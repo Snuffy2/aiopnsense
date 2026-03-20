@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiopnsense"
+version = "0.1.0"
+description = "Async Python client library for OPNsense"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "Apache-2.0"
+authors = [
+    { name = "Snuffy2" },
+]
+dependencies = [
+    "aiohttp>=3.12.0",
+    "awesomeversion>=25.8.0",
+    "python-dateutil>=2.9.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Snuffy2/aiopnsense"
+Repository = "https://github.com/Snuffy2/aiopnsense"
+Issues = "https://github.com/Snuffy2/aiopnsense/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-cov>=6.0.0",
+    "pytest-timeout>=2.3.0",
+    "ruff>=0.8.0",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["aiopnsense*"]
+
+[tool.setuptools.package-data]
+aiopnsense = ["py.typed"]
+
+[tool.pytest.ini_options]
+addopts = """
+  --quiet
+  --timeout=20
+  --durations=10
+  -o console_output_style=progress
+  --cov=aiopnsense
+  --cov-report=term-missing
+"""
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["aiopnsense"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
