@@ -1,0 +1,66 @@
+name: Publish to PyPI
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish
+        required: true
+        type: string
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: pypi
+      # url: https://pypi.org/p/aiopnsense
+      url: https://test.pypi.org/project/aiopnsense
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Setup Python 3 (with caching)
+        uses: actions/setup-python@v6
+        with:
+          python-version: 3.x
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+
+      - name: Verify release tag matches package version
+        run: |
+          python - <<'PY'
+          import pathlib
+          import tomllib
+
+          pyproject = pathlib.Path("pyproject.toml")
+          version = tomllib.loads(pyproject.read_text())["project"]["version"]
+          tag = "${{ github.event.release.tag_name || inputs.tag }}"
+          normalized_tag = tag.removeprefix("v")
+
+          if normalized_tag != version:
+              raise SystemExit(
+                  f"Release tag {tag!r} does not match pyproject version {version!r}"
+              )
+          PY
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build twine
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Check distributions
+        run: python -m twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

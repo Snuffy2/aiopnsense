@@ -255,7 +255,7 @@ class DHCPMixin(PyOPNsenseClientProtocol):
             if awesomeversion.AwesomeVersion(firmware) < awesomeversion.AwesomeVersion("25.1.7"):
                 _LOGGER.debug("Skipping get_dnsmasq_leases for OPNsense < 25.1.7")
                 return []
-        except (awesomeversion.exceptions.AwesomeVersionCompareException, TypeError, ValueError):
+        except awesomeversion.exceptions.AwesomeVersionCompareException, TypeError, ValueError:
             pass
 
         response = await self._safe_dict_get("/api/dnsmasq/leases/search")
@@ -359,7 +359,7 @@ class DHCPMixin(PyOPNsenseClientProtocol):
                     dt: datetime = datetime.strptime(
                         lease_info.get("ends", None), "%Y/%m/%d %H:%M:%S"
                     )
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     continue
                 lease["expires"] = dt.replace(tzinfo=opnsense_tz)
                 if lease["expires"] < datetime.now().astimezone():
@@ -424,7 +424,7 @@ class DHCPMixin(PyOPNsenseClientProtocol):
                     dt: datetime = datetime.strptime(
                         lease_info.get("ends", None), "%Y/%m/%d %H:%M:%S"
                     )
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     continue
                 lease["expires"] = dt.replace(tzinfo=opnsense_tz)
                 if lease["expires"] < datetime.now().astimezone():

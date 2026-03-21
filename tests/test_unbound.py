@@ -57,10 +57,28 @@ async def test_get_unbound_blocklist_handles_empty_or_invalid_responses(
 @pytest.mark.parametrize(
     ("method_name", "uuid", "toggle_result", "dnsbl_result", "expected"),
     [
-        ("enable_unbound_blocklist", "uuid1", {"result": "Enabled"}, {"status": "OK applied"}, True),
-        ("disable_unbound_blocklist", "uuid1", {"result": "Disabled"}, {"status": "OK applied"}, True),
+        (
+            "enable_unbound_blocklist",
+            "uuid1",
+            {"result": "Enabled"},
+            {"status": "OK applied"},
+            True,
+        ),
+        (
+            "disable_unbound_blocklist",
+            "uuid1",
+            {"result": "Disabled"},
+            {"status": "OK applied"},
+            True,
+        ),
         ("enable_unbound_blocklist", None, {"result": "Enabled"}, {"status": "OK applied"}, False),
-        ("enable_unbound_blocklist", "uuid1", {"result": "failed"}, {"status": "OK applied"}, False),
+        (
+            "enable_unbound_blocklist",
+            "uuid1",
+            {"result": "failed"},
+            {"status": "OK applied"},
+            False,
+        ),
         ("enable_unbound_blocklist", "uuid1", {"result": "Enabled"}, {"status": "failed"}, False),
     ],
 )
@@ -118,7 +136,9 @@ async def test_toggle_unbound_blocklist_uses_expected_endpoints() -> None:
         result = await client.disable_unbound_blocklist("uuid1")
 
         assert result is True
-        client._safe_dict_post.assert_awaited_once_with("/api/unbound/settings/toggle_dnsbl/uuid1/0")
+        client._safe_dict_post.assert_awaited_once_with(
+            "/api/unbound/settings/toggle_dnsbl/uuid1/0"
+        )
         client._get.assert_awaited_once_with("/api/unbound/service/dnsbl")
     finally:
         await client.async_close()

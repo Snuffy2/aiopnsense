@@ -30,7 +30,9 @@ async def test_get_host_firmware_version_and_fallback(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_firmware_update_info_triggers_check_when_status_is_incomplete(make_client) -> None:
+async def test_get_firmware_update_info_triggers_check_when_status_is_incomplete(
+    make_client,
+) -> None:
     """Missing firmware status details should trigger a background firmware check."""
     client = make_client()
     try:
@@ -104,8 +106,13 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("upgrade_type", "expected_path"), [("update", "/api/core/firmware/update"), ("upgrade", "/api/core/firmware/upgrade")])
-async def test_upgrade_firmware_calls_expected_endpoint(make_client, upgrade_type, expected_path) -> None:
+@pytest.mark.parametrize(
+    ("upgrade_type", "expected_path"),
+    [("update", "/api/core/firmware/update"), ("upgrade", "/api/core/firmware/upgrade")],
+)
+async def test_upgrade_firmware_calls_expected_endpoint(
+    make_client, upgrade_type, expected_path
+) -> None:
     """Supported upgrade types should call the matching firmware endpoint."""
     client = make_client()
     try:
@@ -141,14 +148,21 @@ async def test_upgrade_status_and_changelog(make_client) -> None:
     """Upgrade status and changelog helpers should proxy the expected endpoints."""
     client = make_client()
     try:
-        client._safe_dict_post = AsyncMock(side_effect=[{"status": "running"}, {"changelog": "..." }])
+        client._safe_dict_post = AsyncMock(
+            side_effect=[{"status": "running"}, {"changelog": "..."}]
+        )
 
         status = await client.upgrade_status()
         changelog = await client.firmware_changelog("26.1.1")
 
         assert status == {"status": "running"}
         assert changelog == {"changelog": "..."}
-        assert client._safe_dict_post.await_args_list[0].args[0] == "/api/core/firmware/upgradestatus"
-        assert client._safe_dict_post.await_args_list[1].args[0] == "/api/core/firmware/changelog/26.1.1"
+        assert (
+            client._safe_dict_post.await_args_list[0].args[0] == "/api/core/firmware/upgradestatus"
+        )
+        assert (
+            client._safe_dict_post.await_args_list[1].args[0]
+            == "/api/core/firmware/changelog/26.1.1"
+        )
     finally:
         await client.async_close()

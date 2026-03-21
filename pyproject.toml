@@ -7,7 +7,7 @@ name = "aiopnsense"
 version = "0.1.0"
 description = "Async Python client library for OPNsense"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 license = "Apache-2.0"
 authors = [
     { name = "Snuffy2" },
@@ -21,15 +21,31 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/Snuffy2/aiopnsense"
 Repository = "https://github.com/Snuffy2/aiopnsense"
-Issues = "https://github.com/Snuffy2/aiopnsense/issues"
 
 [dependency-groups]
+lint = [
+    "aiohttp",
+    "mypy",
+    "pre-commit",
+    "ruff",
+    "types-cffi",
+    "types-PyMySQL",
+    "types-pyRFC3339",
+    "types-python-dateutil",
+    "types-PyYAML",
+    "types-requests",
+    "types-setuptools",
+]
+pytest = [
+    "aiohttp",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-timeout",
+]
 dev = [
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.25.0",
-    "pytest-cov>=6.0.0",
-    "pytest-timeout>=2.3.0",
-    "ruff>=0.8.0",
+    { include-group = "lint" },
+    { include-group = "pytest" },
 ]
 
 [tool.setuptools]
@@ -41,6 +57,12 @@ include = ["aiopnsense*"]
 [tool.setuptools.package-data]
 aiopnsense = ["py.typed"]
 
+[tool.coverage.run]
+branch = true
+source = ["aiopnsense"]
+relative_files = true
+parallel = false
+
 [tool.pytest.ini_options]
 addopts = """
   --quiet
@@ -49,18 +71,89 @@ addopts = """
   -o console_output_style=progress
   --cov=aiopnsense
   --cov-report=term-missing
+  --cov-report=html
 """
-asyncio_mode = "auto"
 testpaths = ["tests"]
-
-[tool.coverage.run]
-branch = true
-source = ["aiopnsense"]
+asyncio_mode = "auto"
 
 [tool.coverage.report]
 show_missing = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+indent-width = 4
+fix = true
+force-exclude = true
+target-version = "py314"
+required-version = ">=0.15.0"
 
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.ruff.lint]
+fixable = ["ALL"]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+combine-as-imports = true
+split-on-trailing-comma = false
+
+[tool.ruff.lint.mccabe]
+max-complexity = 25
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+property-decorators = ["propcache.api.cached_property"]
+
+[tool.mypy]
+python_version = "3.14"
+platform = "linux"
+local_partial_types = true
+strict_equality = true
+no_implicit_optional = true
+warn_incomplete_stub = true
+warn_redundant_casts = true
+warn_unused_configs = true
+incremental = false
+warn_unused_ignores = true
+enable_error_code = [
+    "deprecated",
+    "ignore-without-code",
+    "redundant-self",
+    "truthy-iterable",
+]
+disable_error_code = ["annotation-unchecked"]
+extra_checks = false
+mypy_path = ["."]
+explicit_package_bases = true
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_subclassing_any = false
+disallow_untyped_calls = true
+disallow_untyped_decorators = false
+disallow_untyped_defs = true
+warn_return_any = false
+warn_unreachable = false
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_missing_imports = true
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+disallow_incomplete_defs = false
+disable_error_code = [
+    "import-untyped",
+    "arg-type",
+    "method-assign",
+    "no-untyped-def",
+    "index",
+    "union-attr",
+    "operator",
+]
+check_untyped_defs = false
+warn_unused_ignores = false
