@@ -27,9 +27,9 @@ async def test_telemetry_system_parsing_and_filesystems() -> None:
         }
 
         async def fake_safe_post(path, *args, **kwargs):
-            if "systemTime" in path or "system_time" in path:
+            if "system_time" in path:
                 return time_info
-            if "systemDisk" in path or "system_disk" in path:
+            if "system_disk" in path:
                 return {"devices": [{"dev": "/dev/da0"}]}
             return {}
 
@@ -163,9 +163,9 @@ async def test_telemetry_memory_swap_branches() -> None:
         swap = {"swap": [{"total": "1000", "used": "200"}]}
 
         async def fake_post(path, *args, **kwargs):
-            if "systemResources" in path or "system_resources" in path:
+            if "system_resources" in path:
                 return mem
-            if "systemSwap" in path or "system_swap" in path:
+            if "system_swap" in path:
                 return swap
             return {}
 

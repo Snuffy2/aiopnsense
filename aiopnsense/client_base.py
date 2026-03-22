@@ -3,28 +3,15 @@
 import asyncio
 from collections.abc import MutableMapping
 from datetime import datetime
-from functools import partial
 import inspect
 import json
-import socket
-import ssl
-from typing import Any, Protocol, cast
-from urllib.parse import quote, urlparse
-import xmlrpc.client
+from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
-import awesomeversion
 
 from .const import DEFAULT_CACHE_TTL_SECONDS, DEFAULT_REQUEST_TIMEOUT_SECONDS
-from .exceptions import UnknownFirmware
-from .helpers import _LOGGER, _xmlrpc_timeout
-
-
-class _FirmwareVersionProvider(Protocol):
-    """Structural contract for firmware mixin behavior used by ClientBaseMixin."""
-
-    async def get_host_firmware_version(self) -> str | None:
-        """Return the host firmware version string."""
+from .helpers import _LOGGER
 
 
 class ClientBaseMixin:
@@ -69,18 +56,12 @@ class ClientBaseMixin:
         self._verify_ssl: bool = self._opts.get("verify_ssl", True)
         parts = urlparse(url.rstrip("/"))
         self._url: str = f"{parts.scheme}://{parts.netloc}"
-        self._xmlrpc_url: str = (
-            f"{parts.scheme}://{quote(username, safe='')}:{quote(password, safe='')}@{parts.netloc}"
-        )
-        self._scheme: str = parts.scheme
         self._session: aiohttp.ClientSession = session
         self._initial = initial
         self._firmware_version: str | None = None
         self._endpoint_availability: dict[str, bool] = {}
         self._endpoint_checked_at: dict[str, datetime] = {}
         self._endpoint_cache_ttl_seconds = DEFAULT_CACHE_TTL_SECONDS
-        self._use_snake_case: bool = True
-        self._xmlrpc_query_count = 0
         self._rest_api_query_count = 0
         self._request_queue: asyncio.Queue = asyncio.Queue()
         self._queue_monitor: asyncio.Task[Any] | None = None
@@ -127,169 +108,20 @@ class ClientBaseMixin:
         return self._name
 
     async def reset_query_counts(self) -> None:
-        """Reset REST and XMLRPC query counters to zero."""
-        self._xmlrpc_query_count = 0
+        """Reset API query counters to zero."""
         self._rest_api_query_count = 0
 
-    async def get_query_counts(self) -> tuple:
-        """Return current REST and XMLRPC query counts.
+    async def get_query_counts(self) -> int:
+        """Return current API query counts.
 
         Returns
         -------
-        tuple
-        Two-item tuple containing REST query count and XMLRPC query count.
+        int
+        Total REST API query count recorded by the client.
 
 
         """
-        return self._rest_api_query_count, self._xmlrpc_query_count
-
-    def _get_proxy(self) -> xmlrpc.client.ServerProxy:
-        """Create an XMLRPC server proxy for the configured OPNsense host.
-
-        Returns
-        -------
-        xmlrpc.client.ServerProxy
-        XMLRPC ServerProxy configured for this client instance.
-
-
-        """
-        # https://docs.python.org/3/library/xmlrpc.client.html#module-xmlrpc.client
-        # https://stackoverflow.com/questions/30461969/disable-default-certificate-verification-in-python-2-7-9
-        context = None
-
-        if self._scheme == "https" and not self._verify_ssl:
-            context = ssl._create_unverified_context()  # noqa: SLF001
-
-        # set to True if necessary during development
-        verbose = False
-
-        return xmlrpc.client.ServerProxy(
-            f"{self._xmlrpc_url}/xmlrpc.php", context=context, verbose=verbose
-        )
-
-    @_xmlrpc_timeout
-    async def _restore_config_section(
-        self, section_name: str, data: MutableMapping[str, Any]
-    ) -> None:
-        """Restore a specific configuration section via XMLRPC.
-
-        Parameters
-        ----------
-        section_name : str
-            Configuration section name to restore.
-        data : MutableMapping[str, Any]
-            Input mapping used to build the request payload.
-
-        """
-        loop = await self._get_active_loop()
-        params = {section_name: data}
-        proxy_method = partial(self._get_proxy().opnsense.restore_config_section, params)
-        await loop.run_in_executor(None, proxy_method)
-
-    @_xmlrpc_timeout
-    async def _exec_php(self, script: str) -> dict[str, Any]:
-        """Execute a PHP snippet through XMLRPC and decode the JSON payload.
-
-        Parameters
-        ----------
-        script : str
-            PHP script source executed through XMLRPC.
-
-        Returns
-        -------
-        dict[str, Any]
-        JSON-decoded response payload, or an empty dictionary on failure.
-
-
-        """
-        loop = await self._get_active_loop()
-        self._xmlrpc_query_count += 1
-        script = rf"""
-ini_set('display_errors', 0);
-
-{script}
-
-// wrapping this in json_encode and then unwrapping in python prevents funny XMLRPC NULL encoding errors
-// https://github.com/travisghansen/hass-pfsense/issues/35
-$toreturn_real = $toreturn;
-$toreturn = [];
-$toreturn["real"] = json_encode($toreturn_real);
-        """
-        try:
-            response = await loop.run_in_executor(None, self._get_proxy().opnsense.exec_php, script)
-            if not isinstance(response, MutableMapping):
-                return {}
-            if response.get("real"):
-                response_json = json.loads(response.get("real", ""))
-                return dict(response_json) if isinstance(response_json, MutableMapping) else {}
-        except TypeError as e:
-            stack = inspect.stack()
-            calling_function = stack[1].function.strip("_") if len(stack) > 1 else "Unknown"
-            _LOGGER.error(
-                "Invalid data returned from exec_php for %s. %s: %s. Called from %s",
-                calling_function,
-                type(e).__name__,
-                e,
-                calling_function,
-            )
-        except xmlrpc.client.Fault as e:
-            stack = inspect.stack()
-            calling_function = stack[1].function.strip("_") if len(stack) > 1 else "Unknown"
-            _LOGGER.error(
-                "Error running exec_php script for %s. %s: %s. Ensure the 'os-homeassistant-maxit' plugin has been installed on OPNsense",
-                calling_function,
-                type(e).__name__,
-                e,
-            )
-        except socket.gaierror as e:
-            stack = inspect.stack()
-            calling_function = stack[1].function.strip("_") if len(stack) > 1 else "Unknown"
-            _LOGGER.warning(
-                "Connection Error running exec_php script for %s. %s: %s. Will retry",
-                calling_function,
-                type(e).__name__,
-                e,
-            )
-        except ssl.SSLError as e:
-            stack = inspect.stack()
-            calling_function = stack[1].function.strip("_") if len(stack) > 1 else "Unknown"
-            _LOGGER.warning(
-                "SSL Connection Error running exec_php script for %s. %s: %s. Will retry",
-                calling_function,
-                type(e).__name__,
-                e,
-            )
-        return {}
-
-    async def set_use_snake_case(self, initial: bool = False) -> None:
-        """Set whether to use snake_case or camelCase for API calls.
-
-        Parameters
-        ----------
-        initial : bool
-            Whether the call runs during initial setup/validation. Defaults to False.
-
-        """
-        firmware = await cast("_FirmwareVersionProvider", self).get_host_firmware_version()
-
-        self._use_snake_case = True
-        try:
-            if awesomeversion.AwesomeVersion(firmware) < awesomeversion.AwesomeVersion("25.7"):
-                _LOGGER.debug("Using camelCase for OPNsense < 25.7")
-                self._use_snake_case = False
-            else:
-                _LOGGER.debug("Using snake_case for OPNsense >= 25.7")
-        except (
-            awesomeversion.exceptions.AwesomeVersionCompareException,
-            TypeError,
-            ValueError,
-        ) as e:
-            _LOGGER.error(
-                "Error comparing firmware version %s. Using snake_case by default",
-                firmware,
-            )
-            if initial:
-                raise UnknownFirmware from e
+        return self._rest_api_query_count
 
     async def _get_from_stream(self, path: str) -> dict[str, Any]:
         """Queue a streaming GET request and return the parsed payload.

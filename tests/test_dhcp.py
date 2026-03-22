@@ -57,7 +57,6 @@ async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client) -> None:
         assert filtered[0]["expire"] == 20
 
         # dnsmasq leases behavior
-        client._firmware_version = "25.2"
         client._safe_dict_get = AsyncMock(
             return_value={
                 "rows": [
@@ -150,7 +149,6 @@ async def test_get_isc_dhcpv4_and_v6_parsing() -> None:
 
         # v4: ends present and in future
         future_dt = (datetime.now() + timedelta(hours=1)).strftime("%Y/%m/%d %H:%M:%S")
-        client._use_snake_case = False
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             side_effect=[
@@ -169,15 +167,16 @@ async def test_get_isc_dhcpv4_and_v6_parsing() -> None:
                 {"rows": []},
             ]
         )
+        v4_safe_dict_get = client._safe_dict_get
         v4 = await client._get_isc_dhcpv4_leases()
         assert isinstance(v4, list) and len(v4) == 1
         assert v4[0]["address"] == "10.0.0.1"
         assert v4[0]["mac"] == "m1"
         assert v4[0]["hostname"] == "h1"
         assert isinstance(v4[0].get("expires"), datetime)
+        v4_safe_dict_get.assert_awaited_once_with("/api/dhcpv4/leases/search_lease")
 
         # v6: ends missing -> field passed through
-        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={
@@ -192,6 +191,7 @@ async def test_get_isc_dhcpv4_and_v6_parsing() -> None:
                 ]
             }
         )
+        v6_safe_dict_get = client._safe_dict_get
         v6 = await client._get_isc_dhcpv6_leases()
         assert isinstance(v6, list) and len(v6) == 1
         assert v6[0]["address"] == "fe80::1"
@@ -201,6 +201,7 @@ async def test_get_isc_dhcpv4_and_v6_parsing() -> None:
         assert v6[0].get("expires") is None
         assert "ends_at" not in v6[0] or v6[0]["ends_at"] is None
         assert "expiry" not in v6[0] or v6[0]["expiry"] is None
+        v6_safe_dict_get.assert_awaited_once_with("/api/dhcpv6/leases/search_lease")
     finally:
         await client.async_close()
 
@@ -288,8 +289,6 @@ async def test_get_kea_leases_with_reservations_and_expiry_handling() -> None:
         url="http://localhost", username="u", password="p", session=session
     )
     try:
-        client._use_snake_case = True
-
         # reservation maps hw_address -> ip
         res_rows = [{"hw_address": "aa:bb", "ip_address": "192.0.2.1"}]
 
@@ -307,9 +306,9 @@ async def test_get_kea_leases_with_reservations_and_expiry_handling() -> None:
         ]
 
         async def fake_safe(path):
-            if "search_reservation" in path or "searchReservation" in path:
+            if path == "/api/kea/dhcpv4/search_reservation":
                 return {"rows": res_rows}
-            if "leases4/search" in path:
+            if path == "/api/kea/leases4/search":
                 return {"rows": lease_rows}
             return {}
 

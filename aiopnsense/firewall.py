@@ -323,10 +323,7 @@ class FirewallMixin(PyOPNsenseClientProtocol):
 
 
         """
-        if self._use_snake_case:
-            alias_list_resp = await self._safe_dict_get("/api/firewall/alias/search_item")
-        else:
-            alias_list_resp = await self._safe_dict_get("/api/firewall/alias/searchItem")
+        alias_list_resp = await self._safe_dict_get("/api/firewall/alias/search_item")
         alias_list: list = alias_list_resp.get("rows", [])
         if not isinstance(alias_list, list):
             return False
@@ -340,10 +337,7 @@ class FirewallMixin(PyOPNsenseClientProtocol):
         if not uuid:
             return False
         payload: dict[str, Any] = {}
-        if self._use_snake_case:
-            url: str = f"/api/firewall/alias/toggle_item/{uuid}"
-        else:
-            url = f"/api/firewall/alias/toggleItem/{uuid}"
+        url: str = f"/api/firewall/alias/toggle_item/{uuid}"
         if toggle_on_off == "on":
             url = f"{url}/1"
         elif toggle_on_off == "off":

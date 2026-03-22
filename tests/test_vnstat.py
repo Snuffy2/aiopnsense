@@ -198,7 +198,7 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client) -> None
 
 @pytest.mark.asyncio
 async def test_get_vnstat_uses_systemtime_endpoint_path(make_client) -> None:
-    """get_vnstat should query snake_case and camelCase system-time endpoints correctly."""
+    """get_vnstat should query the supported system-time endpoint."""
     session = MagicMock(spec=aiohttp.ClientSession)
     client = make_client(session=session)
     try:
@@ -206,14 +206,8 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client) -> None:
         client._safe_dict_get = AsyncMock(return_value={"response": ""})
         client._safe_dict_post = AsyncMock(return_value={"datetime": "invalid"})
 
-        client._use_snake_case = True
         await client.get_vnstat()
         client._safe_dict_post.assert_awaited_with("/api/diagnostics/system/system_time")
-
-        client._safe_dict_post.reset_mock()
-        client._use_snake_case = False
-        await client.get_vnstat()
-        client._safe_dict_post.assert_awaited_with("/api/diagnostics/system/systemTime")
     finally:
         await client.async_close()
 

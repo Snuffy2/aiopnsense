@@ -25,11 +25,11 @@ async def test_get_device_unique_id_and_system_info(make_client) -> None:
         uid = await client.get_device_unique_id()
         assert uid == "aa_bb_cc"
 
-        # system info uses snake/camel branches
-        client._use_snake_case = False
+        # system info uses the supported REST endpoint
         client._safe_dict_get = AsyncMock(return_value={"name": "foo"})
         info = await client.get_system_info()
         assert info["name"] == "foo"
+        client._safe_dict_get.assert_awaited_once_with("/api/diagnostics/system/system_information")
     finally:
         await client.async_close()
 
@@ -40,7 +40,6 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client) -> None:
     session = MagicMock(spec=aiohttp.ClientSession)
     client = make_client(session=session)
     try:
-        client._use_snake_case = True
         client._safe_dict_post = AsyncMock(return_value={"datetime": "2026-03-07 12:00:00 EST"})
         parsed_tz = await client._get_opnsense_timezone()
         assert parsed_tz is not None
@@ -103,7 +102,6 @@ async def test_reload_interface_and_certificates_and_gateways(make_client) -> No
     session = MagicMock(spec=aiohttp.ClientSession)
     client = make_client(session=session)
     try:
-        client._use_snake_case = True
         client._safe_dict_post = AsyncMock(return_value={"message": "OK reload"})
         ok = await client.reload_interface("em0")
         assert ok is True

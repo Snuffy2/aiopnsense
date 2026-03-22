@@ -45,8 +45,6 @@ async def test_generate_vouchers_server_selection_errors_and_success(
         url="http://localhost", username="u", password="p", session=session
     )
     try:
-        # follow original tests' snake_case setting where applicable
-        client._use_snake_case = False
         if safe_get_ret is not None:
             client._safe_list_get = AsyncMock(return_value=safe_get_ret)
             with pytest.raises(expect_exc):

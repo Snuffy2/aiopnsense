@@ -4,8 +4,6 @@ from collections.abc import MutableMapping
 from datetime import datetime, tzinfo
 from typing import Any
 
-import awesomeversion
-
 from ._typing import PyOPNsenseClientProtocol
 from .helpers import _LOGGER, _log_errors, get_ip_key, timestamp_to_datetime, try_to_int
 
@@ -138,10 +136,7 @@ class DHCPMixin(PyOPNsenseClientProtocol):
         response = await self._safe_dict_get("/api/kea/leases4/search")
         if not isinstance(response.get("rows", None), list):
             return []
-        if self._use_snake_case:
-            res_resp = await self._safe_dict_get("/api/kea/dhcpv4/search_reservation")
-        else:
-            res_resp = await self._safe_dict_get("/api/kea/dhcpv4/searchReservation")
+        res_resp = await self._safe_dict_get("/api/kea/dhcpv4/search_reservation")
         if not isinstance(res_resp.get("rows", None), list):
             res_info = []
         else:
@@ -246,18 +241,6 @@ class DHCPMixin(PyOPNsenseClientProtocol):
 
 
         """
-        firmware = await self.get_host_firmware_version()
-
-        try:
-            if awesomeversion.AwesomeVersion(firmware) < awesomeversion.AwesomeVersion("25.1"):
-                _LOGGER.debug("Skipping get_dnsmasq_leases for OPNsense < 25.1")
-                return []
-            if awesomeversion.AwesomeVersion(firmware) < awesomeversion.AwesomeVersion("25.1.7"):
-                _LOGGER.debug("Skipping get_dnsmasq_leases for OPNsense < 25.1.7")
-                return []
-        except awesomeversion.exceptions.AwesomeVersionCompareException, TypeError, ValueError:
-            pass
-
         response = await self._safe_dict_get("/api/dnsmasq/leases/search")
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
@@ -323,10 +306,7 @@ class DHCPMixin(PyOPNsenseClientProtocol):
         if not await self.is_endpoint_available("/api/dhcpv4/service/status"):
             _LOGGER.debug("ISC DHCP not installed")
             return []
-        if self._use_snake_case:
-            response = await self._safe_dict_get("/api/dhcpv4/leases/search_lease")
-        else:
-            response = await self._safe_dict_get("/api/dhcpv4/leases/searchLease")
+        response = await self._safe_dict_get("/api/dhcpv4/leases/search_lease")
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
             return []
@@ -388,10 +368,7 @@ class DHCPMixin(PyOPNsenseClientProtocol):
         if not await self.is_endpoint_available("/api/dhcpv6/service/status"):
             _LOGGER.debug("ISC DHCP not installed")
             return []
-        if self._use_snake_case:
-            response = await self._safe_dict_get("/api/dhcpv6/leases/search_lease")
-        else:
-            response = await self._safe_dict_get("/api/dhcpv6/leases/searchLease")
+        response = await self._safe_dict_get("/api/dhcpv6/leases/search_lease")
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
             return []

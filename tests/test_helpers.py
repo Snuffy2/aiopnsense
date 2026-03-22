@@ -1,6 +1,5 @@
 """Tests for `aiopnsense.helpers` utility and decorator helpers."""
 
-import asyncio
 from datetime import datetime
 from unittest.mock import MagicMock
 
@@ -170,24 +169,3 @@ async def test_log_errors_server_timeout_re_raise_and_suppress() -> None:
         assert await decorated(client) is None
     finally:
         await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_xmlrpc_timeout_uses_per_call_asyncio_timeout(monkeypatch) -> None:
-    """_xmlrpc_timeout should use asyncio.wait_for with DEFAULT_REQUEST_TIMEOUT_SECONDS."""
-    monkeypatch.setattr(pyopnsense_helpers, "DEFAULT_REQUEST_TIMEOUT_SECONDS", 0.01)
-
-    @pyopnsense_helpers._xmlrpc_timeout
-    async def fast_func(self):
-        return "ok"
-
-    got = await fast_func(None)
-    assert got == "ok"
-
-    @pyopnsense_helpers._xmlrpc_timeout
-    async def slow_func(self):
-        await asyncio.sleep(0.05)
-        return "late"
-
-    with pytest.raises(TimeoutError):
-        await slow_func(None)
