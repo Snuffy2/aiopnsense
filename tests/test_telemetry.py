@@ -2,6 +2,7 @@
 
 from collections.abc import MutableMapping
 from datetime import UTC
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -26,14 +27,14 @@ async def test_telemetry_system_parsing_and_filesystems() -> None:
             "loadavg": "bad",
         }
 
-        async def fake_safe_post(path, *args, **kwargs):
+        async def fake_safe_get(path: str) -> dict[str, Any]:
             if "system_time" in path:
                 return time_info
             if "system_disk" in path:
                 return {"devices": [{"dev": "/dev/da0"}]}
             return {}
 
-        client._safe_dict_post = AsyncMock(side_effect=fake_safe_post)
+        client._safe_dict_get = AsyncMock(side_effect=fake_safe_get)
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
 
         sys = await client._get_telemetry_system()
@@ -57,12 +58,12 @@ async def test_telemetry_cpu_variants() -> None:
     )
     try:
         # empty cpu type -> returns {}
-        client._safe_list_post = AsyncMock(return_value=[])
+        client._safe_list_get = AsyncMock(return_value=[])
         cpu_empty = await client._get_telemetry_cpu()
         assert cpu_empty == {}
 
         # valid cpu type and stream
-        client._safe_list_post = AsyncMock(return_value=["Intel (2 cores)"])
+        client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
         client._get_from_stream = AsyncMock(
             return_value={
                 "total": "29",
@@ -89,7 +90,7 @@ async def test_telemetry_mbuf_pfstate_and_temps() -> None:
     )
     try:
         # mbuf and pfstate basic numeric parsing
-        client._safe_dict_post = AsyncMock(
+        client._safe_dict_get = AsyncMock(
             side_effect=[
                 {"mbuf-statistics": {"mbuf-current": "10", "mbuf-total": "20"}},
                 {"current": "5", "limit": "10"},
@@ -162,14 +163,14 @@ async def test_telemetry_memory_swap_branches() -> None:
         mem = {"memory": {"total": "8000", "used": "2000"}}
         swap = {"swap": [{"total": "1000", "used": "200"}]}
 
-        async def fake_post(path, *args, **kwargs):
+        async def fake_get(path: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
             if "system_resources" in path:
                 return mem
             if "system_swap" in path:
                 return swap
             return {}
 
-        client._safe_dict_post = AsyncMock(side_effect=fake_post)
+        client._safe_dict_get = AsyncMock(side_effect=fake_get)
         res = await client._get_telemetry_memory()
         assert isinstance(res.get("physmem"), int) or res.get("physmem") is None
     finally:

@@ -40,13 +40,13 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client) -> None:
     session = MagicMock(spec=aiohttp.ClientSession)
     client = make_client(session=session)
     try:
-        client._safe_dict_post = AsyncMock(return_value={"datetime": "2026-03-07 12:00:00 EST"})
+        client._safe_dict_get = AsyncMock(return_value={"datetime": "2026-03-07 12:00:00 EST"})
         parsed_tz = await client._get_opnsense_timezone()
         assert parsed_tz is not None
         parsed_dt = datetime(2026, 3, 7, 12, 0, 0, tzinfo=parsed_tz)
         assert parsed_tz.utcoffset(parsed_dt) == timedelta(hours=-5)
 
-        client._safe_dict_post = AsyncMock(return_value={"datetime": "not-a-datetime"})
+        client._safe_dict_get = AsyncMock(return_value={"datetime": "not-a-datetime"})
         fallback_tz = await client._get_opnsense_timezone()
         assert fallback_tz is not None
         local_tz = datetime.now().astimezone().tzinfo
@@ -56,7 +56,7 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client) -> None:
             now_local
         )
 
-        client._safe_dict_post = AsyncMock(side_effect=aiohttp.ClientError("transient fetch error"))
+        client._safe_dict_get = AsyncMock(side_effect=aiohttp.ClientError("transient fetch error"))
         fetch_fallback_tz = await client._get_opnsense_timezone()
         assert fetch_fallback_tz is not None
         assert fetch_fallback_tz == local_tz or fetch_fallback_tz.utcoffset(

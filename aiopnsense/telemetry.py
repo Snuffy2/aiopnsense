@@ -114,7 +114,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
 
 
         """
-        mbuf_info = await self._safe_dict_post("/api/diagnostics/system/system_mbuf")
+        mbuf_info = await self._safe_dict_get("/api/diagnostics/system/system_mbuf")
         # _LOGGER.debug(f"[get_telemetry_mbuf] mbuf_info: {mbuf_info}")
         mbuf: dict[str, Any] = {}
         mbuf["used"] = try_to_int(mbuf_info.get("mbuf-statistics", {}).get("mbuf-current", None))
@@ -140,7 +140,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
 
 
         """
-        pfstate_info = await self._safe_dict_post("/api/diagnostics/firewall/pf_states")
+        pfstate_info = await self._safe_dict_get("/api/diagnostics/firewall/pf_states")
         # _LOGGER.debug(f"[get_telemetry_pfstate] pfstate_info: {pfstate_info}")
         pfstate: dict[str, Any] = {}
         pfstate["used"] = try_to_int(pfstate_info.get("current", None))
@@ -166,7 +166,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
 
 
         """
-        memory_info = await self._safe_dict_post("/api/diagnostics/system/system_resources")
+        memory_info = await self._safe_dict_get("/api/diagnostics/system/system_resources")
         # _LOGGER.debug(f"[get_telemetry_memory] memory_info: {memory_info}")
         memory: dict[str, Any] = {}
         memory["physmem"] = try_to_int(memory_info.get("memory", {}).get("total", None))
@@ -178,7 +178,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
             and memory["physmem"] > 0
             else None
         )
-        swap_info = await self._safe_dict_post("/api/diagnostics/system/system_swap")
+        swap_info = await self._safe_dict_get("/api/diagnostics/system/system_swap")
         if (
             not isinstance(swap_info.get("swap", None), list)
             or not len(swap_info.get("swap", [])) > 0
@@ -209,7 +209,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
 
 
         """
-        time_info = await self._safe_dict_post("/api/diagnostics/system/system_time")
+        time_info = await self._safe_dict_get("/api/diagnostics/system/system_time")
         # _LOGGER.debug("[get_telemetry_system] time_info: %s", time_info)
         system: dict[str, Any] = {}
         opnsense_tz = await self._get_opnsense_timezone(time_info.get("datetime"))
@@ -293,7 +293,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
 
 
         """
-        cputype_info = await self._safe_list_post("/api/diagnostics/cpu_usage/get_c_p_u_type")
+        cputype_info = await self._safe_list_get("/api/diagnostics/cpu_usage/get_c_p_u_type")
         # _LOGGER.debug(f"[get_telemetry_cpu] cputype_info: {cputype_info}")
         if not len(cputype_info) > 0:
             return {}
@@ -324,7 +324,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
 
 
         """
-        filesystems_info = await self._safe_dict_post("/api/diagnostics/system/system_disk")
+        filesystems_info = await self._safe_dict_get("/api/diagnostics/system/system_disk")
         # _LOGGER.debug(f"[get_telemetry_filesystems] filesystems_info: {filesystems_info}")
         filesystems: list = filesystems_info.get("devices", [])
         # _LOGGER.debug(f"[get_telemetry_filesystems] filesystems: {filesystems}")

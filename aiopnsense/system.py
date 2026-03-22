@@ -46,7 +46,7 @@ class SystemMixin(PyOPNsenseClientProtocol):
         if datetime_str is None:
             try:
                 datetime_raw = (
-                    await self._safe_dict_post("/api/diagnostics/system/system_time")
+                    await self._safe_dict_get("/api/diagnostics/system/system_time")
                 ).get("datetime")
             except (aiohttp.ClientError, TimeoutError) as err:
                 _LOGGER.debug(
