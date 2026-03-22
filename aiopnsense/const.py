@@ -4,7 +4,7 @@ from typing import Any
 
 from dateutil.tz import gettz
 
-VERSION = "v0.0.1"
+VERSION = "v0.0.2"
 
 # Default timeout, in seconds, for HTTP/XMLRPC requests.
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
