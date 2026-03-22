@@ -4,7 +4,6 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiopnsense"
-version = "0.1.0"
 description = "Async Python client library for OPNsense"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -17,6 +16,7 @@ dependencies = [
     "awesomeversion>=25.8.0",
     "python-dateutil>=2.9.0",
 ]
+dynamic = ["version"]
 
 [project.urls]
 Homepage = "https://github.com/Snuffy2/aiopnsense"
@@ -56,6 +56,9 @@ include = ["aiopnsense*"]
 
 [tool.setuptools.package-data]
 aiopnsense = ["py.typed"]
+
+[tool.setuptools.dynamic]
+version = { attr = "aiopnsense.const.VERSION" }
 
 [tool.coverage.run]
 branch = true

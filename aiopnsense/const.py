@@ -4,6 +4,8 @@ from typing import Any
 
 from dateutil.tz import gettz
 
+VERSION = "v0.0.1"
+
 # Default timeout, in seconds, for HTTP/XMLRPC requests.
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 # Shared cache time-to-live, in seconds, for endpoint availability state.
