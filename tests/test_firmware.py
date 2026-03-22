@@ -1,12 +1,10 @@
 """Tests for `aiopnsense.firmware` behaviors."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-import aiohttp
 import pytest
 
-import aiopnsense as pyopnsense
 from tests.conftest import make_mock_session_client
 
 
@@ -51,12 +49,11 @@ async def test_get_firmware_update_info_triggers_check_when_status_is_incomplete
 
 
 @pytest.mark.asyncio
-async def test_get_firmware_update_info_triggers_check_when_last_check_is_stale() -> None:
+async def test_get_firmware_update_info_triggers_check_when_last_check_is_stale(
+    make_client,
+) -> None:
     """A stale `last_check` should trigger a firmware refresh."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _ = make_mock_session_client(make_client)
     try:
         status = {
             "product": {

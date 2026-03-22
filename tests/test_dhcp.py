@@ -1,20 +1,28 @@
 """Tests for `aiopnsense.dhcp`."""
 
-from collections.abc import MutableMapping
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from collections.abc import Callable, MutableMapping
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 
-import aiohttp
 import pytest
 
-import aiopnsense as pyopnsense
+from aiopnsense import OPNsenseClient
 from tests.conftest import make_mock_session_client
+
+ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
-async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client) -> None:
-    """Cover Kea and dnsmasq lease parsing and _keep_latest_leases helper."""
-    client, session = make_mock_session_client(make_client)
+async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client: ClientType) -> None:
+    """Cover Kea and dnsmasq lease parsing and lease de-duplication behavior.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates normalized lease parsing behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
     try:
         # _get_kea_interfaces returns mapping and kea leases: one valid
         client._safe_dict_get = AsyncMock(
@@ -83,9 +91,16 @@ async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_arp_table_uses_get_query_param(make_client) -> None:
-    """get_arp_table should call diagnostics search_arp via GET with resolve query parameter."""
-    client, session = make_mock_session_client(make_client)
+async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> None:
+    """Verify ARP table lookup uses GET endpoint with the expected query parameter.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates resolve query parameter forwarding.
+    """
+    client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
 
@@ -110,8 +125,21 @@ async def test_get_arp_table_uses_get_query_param(make_client) -> None:
         ("_get_isc_dhcpv6_leases", "/api/dhcpv6/service/status"),
     ],
 )
-async def test_isc_dhcp_endpoint_unavailable(make_client, method_name: str, endpoint: str) -> None:
-    """ISC DHCP lease helpers should return an empty list when service endpoints are unavailable."""
+async def test_isc_dhcp_endpoint_unavailable(
+    make_client: ClientType,
+    method_name: str,
+    endpoint: str,
+) -> None:
+    """Verify ISC DHCP lease helpers return empty results when endpoints are unavailable.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        method_name (str): Lease helper method name to invoke.
+        endpoint (str): Service-status endpoint expected for availability probing.
+
+    Returns:
+        None: This test validates endpoint gating behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=False)
@@ -133,12 +161,22 @@ async def test_isc_dhcp_endpoint_unavailable(make_client, method_name: str, endp
     ],
 )
 async def test_keep_latest_leases_prefers_latest_expiration(
-    make_client,
+    make_client: ClientType,
     reservations: list[dict[str, int]],
     expected_key: str,
     expected_expire: int,
 ) -> None:
-    """_keep_latest_leases should keep the row with the highest ``expire`` per dedup key."""
+    """Verify latest lease entry is selected per deduplication key.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        reservations (list[dict[str, int]]): Lease rows containing duplicate keys and expirations.
+        expected_key (str): Key used to identify the duplicate reservation group.
+        expected_expire (int): Expected latest expiration for the duplicate group.
+
+    Returns:
+        None: This test validates lease deduplication selection.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         result = client._keep_latest_leases(reservations)
@@ -150,19 +188,23 @@ async def test_keep_latest_leases_prefers_latest_expiration(
 
 
 @pytest.mark.asyncio
-async def test_get_isc_dhcpv4_and_v6_parsing() -> None:
-    """Test ISC DHCPv4/v6 parsing of 'ends' -> datetime and filtering logic."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_get_isc_dhcpv4_and_v6_parsing(make_client: ClientType) -> None:
+    """Verify ISC DHCPv4/v6 parsing converts and filters lease fields correctly.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates timestamp conversion and lease normalization.
+    """
+    client, _ = make_mock_session_client(make_client)
     try:
         local_tz = datetime.now().astimezone().tzinfo
         assert local_tz is not None
         client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
 
         # v4: ends present and in future
-        future_dt = (datetime.now() + timedelta(hours=1)).strftime("%Y/%m/%d %H:%M:%S")
+        future_dt = (datetime.now(tz=local_tz) + timedelta(hours=1)).strftime("%Y/%m/%d %H:%M:%S")
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             side_effect=[
@@ -221,12 +263,16 @@ async def test_get_isc_dhcpv4_and_v6_parsing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_dhcp_leases_combined_structure() -> None:
-    """Ensure get_dhcp_leases combines multiple sources and returns expected mapping."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_get_dhcp_leases_combined_structure(make_client: ClientType) -> None:
+    """Verify combined DHCP leases payload includes all expected source data.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates aggregate DHCP lease structure.
+    """
+    client, _ = make_mock_session_client(make_client)
     try:
         local_tz = datetime.now().astimezone().tzinfo
         assert local_tz is not None
@@ -268,8 +314,15 @@ async def test_get_dhcp_leases_combined_structure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_kea_interfaces_filters_enabled_and_selected(make_client) -> None:
-    """_get_kea_interfaces should honor enabled flag and selected/value filtering."""
+async def test_get_kea_interfaces_filters_enabled_and_selected(make_client: ClientType) -> None:
+    """Verify Kea interface discovery honors enabled and selected/value constraints.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates Kea interface filtering behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value={"dhcpv4": {"general": {"enabled": "0"}}})
@@ -297,12 +350,21 @@ async def test_get_kea_interfaces_filters_enabled_and_selected(make_client) -> N
 
 
 @pytest.mark.asyncio
-async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(make_client) -> None:
-    """_get_kea_dhcpv4_leases should skip invalid/expired leases and classify static/dynamic."""
+async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
+    make_client: ClientType,
+) -> None:
+    """Verify Kea DHCPv4 leases skip invalid rows and classify static/dynamic entries.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates Kea lease filtering and reservation handling.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
-        future_ts = int(datetime.now().timestamp()) + 3600
-        past_ts = int(datetime.now().timestamp()) - 3600
+        future_ts = int(datetime.now(tz=timezone.utc).timestamp()) + 3600
+        past_ts = int(datetime.now(tz=timezone.utc).timestamp()) - 3600
 
         client._safe_dict_get = AsyncMock(
             side_effect=[
@@ -371,14 +433,21 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(mak
 
 
 @pytest.mark.asyncio
-async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client) -> None:
-    """_get_dnsmasq_leases should handle malformed rows and expiry/type branches."""
+async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: ClientType) -> None:
+    """Verify dnsmasq lease parsing handles malformed and expired rows safely.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates dnsmasq lease expiry and type parsing.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value={"rows": "bad-shape"})
         assert await client._get_dnsmasq_leases() == []
 
-        past_ts = int(datetime.now().timestamp()) - 3600
+        past_ts = int(datetime.now(tz=timezone.utc).timestamp()) - 3600
         client._safe_dict_get = AsyncMock(
             return_value={
                 "rows": [
@@ -414,8 +483,17 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client) -> 
 
 
 @pytest.mark.asyncio
-async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(make_client) -> None:
-    """ISC lease helpers should skip invalid rows, bad timestamps, and expired leases."""
+async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
+    make_client: ClientType,
+) -> None:
+    """Verify ISC lease helpers skip invalid, unparsable, and expired lease rows.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates invalid/expired ISC lease handling paths.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         local_tz = datetime.now().astimezone().tzinfo
@@ -423,7 +501,7 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(make_client
         client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
         client.is_endpoint_available = AsyncMock(return_value=True)
 
-        past_str = (datetime.now() - timedelta(hours=2)).strftime("%Y/%m/%d %H:%M:%S")
+        past_str = (datetime.now(tz=local_tz) - timedelta(hours=2)).strftime("%Y/%m/%d %H:%M:%S")
 
         client._safe_dict_get = AsyncMock(
             side_effect=[

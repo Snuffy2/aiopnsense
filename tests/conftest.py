@@ -75,7 +75,7 @@ class FakeStreamContent:
         """
         self._payload = payload
 
-    async def iter_chunked(self, _chunk_size: int) -> AsyncGenerator[bytes, None]:
+    async def iter_chunked(self, _chunk_size: int) -> AsyncGenerator[bytes]:
         """Yield payload chunks for stream parsing tests.
 
         Args:
@@ -127,11 +127,12 @@ class FakeResponse:
         self._stream_chunks = list(stream_chunks or [])
         self.headers = dict(headers or {})
         self.history = list(history or [])
+        self.request_info: _FakeRequestInfo | None = None
 
         if include_request_info:
             self.request_info = _FakeRequestInfo(real_url=URL(request_url))
 
-    async def __aenter__(self) -> "FakeResponse":
+    async def __aenter__(self) -> FakeResponse:
         """Enter the asynchronous context.
 
         Returns:
@@ -320,7 +321,13 @@ def fake_stream_response_factory(
 ) -> Callable[..., FakeResponse]:
     """Return a factory that constructs fake streaming responses."""
 
-    def _make(chunks: list[bytes], status: int = 200, reason: str = "OK", ok: bool = True) -> Any:
+    def _make(
+        chunks: list[bytes],
+        status: int = 200,
+        reason: str = "OK",
+        *,
+        ok: bool = True,
+    ) -> FakeResponse:
         """Build a fake streaming response.
 
         Args:

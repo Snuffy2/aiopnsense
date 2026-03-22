@@ -1,18 +1,16 @@
 """Tests for `aiopnsense.firewall`."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-import aiohttp
 import pytest
 
-import aiopnsense as pyopnsense
+from tests.conftest import make_mock_session_client
 
 
 @pytest.fixture
 def toggle_alias_client(make_client):
     """Provide a preconfigured OPNsenseClient for toggle_alias tests."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    return make_client(session=session)
+    return make_mock_session_client(make_client)
 
 
 @pytest.mark.asyncio
@@ -233,10 +231,7 @@ async def test_kill_states_returns_normalized_result(make_client) -> None:
 @pytest.mark.asyncio
 async def test_toggle_alias_flows(make_client) -> None:
     """`toggle_alias` should return False on lookup/toggle failure and True on full success."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _ = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
         assert await client.toggle_alias("missing", "on") is False
@@ -275,7 +270,7 @@ async def test_toggle_alias_scenarios(
     safe_get_rows, safe_post_result, expected, toggle_alias_client
 ) -> None:
     """Parametrized alias toggling scenarios should match the final success state."""
-    client = toggle_alias_client
+    client, _session = toggle_alias_client
     try:
         client._safe_dict_get = AsyncMock(return_value={"rows": safe_get_rows})
 

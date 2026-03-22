@@ -2,9 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-import aiohttp
 import pytest
 
 from tests.conftest import make_mock_session_client
@@ -13,7 +12,7 @@ from tests.conftest import make_mock_session_client
 @pytest.mark.asyncio
 async def test_parse_vnstat_payload_hourly_with_split_day_rows(make_client) -> None:
     """Hourly vnStat payloads should combine date rows with time rows."""
-    client, session = make_mock_session_client(make_client)
+    client, _session = make_mock_session_client(make_client)
     try:
         payload = {
             "response": """
@@ -39,7 +38,7 @@ async def test_parse_vnstat_payload_hourly_with_split_day_rows(make_client) -> N
 @pytest.mark.asyncio
 async def test_parse_vnstat_month_label_apostrophe_format(make_client) -> None:
     """Monthly vnStat labels like ``Apr '25`` should parse as year/month."""
-    client = make_client(session=MagicMock(spec=aiohttp.ClientSession))
+    client, _session = make_mock_session_client(make_client)
     try:
         assert client._parse_month_label("Apr '25") == (2025, 4)
         assert client._parse_month_label("March '26") == (2026, 3)
@@ -51,7 +50,7 @@ async def test_parse_vnstat_month_label_apostrophe_format(make_client) -> None:
 @pytest.mark.asyncio
 async def test_get_vnstat_metrics_yearly_parsing(make_client) -> None:
     """get_vnstat_metrics should parse yearly vnStat payload rows."""
-    client, session = make_mock_session_client(make_client)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
@@ -89,7 +88,7 @@ async def test_get_vnstat_metrics_yearly_parsing(make_client) -> None:
 @pytest.mark.asyncio
 async def test_get_vnstat_metrics_unsupported_period_or_endpoint_missing(make_client) -> None:
     """get_vnstat_metrics should return empty data for unsupported/missing endpoints."""
-    client, session = make_mock_session_client(make_client)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
@@ -108,12 +107,12 @@ async def test_get_vnstat_metrics_unsupported_period_or_endpoint_missing(make_cl
 @pytest.mark.asyncio
 async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client) -> None:
     """get_vnstat should produce per-interface summary fields used by sensors."""
-    client, session = make_mock_session_client(make_client)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=True)
         # Keep payload dates aligned with mocked OPNsense system time to avoid
         # day-boundary/timezone flakiness in CI.
-        now = datetime(2000, 1, 15, 12, 0, 0)
+        now = datetime(2000, 1, 15, 12, 0, 0, tzinfo=UTC)
         prev_hour = now - timedelta(hours=1)
         this_month = now.date().replace(day=1)
         prev_month = this_month - timedelta(days=1)
@@ -216,7 +215,7 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client) -> None
 @pytest.mark.asyncio
 async def test_get_vnstat_uses_systemtime_endpoint_path(make_client) -> None:
     """get_vnstat should query the supported system-time endpoint."""
-    client, session = make_mock_session_client(make_client)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=True)
 
@@ -246,7 +245,7 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client) -> None:
 @pytest.mark.asyncio
 async def test_get_vnstat_skips_calls_when_endpoint_missing(make_client) -> None:
     """get_vnstat should return empty payload and skip API calls when endpoint is absent."""
-    client, session = make_mock_session_client(make_client)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
@@ -262,7 +261,7 @@ async def test_get_vnstat_skips_calls_when_endpoint_missing(make_client) -> None
 @pytest.mark.asyncio
 async def test_parse_vnstat_payload_and_helpers_edge_cases(make_client) -> None:
     """VnStat payload/helper methods should handle malformed and fallback scenarios."""
-    client, session = make_mock_session_client(make_client)
+    client, _session = make_mock_session_client(make_client)
     try:
         parsed_empty = client._parse_vnstat_payload({"response": 123}, expected_period="hourly")
         assert parsed_empty["interfaces"] == {}
@@ -328,7 +327,7 @@ async def test_parse_vnstat_payload_and_helpers_edge_cases(make_client) -> None:
 @pytest.mark.asyncio
 async def test_vnstat_metric_values_none_and_valid(make_client) -> None:
     """_metric_values should return valid mapping only when all fields are ints."""
-    client = make_client(session=MagicMock(spec=aiohttp.ClientSession))
+    client, _session = make_mock_session_client(make_client)
     try:
         assert client._metric_values(None) is None
         assert client._metric_values({"total_bytes": 1, "rx_bytes": 2, "tx_bytes": 3}) == {

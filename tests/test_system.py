@@ -1,18 +1,29 @@
 """Tests for `aiopnsense.system`."""
 
-from datetime import datetime, timedelta
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
 
+from aiopnsense import OPNsenseClient
 from tests.conftest import make_mock_session_client
+
+ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
-async def test_get_system_info(make_client) -> None:
-    """System info should be returned from the diagnostics endpoint."""
+async def test_get_system_info(make_client: ClientType) -> None:
+    """Verify system info is returned from the diagnostics endpoint.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates system info retrieval behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value={"name": "foo"})
@@ -56,12 +67,22 @@ async def test_get_system_info(make_client) -> None:
     ],
 )
 async def test_get_device_unique_id_variants(
-    make_client,
+    make_client: ClientType,
     instances: list[Any],
     expected_id: str | None,
     expected: str | None,
 ) -> None:
-    """get_device_unique_id should handle expected-id preference and malformed entries."""
+    """Verify device unique ID selection with expected IDs and malformed rows.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        instances (list[Any]): Interface rows returned by the mocked API.
+        expected_id (str | None): Optional preferred unique ID candidate.
+        expected (str | None): Expected normalized unique ID result.
+
+    Returns:
+        None: This test validates unique-ID selection and fallback behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._safe_list_get = AsyncMock(return_value=instances)
@@ -71,9 +92,16 @@ async def test_get_device_unique_id_variants(
 
 
 @pytest.mark.asyncio
-async def test_get_opnsense_timezone_parse_and_fallback(make_client) -> None:
-    """_get_opnsense_timezone should parse valid timezone strings and fallback on errors."""
-    client, session = make_mock_session_client(make_client)
+async def test_get_opnsense_timezone_parse_and_fallback(make_client: ClientType) -> None:
+    """Verify timezone parsing succeeds and falls back gracefully on invalid data.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates timezone parsing and fallback behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value={"datetime": "2026-03-07 12:00:00 EST"})
         parsed_tz = await client._get_opnsense_timezone()
@@ -102,9 +130,16 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_carp_and_reboot_and_wol(make_client) -> None:
-    """Verify CARP interface discovery and system control endpoints (reboot/halt/WOL)."""
-    client, session = make_mock_session_client(make_client)
+async def test_carp_and_reboot_and_wol(make_client: ClientType) -> None:
+    """Verify CARP discovery and core system control endpoints.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates CARP status parsing and control endpoint behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value={"carp": {"allow": "1"}})
         assert await client.get_carp_status() is True
@@ -131,9 +166,18 @@ async def test_carp_and_reboot_and_wol(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reload_interface_and_certificates_and_gateways(make_client) -> None:
-    """Reload interface, list certificates, and list gateways parsing."""
-    client, session = make_mock_session_client(make_client)
+async def test_reload_interface_and_certificates_and_gateways(
+    make_client: ClientType,
+) -> None:
+    """Verify interface reload and certificate/gateway parsing helpers.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates reload and parsing helper behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_post = AsyncMock(return_value={"message": "OK reload"})
         ok = await client.reload_interface("em0")
@@ -169,8 +213,15 @@ async def test_reload_interface_and_certificates_and_gateways(make_client) -> No
 
 
 @pytest.mark.asyncio
-async def test_gateways_notices_and_close_notice_all(make_client) -> None:
-    """Test gateway notices handling and closing all notices."""
+async def test_gateways_notices_and_close_notice_all(make_client: ClientType) -> None:
+    """Verify gateway notices reporting and close-all notice handling.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates notice parsing and bulk-dismiss behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(
@@ -185,7 +236,7 @@ async def test_gateways_notices_and_close_notice_all(make_client) -> None:
                 "n1": {
                     "statusCode": 1,
                     "message": "m",
-                    "timestamp": int(datetime.now().timestamp()),
+                    "timestamp": int(datetime.now(tz=timezone.utc).timestamp()),
                 }
             }
         )
@@ -203,8 +254,17 @@ async def test_gateways_notices_and_close_notice_all(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_opnsense_timezone_without_tzinfo_string_uses_local_fallback(make_client) -> None:
-    """Naive datetime strings should fall back to local timezone resolution."""
+async def test_get_opnsense_timezone_without_tzinfo_string_uses_local_fallback(
+    make_client: ClientType,
+) -> None:
+    """Verify naive datetime strings fall back to local timezone resolution.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates local-timezone fallback behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         tz = await client._get_opnsense_timezone("2026-03-07 12:00:00")
@@ -216,8 +276,17 @@ async def test_get_opnsense_timezone_without_tzinfo_string_uses_local_fallback(m
 
 
 @pytest.mark.asyncio
-async def test_get_carp_interfaces_handles_invalid_payloads_and_default_status(make_client) -> None:
-    """CARP interface parsing should tolerate malformed payloads and default missing status."""
+async def test_get_carp_interfaces_handles_invalid_payloads_and_default_status(
+    make_client: ClientType,
+) -> None:
+    """Verify CARP interface parsing tolerates malformed payloads and missing status.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates robust CARP interface normalization behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(side_effect=[{"rows": "bad"}, {"rows": "bad"}])
@@ -243,8 +312,17 @@ async def test_get_carp_interfaces_handles_invalid_payloads_and_default_status(m
 
 
 @pytest.mark.asyncio
-async def test_system_actions_and_notice_closing_failure_paths(make_client) -> None:
-    """System action helpers should return failure values when OPNsense reports non-ok status."""
+async def test_system_actions_and_notice_closing_failure_paths(
+    make_client: ClientType,
+) -> None:
+    """Verify failure-path behavior for system actions and notice closing.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates non-OK status handling for action helpers.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_post = AsyncMock(return_value={"status": "failed"})
@@ -270,8 +348,17 @@ async def test_system_actions_and_notice_closing_failure_paths(make_client) -> N
 
 
 @pytest.mark.asyncio
-async def test_get_certificates_handles_non_list_and_missing_description(make_client) -> None:
-    """Certificate helper should return empty for malformed rows and skip rows without descriptions."""
+async def test_get_certificates_handles_non_list_and_missing_description(
+    make_client: ClientType,
+) -> None:
+    """Verify certificate parsing skips malformed rows and missing descriptions.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates certificate-row filtering behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value={"rows": "bad"})

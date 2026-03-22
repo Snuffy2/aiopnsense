@@ -1,18 +1,27 @@
 """Tests for `aiopnsense.services`."""
 
-from unittest.mock import AsyncMock, MagicMock
+from collections.abc import Callable
+from unittest.mock import AsyncMock
 
-import aiohttp
 import pytest
 
-import aiopnsense as pyopnsense
+from aiopnsense import OPNsenseClient
 from tests.conftest import make_mock_session_client
+
+ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
-async def test_service_management_and_get_services(make_client) -> None:
-    """Exercise get_services(), get_service_is_running() and service control."""
-    client, session = make_mock_session_client(make_client)
+async def test_service_management_and_get_services(make_client: ClientType) -> None:
+    """Verify service listing, state checks, and service control helpers.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates service normalization and control-path behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(
             return_value={
@@ -41,12 +50,20 @@ async def test_service_management_and_get_services(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_manage_service_and_restart_if_running(monkeypatch, make_client) -> None:
-    """Test _manage_service and restart_service_if_running behavior."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_manage_service_and_restart_if_running(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: ClientType,
+) -> None:
+    """Verify service-management helper behavior and restart-if-running branching.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture used to patch restart helper behavior.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates service-management endpoint and restart control flow.
+    """
+    client, _session = make_mock_session_client(make_client)
     try:
         # _manage_service should return False when service empty
         assert await client._manage_service("start", "") is False
