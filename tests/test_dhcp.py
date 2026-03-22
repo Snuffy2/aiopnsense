@@ -345,3 +345,202 @@ async def test_get_kea_leases_with_reservations_and_expiry_handling() -> None:
         assert leases[0].get("type") == "static"
     finally:
         await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_kea_interfaces_filters_enabled_and_selected(make_client) -> None:
+    """_get_kea_interfaces should honor enabled flag and selected/value filtering."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._safe_dict_get = AsyncMock(return_value={"dhcpv4": {"general": {"enabled": "0"}}})
+        assert await client._get_kea_interfaces() == {}
+
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "dhcpv4": {
+                    "general": {
+                        "enabled": "1",
+                        "interfaces": {
+                            "em0": {"selected": 1, "value": "LAN"},
+                            "em1": {"selected": 0, "value": "WAN"},
+                            "em2": {"selected": 1, "value": ""},
+                            "em3": "invalid",
+                        },
+                    }
+                }
+            }
+        )
+
+        assert await client._get_kea_interfaces() == {"em0": "LAN"}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(make_client) -> None:
+    """_get_kea_dhcpv4_leases should skip invalid/expired leases and classify static/dynamic."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        future_ts = int(datetime.now().timestamp()) + 3600
+        past_ts = int(datetime.now().timestamp()) - 3600
+
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {
+                    "rows": [
+                        None,
+                        {"state": "1", "hwaddr": "skip"},
+                        {"state": "0", "address": "192.0.2.10"},
+                        {
+                            "state": "0",
+                            "address": "192.0.2.11",
+                            "hostname": "dyn.",
+                            "if_name": "em0",
+                            "if_descr": "LAN",
+                            "hwaddr": "bb:cc",
+                            "expire": "never",
+                        },
+                        {
+                            "state": "0",
+                            "address": "192.0.2.12",
+                            "hostname": "expired",
+                            "if_name": "em0",
+                            "hwaddr": "cc:dd",
+                            "expire": past_ts,
+                        },
+                        {
+                            "state": "0",
+                            "address": "192.0.2.13",
+                            "hostname": "stat.",
+                            "if_name": "em1",
+                            "if_descr": "OPT",
+                            "hwaddr": "aa:bb",
+                            "expire": future_ts,
+                        },
+                    ]
+                },
+                {
+                    "rows": [
+                        None,
+                        {"ip_address": "192.0.2.13"},
+                        {"hw_address": "aa:bb", "ip_address": "192.0.2.13"},
+                    ]
+                },
+            ]
+        )
+
+        leases = await client._get_kea_dhcpv4_leases()
+        assert len(leases) == 2
+        assert any(
+            lease["address"] == "192.0.2.11" and lease["type"] == "dynamic" for lease in leases
+        )
+        assert any(
+            lease["address"] == "192.0.2.13" and lease["type"] == "static" for lease in leases
+        )
+
+        # Reservation rows not being a list should be tolerated.
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {"rows": [{"state": "0", "hwaddr": "aa", "address": "10.0.0.1"}]},
+                {"rows": "bad"},
+            ]
+        )
+        assert isinstance(await client._get_kea_dhcpv4_leases(), list)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client) -> None:
+    """_get_dnsmasq_leases should handle malformed rows and expiry/type branches."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._safe_dict_get = AsyncMock(return_value={"rows": "bad-shape"})
+        assert await client._get_dnsmasq_leases() == []
+
+        past_ts = int(datetime.now().timestamp()) - 3600
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    None,
+                    {
+                        "address": "192.0.2.21",
+                        "hostname": "expired",
+                        "if": "em0",
+                        "is_reserved": "0",
+                        "hwaddr": "aa:aa:aa",
+                        "expire": past_ts,
+                    },
+                    {
+                        "address": "192.0.2.22",
+                        "hostname": "dynamic-host",
+                        "if": "em0",
+                        "is_reserved": "0",
+                        "hwaddr": "",
+                        "expire": "never",
+                    },
+                ]
+            }
+        )
+
+        leases = await client._get_dnsmasq_leases()
+        assert len(leases) == 1
+        assert leases[0]["address"] == "192.0.2.22"
+        assert leases[0]["type"] == "dynamic"
+        assert leases[0]["mac"] is None
+        assert leases[0]["expires"] == "never"
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(make_client) -> None:
+    """ISC lease helpers should skip invalid rows, bad timestamps, and expired leases."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        local_tz = datetime.now().astimezone().tzinfo
+        assert local_tz is not None
+        client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
+        client.is_endpoint_available = AsyncMock(return_value=True)
+
+        past_str = (datetime.now() - timedelta(hours=2)).strftime("%Y/%m/%d %H:%M:%S")
+
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {"rows": "bad"},
+                {
+                    "rows": [
+                        {"state": "inactive", "mac": "skip"},
+                        {"state": "active", "mac": "bad-time", "ends": "invalid-date"},
+                        {"state": "active", "mac": "expired", "ends": past_str},
+                        {"state": "active", "mac": "ok", "address": "10.0.0.9", "if": "em0"},
+                    ]
+                },
+            ]
+        )
+        assert await client._get_isc_dhcpv4_leases() == []
+        v4_leases = await client._get_isc_dhcpv4_leases()
+        assert len(v4_leases) == 1
+        assert v4_leases[0]["mac"] == "ok"
+        assert v4_leases[0]["expires"] is None
+
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {"rows": "bad"},
+                {
+                    "rows": [
+                        None,
+                        {"state": "active", "mac": "bad-time-v6", "ends": "invalid-date"},
+                        {"state": "active", "mac": "expired-v6", "ends": past_str},
+                        {"state": "active", "mac": "ok-v6", "address": "2001:db8::10", "if": "em1"},
+                    ]
+                },
+            ]
+        )
+        assert await client._get_isc_dhcpv6_leases() == []
+        v6_leases = await client._get_isc_dhcpv6_leases()
+        assert len(v6_leases) == 1
+        assert v6_leases[0]["mac"] == "ok-v6"
+        assert v6_leases[0]["expires"] is None
+    finally:
+        await client.async_close()

@@ -234,3 +234,115 @@ async def test_get_device_unique_id_expected(make_client) -> None:
         assert await client.get_device_unique_id(expected_id="cc_dd_ee") == "aa_bb_cc"
     finally:
         await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_opnsense_timezone_without_tzinfo_string_uses_local_fallback(make_client) -> None:
+    """Naive datetime strings should fall back to local timezone resolution."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        tz = await client._get_opnsense_timezone("2026-03-07 12:00:00")
+        local_tz = client._get_local_timezone()
+        now = datetime.now().astimezone()
+        assert tz.utcoffset(now) == local_tz.utcoffset(now)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_device_unique_id_skips_non_mapping_entries(make_client) -> None:
+    """get_device_unique_id should ignore non-mapping entries returned by interface export."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._safe_list_get = AsyncMock(
+            return_value=[
+                "invalid-entry",
+                {"is_physical": True, "macaddr_hw": "aa:bb:cc"},
+            ]
+        )
+        assert await client.get_device_unique_id() == "aa_bb_cc"
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_carp_interfaces_handles_invalid_payloads_and_default_status(make_client) -> None:
+    """CARP interface parsing should tolerate malformed payloads and default missing status."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._safe_dict_get = AsyncMock(side_effect=[{"rows": "bad"}, {"rows": "bad"}])
+        assert await client.get_carp_interfaces() == []
+
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {
+                    "rows": [
+                        {"mode": "other", "interface": "em9"},
+                        {"mode": "carp", "interface": "em0"},
+                    ]
+                },
+                {"rows": [{"interface": "em1", "status": "UP"}]},
+            ]
+        )
+        carp = await client.get_carp_interfaces()
+        assert len(carp) == 1
+        assert carp[0]["interface"] == "em0"
+        assert carp[0]["status"] == "DISABLED"
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_system_actions_and_notice_closing_failure_paths(make_client) -> None:
+    """System action helpers should return failure values when OPNsense reports non-ok status."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._safe_dict_post = AsyncMock(return_value={"status": "failed"})
+        assert await client.system_reboot() is False
+        assert await client.system_halt() is None
+        assert await client.send_wol("em0", "aa:bb:cc") is False
+
+        client._safe_dict_post = AsyncMock(return_value={"status": "failed"})
+        assert await client.close_notice("single-notice") is False
+
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "n1": {"statusCode": 1},
+                "n2": {"statusCode": 2},
+                "n3": {"statusCode": 1},
+                "bad": "invalid",
+            }
+        )
+        client._safe_dict_post = AsyncMock(side_effect=[{"status": "ok"}, {"status": "failed"}])
+        assert await client.close_notice("all") is False
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_certificates_handles_non_list_and_missing_description(make_client) -> None:
+    """Certificate helper should return empty for malformed rows and skip rows without descriptions."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._safe_dict_get = AsyncMock(return_value={"rows": "bad"})
+        assert await client.get_certificates() == {}
+
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {"uuid": "skip-no-descr"},
+                    {
+                        "descr": "cert-ok",
+                        "uuid": "u1",
+                        "in_use": "0",
+                        "valid_from": 0,
+                        "valid_to": 0,
+                    },
+                ]
+            }
+        )
+        certs = await client.get_certificates()
+        assert list(certs) == ["cert-ok"]
+        assert certs["cert-ok"]["in_use"] is False
+    finally:
+        await client.async_close()
