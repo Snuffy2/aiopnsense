@@ -26,7 +26,7 @@ Repository = "https://github.com/Snuffy2/aiopnsense"
 lint = [
     "aiohttp",
     "mypy",
-    "pre-commit",
+    "prek",
     "ruff",
     "types-cffi",
     "types-PyMySQL",

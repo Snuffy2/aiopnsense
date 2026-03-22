@@ -2,8 +2,9 @@
 
 `aiopnsense` is an async Python client library for OPNsense.
 
-It is extracted from the `hass-opnsense` custom integration so it can be
-versioned and consumed as an external dependency by Home Assistant Core.
+**Requires OPNsense Firmware 26.1.1+**
+
+It is extracted from the [`hass-opnsense`](https://github.com/travisghansen/hass-opnsense) integration so it can be versioned and used as an external dependency by Home Assistant.
 
 ## Development
 
@@ -17,4 +18,3 @@ pip install --group dev -e .
 pytest
 prek run --all-files
 ```
-

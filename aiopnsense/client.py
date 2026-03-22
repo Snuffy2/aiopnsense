@@ -28,4 +28,4 @@ class OPNsenseClient(
     VnstatMixin,
     VPNMixin,
 ):
-    """Async client for OPNsense REST and XMLRPC endpoints."""
+    """Async client for supported OPNsense REST endpoints."""

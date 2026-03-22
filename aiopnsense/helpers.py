@@ -12,8 +12,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiohttp
 
-from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
-
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
@@ -58,29 +56,6 @@ def _log_errors(func: Callable) -> Any:
             )
             if self._initial:
                 raise
-
-    return inner
-
-
-def _xmlrpc_timeout(func: Callable) -> Any:
-    """Ensure XMLRPC calls obey the configured per-call timeout.
-
-    Parameters
-    ----------
-    func : Callable
-        Coroutine function to decorate and execute with shared behavior.
-
-    Returns
-    -------
-    Any
-    Decorator wrapper that enforces an `asyncio.wait_for` timeout and returns the wrapped result.
-
-
-    """
-
-    async def inner(self: Any, *args: Any, **kwargs: Any) -> Any:
-        """Execute wrapped coroutine with a per-call asyncio timeout window."""
-        return await asyncio.wait_for(func(self, *args, **kwargs), DEFAULT_REQUEST_TIMEOUT_SECONDS)
 
     return inner
 

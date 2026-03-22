@@ -166,10 +166,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
 
 
         """
-        if self._use_snake_case:
-            memory_info = await self._safe_dict_post("/api/diagnostics/system/system_resources")
-        else:
-            memory_info = await self._safe_dict_post("/api/diagnostics/system/systemResources")
+        memory_info = await self._safe_dict_post("/api/diagnostics/system/system_resources")
         # _LOGGER.debug(f"[get_telemetry_memory] memory_info: {memory_info}")
         memory: dict[str, Any] = {}
         memory["physmem"] = try_to_int(memory_info.get("memory", {}).get("total", None))
@@ -212,10 +209,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
 
 
         """
-        if self._use_snake_case:
-            time_info = await self._safe_dict_post("/api/diagnostics/system/system_time")
-        else:
-            time_info = await self._safe_dict_post("/api/diagnostics/system/systemTime")
+        time_info = await self._safe_dict_post("/api/diagnostics/system/system_time")
         # _LOGGER.debug("[get_telemetry_system] time_info: %s", time_info)
         system: dict[str, Any] = {}
         opnsense_tz = await self._get_opnsense_timezone(time_info.get("datetime"))
@@ -299,10 +293,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
 
 
         """
-        if self._use_snake_case:
-            cputype_info = await self._safe_list_post("/api/diagnostics/cpu_usage/get_c_p_u_type")
-        else:
-            cputype_info = await self._safe_list_post("/api/diagnostics/cpu_usage/getCPUType")
+        cputype_info = await self._safe_list_post("/api/diagnostics/cpu_usage/get_c_p_u_type")
         # _LOGGER.debug(f"[get_telemetry_cpu] cputype_info: {cputype_info}")
         if not len(cputype_info) > 0:
             return {}
@@ -333,10 +324,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
 
 
         """
-        if self._use_snake_case:
-            filesystems_info = await self._safe_dict_post("/api/diagnostics/system/system_disk")
-        else:
-            filesystems_info = await self._safe_dict_post("/api/diagnostics/system/systemDisk")
+        filesystems_info = await self._safe_dict_post("/api/diagnostics/system/system_disk")
         # _LOGGER.debug(f"[get_telemetry_filesystems] filesystems_info: {filesystems_info}")
         filesystems: list = filesystems_info.get("devices", [])
         # _LOGGER.debug(f"[get_telemetry_filesystems] filesystems: {filesystems}")
@@ -375,10 +363,7 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
 
 
         """
-        if self._use_snake_case:
-            temps_info = await self._safe_list_get("/api/diagnostics/system/system_temperature")
-        else:
-            temps_info = await self._safe_list_get("/api/diagnostics/system/systemTemperature")
+        temps_info = await self._safe_list_get("/api/diagnostics/system/system_temperature")
         # _LOGGER.debug(f"[get_telemetry_temps] temps_info: {temps_info}")
         if not len(temps_info) > 0:
             return {}

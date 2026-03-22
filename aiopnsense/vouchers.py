@@ -30,10 +30,7 @@ class VouchersMixin(PyOPNsenseClientProtocol):
         if data.get("voucher_server", None):
             server = data.get("voucher_server")
         else:
-            if self._use_snake_case:
-                servers = await self._safe_list_get("/api/captiveportal/voucher/list_providers")
-            else:
-                servers = await self._safe_list_get("/api/captiveportal/voucher/listProviders")
+            servers = await self._safe_list_get("/api/captiveportal/voucher/list_providers")
             if len(servers) == 0:
                 raise VoucherServerError("No voucher servers exist")
             if len(servers) != 1:
@@ -44,10 +41,7 @@ class VouchersMixin(PyOPNsenseClientProtocol):
         server_slug = quote(str(server), safe="")
         payload: dict[str, Any] = dict(data).copy()
         payload.pop("voucher_server", None)
-        if self._use_snake_case:
-            voucher_url: str = f"/api/captiveportal/voucher/generate_vouchers/{server_slug}/"
-        else:
-            voucher_url = f"/api/captiveportal/voucher/generateVouchers/{server_slug}/"
+        voucher_url: str = f"/api/captiveportal/voucher/generate_vouchers/{server_slug}/"
         _LOGGER.debug("[generate_vouchers] url: %s, payload: %s", voucher_url, payload)
         vouchers = await self._safe_list_post(
             voucher_url,

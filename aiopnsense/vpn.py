@@ -47,12 +47,8 @@ class VPNMixin(PyOPNsenseClientProtocol):
         openvpn: dict[str, Any] = {"servers": {}, "clients": {}}
 
         # Fetch data
-        if self._use_snake_case:
-            sessions_info = await self._safe_dict_get("/api/openvpn/service/search_sessions")
-            routes_info = await self._safe_dict_get("/api/openvpn/service/search_routes")
-        else:
-            sessions_info = await self._safe_dict_get("/api/openvpn/service/searchSessions")
-            routes_info = await self._safe_dict_get("/api/openvpn/service/searchRoutes")
+        sessions_info = await self._safe_dict_get("/api/openvpn/service/search_sessions")
+        routes_info = await self._safe_dict_get("/api/openvpn/service/search_routes")
         providers_info = await self._safe_dict_get("/api/openvpn/export/providers")
         instances_info = await self._safe_dict_get("/api/openvpn/instances/search")
 
@@ -610,17 +606,9 @@ class VPNMixin(PyOPNsenseClientProtocol):
             return reconfigure.get("result", "") == "ok"
         if vpn_type == "wireguard":
             if clients_servers == "clients":
-                endpoint = (
-                    f"/api/wireguard/client/toggle_client/{uuid}"
-                    if self._use_snake_case
-                    else f"/api/wireguard/client/toggleClient/{uuid}"
-                )
+                endpoint = f"/api/wireguard/client/toggle_client/{uuid}"
             elif clients_servers == "servers":
-                endpoint = (
-                    f"/api/wireguard/server/toggle_server/{uuid}"
-                    if self._use_snake_case
-                    else f"/api/wireguard/server/toggleServer/{uuid}"
-                )
+                endpoint = f"/api/wireguard/server/toggle_server/{uuid}"
             else:
                 return False
             success = await self._safe_dict_post(endpoint)

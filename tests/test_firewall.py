@@ -238,8 +238,6 @@ async def test_toggle_alias_flows(make_client) -> None:
         url="http://localhost", username="u", password="p", session=session
     )
     try:
-        client._use_snake_case = True
-
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
         assert await client.toggle_alias("missing", "on") is False
 

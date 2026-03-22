@@ -47,9 +47,9 @@ async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
         }
 
         async def fake_safe_dict_get(path):
-            if "search_sessions" in path or "searchSessions" in path:
+            if "search_sessions" in path:
                 return sessions_info
-            if "search_routes" in path or "searchRoutes" in path:
+            if "search_routes" in path:
                 return routes_info
             if "providers" in path:
                 return providers_info
@@ -137,23 +137,20 @@ async def test_wireguard_processing_and_updates(make_client) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "vpn_type,path,use_snake_case,post_resp,expected",
+    "vpn_type,path,post_resp,expected",
     [
-        ("openvpn", "servers", False, {"changed": False}, False),
-        ("openvpn", "servers", False, [{"changed": True}, {"result": "ok"}], True),
-        ("wireguard", "clients", True, [{"changed": True}, {"result": "ok"}], True),
-        ("wireguard", "servers", False, {"changed": False}, False),
+        ("openvpn", "servers", {"changed": False}, False),
+        ("openvpn", "servers", [{"changed": True}, {"result": "ok"}], True),
+        ("wireguard", "clients", [{"changed": True}, {"result": "ok"}], True),
+        ("wireguard", "servers", {"changed": False}, False),
     ],
 )
 async def test_toggle_vpn_instance_variants(
-    make_client, vpn_type, path, use_snake_case, post_resp, expected
+    make_client, vpn_type, path, post_resp, expected
 ) -> None:
     """Parametrized toggle_vpn_instance covering OpenVPN and WireGuard variants."""
     session = MagicMock(spec=aiohttp.ClientSession)
     client = make_client(session=session)
-
-    if use_snake_case:
-        client._use_snake_case = True
 
     if isinstance(post_resp, list):
         client._safe_dict_post = AsyncMock(side_effect=post_resp)
@@ -178,9 +175,9 @@ async def test_openvpn_more_detail_parsing(monkeypatch, make_client) -> None:
     instances_info = {"rows": [{"role": "client", "uuid": "c1", "enabled": "0"}]}
 
     async def fake_safe_dict_get(path):
-        if "search_sessions" in path or "searchSessions" in path:
+        if "search_sessions" in path:
             return sessions_info
-        if "search_routes" in path or "searchRoutes" in path:
+        if "search_routes" in path:
             return routes_info
         if "providers" in path:
             return providers_info
@@ -208,7 +205,7 @@ async def test_openvpn_processing_and_fetch_details() -> None:
     try:
         # prepare fake responses for _safe_dict_get based on path
         def fake_safe_dict_get(path):
-            if "searchSessions" in path or "search_sessions" in path:
+            if "search_sessions" in path:
                 return {
                     "rows": [
                         {
@@ -221,7 +218,7 @@ async def test_openvpn_processing_and_fetch_details() -> None:
                         {"type": "server"},
                     ]
                 }
-            if "searchRoutes" in path or "search_routes" in path:
+            if "search_routes" in path:
                 return {
                     "rows": [
                         {

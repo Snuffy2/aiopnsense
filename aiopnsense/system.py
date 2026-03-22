@@ -44,13 +44,10 @@ class SystemMixin(PyOPNsenseClientProtocol):
 
         """
         if datetime_str is None:
-            path = (
-                "/api/diagnostics/system/system_time"
-                if self._use_snake_case
-                else "/api/diagnostics/system/systemTime"
-            )
             try:
-                datetime_raw = (await self._safe_dict_post(path)).get("datetime")
+                datetime_raw = (
+                    await self._safe_dict_post("/api/diagnostics/system/system_time")
+                ).get("datetime")
             except (aiohttp.ClientError, TimeoutError) as err:
                 _LOGGER.debug(
                     "Failed to fetch OPNsense system time for timezone resolution: %s: %s",
@@ -79,16 +76,6 @@ class SystemMixin(PyOPNsenseClientProtocol):
                     err,
                 )
         return self._get_local_timezone()
-
-    @_log_errors
-    async def _filter_configure(self) -> None:
-        """Apply pending firewall/NAT filter configuration changes."""
-        script: str = r"""
-filter_configure();
-clear_subsystem_dirty('natconf');
-clear_subsystem_dirty('filter');
-"""
-        await self._exec_php(script)
 
     @_log_errors
     async def get_device_unique_id(self, expected_id: str | None = None) -> str | None:
@@ -141,36 +128,9 @@ clear_subsystem_dirty('filter');
 
         """
         system_info: dict[str, Any] = {}
-        if self._use_snake_case:
-            response = await self._safe_dict_get("/api/diagnostics/system/system_information")
-        else:
-            response = await self._safe_dict_get("/api/diagnostics/system/systemInformation")
+        response = await self._safe_dict_get("/api/diagnostics/system/system_information")
         system_info["name"] = response.get("name", None)
         return system_info
-
-    @_log_errors
-    async def get_config(self) -> dict[str, Any]:
-        """XMLRPC call to return all the config settings.
-
-        Returns
-        -------
-        dict[str, Any]
-        Parsed config payload returned by OPNsense APIs.
-
-
-        """
-        script: str = r"""
-global $config;
-
-$toreturn = [
-  "data" => $config,
-];
-"""
-        response: dict[str, Any] = await self._exec_php(script)
-        ret_data = response.get("data", {})
-        if not isinstance(ret_data, MutableMapping):
-            return {}
-        return dict(ret_data)
 
     @_log_errors
     async def get_carp_status(self) -> bool:
@@ -328,12 +288,7 @@ $toreturn = [
 
 
         """
-
-        dismiss_endpoint = (
-            "/api/core/system/dismiss_status"
-            if self._use_snake_case
-            else "/api/core/system/dismissStatus"
-        )
+        dismiss_endpoint = "/api/core/system/dismiss_status"
 
         # id = "all" to close all notices
         success = True
@@ -372,14 +327,7 @@ $toreturn = [
 
 
         """
-        if self._use_snake_case:
-            reload = await self._safe_dict_post(
-                f"/api/interfaces/overview/reload_interface/{if_name}"
-            )
-        else:
-            reload = await self._safe_dict_post(
-                f"/api/interfaces/overview/reloadInterface/{if_name}"
-            )
+        reload = await self._safe_dict_post(f"/api/interfaces/overview/reload_interface/{if_name}")
         return reload.get("message", "").startswith("OK")
 
     @_log_errors

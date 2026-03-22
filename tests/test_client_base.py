@@ -4,23 +4,15 @@ import asyncio
 from collections.abc import MutableMapping
 import contextlib
 from datetime import datetime, timedelta
-import socket
-from ssl import SSLError
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-import xmlrpc.client as xc
-from xmlrpc.client import Fault
 
 import aiohttp
-import awesomeversion
 import pytest
 from yarl import URL
 
 import aiopnsense as pyopnsense
-from aiopnsense import (
-    client_base as pyopnsense_client_base,
-    helpers as pyopnsense_helpers,
-)
+from aiopnsense import client_base as pyopnsense_client_base
 
 
 @pytest.mark.asyncio
@@ -288,73 +280,6 @@ async def test_opnsenseclient_async_close(make_client) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("firmware,expected", [("25.8.0", True), ("25.1.0", False)])
-async def test_set_use_snake_case_detection(make_client, firmware, expected) -> None:
-    """set_use_snake_case should detect firmware ranges correctly."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
-    client._firmware_version = firmware
-    await client.set_use_snake_case()
-    assert client._use_snake_case is expected
-    await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_set_use_snake_case_handles_compare_exception(monkeypatch, make_client) -> None:
-    """set_use_snake_case should default to snake_case True on comparison exception."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
-    try:
-
-        def mock_compare(self, other):
-            raise awesomeversion.exceptions.AwesomeVersionCompareException("test exception")
-
-        monkeypatch.setattr(awesomeversion.AwesomeVersion, "__lt__", mock_compare)
-        client._firmware_version = "25.8.0"
-        await client.set_use_snake_case()
-        # Should default to True on exception
-        assert client._use_snake_case is True
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.parametrize(
-    "exc_factory,initial",
-    [
-        (lambda: TypeError("bad json"), False),
-        (lambda: Fault(1, "err"), False),
-        (lambda: socket.gaierror("name or service not known"), False),
-        (lambda: SSLError("ssl fail"), False),
-        (lambda: Fault(2, "err"), True),
-        (lambda: socket.gaierror("no host"), True),
-        (lambda: SSLError("ssl fail"), True),
-    ],
-)
-@pytest.mark.asyncio
-async def test_exec_php_error_paths(exc_factory, initial: bool, make_client) -> None:
-    """_exec_php should swallow known exceptions and return {} regardless of initial flag.
-
-    Consolidates previous exec_php tests into one parameterized function covering:
-    - TypeError JSON issues
-    - xmlrpc.client.Fault
-    - socket.gaierror
-    - ssl.SSLError
-    With both initial False and initial True states.
-    """
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
-    try:
-        client._initial = initial
-        proxy = MagicMock()
-        proxy.opnsense.exec_php.side_effect = exc_factory()
-        client._get_proxy = MagicMock(return_value=proxy)
-        res = await client._exec_php("echo test;")
-        assert res == {}
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method_name, session_method, args, kwargs",
     [
@@ -480,29 +405,6 @@ async def test_get_from_stream_partial_chunks_accumulates_buffer(
     try:
         res = await client._do_get_from_stream("/stream2", caller="tst")
         assert isinstance(res, MutableMapping)
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_proxy_https_unverified_returns_serverproxy() -> None:
-    """When scheme is https and verify_ssl is False, _get_proxy returns ServerProxy.
-
-    Make this an async test and instantiate the client while the event loop is
-    running so any background tasks are created on the active loop; ensure we
-    close the client afterwards to avoid leaking tasks.
-    """
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="https://localhost",
-        username="u",
-        password="p",
-        session=session,
-        opts={"verify_ssl": False},
-    )
-    try:
-        proxy = client._get_proxy()
-        assert isinstance(proxy, xc.ServerProxy)
     finally:
         await client.async_close()
 
@@ -808,33 +710,6 @@ async def test_post_uses_unknown_when_inspect_stack_raises(monkeypatch, make_cli
 
 
 @pytest.mark.asyncio
-async def test_exec_php_returns_real_json_and_xmlrpc_timeout_decorator() -> None:
-    """_exec_php should return parsed JSON from response['real']; test @_xmlrpc_timeout wrapper."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
-    try:
-        # Simulate exec_php returning a mapping with 'real' JSON string
-        proxy = MagicMock()
-        proxy.opnsense.exec_php.return_value = {"real": '{"ok": true, "val": 5}'}
-        client._get_proxy = MagicMock(return_value=proxy)
-        res = await client._exec_php("echo ok;")
-        assert isinstance(res, MutableMapping) and res.get("val") == 5
-
-        # Test the _xmlrpc_timeout decorator: wrap a simple async function
-        class D:
-            @pyopnsense_helpers._xmlrpc_timeout
-            async def wrapped(self) -> int:
-                return 7
-
-        d = D()
-        assert await d.wrapped() == 7
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_do_get_and_do_post_success_paths() -> None:
     """_do_get/_do_post should return parsed JSON when response.ok is True."""
     session = MagicMock(spec=aiohttp.ClientSession)
@@ -880,24 +755,6 @@ async def test_do_get_and_do_post_success_paths() -> None:
 
         posted = await client._do_post("/api/x", payload={"x": 1}, caller="t")
         assert isinstance(posted, list) and posted[0] == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_exec_php_non_mapping_and_get_proxy_https_unverified() -> None:
-    """_exec_php returns {} when proxy returns non-mapping; _get_proxy supports https unverified."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    # non-mapping return
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
-    try:
-        proxy = MagicMock()
-        proxy.opnsense.exec_php.return_value = [1, 2, 3]
-        client._get_proxy = MagicMock(return_value=proxy)
-        res = await client._exec_php("x")
-        assert res == {}
     finally:
         await client.async_close()
 
@@ -1101,25 +958,6 @@ async def test_do_get_post_and_stream_permission_errors(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_restore_config_section_executes_in_executor(make_client) -> None:
-    """_restore_config_section should call underlying proxy method with params."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
-    called = {}
-
-    class FakeProxy:
-        class opnsense:  # noqa: D401 - minimal container for restore_config_section
-            @staticmethod
-            def restore_config_section(params):  # pragma: no cover - executed in executor
-                called["params"] = params
-
-    client._get_proxy = MagicMock(return_value=FakeProxy())
-    await client._restore_config_section("filter", {"rule": []})
-    assert called.get("params") == {"filter": {"rule": []}}
-    await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_client_name_property():
     """Ensure client reports a composed name property correctly."""
     session = MagicMock(spec=aiohttp.ClientSession)
@@ -1139,6 +977,24 @@ async def test_client_name_property():
 async def test_reset_and_get_query_counts():
     """Reset and retrieve client query counters."""
     session = MagicMock(spec=aiohttp.ClientSession)
+
+    class FakeOKResp:
+        def __init__(self, payload):
+            self.status = 200
+            self.reason = "OK"
+            self.ok = True
+            self._payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self, content_type=None):
+            return self._payload
+
+    session.get = lambda *args, **kwargs: FakeOKResp({"ok": True})
     client = pyopnsense.OPNsenseClient(
         url="http://localhost",
         username="user",
@@ -1146,29 +1002,12 @@ async def test_reset_and_get_query_counts():
         session=session,
     )
     try:
+        await client._do_get("/api/test", caller="test_reset_and_get_query_counts")
+        count = await client.get_query_counts()
+        assert count > 0
+
         await client.reset_query_counts()
-        rest, xml = await client.get_query_counts()
-        assert rest == 0
-        assert xml == 0
+        count = await client.get_query_counts()
+        assert count == 0
     finally:
         await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_set_use_snake_case_unknown_firmware_raise(monkeypatch, make_client) -> None:
-    """set_use_snake_case should raise UnknownFirmware when initial True and compare fails."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
-    client._firmware_version = "25.x"
-
-    class BadAV:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def __lt__(self, other):  # noqa: D401 - comparison triggers exception
-            raise awesomeversion.exceptions.AwesomeVersionCompareException("bad")
-
-    monkeypatch.setattr(pyopnsense_client_base.awesomeversion, "AwesomeVersion", BadAV)
-    with pytest.raises(pyopnsense.UnknownFirmware):
-        await client.set_use_snake_case(initial=True)
-    await client.async_close()

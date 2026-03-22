@@ -9,7 +9,6 @@ from typing import Any, Protocol
 class PyOPNsenseClientProtocol(Protocol):
     """Structural typing contract used by split pyopnsense mixins."""
 
-    _use_snake_case: bool
     _firmware_version: str | None
     _endpoint_availability: dict[str, bool]
     _endpoint_checked_at: dict[str, datetime]
@@ -185,61 +184,13 @@ class PyOPNsenseClientProtocol(Protocol):
         ...
 
     @abstractmethod
-    async def _exec_php(self, script: str) -> dict[str, Any]:
-        """Execute a PHP script via XMLRPC and decode the JSON payload.
-
-        Parameters
-        ----------
-        script : str
-            PHP source snippet.
+    async def get_query_counts(self) -> int:
+        """Return the current REST API query count.
 
         Returns
         -------
-        dict[str, Any]
-            Decoded dictionary payload.
-
-        """
-        ...
-
-    @abstractmethod
-    async def _restore_config_section(
-        self, section_name: str, data: MutableMapping[str, Any]
-    ) -> None:
-        """Restore a configuration section via XMLRPC.
-
-        Parameters
-        ----------
-        section_name : str
-            Config section key.
-        data : MutableMapping[str, Any]
-            Replacement section payload.
-
-        Returns
-        -------
-        None
-
-        """
-        ...
-
-    @abstractmethod
-    async def _filter_configure(self) -> None:
-        """Apply pending firewall and NAT filter configuration changes.
-
-        Returns
-        -------
-        None
-
-        """
-        ...
-
-    @abstractmethod
-    async def get_config(self) -> dict[str, Any]:
-        """Return full OPNsense configuration payload.
-
-        Returns
-        -------
-        dict[str, Any]
-            Full configuration dictionary.
+        int
+            Total REST API query count recorded by the client.
 
         """
         ...
