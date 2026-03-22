@@ -29,23 +29,14 @@ class ClientBaseMixin:
     ) -> None:
         """Initialize the OPNsense client.
 
-        Parameters
-        ----------
-        url : str
-            Base URL of the OPNsense instance.
-        username : str
-            API username used for authentication.
-        password : str
-            API password used for authentication.
-        session : aiohttp.ClientSession
-            Shared aiohttp client session used for HTTP requests.
-        opts : MutableMapping[str, Any] | None
-            Optional connection options (for example verify_ssl). Defaults to None.
-        initial : bool
-            Whether the call runs during initial setup/validation. Defaults to False.
-        name : str
-            Human-friendly name used in logs and identifiers. Defaults to 'OPNsense'.
-
+        Args:
+            url (str): Base URL of the OPNsense instance.
+            username (str): Username for API authentication.
+            password (str): Password for API authentication.
+            session (aiohttp.ClientSession): HTTP client session used for API requests.
+            opts (MutableMapping[str, Any] | None, optional): Optional client configuration values.
+            initial (bool): Whether the client runs in initial-connectivity mode.
+            name (str): Display name for the client instance.
         """
 
         self._username: str = username
@@ -72,12 +63,7 @@ class ClientBaseMixin:
         self._loop: asyncio.AbstractEventLoop | None = None
 
     async def _ensure_workers_started(self) -> None:
-        """Ensure queue workers are running on the active event loop.
-
-        This binds loop-dependent resources lazily to the currently running
-        loop, avoiding private loop creation during object construction.
-
-        """
+        """Ensure queue workers are running on the active event loop."""
         self._loop = asyncio.get_running_loop()
 
         if self._queue_monitor is None or self._queue_monitor.done():
@@ -88,7 +74,11 @@ class ClientBaseMixin:
             self._workers.append(asyncio.create_task(self._process_queue()))
 
     async def _get_active_loop(self) -> asyncio.AbstractEventLoop:
-        """Ensure workers are started and return the active event loop."""
+        """Ensure workers are started and return the active event loop.
+
+        Returns:
+            asyncio.AbstractEventLoop: Value produced by this method.
+        """
         await self._ensure_workers_started()
         if self._loop is None:
             raise RuntimeError("Event loop is not initialized")
@@ -98,12 +88,8 @@ class ClientBaseMixin:
     def name(self) -> str:
         """Return the name of the client.
 
-        Returns
-        -------
-        str
-        Configured client display name.
-
-
+        Returns:
+            str: The name of the client.
         """
         return self._name
 
@@ -114,29 +100,19 @@ class ClientBaseMixin:
     async def get_query_counts(self) -> int:
         """Return current API query counts.
 
-        Returns
-        -------
-        int
-        Total REST API query count recorded by the client.
-
-
+        Returns:
+            int: Current number of API queries performed by the client.
         """
         return self._rest_api_query_count
 
     async def _get_from_stream(self, path: str) -> dict[str, Any]:
         """Queue a streaming GET request and return the parsed payload.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to call on the OPNsense host.
+        Args:
+            path (str): API endpoint path to request.
 
-        Returns
-        -------
-        dict[str, Any]
-        Queued streaming-response payload parsed into a dictionary.
-
-
+        Returns:
+            dict[str, Any]: Decoded payload extracted from the streaming API response.
         """
         loop = await self._get_active_loop()
         try:
@@ -150,17 +126,11 @@ class ClientBaseMixin:
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
         """Queue a GET request and return the result.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to call on the OPNsense host.
+        Args:
+            path (str): API endpoint path to request.
 
-        Returns
-        -------
-        MutableMapping[str, Any] | list | None
-        Decoded JSON payload from a queued GET request, or None when request/parse fails.
-
-
+        Returns:
+            MutableMapping[str, Any] | list | None: Decoded response payload returned by the GET request.
         """
         loop = await self._get_active_loop()
         try:
@@ -176,19 +146,12 @@ class ClientBaseMixin:
     ) -> MutableMapping[str, Any] | list | None:
         """Queue a POST request and return the result.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to call on the OPNsense host.
-        payload : MutableMapping[str, Any] | None
-            JSON payload body sent with the API request. Defaults to None.
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None, optional): Request payload sent to the API endpoint.
 
-        Returns
-        -------
-        MutableMapping[str, Any] | list | None
-        Decoded JSON payload from a queued POST request, or None when request/parse fails.
-
-
+        Returns:
+            MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request.
         """
         loop = await self._get_active_loop()
         try:
@@ -257,19 +220,12 @@ class ClientBaseMixin:
     async def _do_get_from_stream(self, path: str, caller: str = "Unknown") -> dict[str, Any]:
         """Execute a streaming GET request immediately.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to call on the OPNsense host.
-        caller : str
-            Name of the calling method used for log context. Defaults to 'Unknown'.
+        Args:
+            path (str): API endpoint path to request.
+            caller (str): Caller name used for diagnostics and logging.
 
-        Returns
-        -------
-        dict[str, Any]
-        Parsed JSON object extracted from the stream payload.
-
-
+        Returns:
+            dict[str, Any]: Decoded payload extracted from the streaming API response.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -359,22 +315,13 @@ class ClientBaseMixin:
     ) -> MutableMapping[str, Any] | list | None:
         """Execute a GET request immediately without queueing.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to call on the OPNsense host.
-        caller : str
-            Name of the calling method used for log context. Defaults to 'Unknown'.
-        timeout_seconds : int | float | None
-            Optional timeout value in seconds for this request. Defaults to None,
-            which uses the shared default timeout.
+        Args:
+            path (str): API endpoint path to request.
+            caller (str): Caller name used for diagnostics and logging.
+            timeout_seconds (float | None, optional): Request timeout in seconds for this call.
 
-        Returns
-        -------
-        MutableMapping[str, Any] | list | None
-        Decoded JSON payload from an immediate GET request, or None when request/parse fails.
-
-
+        Returns:
+            MutableMapping[str, Any] | list | None: Decoded response payload returned by the GET request.
         """
         # /api/<module>/<controller>/<command>/[<param1>/[<param2>/...]]
         self._rest_api_query_count += 1
@@ -423,17 +370,11 @@ class ClientBaseMixin:
     def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
         """Normalize per-call timeout values to a positive float in seconds.
 
-        Parameters
-        ----------
-        timeout_seconds : int | float | None
-            Requested timeout value in seconds.
+        Args:
+            timeout_seconds (float | None): Request timeout in seconds for this call.
 
-        Returns
-        -------
-        float
-            Positive timeout in seconds. Falls back to
-            DEFAULT_REQUEST_TIMEOUT_SECONDS when invalid.
-
+        Returns:
+            float: Normalized value ready for downstream processing.
         """
         if timeout_seconds is None:
             return float(DEFAULT_REQUEST_TIMEOUT_SECONDS)
@@ -448,17 +389,11 @@ class ClientBaseMixin:
     async def _safe_dict_get(self, path: str) -> dict[str, Any]:
         """Fetch data from the given path, ensuring the result is a dict.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to call on the OPNsense host.
+        Args:
+            path (str): API endpoint path to request.
 
-        Returns
-        -------
-        dict[str, Any]
-        Dictionary payload from the GET request, or an empty dictionary if the response is not a mapping.
-
-
+        Returns:
+            dict[str, Any]: Response payload coerced to a dictionary.
         """
         result = await self._get(path=path)
         return dict(result) if isinstance(result, MutableMapping) else {}
@@ -468,19 +403,12 @@ class ClientBaseMixin:
     ) -> dict[str, Any]:
         """Fetch a GET payload with a custom timeout and coerce to a dictionary.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to call on the OPNsense host.
-        timeout_seconds : int | float
-            Total timeout window in seconds for this request.
+        Args:
+            path (str): API endpoint path to request.
+            timeout_seconds (float): Request timeout in seconds for this call.
 
-        Returns
-        -------
-        dict[str, Any]
-            Dictionary payload from the GET request, or an empty dictionary if
-            the response is not a mapping.
-
+        Returns:
+            dict[str, Any]: Response payload coerced to a dictionary.
         """
         result = await self._do_get(
             path=path,
@@ -492,17 +420,11 @@ class ClientBaseMixin:
     async def _safe_list_get(self, path: str) -> list:
         """Fetch data from the given path, ensuring the result is a list.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to call on the OPNsense host.
+        Args:
+            path (str): API endpoint path to request.
 
-        Returns
-        -------
-        list
-        List payload from the GET request, or an empty list if the response is not a list.
-
-
+        Returns:
+            list: Response payload coerced to a list.
         """
         result = await self._get(path=path)
         return result if isinstance(result, list) else []
@@ -512,21 +434,13 @@ class ClientBaseMixin:
     ) -> MutableMapping[str, Any] | list | None:
         """Execute a POST request immediately without queueing.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to call on the OPNsense host.
-        payload : MutableMapping[str, Any] | None
-            JSON payload body sent with the API request. Defaults to None.
-        caller : str
-            Name of the calling method used for log context. Defaults to 'Unknown'.
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None, optional): Request payload sent to the API endpoint.
+            caller (str): Caller name used for diagnostics and logging.
 
-        Returns
-        -------
-        MutableMapping[str, Any] | list | None
-        Decoded JSON payload from an immediate POST request, or None when request/parse fails.
-
-
+        Returns:
+            MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -578,19 +492,12 @@ class ClientBaseMixin:
     ) -> dict[str, Any]:
         """Fetch data from the given path, ensuring the result is a dict.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to call on the OPNsense host.
-        payload : MutableMapping[str, Any] | None
-            JSON payload body sent with the API request. Defaults to None.
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None, optional): Request payload sent to the API endpoint.
 
-        Returns
-        -------
-        dict[str, Any]
-        Dictionary payload from the POST request, or an empty dictionary if the response is not a mapping.
-
-
+        Returns:
+            dict[str, Any]: Response payload coerced to a dictionary.
         """
         result = await self._post(path=path, payload=payload)
         return dict(result) if isinstance(result, MutableMapping) else {}
@@ -600,19 +507,12 @@ class ClientBaseMixin:
     ) -> list:
         """Fetch data from the given path, ensuring the result is a list.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to call on the OPNsense host.
-        payload : MutableMapping[str, Any] | None
-            JSON payload body sent with the API request. Defaults to None.
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None, optional): Request payload sent to the API endpoint.
 
-        Returns
-        -------
-        list
-        List payload from the POST request, or an empty list if the response is not a list.
-
-
+        Returns:
+            list: Response payload coerced to a list.
         """
         result = await self._post(path=path, payload=payload)
         return result if isinstance(result, list) else []
@@ -620,30 +520,12 @@ class ClientBaseMixin:
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
         """Return whether a specific API endpoint appears to be available.
 
-        Parameters
-        ----------
-        path : str
-            API endpoint path to check on the OPNsense host.
-        force_refresh : bool
-            Whether to bypass cached availability state and perform a new probe.
+        Args:
+            path (str): API endpoint path to request.
+            force_refresh (bool): Whether to bypass cached endpoint availability.
 
-        Returns
-        -------
-        bool
-            ``True`` when endpoint probe succeeded, otherwise ``False``.
-
-        Notes
-        -----
-        Availability is cached per endpoint path in ``self._endpoint_availability`` and
-        timestamped in ``self._endpoint_checked_at``.
-        Cached entries are considered fresh for ``self._endpoint_cache_ttl_seconds``
-        seconds.
-        Successful checks (HTTP 2xx) and definitive "not found" checks (HTTP 404)
-        are cached and returned until TTL expiry.
-        Other HTTP failures (for example 4xx except 404, and 5xx) plus transport
-        exceptions are treated as transient failures and are not cached.
-        ``force_refresh=True`` bypasses cache freshness and probes immediately.
-
+        Returns:
+            bool: True if a specific api endpoint appears to be available; otherwise, False.
         """
         if not isinstance(path, str) or not path:
             return False

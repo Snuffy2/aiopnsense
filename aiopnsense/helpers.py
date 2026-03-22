@@ -18,21 +18,25 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 def _log_errors(func: Callable) -> Any:
     """Wrap coroutine methods with shared timeout/error logging behavior.
 
-    Parameters
-    ----------
-    func : Callable
-        Coroutine function to decorate and execute with shared behavior.
+    Args:
+        func (Callable): Coroutine function to decorate and execute with shared
+            behavior.
 
-    Returns
-    -------
-    Any
-    Decorator wrapper that applies shared exception logging and returns the wrapped coroutine result.
-
-
+    Returns:
+        Any: Decorator wrapper that applies shared exception logging and
+            returns the wrapped coroutine result.
     """
 
     async def inner(self: Any, *args: Any, **kwargs: Any) -> Any:
-        """Execute wrapped coroutine with shared timeout/exception logging."""
+        """Execute wrapped coroutine with shared timeout/exception logging.
+
+        Args:
+            *args (Any): Positional arguments forwarded to the wrapped callable.
+            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Value produced by this helper method.
+        """
         try:
             return await func(self, *args, **kwargs)
         except asyncio.CancelledError:

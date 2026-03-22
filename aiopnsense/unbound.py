@@ -16,12 +16,8 @@ class UnboundMixin(PyOPNsenseClientProtocol):
     async def get_unbound_blocklist(self) -> dict[str, Any]:
         """Return the Unbound Blocklist details.
 
-        Returns
-        -------
-        dict[str, Any]
-        Parsed unbound blocklist payload returned by OPNsense APIs.
-
-
+        Returns:
+            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         dnsbl_raw = await self._safe_dict_get("/api/unbound/settings/search_dnsbl")
         if not isinstance(dnsbl_raw, MutableMapping):
@@ -42,19 +38,12 @@ class UnboundMixin(PyOPNsenseClientProtocol):
     async def _toggle_unbound_blocklist(self, set_state: bool, uuid: str | None) -> bool:
         """Enable or disable the unbound blocklist.
 
-        Parameters
-        ----------
-        set_state : bool
-            Desired enabled state to apply.
-        uuid : str | None
-            Target object UUID returned by OPNsense.
+        Args:
+            set_state (bool): Target alias enabled state.
+            uuid (str | None): Unique identifier of the target OPNsense resource.
 
-        Returns
-        -------
-        bool
-        ``True`` when the target blocklist toggles successfully and DNSBL reports OK.
-
-
+        Returns:
+            bool: True when the toggle operation completes successfully; otherwise, False.
         """
         if not uuid:
             _LOGGER.error("Blocklist uuid must be provided for Unbound Extended Blocklists")
@@ -89,17 +78,11 @@ class UnboundMixin(PyOPNsenseClientProtocol):
     async def enable_unbound_blocklist(self, uuid: str | None = None) -> bool:
         """Enable the unbound blocklist.
 
-        Parameters
-        ----------
-        uuid : str | None
-            Target object UUID returned by OPNsense. Defaults to None.
+        Args:
+            uuid (str | None, optional): Unique identifier of the target OPNsense resource.
 
-        Returns
-        -------
-        bool
-        True when OPNsense reports the requested action succeeded; otherwise False.
-
-
+        Returns:
+            bool: True when the operation succeeds; otherwise, False.
         """
         return await self._toggle_unbound_blocklist(set_state=True, uuid=uuid)
 
@@ -107,16 +90,10 @@ class UnboundMixin(PyOPNsenseClientProtocol):
     async def disable_unbound_blocklist(self, uuid: str | None = None) -> bool:
         """Disable the unbound blocklist.
 
-        Parameters
-        ----------
-        uuid : str | None
-            Target object UUID returned by OPNsense. Defaults to None.
+        Args:
+            uuid (str | None, optional): Unique identifier of the target OPNsense resource.
 
-        Returns
-        -------
-        bool
-        True when OPNsense reports the requested action succeeded; otherwise False.
-
-
+        Returns:
+            bool: True when the operation succeeds; otherwise, False.
         """
         return await self._toggle_unbound_blocklist(set_state=False, uuid=uuid)

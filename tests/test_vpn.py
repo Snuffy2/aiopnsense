@@ -47,6 +47,14 @@ async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
         }
 
         async def fake_safe_dict_get(path):
+            """Fake safe dict get.
+
+            Args:
+                path (str): API endpoint path string to request.
+
+            Returns:
+                Any: Response payload coerced to a dictionary.
+            """
             if "search_sessions" in path:
                 return sessions_info
             if "search_routes" in path:
@@ -65,6 +73,14 @@ async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
             return {}
 
         async def fake_safe_list_get(path):
+            """Fake safe list get.
+
+            Args:
+                path (str): API endpoint path to request.
+
+            Returns:
+                Any: Response payload coerced to a list.
+            """
             return []
 
         monkeypatch.setattr(
@@ -175,6 +191,14 @@ async def test_openvpn_more_detail_parsing(monkeypatch, make_client) -> None:
     instances_info = {"rows": [{"role": "client", "uuid": "c1", "enabled": "0"}]}
 
     async def fake_safe_dict_get(path):
+        """Fake safe dict get.
+
+        Args:
+            path (str): API endpoint path to request.
+
+        Returns:
+            Any: Response payload coerced to a dictionary.
+        """
         if "search_sessions" in path:
             return sessions_info
         if "search_routes" in path:
@@ -205,6 +229,14 @@ async def test_openvpn_processing_and_fetch_details() -> None:
     try:
         # prepare fake responses for _safe_dict_get based on path
         def fake_safe_dict_get(path):
+            """Fake safe dict get.
+
+            Args:
+                path (str): API endpoint path to request.
+
+            Returns:
+                Any: Response payload coerced to a dictionary.
+            """
             if "search_sessions" in path:
                 return {
                     "rows": [
@@ -313,6 +345,14 @@ async def test_fetch_openvpn_server_details_missing_server_field() -> None:
 
         async def fake_safe_dict_get(path):
             # return instance details with no 'server' key
+            """Fake safe dict get.
+
+            Args:
+                path (str): API endpoint path to request.
+
+            Returns:
+                Any: Response payload coerced to a dictionary.
+            """
             if "/instances/get/" in path:
                 return {"instance": {}}
             return {}

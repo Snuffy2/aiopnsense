@@ -4,7 +4,8 @@ import asyncio
 from collections.abc import MutableMapping
 import contextlib
 from datetime import datetime, timedelta
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -116,17 +117,52 @@ async def test_is_endpoint_available_caches_success(make_client) -> None:
 
     class FakeResp:
         def __init__(self, status: int, ok: bool) -> None:
+            """Initialize the FakeResp instance.
+
+            Args:
+                status (int): Status value to evaluate or normalize.
+                ok (bool): Mock HTTP success flag for test responses.
+            """
             self.status = status
             self.reason = "OK"
             self.ok = ok
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> Self:
+            """Enter the asynchronous context.
+
+            Returns:
+                Self: The context-managed instance.
+            """
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            """Exit the asynchronous context.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
+                exc (BaseException | None): Exception instance raised in async context teardown.
+                tb (TracebackType | None): Traceback associated with async context teardown.
+
+            Returns:
+                bool: False so exceptions are not suppressed.
+            """
             return False
 
-    def _get(*args, **kwargs):
+    def _get(*args: Any, **kwargs: Any) -> Any:
+        """Get.
+
+        Args:
+            *args (Any): Positional arguments forwarded to the wrapped callable.
+            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Decoded response payload returned by the GET request.
+        """
         nonlocal calls
         calls += 1
         return FakeResp(status=200, ok=True)
@@ -149,17 +185,52 @@ async def test_is_endpoint_available_cache_false_by_ttl_and_force_refresh(make_c
 
     class FakeResp:
         def __init__(self, status: int, ok: bool) -> None:
+            """Initialize the FakeResp instance.
+
+            Args:
+                status (int): Status value to evaluate or normalize.
+                ok (bool): Mock HTTP success flag for test responses.
+            """
             self.status = status
             self.reason = "ERR"
             self.ok = ok
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> Self:
+            """Enter the asynchronous context.
+
+            Returns:
+                Self: The context-managed instance.
+            """
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            """Exit the asynchronous context.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
+                exc (BaseException | None): Exception instance raised in async context teardown.
+                tb (TracebackType | None): Traceback associated with async context teardown.
+
+            Returns:
+                bool: False so exceptions are not suppressed.
+            """
             return False
 
-    def _get(*args, **kwargs):
+    def _get(*args: Any, **kwargs: Any) -> Any:
+        """Get.
+
+        Args:
+            *args (Any): Positional arguments forwarded to the wrapped callable.
+            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Decoded response payload returned by the GET request.
+        """
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -193,7 +264,16 @@ async def test_is_endpoint_available_handles_timeout(make_client) -> None:
     client = make_client(session=session)
     calls = 0
 
-    def _get(*args, **kwargs):
+    def _get(*args: Any, **kwargs: Any) -> Any:
+        """Get.
+
+        Args:
+            *args (Any): Positional arguments forwarded to the wrapped callable.
+            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Decoded response payload returned by the GET request.
+        """
         nonlocal calls
         calls += 1
         raise TimeoutError("timeout")
@@ -216,17 +296,52 @@ async def test_is_endpoint_available_does_not_cache_non_404_http_errors(make_cli
 
     class FakeResp:
         def __init__(self, status: int, ok: bool) -> None:
+            """Initialize the FakeResp instance.
+
+            Args:
+                status (int): Status value to evaluate or normalize.
+                ok (bool): Mock HTTP success flag for test responses.
+            """
             self.status = status
             self.reason = "ERR"
             self.ok = ok
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> Self:
+            """Enter the asynchronous context.
+
+            Returns:
+                Self: The context-managed instance.
+            """
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            """Exit the asynchronous context.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
+                exc (BaseException | None): Exception instance raised in async context teardown.
+                tb (TracebackType | None): Traceback associated with async context teardown.
+
+            Returns:
+                bool: False so exceptions are not suppressed.
+            """
             return False
 
-    def _get(*args, **kwargs):
+    def _get(*args: Any, **kwargs: Any) -> Any:
+        """Get.
+
+        Args:
+            *args (Any): Positional arguments forwarded to the wrapped callable.
+            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Decoded response payload returned by the GET request.
+        """
         nonlocal calls
         calls += 1
         return FakeResp(status=500, ok=False)
@@ -295,7 +410,13 @@ async def test_do_get_post_error_initial_behavior(
 
     # create a fake response context manager
     class FakeResp:
-        def __init__(self, status=500, ok=False):
+        def __init__(self, status: int = 500, ok: bool = False) -> None:
+            """Initialize the FakeResp instance.
+
+            Args:
+                status (Any): Status value to evaluate or normalize.
+                ok (Any): Mock HTTP success flag for test responses.
+            """
             self.status = status
             self.reason = "Err"
             self.ok = ok
@@ -305,26 +426,73 @@ async def test_do_get_post_error_initial_behavior(
                 real_url = URL("http://localhost")
 
             self.request_info = RI()
-            self.history = []
-            self.headers = {}
+            self.history: list[Any] = []
+            self.headers: dict[str, Any] = {}
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> Self:
+            """Enter the asynchronous context.
+
+            Returns:
+                Self: The context-managed instance.
+            """
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            """Exit the asynchronous context.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
+                exc (BaseException | None): Exception instance raised in async context teardown.
+                tb (TracebackType | None): Traceback associated with async context teardown.
+
+            Returns:
+                bool: False so exceptions are not suppressed.
+            """
             return False
 
-        async def json(self, content_type=None):
+        async def json(self, content_type: Any = None) -> Any:
+            """Json.
+
+            Args:
+                content_type (Any, optional): Mock response content type.
+
+            Returns:
+                Any: Value produced by this helper method.
+            """
             return {"x": 1}
 
-        async def text(self):
+        async def text(self) -> str:
+            """Text.
+
+            Returns:
+                Any: Value produced by this helper method.
+            """
             return "raw response text"
 
         @property
-        def content(self):
+        def content(self) -> Any:
+            """Content.
+
+            Returns:
+                Any: Value produced by this helper method.
+            """
+
             class C:
-                async def iter_chunked(self, n):
-                    yield b"data:{}\n\n" % b"{}"
+                async def iter_chunked(self, n: int) -> Any:
+                    """Iter chunked.
+
+                    Args:
+                        n (Any): Numeric value to normalize.
+
+                    Returns:
+                        Any: Value produced by this helper method.
+                    """
+                    yield b"data: {}\n\n"
 
             return C()
 
@@ -449,7 +617,12 @@ async def test_do_get_from_stream_error_initial_raises(make_client) -> None:
     session = MagicMock(spec=aiohttp.ClientSession)
 
     class FakeBadResp:
-        def __init__(self, status=403):
+        def __init__(self, status: int = 403) -> None:
+            """Initialize the FakeBadResp instance.
+
+            Args:
+                status (Any): Status value to evaluate or normalize.
+            """
             self.status = status
             self.reason = "Forbidden"
             self.ok = False
@@ -458,24 +631,67 @@ async def test_do_get_from_stream_error_initial_raises(make_client) -> None:
                 real_url = URL("http://localhost")
 
             self.request_info = RI()
-            self.history = []
-            self.headers = {}
+            self.history: list[Any] = []
+            self.headers: dict[str, Any] = {}
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> Self:
+            """Enter the asynchronous context.
+
+            Returns:
+                Self: The context-managed instance.
+            """
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            """Exit the asynchronous context.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
+                exc (BaseException | None): Exception instance raised in async context teardown.
+                tb (TracebackType | None): Traceback associated with async context teardown.
+
+            Returns:
+                bool: False so exceptions are not suppressed.
+            """
             return False
 
         @property
-        def content(self):
+        def content(self) -> Any:
+            """Content.
+
+            Returns:
+                Any: Value produced by this helper method.
+            """
+
             class C:
-                async def iter_chunked(self, n):
+                async def iter_chunked(self, n: int) -> Any:
+                    """Iter chunked.
+
+                    Args:
+                        n (Any): Numeric value to normalize.
+
+                    Returns:
+                        Any: Value produced by this helper method.
+                    """
                     yield b""
 
             return C()
 
-    def fake_get(*args, **kwargs):
+    def fake_get(*args: Any, **kwargs: Any) -> Any:
+        """Fake get.
+
+        Args:
+            *args (Any): Positional arguments forwarded to the wrapped callable.
+            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Mock value returned to support test behavior.
+        """
         return FakeBadResp()
 
     session.get = fake_get
@@ -559,8 +775,17 @@ async def test_get_enqueues_and_processes(returned, make_client) -> None:
 
         called = {}
 
-        async def fake_do_get(path, caller="x"):
+        async def fake_do_get(path: Any, caller: str = "x") -> Any:
             # capture the caller name supplied by _get
+            """Fake do get.
+
+            Args:
+                path (Any): API endpoint path to request.
+                caller (Any): Caller name used for diagnostics and logging.
+
+            Returns:
+                Any: Mock value returned to support test behavior.
+            """
             called["caller"] = caller
             return returned
 
@@ -595,7 +820,12 @@ async def test_get_uses_unknown_when_inspect_stack_raises(monkeypatch, make_clie
         # Replace client_base.inspect.stack to raise an IndexError
         class _BadInspect:
             @staticmethod
-            def stack():
+            def stack() -> Any:
+                """Stack.
+
+                Returns:
+                    Any: Value produced by this helper method.
+                """
                 raise IndexError("no stack")
 
         monkeypatch.setattr(pyopnsense_client_base, "inspect", _BadInspect)
@@ -603,9 +833,18 @@ async def test_get_uses_unknown_when_inspect_stack_raises(monkeypatch, make_clie
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
 
-        captured = {}
+        captured: dict[str, Any] = {}
 
-        async def fake_do_get(path, caller="x"):
+        async def fake_do_get(path: Any, caller: str = "x") -> Any:
+            """Fake do get.
+
+            Args:
+                path (Any): API endpoint path to request.
+                caller (Any): Caller name used for diagnostics and logging.
+
+            Returns:
+                Any: Mock value returned to support test behavior.
+            """
             captured["caller"] = caller
             return {"ok": True}
 
@@ -640,9 +879,19 @@ async def test_post_enqueues_and_processes(returned, make_client) -> None:
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
 
-        captured = {}
+        captured: dict[str, Any] = {}
 
-        async def fake_do_post(path, payload=None, caller="x"):
+        async def fake_do_post(path: Any, payload: Any = None, caller: str = "x") -> Any:
+            """Fake do post.
+
+            Args:
+                path (Any): API endpoint path to request.
+                payload (Any, optional): Request payload sent to the API endpoint.
+                caller (Any): Caller name used for diagnostics and logging.
+
+            Returns:
+                Any: Mock value returned to support test behavior.
+            """
             captured["caller"] = caller
             captured["payload"] = payload
             return returned
@@ -677,7 +926,12 @@ async def test_post_uses_unknown_when_inspect_stack_raises(monkeypatch, make_cli
 
         class _BadInspect:
             @staticmethod
-            def stack():
+            def stack() -> Any:
+                """Stack.
+
+                Returns:
+                    Any: Value produced by this helper method.
+                """
                 raise IndexError("no stack")
 
         monkeypatch.setattr(pyopnsense_client_base, "inspect", _BadInspect)
@@ -685,9 +939,19 @@ async def test_post_uses_unknown_when_inspect_stack_raises(monkeypatch, make_cli
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
 
-        captured = {}
+        captured: dict[str, Any] = {}
 
-        async def fake_do_post(path, payload=None, caller="x"):
+        async def fake_do_post(path: Any, payload: Any = None, caller: str = "x") -> Any:
+            """Fake do post.
+
+            Args:
+                path (Any): API endpoint path to request.
+                payload (Any, optional): Request payload sent to the API endpoint.
+                caller (Any): Caller name used for diagnostics and logging.
+
+            Returns:
+                Any: Mock value returned to support test behavior.
+            """
             captured["caller"] = caller
             captured["payload"] = payload
             return {"ok": True}
@@ -715,33 +979,98 @@ async def test_do_get_and_do_post_success_paths() -> None:
     session = MagicMock(spec=aiohttp.ClientSession)
 
     class FakeOKResp:
-        def __init__(self, payload):
+        def __init__(self, payload: Any) -> None:
+            """Initialize the FakeOKResp instance.
+
+            Args:
+                payload (Any): Request payload sent to the API endpoint.
+            """
             self.status = 200
             self.reason = "OK"
             self.ok = True
             self._payload = payload
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> Self:
+            """Enter the asynchronous context.
+
+            Returns:
+                Self: The context-managed instance.
+            """
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            """Exit the asynchronous context.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
+                exc (BaseException | None): Exception instance raised in async context teardown.
+                tb (TracebackType | None): Traceback associated with async context teardown.
+
+            Returns:
+                bool: False so exceptions are not suppressed.
+            """
             return False
 
-        async def json(self, content_type=None):
+        async def json(self, content_type: Any = None) -> Any:
+            """Json.
+
+            Args:
+                content_type (Any, optional): Mock response content type.
+
+            Returns:
+                Any: Value produced by this helper method.
+            """
             return self._payload
 
         @property
-        def content(self):
+        def content(self) -> Any:
+            """Content.
+
+            Returns:
+                Any: Value produced by this helper method.
+            """
+
             class C:
-                async def iter_chunked(self, n):
+                async def iter_chunked(self, n: int) -> Any:
+                    """Iter chunked.
+
+                    Args:
+                        n (Any): Numeric value to normalize.
+
+                    Returns:
+                        Any: Value produced by this helper method.
+                    """
                     yield b""  # not used here
 
             return C()
 
-    def fake_get(*args, **kwargs):
+    def fake_get(*args: Any, **kwargs: Any) -> Any:
+        """Fake get.
+
+        Args:
+            *args (Any): Positional arguments forwarded to the wrapped callable.
+            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Mock value returned to support test behavior.
+        """
         return FakeOKResp({"a": 1})
 
-    def fake_post(*args, **kwargs):
+    def fake_post(*args: Any, **kwargs: Any) -> Any:
+        """Fake post.
+
+        Args:
+            *args (Any): Positional arguments forwarded to the wrapped callable.
+            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Mock value returned to support test behavior.
+        """
         return FakeOKResp([1, 2, 3])
 
     session.get = fake_get
@@ -812,6 +1141,15 @@ async def test_process_queue_cancelled_sets_future_cancelled_error() -> None:
         release = asyncio.Event()
 
         async def _blocked_get(_path: str, _caller: str) -> MutableMapping[str, Any]:
+            """Blocked get.
+
+            Args:
+                _path (str):  path used by this operation.
+                _caller (str):  caller used by this operation.
+
+            Returns:
+                MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
+            """
             started.set()
             await release.wait()
             return {}
@@ -854,13 +1192,23 @@ async def test_monitor_queue_handles_qsize_exception() -> None:
     try:
         # make qsize raise
         class BadQ:
-            def qsize(self):
+            def qsize(self) -> int:
+                """Qsize.
+
+                Returns:
+                    Any: Value produced by this helper method.
+                """
                 raise RuntimeError("boom")
 
-            def empty(self):
+            def empty(self) -> bool:
                 # indicate there are no queued items so async_close won't attempt to
                 # drain a non-standard queue object; this keeps the test focused on
                 # the qsize exception handling in _monitor_queue.
+                """Empty.
+
+                Returns:
+                    Any: Value produced by this helper method.
+                """
                 return True
 
         client._request_queue = BadQ()  # type: ignore[assignment]
@@ -911,7 +1259,8 @@ async def test_do_get_post_and_stream_permission_errors(make_client) -> None:
     session = MagicMock(spec=aiohttp.ClientSession)
 
     class Fake403:
-        def __init__(self):
+        def __init__(self) -> None:
+            """Initialize the Fake403 instance."""
             self.status = 403
             self.reason = "Forbidden"
             self.ok = False
@@ -920,22 +1269,64 @@ async def test_do_get_post_and_stream_permission_errors(make_client) -> None:
                 real_url = URL("http://localhost")
 
             self.request_info = RI()
-            self.history = []
-            self.headers = {}
+            self.history: list[Any] = []
+            self.headers: dict[str, Any] = {}
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> Self:
+            """Enter the asynchronous context.
+
+            Returns:
+                Self: The context-managed instance.
+            """
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            """Exit the asynchronous context.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
+                exc (BaseException | None): Exception instance raised in async context teardown.
+                tb (TracebackType | None): Traceback associated with async context teardown.
+
+            Returns:
+                bool: False so exceptions are not suppressed.
+            """
             return False
 
-        async def json(self, content_type=None):
+        async def json(self, content_type: Any = None) -> Any:
+            """Json.
+
+            Args:
+                content_type (Any, optional): Mock response content type.
+
+            Returns:
+                Any: Value produced by this helper method.
+            """
             return {"err": 1}
 
         @property
-        def content(self):  # for stream variant
+        def content(self) -> Any:  # for stream variant
+            """Content.
+
+            Returns:
+                Any: Value produced by this helper method.
+            """
+
             class C:
-                async def iter_chunked(self, n):
+                async def iter_chunked(self, n: int) -> Any:
+                    """Iter chunked.
+
+                    Args:
+                        n (Any): Numeric value to normalize.
+
+                    Returns:
+                        Any: Value produced by this helper method.
+                    """
                     if False:  # pragma: no cover
                         yield b""  # never executed; placeholder
                         return
@@ -958,7 +1349,7 @@ async def test_do_get_post_and_stream_permission_errors(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_name_property():
+async def test_client_name_property() -> None:
     """Ensure client reports a composed name property correctly."""
     session = MagicMock(spec=aiohttp.ClientSession)
     client = pyopnsense.OPNsenseClient(
@@ -974,24 +1365,57 @@ async def test_client_name_property():
 
 
 @pytest.mark.asyncio
-async def test_reset_and_get_query_counts():
+async def test_reset_and_get_query_counts() -> None:
     """Reset and retrieve client query counters."""
     session = MagicMock(spec=aiohttp.ClientSession)
 
     class FakeOKResp:
-        def __init__(self, payload):
+        def __init__(self, payload: Any) -> None:
+            """Initialize the FakeOKResp instance.
+
+            Args:
+                payload (Any): Request payload sent to the API endpoint.
+            """
             self.status = 200
             self.reason = "OK"
             self.ok = True
             self._payload = payload
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> Self:
+            """Enter the asynchronous context.
+
+            Returns:
+                Self: The context-managed instance.
+            """
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            """Exit the asynchronous context.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
+                exc (BaseException | None): Exception instance raised in async context teardown.
+                tb (TracebackType | None): Traceback associated with async context teardown.
+
+            Returns:
+                bool: False so exceptions are not suppressed.
+            """
             return False
 
-        async def json(self, content_type=None):
+        async def json(self, content_type: Any = None) -> Any:
+            """Json.
+
+            Args:
+                content_type (Any, optional): Mock response content type.
+
+            Returns:
+                Any: Value produced by this helper method.
+            """
             return self._payload
 
     session.get = lambda *args, **kwargs: FakeOKResp({"ok": True})

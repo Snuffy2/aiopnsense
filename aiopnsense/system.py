@@ -19,29 +19,19 @@ class SystemMixin(PyOPNsenseClientProtocol):
     def _get_local_timezone(self) -> tzinfo:
         """Return a local timezone fallback with fixed UTC offset.
 
-        Returns
-        -------
-        tzinfo
-            Local timezone fallback using the host UTC offset.
-
+        Returns:
+            tzinfo: Resolved timezone object for OPNsense system data.
         """
         return timezone(datetime.now().astimezone().utcoffset() or timedelta())
 
     async def _get_opnsense_timezone(self, datetime_str: str | None = None) -> tzinfo:
         """Resolve timezone information from OPNsense system time data.
 
-        Parameters
-        ----------
-        datetime_str : str | None
-            Optional datetime string from the system-time endpoint. When omitted,
-            the method queries OPNsense for current system-time data.
+        Args:
+            datetime_str (str | None, optional): Datetime string parsed from API output.
 
-        Returns
-        -------
-        tzinfo
-            Parsed timezone from OPNsense datetime output, or a local fixed-offset
-            fallback when parsing fails.
-
+        Returns:
+            tzinfo: Resolved timezone object for OPNsense system data.
         """
         if datetime_str is None:
             try:
@@ -81,17 +71,11 @@ class SystemMixin(PyOPNsenseClientProtocol):
     async def get_device_unique_id(self, expected_id: str | None = None) -> str | None:
         """Get the OPNsense Unique ID.
 
-        Parameters
-        ----------
-        expected_id : str | None
-            Previously stored unique ID used to prefer a stable match. Defaults to None.
+        Args:
+            expected_id (str | None, optional): Identifier for the related expected entry.
 
-        Returns
-        -------
-        str | None
-        Stable unique identifier derived from physical interface MAC addresses, or None when unavailable.
-
-
+        Returns:
+            str | None: Normalized data returned by the related OPNsense endpoint.
         """
         instances = await self._safe_list_get("/api/interfaces/overview/export")
         mac_addresses: set[str] = set()
@@ -120,12 +104,8 @@ class SystemMixin(PyOPNsenseClientProtocol):
     async def get_system_info(self) -> dict[str, Any]:
         """Return the system info from OPNsense.
 
-        Returns
-        -------
-        dict[str, Any]
-        Parsed system info payload returned by OPNsense APIs.
-
-
+        Returns:
+            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         system_info: dict[str, Any] = {}
         response = await self._safe_dict_get("/api/diagnostics/system/system_information")
@@ -136,12 +116,8 @@ class SystemMixin(PyOPNsenseClientProtocol):
     async def get_carp_status(self) -> bool:
         """Return the Carp status.
 
-        Returns
-        -------
-        bool
-        Parsed carp status payload returned by OPNsense APIs.
-
-
+        Returns:
+            bool: True when the operation succeeds; otherwise, False.
         """
         response = await self._safe_dict_get("/api/diagnostics/interface/get_vip_status")
         # _LOGGER.debug(f"[get_carp_status] response: {response}")
@@ -151,12 +127,8 @@ class SystemMixin(PyOPNsenseClientProtocol):
     async def get_carp_interfaces(self) -> list:
         """Return the interfaces used by Carp.
 
-        Returns
-        -------
-        list
-        Parsed carp interfaces payload returned by OPNsense APIs.
-
-
+        Returns:
+            list: Normalized data returned by the related OPNsense endpoint.
         """
         vip_settings_raw = await self._safe_dict_get("/api/interfaces/vip_settings/get")
         if not isinstance(vip_settings_raw.get("rows", None), list):
@@ -191,12 +163,8 @@ class SystemMixin(PyOPNsenseClientProtocol):
     async def system_reboot(self) -> bool:
         """Reboot OPNsense.
 
-        Returns
-        -------
-        bool
-        True when OPNsense reports the requested action succeeded; otherwise False.
-
-
+        Returns:
+            bool: True when the operation succeeds; otherwise, False.
         """
         response = await self._safe_dict_post("/api/core/system/reboot")
         _LOGGER.debug("[system_reboot] response: %s", response)
@@ -217,19 +185,12 @@ class SystemMixin(PyOPNsenseClientProtocol):
     async def send_wol(self, interface: str, mac: str) -> bool:
         """Send a wake on lan packet to the specified MAC address.
 
-        Parameters
-        ----------
-        interface : str
-            Interface identifier used by the Wake-on-LAN endpoint.
-        mac : str
-            MAC address of the target device.
+        Args:
+            interface (str): Interface identifier to reload or inspect.
+            mac (str): MAC address to use for Wake-on-LAN.
 
-        Returns
-        -------
-        bool
-        True when OPNsense reports the requested action succeeded; otherwise False.
-
-
+        Returns:
+            bool: True when the operation succeeds; otherwise, False.
         """
         payload: dict[str, Any] = {"wake": {"interface": interface, "mac": mac}}
         _LOGGER.debug("[send_wol] payload: %s", payload)
@@ -243,12 +204,8 @@ class SystemMixin(PyOPNsenseClientProtocol):
     async def get_notices(self) -> dict[str, Any]:
         """Get active OPNsense notices.
 
-        Returns
-        -------
-        dict[str, Any]
-        Parsed notices payload returned by OPNsense APIs.
-
-
+        Returns:
+            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         notices_info = await self._safe_dict_get("/api/core/system/status")
         # _LOGGER.debug(f"[get_notices] notices_info: {notices_info}")
@@ -276,17 +233,11 @@ class SystemMixin(PyOPNsenseClientProtocol):
     async def close_notice(self, id: str) -> bool:
         """Close selected notices.
 
-        Parameters
-        ----------
-        id : str
-            Notice identifier to dismiss, or ``"all"`` to dismiss all active notices.
+        Args:
+            id (str): Identifier of the notice to close.
 
-        Returns
-        -------
-        bool
-        True when OPNsense reports the requested action succeeded; otherwise False.
-
-
+        Returns:
+            bool: True when the operation succeeds; otherwise, False.
         """
         dismiss_endpoint = "/api/core/system/dismiss_status"
 
@@ -315,17 +266,11 @@ class SystemMixin(PyOPNsenseClientProtocol):
     async def reload_interface(self, if_name: str) -> bool:
         """Reload the specified interface.
 
-        Parameters
-        ----------
-        if_name : str
-            Interface name to reload.
+        Args:
+            if_name (str): Interface name to select rows for.
 
-        Returns
-        -------
-        bool
-        True when OPNsense reports the requested action succeeded; otherwise False.
-
-
+        Returns:
+            bool: True when the operation succeeds; otherwise, False.
         """
         reload = await self._safe_dict_post(f"/api/interfaces/overview/reload_interface/{if_name}")
         return reload.get("message", "").startswith("OK")
@@ -334,12 +279,8 @@ class SystemMixin(PyOPNsenseClientProtocol):
     async def get_certificates(self) -> dict[str, Any]:
         """Return the active encryption certificates.
 
-        Returns
-        -------
-        dict[str, Any]
-        Parsed certificates payload returned by OPNsense APIs.
-
-
+        Returns:
+            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         certs_raw = await self._safe_dict_get("/api/trust/cert/search")
         cert_rows = certs_raw.get("rows")

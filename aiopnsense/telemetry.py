@@ -19,12 +19,8 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
     async def get_telemetry(self) -> MutableMapping[str, Any]:
         """Get telemetry data from OPNsense.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed telemetry payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         telemetry: dict[str, Any] = {}
         telemetry["mbuf"] = await self._get_telemetry_mbuf()
@@ -41,12 +37,8 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
     async def get_interfaces(self) -> MutableMapping[str, Any]:
         """Return all OPNsense interfaces.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed interfaces payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         interface_info = await self._safe_list_get("/api/interfaces/overview/export")
         # _LOGGER.debug(f"[get_interfaces] interface_info: {interface_info}")
@@ -107,12 +99,8 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
     async def _get_telemetry_mbuf(self) -> MutableMapping[str, Any]:
         """Collect mbuf usage telemetry.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed telemetry mbuf payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
         mbuf_info = await self._safe_dict_get("/api/diagnostics/system/system_mbuf")
         # _LOGGER.debug(f"[get_telemetry_mbuf] mbuf_info: {mbuf_info}")
@@ -133,12 +121,8 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
     async def _get_telemetry_pfstate(self) -> MutableMapping[str, Any]:
         """Collect PF state table telemetry.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed telemetry pfstate payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
         pfstate_info = await self._safe_dict_get("/api/diagnostics/firewall/pf_states")
         # _LOGGER.debug(f"[get_telemetry_pfstate] pfstate_info: {pfstate_info}")
@@ -159,12 +143,8 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
     async def _get_telemetry_memory(self) -> MutableMapping[str, Any]:
         """Collect memory and swap telemetry.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed telemetry memory payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
         memory_info = await self._safe_dict_get("/api/diagnostics/system/system_resources")
         # _LOGGER.debug(f"[get_telemetry_memory] memory_info: {memory_info}")
@@ -202,12 +182,8 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
     async def _get_telemetry_system(self) -> MutableMapping[str, Any]:
         """Collect system time, uptime, boottime, and load telemetry.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed telemetry system payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
         time_info = await self._safe_dict_get("/api/diagnostics/system/system_time")
         # _LOGGER.debug("[get_telemetry_system] time_info: %s", time_info)
@@ -286,12 +262,8 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
     async def _get_telemetry_cpu(self) -> MutableMapping[str, Any]:
         """Collect CPU core count and usage telemetry.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed telemetry cpu payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
         cputype_info = await self._safe_list_get("/api/diagnostics/cpu_usage/get_c_p_u_type")
         # _LOGGER.debug(f"[get_telemetry_cpu] cputype_info: {cputype_info}")
@@ -317,12 +289,8 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
     async def _get_telemetry_filesystems(self) -> list:
         """Collect filesystem telemetry entries from diagnostics.
 
-        Returns
-        -------
-        list
-        Parsed telemetry filesystems payload returned by OPNsense APIs.
-
-
+        Returns:
+            list: List of normalized entries produced by this method.
         """
         filesystems_info = await self._safe_dict_get("/api/diagnostics/system/system_disk")
         # _LOGGER.debug(f"[get_telemetry_filesystems] filesystems_info: {filesystems_info}")
@@ -334,12 +302,8 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
     async def get_gateways(self) -> MutableMapping[str, Any]:
         """Return OPNsense Gateway details.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed gateways payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         gateways_info = await self._safe_dict_get("/api/routes/gateway/status")
         # _LOGGER.debug(f"[get_gateways] gateways_info: {gateways_info}")
@@ -356,12 +320,8 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
     async def _get_telemetry_temps(self) -> MutableMapping[str, Any]:
         """Collect temperature sensor telemetry.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed telemetry temps payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
         temps_info = await self._safe_list_get("/api/diagnostics/system/system_temperature")
         # _LOGGER.debug(f"[get_telemetry_temps] temps_info: {temps_info}")
