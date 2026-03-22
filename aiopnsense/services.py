@@ -31,7 +31,7 @@ class ServicesMixin(PyOPNsenseClientProtocol):
             running = service.get("running", 0)
             try:
                 is_running = int(running) == 1
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 is_running = str(running) == "1"
             service["status"] = is_running
             normalized_services.append(service)

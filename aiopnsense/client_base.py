@@ -309,7 +309,7 @@ $toreturn["real"] = json_encode($toreturn_real);
         loop = await self._get_active_loop()
         try:
             caller = inspect.stack()[1].function
-        except (IndexError, AttributeError):
+        except IndexError, AttributeError:
             caller = "Unknown"
         future = loop.create_future()
         await self._request_queue.put(("get_from_stream", path, None, future, caller))
@@ -333,7 +333,7 @@ $toreturn["real"] = json_encode($toreturn_real);
         loop = await self._get_active_loop()
         try:
             caller = inspect.stack()[1].function
-        except (IndexError, AttributeError):
+        except IndexError, AttributeError:
             caller = "Unknown"
         future = loop.create_future()
         await self._request_queue.put(("get", path, None, future, caller))
@@ -361,7 +361,7 @@ $toreturn["real"] = json_encode($toreturn_real);
         loop = await self._get_active_loop()
         try:
             caller = inspect.stack()[1].function
-        except (IndexError, AttributeError):
+        except IndexError, AttributeError:
             caller = "Unknown"
         future = loop.create_future()
         await self._request_queue.put(("post", path, payload, future, caller))
@@ -607,7 +607,7 @@ $toreturn["real"] = json_encode($toreturn_real);
             return float(DEFAULT_REQUEST_TIMEOUT_SECONDS)
         try:
             timeout_total = float(timeout_seconds)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return float(DEFAULT_REQUEST_TIMEOUT_SECONDS)
         if timeout_total <= 0:
             return float(DEFAULT_REQUEST_TIMEOUT_SECONDS)

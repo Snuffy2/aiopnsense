@@ -131,7 +131,13 @@ async def test_nat_rule_helpers_parse_rows(
     ("toggle_value", "toggle_response", "apply_response", "expected_url", "expected"),
     [
         (None, {"result": "ok"}, {"status": "OK"}, "/api/firewall/filter/toggle_rule/rule1", True),
-        ("on", {"result": "ok"}, {"status": "OK"}, "/api/firewall/filter/toggle_rule/rule1/1", True),
+        (
+            "on",
+            {"result": "ok"},
+            {"status": "OK"},
+            "/api/firewall/filter/toggle_rule/rule1/1",
+            True,
+        ),
         (
             "off",
             {"result": "ok"},
@@ -139,11 +145,25 @@ async def test_nat_rule_helpers_parse_rows(
             "/api/firewall/filter/toggle_rule/rule1/0",
             True,
         ),
-        ("on", {"result": "failed"}, {"status": "OK"}, "/api/firewall/filter/toggle_rule/rule1/1", False),
-        ("on", {"result": "ok"}, {"status": "failed"}, "/api/firewall/filter/toggle_rule/rule1/1", False),
+        (
+            "on",
+            {"result": "failed"},
+            {"status": "OK"},
+            "/api/firewall/filter/toggle_rule/rule1/1",
+            False,
+        ),
+        (
+            "on",
+            {"result": "ok"},
+            {"status": "failed"},
+            "/api/firewall/filter/toggle_rule/rule1/1",
+            False,
+        ),
     ],
 )
-async def test_toggle_firewall_rule(make_client, toggle_value, toggle_response, apply_response, expected_url, expected) -> None:
+async def test_toggle_firewall_rule(
+    make_client, toggle_value, toggle_response, apply_response, expected_url, expected
+) -> None:
     """Firewall rule toggles should use the right endpoint and require a successful apply."""
     client = make_client()
     try:
@@ -172,7 +192,9 @@ async def test_toggle_firewall_rule(make_client, toggle_value, toggle_response, 
         ("d_nat", "off", "/api/firewall/d_nat/toggle_rule/rule1/1"),
     ],
 )
-async def test_toggle_nat_rule_uses_expected_url(make_client, nat_rule_type, toggle_value, expected_url) -> None:
+async def test_toggle_nat_rule_uses_expected_url(
+    make_client, nat_rule_type, toggle_value, expected_url
+) -> None:
     """NAT toggles should target the correct REST endpoints, including d_nat inversion."""
     client = make_client()
     try:
@@ -182,7 +204,10 @@ async def test_toggle_nat_rule_uses_expected_url(make_client, nat_rule_type, tog
 
         assert result is True
         assert client._safe_dict_post.await_args_list[0].args[0] == expected_url
-        assert client._safe_dict_post.await_args_list[1].args[0] == f"/api/firewall/{nat_rule_type}/apply"
+        assert (
+            client._safe_dict_post.await_args_list[1].args[0]
+            == f"/api/firewall/{nat_rule_type}/apply"
+        )
     finally:
         await client.async_close()
 
@@ -218,11 +243,15 @@ async def test_toggle_alias_flows(make_client) -> None:
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
         assert await client.toggle_alias("missing", "on") is False
 
-        client._safe_dict_get = AsyncMock(return_value={"rows": [{"name": "alias1", "uuid": "aid"}]})
+        client._safe_dict_get = AsyncMock(
+            return_value={"rows": [{"name": "alias1", "uuid": "aid"}]}
+        )
         client._safe_dict_post = AsyncMock(return_value={"result": "failed"})
         assert await client.toggle_alias("alias1", "on") is False
 
-        client._safe_dict_get = AsyncMock(return_value={"rows": [{"name": "alias1", "uuid": "aid"}]})
+        client._safe_dict_get = AsyncMock(
+            return_value={"rows": [{"name": "alias1", "uuid": "aid"}]}
+        )
         client._safe_dict_post = AsyncMock(
             side_effect=[{"result": "ok"}, {"result": "saved"}, {"status": "ok"}]
         )

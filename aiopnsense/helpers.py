@@ -239,7 +239,7 @@ def try_to_int(input: Any | None, retval: int | None = None) -> int | None:
         return retval
     try:
         return int(input)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return retval
 
 
@@ -263,5 +263,5 @@ def try_to_float(input: Any | None, retval: float | None = None) -> float | None
         return retval
     try:
         return float(input)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return retval

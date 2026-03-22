@@ -10,8 +10,11 @@ versioned and consumed as an external dependency by Home Assistant Core.
 Install the package in editable mode with test dependencies and run:
 
 ```bash
-python -m pip install -e .[dev]
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install --group dev -e .
 pytest
-ruff check .
+prek run --all-files
 ```
 
