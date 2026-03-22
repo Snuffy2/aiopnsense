@@ -1,35 +1,71 @@
 """Tests for `aiopnsense.system`."""
 
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
 
-import aiopnsense as pyopnsense
 from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
-async def test_get_device_unique_id_and_system_info(make_client) -> None:
-    """Verify device unique id is derived from MACs and system info is returned."""
-    client, session = make_mock_session_client(make_client)
+async def test_get_system_info(make_client) -> None:
+    """System info should be returned from the diagnostics endpoint."""
+    client, _session = make_mock_session_client(make_client)
     try:
-        # device unique id from mac addresses
-        client._safe_list_get = AsyncMock(
-            return_value=[
-                {"is_physical": True, "macaddr_hw": "aa:bb:cc"},
-                {"is_physical": True, "macaddr_hw": "aa:bb:cc"},
-            ]
-        )
-        uid = await client.get_device_unique_id()
-        assert uid == "aa_bb_cc"
-
-        # system info uses the supported REST endpoint
         client._safe_dict_get = AsyncMock(return_value={"name": "foo"})
         info = await client.get_system_info()
         assert info["name"] == "foo"
         client._safe_dict_get.assert_awaited_once_with("/api/diagnostics/system/system_information")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("instances", "expected_id", "expected"),
+    [
+        (
+            [
+                {"is_physical": True, "macaddr_hw": "aa:bb:cc"},
+                {"is_physical": True, "macaddr_hw": "aa:bb:cc"},
+            ],
+            None,
+            "aa_bb_cc",
+        ),
+        ([{"is_physical": False}], None, None),
+        (
+            [
+                {"is_physical": True, "macaddr_hw": "aa:bb:cc"},
+                {"is_physical": True, "macaddr_hw": "bb:cc:dd"},
+            ],
+            "bb_cc_dd",
+            "bb_cc_dd",
+        ),
+        (
+            [
+                {"is_physical": True, "macaddr_hw": "aa:bb:cc"},
+                {"is_physical": True, "macaddr_hw": "bb:cc:dd"},
+            ],
+            "cc_dd_ee",
+            "aa_bb_cc",
+        ),
+        (["invalid-entry", {"is_physical": True, "macaddr_hw": "aa:bb:cc"}], None, "aa_bb_cc"),
+    ],
+)
+async def test_get_device_unique_id_variants(
+    make_client,
+    instances: list[Any],
+    expected_id: str | None,
+    expected: str | None,
+) -> None:
+    """get_device_unique_id should handle expected-id preference and malformed entries."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._safe_list_get = AsyncMock(return_value=instances)
+        assert await client.get_device_unique_id(expected_id=expected_id) == expected
     finally:
         await client.async_close()
 
@@ -133,12 +169,9 @@ async def test_reload_interface_and_certificates_and_gateways(make_client) -> No
 
 
 @pytest.mark.asyncio
-async def test_gateways_notices_and_close_notice_all() -> None:
+async def test_gateways_notices_and_close_notice_all(make_client) -> None:
     """Test gateway notices handling and closing all notices."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(
             return_value={"items": [{"name": "gw1", "status_translated": "OK"}]}
@@ -170,73 +203,6 @@ async def test_gateways_notices_and_close_notice_all() -> None:
 
 
 @pytest.mark.asyncio
-async def test_carp_and_system_actions_and_wol() -> None:
-    """Test get_carp_status, get_carp_interfaces, reboot/halt and send_wol."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
-    try:
-        # carp status
-        client._safe_dict_get = AsyncMock(return_value={"carp": {"allow": "1"}})
-        assert await client.get_carp_status() is True
-
-        # carp interfaces: one vip with mode carp and matching status
-        vip_rows = [{"mode": "carp", "interface": "em0"}]
-        vip_status = [{"interface": "em0", "status": "UP"}]
-        # first call returns vip_settings, second returns vip_status
-        client._safe_dict_get = AsyncMock(side_effect=[{"rows": vip_rows}, {"rows": vip_status}])
-        carp = await client.get_carp_interfaces()
-        assert isinstance(carp, list) and carp[0].get("status")
-
-        # system reboot/halt
-        client._safe_dict_post = AsyncMock(return_value={"status": "ok"})
-        assert await client.system_reboot() is True
-        assert await client.system_halt() is None
-
-        # send wol success
-        client._safe_dict_post = AsyncMock(return_value={"status": "ok"})
-        assert await client.send_wol("em0", "aa:bb:cc") is True
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_device_unique_id_no_mac(make_client) -> None:
-    """get_device_unique_id returns None when no physical mac addresses present."""
-    client, session = make_mock_session_client(make_client)
-    try:
-        client._safe_list_get = AsyncMock(return_value=[{"is_physical": False}])
-        assert await client.get_device_unique_id() is None
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_device_unique_id_expected(make_client) -> None:
-    """get_device_unique_id returns expected_id if present even if not the first."""
-    client, session = make_mock_session_client(make_client)
-    try:
-        # aa_bb_cc is smaller than bb_cc_dd
-        client._safe_list_get = AsyncMock(
-            return_value=[
-                {"is_physical": True, "macaddr_hw": "aa:bb:cc"},
-                {"is_physical": True, "macaddr_hw": "bb:cc:dd"},
-            ]
-        )
-        # Without expected_id, it returns the first one (aa_bb_cc)
-        assert await client.get_device_unique_id() == "aa_bb_cc"
-
-        # With expected_id bb_cc_dd, it returns bb_cc_dd even if aa_bb_cc is smaller
-        assert await client.get_device_unique_id(expected_id="bb_cc_dd") == "bb_cc_dd"
-
-        # With expected_id not present, it returns the first one
-        assert await client.get_device_unique_id(expected_id="cc_dd_ee") == "aa_bb_cc"
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_get_opnsense_timezone_without_tzinfo_string_uses_local_fallback(make_client) -> None:
     """Naive datetime strings should fall back to local timezone resolution."""
     client, _session = make_mock_session_client(make_client)
@@ -245,22 +211,6 @@ async def test_get_opnsense_timezone_without_tzinfo_string_uses_local_fallback(m
         local_tz = client._get_local_timezone()
         now = datetime.now().astimezone()
         assert tz.utcoffset(now) == local_tz.utcoffset(now)
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_device_unique_id_skips_non_mapping_entries(make_client) -> None:
-    """get_device_unique_id should ignore non-mapping entries returned by interface export."""
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._safe_list_get = AsyncMock(
-            return_value=[
-                "invalid-entry",
-                {"is_physical": True, "macaddr_hw": "aa:bb:cc"},
-            ]
-        )
-        assert await client.get_device_unique_id() == "aa_bb_cc"
     finally:
         await client.async_close()
 

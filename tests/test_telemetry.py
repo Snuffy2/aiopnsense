@@ -3,22 +3,17 @@
 from collections.abc import MutableMapping
 from datetime import UTC
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-import aiohttp
 import pytest
 
-import aiopnsense as pyopnsense
 from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
-async def test_telemetry_system_parsing_and_filesystems() -> None:
+async def test_telemetry_system_parsing_and_filesystems(make_client) -> None:
     """Test telemetry system parsing when boottime missing/invalid and filesystems path."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _session = make_mock_session_client(make_client)
     try:
         # time_info with bad datetime and uptime matching regex
         time_info = {
@@ -59,12 +54,9 @@ async def test_telemetry_system_parsing_and_filesystems() -> None:
 
 
 @pytest.mark.asyncio
-async def test_telemetry_cpu_variants() -> None:
+async def test_telemetry_cpu_variants(make_client) -> None:
     """Test _get_telemetry_cpu behavior for empty cputype list and valid stream."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _session = make_mock_session_client(make_client)
     try:
         # empty cpu type -> returns {}
         client._safe_list_get = AsyncMock(return_value=[])
@@ -91,12 +83,9 @@ async def test_telemetry_cpu_variants() -> None:
 
 
 @pytest.mark.asyncio
-async def test_telemetry_mbuf_pfstate_and_temps() -> None:
+async def test_telemetry_mbuf_pfstate_and_temps(make_client) -> None:
     """Test telemetry mbuf, pfstate and temps parsing branches."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _session = make_mock_session_client(make_client)
     try:
         # mbuf and pfstate basic numeric parsing
         client._safe_dict_get = AsyncMock(
@@ -121,12 +110,9 @@ async def test_telemetry_mbuf_pfstate_and_temps() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_interfaces_status_variants() -> None:
+async def test_get_interfaces_status_variants(make_client) -> None:
     """Ensure interface parsing handles status, associated mapping and mac filtering."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _session = make_mock_session_client(make_client)
     try:
         # prepare list with various status and mac strings
         iface_list = [
@@ -161,12 +147,9 @@ async def test_get_interfaces_status_variants() -> None:
 
 
 @pytest.mark.asyncio
-async def test_telemetry_memory_swap_branches() -> None:
+async def test_telemetry_memory_swap_branches(make_client) -> None:
     """Cover telemetry memory path including swap data branch."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _session = make_mock_session_client(make_client)
     try:
         # prepare memory info with swap list present
         mem = {"memory": {"total": "8000", "used": "2000"}}

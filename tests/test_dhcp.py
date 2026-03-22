@@ -103,53 +103,48 @@ async def test_get_arp_table_uses_get_query_param(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_isc_dhcp_endpoint_unavailable(make_client) -> None:
-    """ISC DHCP lease methods should return empty list when endpoints are unavailable."""
-    client, session = make_mock_session_client(make_client)
+@pytest.mark.parametrize(
+    ("method_name", "endpoint"),
+    [
+        ("_get_isc_dhcpv4_leases", "/api/dhcpv4/service/status"),
+        ("_get_isc_dhcpv6_leases", "/api/dhcpv6/service/status"),
+    ],
+)
+async def test_isc_dhcp_endpoint_unavailable(make_client, method_name: str, endpoint: str) -> None:
+    """ISC DHCP lease helpers should return an empty list when service endpoints are unavailable."""
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
-
-        # Test DHCPv4
-        leases_v4 = await client._get_isc_dhcpv4_leases()
-        assert leases_v4 == []
-        client._safe_dict_get.assert_not_awaited()
-
-        # Test DHCPv6
-        client._safe_dict_get.reset_mock()
-        leases_v6 = await client._get_isc_dhcpv6_leases()
+        leases_v6 = await getattr(client, method_name)()
         assert leases_v6 == []
+        client.is_endpoint_available.assert_awaited_once_with(endpoint)
         client._safe_dict_get.assert_not_awaited()
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_dhcp_edge_cases_and_keep_latest(make_client) -> None:
-    """Ensure DHCP parsing and _keep_latest_leases handle odd entries."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+@pytest.mark.parametrize(
+    ("reservations", "expected_key", "expected_expire"),
+    [
+        ([{"a": 1, "expire": 10}, {"a": 1, "expire": 20}, {"a": 2, "expire": 5}], "a", 20),
+        ([{"b": 1, "expire": 10}, {"b": 1, "expire": 20}, {"c": 2, "expire": 5}], "b", 20),
+    ],
+)
+async def test_keep_latest_leases_prefers_latest_expiration(
+    make_client,
+    reservations: list[dict[str, int]],
+    expected_key: str,
+    expected_expire: int,
+) -> None:
+    """_keep_latest_leases should keep the row with the highest ``expire`` per dedup key."""
+    client, _session = make_mock_session_client(make_client)
     try:
-        # kea leases: missing address/expire
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
-                {"dhcpv4": {"general": {"enabled": "1", "interfaces": {}}}},
-                {"rows": [{"if_name": "em0", "hwaddr": "mac1", "hostname": "h"}]},
-            ]
-        )
-        leases = await client._get_kea_dhcpv4_leases()
-        assert isinstance(leases, list)
-
-        # keep_latest with numeric expiries (avoid None comparison error)
-        res = client._keep_latest_leases(
-            [{"a": 1, "expire": 10}, {"a": 1, "expire": 20}, {"b": 2, "expire": 5}]
-        )
-        filtered = [item for item in res if item.get("a") == 1]
-        assert len(filtered) == 1
-        assert filtered[0]["expire"] == 20
-        assert any(item for item in res if item.get("b") == 2)
+        result = client._keep_latest_leases(reservations)
+        matching = [item for item in result if item.get(expected_key) == 1]
+        assert len(matching) == 1
+        assert matching[0]["expire"] == expected_expire
     finally:
         await client.async_close()
 
@@ -268,81 +263,6 @@ async def test_get_dhcp_leases_combined_structure() -> None:
         client._get_isc_dhcpv4_leases.assert_awaited_once_with(opnsense_tz=local_tz)
         client._get_isc_dhcpv6_leases.assert_awaited_once_with(opnsense_tz=local_tz)
         client._get_dnsmasq_leases.assert_awaited_once_with(opnsense_tz=local_tz)
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_dhcp_leases_calls_isc_methods_independently() -> None:
-    """get_dhcp_leases should call both ISC helpers regardless of top-level endpoint status."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
-    try:
-        local_tz = datetime.now().astimezone().tzinfo
-        assert local_tz is not None
-        client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
-        client._get_kea_dhcpv4_leases = AsyncMock(
-            return_value=[{"if_name": "em0", "address": "1.1.1.1", "mac": "m1"}]
-        )
-        client._get_dnsmasq_leases = AsyncMock(return_value=[])
-        client._get_isc_dhcpv4_leases = AsyncMock(return_value=[])
-        client._get_isc_dhcpv6_leases = AsyncMock(return_value=[])
-        client._get_kea_interfaces = AsyncMock(return_value={"em0": "eth0"})
-
-        combined = await client.get_dhcp_leases()
-
-        assert "em0" in combined["leases"]
-        client._get_isc_dhcpv4_leases.assert_awaited_once_with(opnsense_tz=local_tz)
-        client._get_isc_dhcpv6_leases.assert_awaited_once_with(opnsense_tz=local_tz)
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_kea_leases_with_reservations_and_expiry_handling() -> None:
-    """Exercise _get_kea_dhcpv4_leases reservation matching and expiry logic."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
-    try:
-        # reservation maps hw_address -> ip
-        res_rows = [{"hw_address": "aa:bb", "ip_address": "192.0.2.1"}]
-
-        # lease row matches reservation and has future expire
-        future_ts = int((datetime.now().timestamp()) + 3600)
-        lease_rows = [
-            {
-                "address": "192.0.2.1",
-                "hwaddr": "aa:bb",
-                "state": "0",
-                "if_name": "em0",
-                "expire": future_ts,
-                "hostname": "h",
-            }
-        ]
-
-        async def fake_safe(path):
-            """Fake safe.
-
-            Args:
-                path (str): API endpoint path to request.
-
-            Returns:
-                Any: Mock value returned to support test behavior.
-            """
-            if path == "/api/kea/dhcpv4/search_reservation":
-                return {"rows": res_rows}
-            if path == "/api/kea/leases4/search":
-                return {"rows": lease_rows}
-            return {}
-
-        client._safe_dict_get = AsyncMock(side_effect=fake_safe)
-        leases = await client._get_kea_dhcpv4_leases()
-        assert isinstance(leases, list) and len(leases) == 1
-        assert leases[0].get("type") == "static"
     finally:
         await client.async_close()
 

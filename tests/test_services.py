@@ -15,9 +15,17 @@ async def test_service_management_and_get_services(make_client) -> None:
     client, session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(
-            return_value={"rows": [{"name": "svc1", "running": 1, "id": "svc1"}]}
+            return_value={
+                "rows": [
+                    {"name": "svc1", "running": 1, "id": "svc1"},
+                    "malformed",
+                    123,
+                    None,
+                ]
+            }
         )
         services = await client.get_services()
+        assert len(services) == 1
         assert services[0]["status"] is True
         assert await client.get_service_is_running("svc1") is True
 
@@ -65,35 +73,5 @@ async def test_manage_service_and_restart_if_running(monkeypatch, make_client) -
         client.get_service_is_running = AsyncMock(return_value=False)
         assert await client.restart_service_if_running("svc1") is True
         restart_service_mock.assert_not_awaited()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_services_and_service_is_running() -> None:
-    """Verify service listing and running-state detection."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
-    try:
-        # get_services returns rows
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"name": "svc", "running": 1, "id": "svc"},
-                    "malformed",
-                    123,
-                    None,
-                ]
-            }
-        )
-        services = await client.get_services()
-        assert isinstance(services, list)
-        assert len(services) == 1
-        assert services[0]["status"] is True
-
-        # get_service_is_running
-        assert await client.get_service_is_running("svc") is True
     finally:
         await client.async_close()
