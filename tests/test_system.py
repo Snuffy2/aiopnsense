@@ -7,13 +7,13 @@ import aiohttp
 import pytest
 
 import aiopnsense as pyopnsense
+from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
 async def test_get_device_unique_id_and_system_info(make_client) -> None:
     """Verify device unique id is derived from MACs and system info is returned."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         # device unique id from mac addresses
         client._safe_list_get = AsyncMock(
@@ -37,8 +37,7 @@ async def test_get_device_unique_id_and_system_info(make_client) -> None:
 @pytest.mark.asyncio
 async def test_get_opnsense_timezone_parse_and_fallback(make_client) -> None:
     """_get_opnsense_timezone should parse valid timezone strings and fallback on errors."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value={"datetime": "2026-03-07 12:00:00 EST"})
         parsed_tz = await client._get_opnsense_timezone()
@@ -69,8 +68,7 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client) -> None:
 @pytest.mark.asyncio
 async def test_carp_and_reboot_and_wol(make_client) -> None:
     """Verify CARP interface discovery and system control endpoints (reboot/halt/WOL)."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value={"carp": {"allow": "1"}})
         assert await client.get_carp_status() is True
@@ -99,8 +97,7 @@ async def test_carp_and_reboot_and_wol(make_client) -> None:
 @pytest.mark.asyncio
 async def test_reload_interface_and_certificates_and_gateways(make_client) -> None:
     """Reload interface, list certificates, and list gateways parsing."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         client._safe_dict_post = AsyncMock(return_value={"message": "OK reload"})
         ok = await client.reload_interface("em0")
@@ -207,8 +204,7 @@ async def test_carp_and_system_actions_and_wol() -> None:
 @pytest.mark.asyncio
 async def test_get_device_unique_id_no_mac(make_client) -> None:
     """get_device_unique_id returns None when no physical mac addresses present."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         client._safe_list_get = AsyncMock(return_value=[{"is_physical": False}])
         assert await client.get_device_unique_id() is None
@@ -219,8 +215,7 @@ async def test_get_device_unique_id_no_mac(make_client) -> None:
 @pytest.mark.asyncio
 async def test_get_device_unique_id_expected(make_client) -> None:
     """get_device_unique_id returns expected_id if present even if not the first."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         # aa_bb_cc is smaller than bb_cc_dd
         client._safe_list_get = AsyncMock(

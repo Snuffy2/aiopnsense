@@ -6,13 +6,13 @@ import aiohttp
 import pytest
 
 import aiopnsense as pyopnsense
+from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
 async def test_get_unbound_blocklist_returns_uuid_mapping(make_client) -> None:
     """The DNSBL search response should be normalized into a UUID-keyed mapping."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(
             return_value={
@@ -109,8 +109,7 @@ async def test_enable_disable_unbound_blocklist(
 @pytest.mark.asyncio
 async def test_toggle_unbound_blocklist_handles_apply_exception(make_client) -> None:
     """Client errors during the DNSBL apply step should return False."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         client._safe_dict_post = AsyncMock(return_value={"result": "Enabled"})
         client._get = AsyncMock(side_effect=aiohttp.ClientError("boom"))

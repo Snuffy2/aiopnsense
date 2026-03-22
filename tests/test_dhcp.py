@@ -8,13 +8,13 @@ import aiohttp
 import pytest
 
 import aiopnsense as pyopnsense
+from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
 async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client) -> None:
     """Cover Kea and dnsmasq lease parsing and _keep_latest_leases helper."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         # _get_kea_interfaces returns mapping and kea leases: one valid
         client._safe_dict_get = AsyncMock(
@@ -85,8 +85,7 @@ async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client) -> None:
 @pytest.mark.asyncio
 async def test_get_arp_table_uses_get_query_param(make_client) -> None:
     """get_arp_table should call diagnostics search_arp via GET with resolve query parameter."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
 
@@ -106,8 +105,7 @@ async def test_get_arp_table_uses_get_query_param(make_client) -> None:
 @pytest.mark.asyncio
 async def test_isc_dhcp_endpoint_unavailable(make_client) -> None:
     """ISC DHCP lease methods should return empty list when endpoints are unavailable."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()

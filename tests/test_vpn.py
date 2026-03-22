@@ -8,13 +8,13 @@ import pytest
 
 import aiopnsense as pyopnsense
 from aiopnsense import vpn as pyopnsense_vpn
+from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
 async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
     """Validate openvpn server/client discovery and fetch details flow."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         # Prepare fake responses for safe_gets
         sessions_info = {
@@ -165,8 +165,7 @@ async def test_toggle_vpn_instance_variants(
     make_client, vpn_type, path, post_resp, expected
 ) -> None:
     """Parametrized toggle_vpn_instance covering OpenVPN and WireGuard variants."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
 
     if isinstance(post_resp, list):
         client._safe_dict_post = AsyncMock(side_effect=post_resp)
@@ -181,8 +180,7 @@ async def test_toggle_vpn_instance_variants(
 @pytest.mark.asyncio
 async def test_openvpn_more_detail_parsing(monkeypatch, make_client) -> None:
     """Exercise additional OpenVPN parsing branches (no sessions, missing fields)."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
 
     # prepare responses that exercise missing/partial fields
     sessions_info: dict[str, list[dict]] = {"rows": []}
@@ -429,8 +427,7 @@ def test_wireguard_is_connected_variants(monkeypatch, delta_minutes: int, expect
 @pytest.mark.asyncio
 async def test_get_wireguard_success_and_invalid(make_client) -> None:
     """Exercise get_wireguard success path and invalid structure early return."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
 
     now = datetime.now().astimezone()
     old_handshake = int((now - timedelta(minutes=10)).timestamp())  # disconnected

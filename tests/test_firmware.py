@@ -7,13 +7,13 @@ import aiohttp
 import pytest
 
 import aiopnsense as pyopnsense
+from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
 async def test_get_host_firmware_version_and_fallback(make_client) -> None:
     """Firmware version lookup should prefer semver and fall back to product series."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
 
     client._safe_dict_get = AsyncMock(return_value={"product": {"product_version": "25.8.0"}})
     firmware = await client.get_host_firmware_version()

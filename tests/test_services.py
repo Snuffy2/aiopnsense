@@ -6,13 +6,13 @@ import aiohttp
 import pytest
 
 import aiopnsense as pyopnsense
+from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
 async def test_service_management_and_get_services(make_client) -> None:
     """Exercise get_services(), get_service_is_running() and service control."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(
             return_value={"rows": [{"name": "svc1", "running": 1, "id": "svc1"}]}
