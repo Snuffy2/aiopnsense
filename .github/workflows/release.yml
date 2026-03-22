@@ -1,11 +1,6 @@
 name: Publish to PyPI on Release
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Release tag to publish to Test PyPI
-        required: true
-        type: string
   release:
     types: [published]
 
