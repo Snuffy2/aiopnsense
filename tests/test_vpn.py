@@ -1,20 +1,19 @@
 """Tests for `aiopnsense.vpn`."""
 
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
-import aiohttp
 import pytest
 
 import aiopnsense as pyopnsense
 from aiopnsense import vpn as pyopnsense_vpn
+from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
 async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
     """Validate openvpn server/client discovery and fetch details flow."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
     try:
         # Prepare fake responses for safe_gets
         sessions_info = {
@@ -165,8 +164,7 @@ async def test_toggle_vpn_instance_variants(
     make_client, vpn_type, path, post_resp, expected
 ) -> None:
     """Parametrized toggle_vpn_instance covering OpenVPN and WireGuard variants."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
 
     if isinstance(post_resp, list):
         client._safe_dict_post = AsyncMock(side_effect=post_resp)
@@ -181,8 +179,7 @@ async def test_toggle_vpn_instance_variants(
 @pytest.mark.asyncio
 async def test_openvpn_more_detail_parsing(monkeypatch, make_client) -> None:
     """Exercise additional OpenVPN parsing branches (no sessions, missing fields)."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
 
     # prepare responses that exercise missing/partial fields
     sessions_info: dict[str, list[dict]] = {"rows": []}
@@ -220,12 +217,9 @@ async def test_openvpn_more_detail_parsing(monkeypatch, make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_openvpn_processing_and_fetch_details() -> None:
+async def test_openvpn_processing_and_fetch_details(make_client) -> None:
     """Test processing of OpenVPN instances/providers/sessions/routes and fetching details."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _ = make_mock_session_client(make_client)
     try:
         # prepare fake responses for _safe_dict_get based on path
         def fake_safe_dict_get(path):
@@ -316,7 +310,7 @@ async def test_openvpn_client_session_updates_server_stats() -> None:
         "if": "wg1",
         "transfer-rx": "100",
         "transfer-tx": "200",
-        "latest-handshake": int(datetime.now().timestamp()),
+        "latest-handshake": int(datetime.now(tz=UTC).timestamp()),
     }
 
     await pyopnsense.OPNsenseClient._update_wireguard_peer_status(entry, servers, clients)
@@ -334,12 +328,9 @@ async def test_openvpn_client_session_updates_server_stats() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_openvpn_server_details_missing_server_field() -> None:
+async def test_fetch_openvpn_server_details_missing_server_field(make_client) -> None:
     """When instance details lack 'server' key, no tunnel_addresses should be set."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _ = make_mock_session_client(make_client)
     try:
         openvpn = {"servers": {"srv1": {"uuid": "srv1"}}}
 
@@ -374,7 +365,7 @@ async def test_get_wireguard_full_processing_and_peer_details() -> None:
         "peers": [
             {
                 "public-key": "pk1",
-                "latest-handshake": int(datetime.now().timestamp()),
+                "latest-handshake": int(datetime.now(tz=UTC).timestamp()),
                 "transfer-rx": "100",
                 "transfer-tx": "200",
                 "if": "wg1",
@@ -429,8 +420,7 @@ def test_wireguard_is_connected_variants(monkeypatch, delta_minutes: int, expect
 @pytest.mark.asyncio
 async def test_get_wireguard_success_and_invalid(make_client) -> None:
     """Exercise get_wireguard success path and invalid structure early return."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
 
     now = datetime.now().astimezone()
     old_handshake = int((now - timedelta(minutes=10)).timestamp())  # disconnected

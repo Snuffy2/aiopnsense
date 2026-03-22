@@ -1,11 +1,11 @@
 """Tests for `aiopnsense.vouchers`."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-import aiohttp
 import pytest
 
 import aiopnsense as pyopnsense
+from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
@@ -34,16 +34,13 @@ import aiopnsense as pyopnsense
     ],
 )
 async def test_generate_vouchers_server_selection_errors_and_success(
-    safe_get_ret, safe_post_ret, data, expect_exc, expect_username, expect_extras
+    make_client, safe_get_ret, safe_post_ret, data, expect_exc, expect_username, expect_extras
 ):
     """generate_vouchers: no servers / multiple servers -> error, provided server -> success.
 
     Consolidated test covering error cases and success with optional extra fields.
     """
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _ = make_mock_session_client(make_client)
     try:
         if safe_get_ret is not None:
             client._safe_list_get = AsyncMock(return_value=safe_get_ret)

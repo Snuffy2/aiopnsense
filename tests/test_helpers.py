@@ -1,14 +1,15 @@
 """Tests for `aiopnsense.helpers` utility and decorator helpers."""
 
-from datetime import datetime
-from typing import Any, NoReturn
-from unittest.mock import MagicMock
+from datetime import datetime, timezone
+from typing import Any, Callable, NoReturn
 
 import aiohttp
 import pytest
 
-import aiopnsense as pyopnsense
-from aiopnsense import helpers as pyopnsense_helpers
+from aiopnsense import OPNsenseClient, helpers as pyopnsense_helpers
+from tests.conftest import make_mock_session_client
+
+ClientType = Callable[..., OPNsenseClient]
 
 
 def test_human_friendly_duration() -> None:
@@ -71,7 +72,7 @@ def test_dict_get() -> None:
 
 def test_timestamp_to_datetime() -> None:
     """Convert timestamp integers to datetime objects, handling None."""
-    ts = int(datetime.now().timestamp())
+    ts = int(datetime.now(tz=timezone.utc).timestamp())
     dt = pyopnsense_helpers.timestamp_to_datetime(ts)
     assert isinstance(dt, datetime)
     assert dt.tzinfo is not None
@@ -131,10 +132,16 @@ async def test_log_errors_decorator_re_raise_and_suppress() -> None:
 
 
 @pytest.mark.asyncio
-async def test_log_errors_timeout_re_raise_and_suppress() -> None:
-    """_log_errors should re-raise TimeoutError when client._initial is True and suppress when False."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(url="http://x", username="u", password="p", session=session)
+async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType) -> None:
+    """Verify ``_log_errors`` re-raises or suppresses ``TimeoutError`` by init mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates timeout error propagation behavior.
+    """
+    client, _ = make_mock_session_client(make_client, url="http://x")
     try:
 
         async def raising_timeout(*args: Any, **kwargs: Any) -> NoReturn:
@@ -166,10 +173,16 @@ async def test_log_errors_timeout_re_raise_and_suppress() -> None:
 
 
 @pytest.mark.asyncio
-async def test_log_errors_server_timeout_re_raise_and_suppress() -> None:
-    """_log_errors should re-raise aiohttp.ServerTimeoutError when client._initial is True and suppress when False."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(url="http://x", username="u", password="p", session=session)
+async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: ClientType) -> None:
+    """Verify ``_log_errors`` re-raises or suppresses ``ServerTimeoutError`` by init mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates server-timeout error propagation behavior.
+    """
+    client, _ = make_mock_session_client(make_client, url="http://x")
     try:
 
         async def raising_server_timeout(*args: Any, **kwargs: Any) -> Any:

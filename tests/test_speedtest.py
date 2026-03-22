@@ -1,16 +1,16 @@
 """Tests for `aiopnsense.speedtest`."""
 
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, call
 
-import aiohttp
 import pytest
+
+from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
 async def test_get_speedtest_skips_calls_when_endpoint_missing(make_client) -> None:
     """get_speedtest should skip speedtest API calls when endpoint is unavailable."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
@@ -27,8 +27,7 @@ async def test_get_speedtest_skips_calls_when_endpoint_missing(make_client) -> N
 @pytest.mark.asyncio
 async def test_get_speedtest_normalizes_recent_and_stat_payloads(make_client) -> None:
     """get_speedtest should normalize showrecent and showstat payload fields."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(side_effect=[True, True])
         client._safe_dict_get = AsyncMock(
@@ -70,8 +69,7 @@ async def test_get_speedtest_normalizes_recent_and_stat_payloads(make_client) ->
 @pytest.mark.asyncio
 async def test_get_speedtest_fetches_showstat_without_endpoint_probe(make_client) -> None:
     """get_speedtest should only probe showrecent and then fetch both payloads."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
@@ -98,8 +96,7 @@ async def test_get_speedtest_fetches_showstat_without_endpoint_probe(make_client
 @pytest.mark.asyncio
 async def test_get_speedtest_normalizes_malformed_payloads(make_client) -> None:
     """get_speedtest should coerce malformed or missing values to None safely."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(side_effect=[True, True])
         client._safe_dict_get = AsyncMock(
@@ -146,8 +143,7 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client) -> None:
 @pytest.mark.asyncio
 async def test_parse_recent_server_variants(make_client) -> None:
     """_parse_recent_server should parse known server formats safely."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
     try:
         assert client._parse_recent_server(None) == (None, None)
         assert client._parse_recent_server("   ") == (None, None)
@@ -163,8 +159,7 @@ async def test_parse_recent_server_variants(make_client) -> None:
 @pytest.mark.asyncio
 async def test_run_speedtest_uses_extended_timeout(make_client) -> None:
     """run_speedtest should use custom timeout helper for long-running endpoint calls."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get_with_timeout = AsyncMock(return_value={"timestamp": "x"})
@@ -182,8 +177,7 @@ async def test_run_speedtest_uses_extended_timeout(make_client) -> None:
 @pytest.mark.asyncio
 async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client) -> None:
     """run_speedtest should return an empty payload when endpoint is unavailable."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get_with_timeout = AsyncMock()
@@ -200,8 +194,7 @@ async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client) ->
 @pytest.mark.asyncio
 async def test_run_speedtest_returns_empty_for_non_mapping_response(make_client) -> None:
     """run_speedtest should return an empty payload for non-mapping responses."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get_with_timeout = AsyncMock(return_value=["not", "a", "mapping"])

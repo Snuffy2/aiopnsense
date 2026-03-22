@@ -1,48 +1,71 @@
 """Tests for `aiopnsense.client_base` request, queue, and transport helpers."""
 
 import asyncio
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
 import contextlib
 from datetime import datetime, timedelta
-from types import TracebackType
-from typing import Any, Self
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
-from yarl import URL
 
-import aiopnsense as pyopnsense
-from aiopnsense import client_base as pyopnsense_client_base
+from aiopnsense import OPNsenseClient, client_base as pyopnsense_client_base
+from tests.conftest import FakeResponse, make_mock_session_client
 
-
-@pytest.mark.asyncio
-async def test_safe_dict_get_and_list_get(monkeypatch, make_client) -> None:
-    """Ensure safe getters coerce None to empty dict/list as expected."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session, username="user", password="pass")
-    # Patch _get to return dict or list using pytest's monkeypatch
-    monkeypatch.setattr(client, "_get", AsyncMock(return_value={"foo": "bar"}), raising=False)
-    result_dict = await client._safe_dict_get("/fake")
-    assert result_dict == {"foo": "bar"}
-
-    monkeypatch.setattr(client, "_get", AsyncMock(return_value=[1, 2, 3]), raising=False)
-    result_list = await client._safe_list_get("/fake")
-    assert result_list == [1, 2, 3]
-
-    monkeypatch.setattr(client, "_get", AsyncMock(return_value=None), raising=False)
-    result_empty_dict = await client._safe_dict_get("/fake")
-    assert result_empty_dict == {}
-    result_empty_list = await client._safe_list_get("/fake")
-    assert result_empty_list == []
-    await client.async_close()
+MakeClientFactory = Callable[..., OPNsenseClient]
+FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]
 
 
 @pytest.mark.asyncio
-async def test_safe_dict_post_and_list_post(monkeypatch, make_client) -> None:
-    """Ensure safe post helpers coerce None to empty dict/list as expected."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session, username="user", password="pass")
+async def test_safe_dict_get_and_list_get(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Ensure safe getters coerce ``None`` into empty containers.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts side effects and normalized return payloads.
+    """
+    client, _session = make_mock_session_client(make_client, username="user", password="pass")
+    try:
+        # Patch _get to return dict or list using pytest's monkeypatch
+        monkeypatch.setattr(client, "_get", AsyncMock(return_value={"foo": "bar"}), raising=False)
+        result_dict = await client._safe_dict_get("/fake")
+        assert result_dict == {"foo": "bar"}
+
+        monkeypatch.setattr(client, "_get", AsyncMock(return_value=[1, 2, 3]), raising=False)
+        result_list = await client._safe_list_get("/fake")
+        assert result_list == [1, 2, 3]
+
+        monkeypatch.setattr(client, "_get", AsyncMock(return_value=None), raising=False)
+        result_empty_dict = await client._safe_dict_get("/fake")
+        assert result_empty_dict == {}
+        result_empty_list = await client._safe_list_get("/fake")
+        assert result_empty_list == []
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_safe_dict_post_and_list_post(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Ensure safe post helpers coerce ``None`` into empty containers.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts side effects and normalized return payloads.
+    """
+    client, _session = make_mock_session_client(make_client, username="user", password="pass")
     try:
         monkeypatch.setattr(client, "_post", AsyncMock(return_value={"foo": "bar"}), raising=False)
         result_dict = await client._safe_dict_post("/fake")
@@ -62,17 +85,26 @@ async def test_safe_dict_post_and_list_post(monkeypatch, make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_safe_dict_get_with_timeout(monkeypatch, make_client) -> None:
-    """Ensure custom-timeout safe getter coerces None to empty dict as expected."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session, username="user", password="pass")
+async def test_safe_dict_get_with_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Ensure timeout-specific safe getter normalizes ``None`` to ``{}``.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test verifies timeout helper delegation and normalization.
+    """
+    client, _session = make_mock_session_client(make_client, username="user", password="pass")
     try:
-        monkeypatch.setattr(
-            client, "_do_get", AsyncMock(return_value={"foo": "bar"}), raising=False
-        )
+        do_get_mock = AsyncMock(return_value={"foo": "bar"})
+        monkeypatch.setattr(client, "_do_get", do_get_mock, raising=False)
         result_dict = await client._safe_dict_get_with_timeout("/fake", timeout_seconds=180)
         assert result_dict == {"foo": "bar"}
-        client._do_get.assert_awaited_once_with(
+        do_get_mock.assert_awaited_once_with(
             path="/fake",
             caller="_safe_dict_get_with_timeout",
             timeout_seconds=180,
@@ -97,11 +129,21 @@ async def test_safe_dict_get_with_timeout(monkeypatch, make_client) -> None:
 )
 @pytest.mark.asyncio
 async def test_normalize_timeout_seconds(
-    timeout_seconds: Any, expected: float, make_client
+    timeout_seconds: Any,
+    expected: float,
+    make_client: MakeClientFactory,
 ) -> None:
-    """_normalize_timeout_seconds should coerce invalid values to the default timeout."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    """Verify timeout normalization behavior for valid and invalid values.
+
+    Args:
+        timeout_seconds (Any): Candidate timeout input under test.
+        expected (float): Expected normalized timeout value.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts normalized timeout conversion behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
     try:
         assert client._normalize_timeout_seconds(timeout_seconds) == expected
     finally:
@@ -109,49 +151,17 @@ async def test_normalize_timeout_seconds(
 
 
 @pytest.mark.asyncio
-async def test_is_endpoint_available_caches_success(make_client) -> None:
-    """Endpoint probe should cache positive results and avoid repeated calls."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+async def test_is_endpoint_available_caches_success(make_client: MakeClientFactory) -> None:
+    """Verify endpoint availability results are cached after a successful probe.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts positive endpoint cache behavior.
+    """
+    client, session = make_mock_session_client(make_client)
     calls = 0
-
-    class FakeResp:
-        def __init__(self, status: int, ok: bool) -> None:
-            """Initialize the FakeResp instance.
-
-            Args:
-                status (int): Status value to evaluate or normalize.
-                ok (bool): Mock HTTP success flag for test responses.
-            """
-            self.status = status
-            self.reason = "OK"
-            self.ok = ok
-
-        async def __aenter__(self) -> Self:
-            """Enter the asynchronous context.
-
-            Returns:
-                Self: The context-managed instance.
-            """
-            return self
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            tb: TracebackType | None,
-        ) -> bool:
-            """Exit the asynchronous context.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
-                exc (BaseException | None): Exception instance raised in async context teardown.
-                tb (TracebackType | None): Traceback associated with async context teardown.
-
-            Returns:
-                bool: False so exceptions are not suppressed.
-            """
-            return False
 
     def _get(*args: Any, **kwargs: Any) -> Any:
         """Get.
@@ -165,7 +175,7 @@ async def test_is_endpoint_available_caches_success(make_client) -> None:
         """
         nonlocal calls
         calls += 1
-        return FakeResp(status=200, ok=True)
+        return FakeResponse(status=200, ok=True)
 
     session.get = _get
     try:
@@ -177,49 +187,19 @@ async def test_is_endpoint_available_caches_success(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_is_endpoint_available_cache_false_by_ttl_and_force_refresh(make_client) -> None:
-    """Endpoint probe should cache False results until TTL expiry or force refresh."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+async def test_is_endpoint_available_cache_false_by_ttl_and_force_refresh(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify negative endpoint results are cached until TTL expiry or force refresh.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts TTL and force-refresh behavior.
+    """
+    client, session = make_mock_session_client(make_client)
     calls = 0
-
-    class FakeResp:
-        def __init__(self, status: int, ok: bool) -> None:
-            """Initialize the FakeResp instance.
-
-            Args:
-                status (int): Status value to evaluate or normalize.
-                ok (bool): Mock HTTP success flag for test responses.
-            """
-            self.status = status
-            self.reason = "ERR"
-            self.ok = ok
-
-        async def __aenter__(self) -> Self:
-            """Enter the asynchronous context.
-
-            Returns:
-                Self: The context-managed instance.
-            """
-            return self
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            tb: TracebackType | None,
-        ) -> bool:
-            """Exit the asynchronous context.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
-                exc (BaseException | None): Exception instance raised in async context teardown.
-                tb (TracebackType | None): Traceback associated with async context teardown.
-
-            Returns:
-                bool: False so exceptions are not suppressed.
-            """
-            return False
 
     def _get(*args: Any, **kwargs: Any) -> Any:
         """Get.
@@ -234,8 +214,8 @@ async def test_is_endpoint_available_cache_false_by_ttl_and_force_refresh(make_c
         nonlocal calls
         calls += 1
         if calls == 1:
-            return FakeResp(status=404, ok=False)
-        return FakeResp(status=200, ok=True)
+            return FakeResponse(status=404, reason="ERR", ok=False)
+        return FakeResponse(status=200, reason="ERR", ok=True)
 
     session.get = _get
     try:
@@ -258,10 +238,16 @@ async def test_is_endpoint_available_cache_false_by_ttl_and_force_refresh(make_c
 
 
 @pytest.mark.asyncio
-async def test_is_endpoint_available_handles_timeout(make_client) -> None:
-    """Endpoint probe should return False and retry after timeout failures."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+async def test_is_endpoint_available_handles_timeout(make_client: MakeClientFactory) -> None:
+    """Verify endpoint probing returns ``False`` and retries after timeouts.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts timeout handling and retry behavior.
+    """
+    client, session = make_mock_session_client(make_client)
     calls = 0
 
     def _get(*args: Any, **kwargs: Any) -> Any:
@@ -288,49 +274,19 @@ async def test_is_endpoint_available_handles_timeout(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_is_endpoint_available_does_not_cache_non_404_http_errors(make_client) -> None:
-    """Endpoint probe should retry when non-404 HTTP status codes are returned."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+async def test_is_endpoint_available_does_not_cache_non_404_http_errors(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify non-404 HTTP failures are not cached for endpoint availability.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts retry behavior for non-404 failures.
+    """
+    client, session = make_mock_session_client(make_client)
     calls = 0
-
-    class FakeResp:
-        def __init__(self, status: int, ok: bool) -> None:
-            """Initialize the FakeResp instance.
-
-            Args:
-                status (int): Status value to evaluate or normalize.
-                ok (bool): Mock HTTP success flag for test responses.
-            """
-            self.status = status
-            self.reason = "ERR"
-            self.ok = ok
-
-        async def __aenter__(self) -> Self:
-            """Enter the asynchronous context.
-
-            Returns:
-                Self: The context-managed instance.
-            """
-            return self
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            tb: TracebackType | None,
-        ) -> bool:
-            """Exit the asynchronous context.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
-                exc (BaseException | None): Exception instance raised in async context teardown.
-                tb (TracebackType | None): Traceback associated with async context teardown.
-
-            Returns:
-                bool: False so exceptions are not suppressed.
-            """
-            return False
 
     def _get(*args: Any, **kwargs: Any) -> Any:
         """Get.
@@ -344,7 +300,7 @@ async def test_is_endpoint_available_does_not_cache_non_404_http_errors(make_cli
         """
         nonlocal calls
         calls += 1
-        return FakeResp(status=500, ok=False)
+        return FakeResponse(status=500, reason="ERR", ok=False)
 
     session.get = _get
     try:
@@ -359,15 +315,16 @@ async def test_is_endpoint_available_does_not_cache_non_404_http_errors(make_cli
 
 
 @pytest.mark.asyncio
-async def test_opnsenseclient_async_close(make_client) -> None:
-    """Verify async_close cancels workers and queue monitor as expected."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost",
-        username="user",
-        password="pass",
-        session=session,
-    )
+async def test_opnsenseclient_async_close(make_client: MakeClientFactory) -> None:
+    """Verify ``async_close`` cancels worker tasks and queue monitor resources.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts cancellation and cleanup behavior.
+    """
+    client, _session = make_mock_session_client(make_client, username="user", password="pass")
     try:
         initial_tasks = [t for t in [client._queue_monitor, *client._workers] if t is not None]
         for task in initial_tasks:
@@ -403,105 +360,47 @@ async def test_opnsenseclient_async_close(make_client) -> None:
     ],
 )
 async def test_do_get_post_error_initial_behavior(
-    method_name, session_method, args, kwargs, make_client
+    method_name: str,
+    session_method: str,
+    args: tuple[str],
+    kwargs: dict[str, Any],
+    make_client: MakeClientFactory,
 ) -> None:
-    """When client._initial is True, non-ok responses should raise ClientResponseError for _do_get/_do_post."""
-    session = MagicMock(spec=aiohttp.ClientSession)
+    """Verify initial-mode request failures raise ``ClientResponseError``.
 
-    # create a fake response context manager
-    class FakeResp:
-        def __init__(self, status: int = 500, ok: bool = False) -> None:
-            """Initialize the FakeResp instance.
+    Args:
+        method_name (str): Client method to invoke (``_do_get`` or ``_do_post``).
+        session_method (str): Session method to override (``get`` or ``post``).
+        args (tuple[str]): Positional arguments passed to the client method.
+        kwargs (dict[str, Any]): Keyword arguments passed to the client method.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
-            Args:
-                status (Any): Status value to evaluate or normalize.
-                ok (Any): Mock HTTP success flag for test responses.
-            """
-            self.status = status
-            self.reason = "Err"
-            self.ok = ok
-
-            # Provide a minimal request_info with real_url to satisfy logging
-            class RI:
-                real_url = URL("http://localhost")
-
-            self.request_info = RI()
-            self.history: list[Any] = []
-            self.headers: dict[str, Any] = {}
-
-        async def __aenter__(self) -> Self:
-            """Enter the asynchronous context.
-
-            Returns:
-                Self: The context-managed instance.
-            """
-            return self
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            tb: TracebackType | None,
-        ) -> bool:
-            """Exit the asynchronous context.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
-                exc (BaseException | None): Exception instance raised in async context teardown.
-                tb (TracebackType | None): Traceback associated with async context teardown.
-
-            Returns:
-                bool: False so exceptions are not suppressed.
-            """
-            return False
-
-        async def json(self, content_type: Any = None) -> Any:
-            """Json.
-
-            Args:
-                content_type (Any, optional): Mock response content type.
-
-            Returns:
-                Any: Value produced by this helper method.
-            """
-            return {"x": 1}
-
-        async def text(self) -> str:
-            """Text.
-
-            Returns:
-                Any: Value produced by this helper method.
-            """
-            return "raw response text"
-
-        @property
-        def content(self) -> Any:
-            """Content.
-
-            Returns:
-                Any: Value produced by this helper method.
-            """
-
-            class C:
-                async def iter_chunked(self, n: int) -> Any:
-                    """Iter chunked.
-
-                    Args:
-                        n (Any): Numeric value to normalize.
-
-                    Returns:
-                        Any: Value produced by this helper method.
-                    """
-                    yield b"data: {}\n\n"
-
-            return C()
+    Returns:
+        None: This test asserts exception behavior for initial requests.
+    """
+    client, session = make_mock_session_client(make_client)
 
     if session_method == "get":
-        session.get = lambda *a, **k: FakeResp(status=403, ok=False)
+        session.get = lambda *a, **k: FakeResponse(
+            status=403,
+            reason="Err",
+            ok=False,
+            json_payload={"x": 1},
+            text_payload="raw response text",
+            stream_chunks=[b"data: {}\n\n"],
+            include_request_info=True,
+        )
     else:
-        session.post = lambda *a, **k: FakeResp(status=500, ok=False)
+        session.post = lambda *a, **k: FakeResponse(
+            status=500,
+            reason="Err",
+            ok=False,
+            json_payload={"x": 1},
+            text_payload="raw response text",
+            stream_chunks=[b"data: {}\n\n"],
+            include_request_info=True,
+        )
 
-    client = make_client(session=session)
     client._initial = True
     try:
         with pytest.raises(aiohttp.ClientResponseError):
@@ -511,16 +410,25 @@ async def test_do_get_post_error_initial_behavior(
 
 
 @pytest.mark.asyncio
-async def test_get_from_stream_parsing(make_client, fake_stream_response_factory) -> None:
-    """Simulate SSE-like stream with two messages and assert parsing returns dict."""
-    session = MagicMock(spec=aiohttp.ClientSession)
+async def test_get_from_stream_parsing(
+    make_client: MakeClientFactory,
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Verify stream parsing returns the second valid SSE payload as mapping.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        fake_stream_response_factory (FakeStreamResponseFactory): Fixture function building stream
+            response stubs.
+
+    Returns:
+        None: This test asserts stream payload parsing behavior.
+    """
+    client, session = make_mock_session_client(make_client)
 
     # use shared factory to construct a fake streaming response
     session.get = lambda *a, **k: fake_stream_response_factory(
         [b'data: {"a": 1}\n\n', b'data: {"b": 2}\n\n']
-    )
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
     )
     try:
         res = await client._do_get_from_stream("/stream", caller="tst")
@@ -533,19 +441,26 @@ async def test_get_from_stream_parsing(make_client, fake_stream_response_factory
 
 @pytest.mark.asyncio
 async def test_get_from_stream_ignores_first_message(
-    make_client, fake_stream_response_factory
+    make_client: MakeClientFactory,
+    fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Ensure the parser ignores the first data message and returns the second."""
-    session = MagicMock(spec=aiohttp.ClientSession)
+    """Verify stream parser ignores first SSE data message and returns the second.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        fake_stream_response_factory (FakeStreamResponseFactory): Fixture function building stream
+            response stubs.
+
+    Returns:
+        None: This test asserts SSE message selection behavior.
+    """
+    client, session = make_mock_session_client(make_client)
 
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
             b'data: {"id": "first", "body": "ignore me"}\n\n',
             b'data: {"id": "second", "body": "keep me"}\n\n',
         ]
-    )
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
     )
     try:
         res = await client._do_get_from_stream("/stream", caller="tst")
@@ -559,16 +474,23 @@ async def test_get_from_stream_ignores_first_message(
 
 @pytest.mark.asyncio
 async def test_get_from_stream_partial_chunks_accumulates_buffer(
-    make_client, fake_stream_response_factory
+    make_client: MakeClientFactory,
+    fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Simulate a stream where a JSON message is split across chunks to exercise buffer accumulation."""
-    session = MagicMock(spec=aiohttp.ClientSession)
+    """Verify stream parser accumulates partial chunked payload fragments.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        fake_stream_response_factory (FakeStreamResponseFactory): Fixture function building stream
+            response stubs.
+
+    Returns:
+        None: This test asserts chunk-buffer accumulation behavior.
+    """
+    client, session = make_mock_session_client(make_client)
 
     session.get = lambda *a, **k: fake_stream_response_factory(
         [b'data: {"a"', b": 1}\n\n", b'data: {"b": 2}\n\n']
-    )
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
     )
     try:
         res = await client._do_get_from_stream("/stream2", caller="tst")
@@ -578,12 +500,18 @@ async def test_get_from_stream_partial_chunks_accumulates_buffer(
 
 
 @pytest.mark.asyncio
-async def test_process_queue_unknown_method_sets_future_exception(make_client) -> None:
-    """Putting an unknown method into the request queue should set an exception on the future."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_process_queue_unknown_method_sets_future_exception(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify unknown queue methods set a runtime exception on the future.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts unknown-method queue error propagation.
+    """
+    client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
         q: asyncio.Queue = asyncio.Queue()
@@ -612,75 +540,18 @@ async def test_process_queue_unknown_method_sets_future_exception(make_client) -
 
 
 @pytest.mark.asyncio
-async def test_do_get_from_stream_error_initial_raises(make_client) -> None:
-    """When response.ok is False and client._initial True, _do_get_from_stream should raise."""
-    session = MagicMock(spec=aiohttp.ClientSession)
+async def test_do_get_from_stream_error_initial_raises(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify initial-mode stream requests raise on non-OK HTTP responses.
 
-    class FakeBadResp:
-        def __init__(self, status: int = 403) -> None:
-            """Initialize the FakeBadResp instance.
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
-            Args:
-                status (Any): Status value to evaluate or normalize.
-            """
-            self.status = status
-            self.reason = "Forbidden"
-            self.ok = False
-
-            class RI:
-                real_url = URL("http://localhost")
-
-            self.request_info = RI()
-            self.history: list[Any] = []
-            self.headers: dict[str, Any] = {}
-
-        async def __aenter__(self) -> Self:
-            """Enter the asynchronous context.
-
-            Returns:
-                Self: The context-managed instance.
-            """
-            return self
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            tb: TracebackType | None,
-        ) -> bool:
-            """Exit the asynchronous context.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
-                exc (BaseException | None): Exception instance raised in async context teardown.
-                tb (TracebackType | None): Traceback associated with async context teardown.
-
-            Returns:
-                bool: False so exceptions are not suppressed.
-            """
-            return False
-
-        @property
-        def content(self) -> Any:
-            """Content.
-
-            Returns:
-                Any: Value produced by this helper method.
-            """
-
-            class C:
-                async def iter_chunked(self, n: int) -> Any:
-                    """Iter chunked.
-
-                    Args:
-                        n (Any): Numeric value to normalize.
-
-                    Returns:
-                        Any: Value produced by this helper method.
-                    """
-                    yield b""
-
-            return C()
+    Returns:
+        None: This test asserts stream exception behavior during initialization.
+    """
+    client, session = make_mock_session_client(make_client)
 
     def fake_get(*args: Any, **kwargs: Any) -> Any:
         """Fake get.
@@ -692,12 +563,15 @@ async def test_do_get_from_stream_error_initial_raises(make_client) -> None:
         Returns:
             Any: Mock value returned to support test behavior.
         """
-        return FakeBadResp()
+        return FakeResponse(
+            status=403,
+            reason="Forbidden",
+            ok=False,
+            stream_chunks=[b""],
+            include_request_info=True,
+        )
 
     session.get = fake_get
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
     try:
         client._initial = True
         with pytest.raises(aiohttp.ClientResponseError):
@@ -707,12 +581,16 @@ async def test_do_get_from_stream_error_initial_raises(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_queue_handles_requests(make_client) -> None:
-    """Run a single iteration of _process_queue processing several request types."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_process_queue_handles_requests(make_client: MakeClientFactory) -> None:
+    """Verify queue worker dispatches get/post/stream requests to the right handlers.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts request queue dispatch and result propagation.
+    """
+    client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
         # patch the do_* methods
@@ -758,15 +636,17 @@ async def test_process_queue_handles_requests(make_client) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("returned", [{"ok": 1}, [1, 2, 3], None])
-async def test_get_enqueues_and_processes(returned, make_client) -> None:
-    """Ensure `_get` enqueues a request and `_process_queue` calls `_do_get` and returns value.
+async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClientFactory) -> None:
+    """Verify ``_get`` enqueues requests and returns queue-processed results.
 
-    Parameterized to cover mapping, list and None return types.
+    Args:
+        returned (Any): Mock response returned by ``_do_get``.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts queue integration and caller propagation for ``_get``.
     """
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
         # replace request queue with a real one so _process_queue can run
@@ -809,12 +689,20 @@ async def test_get_enqueues_and_processes(returned, make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_uses_unknown_when_inspect_stack_raises(monkeypatch, make_client) -> None:
-    """If inspect.stack() raises, `_get` should set caller to 'Unknown'."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_get_uses_unknown_when_inspect_stack_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify ``_get`` uses ``Unknown`` caller when stack inspection fails.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for patching ``inspect`` helpers.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts caller fallback behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
         # Replace client_base.inspect.stack to raise an IndexError
@@ -865,15 +753,17 @@ async def test_get_uses_unknown_when_inspect_stack_raises(monkeypatch, make_clie
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("returned", [{"ok": 1}, [1, 2, 3], None])
-async def test_post_enqueues_and_processes(returned, make_client) -> None:
-    """Ensure `_post` enqueues a request and `_process_queue` calls `_do_post` and returns value.
+async def test_post_enqueues_and_processes(returned: Any, make_client: MakeClientFactory) -> None:
+    """Verify ``_post`` enqueues requests and forwards payload through processing.
 
-    Parameterized to cover mapping, list and None return types. Also verify payload is forwarded.
+    Args:
+        returned (Any): Mock response returned by ``_do_post``.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts queue integration and payload forwarding for ``_post``.
     """
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+    client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
         q: asyncio.Queue = asyncio.Queue()
@@ -915,12 +805,20 @@ async def test_post_enqueues_and_processes(returned, make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_post_uses_unknown_when_inspect_stack_raises(monkeypatch, make_client) -> None:
-    """If inspect.stack() raises, `_post` should set caller to 'Unknown'."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_post_uses_unknown_when_inspect_stack_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify ``_post`` uses ``Unknown`` caller when stack inspection fails.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for patching ``inspect`` helpers.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts caller fallback behavior for ``_post``.
+    """
+    client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
 
@@ -974,80 +872,16 @@ async def test_post_uses_unknown_when_inspect_stack_raises(monkeypatch, make_cli
 
 
 @pytest.mark.asyncio
-async def test_do_get_and_do_post_success_paths() -> None:
-    """_do_get/_do_post should return parsed JSON when response.ok is True."""
-    session = MagicMock(spec=aiohttp.ClientSession)
+async def test_do_get_and_do_post_success_paths(make_client: MakeClientFactory) -> None:
+    """Verify ``_do_get`` and ``_do_post`` return parsed JSON for successful responses.
 
-    class FakeOKResp:
-        def __init__(self, payload: Any) -> None:
-            """Initialize the FakeOKResp instance.
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
-            Args:
-                payload (Any): Request payload sent to the API endpoint.
-            """
-            self.status = 200
-            self.reason = "OK"
-            self.ok = True
-            self._payload = payload
-
-        async def __aenter__(self) -> Self:
-            """Enter the asynchronous context.
-
-            Returns:
-                Self: The context-managed instance.
-            """
-            return self
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            tb: TracebackType | None,
-        ) -> bool:
-            """Exit the asynchronous context.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
-                exc (BaseException | None): Exception instance raised in async context teardown.
-                tb (TracebackType | None): Traceback associated with async context teardown.
-
-            Returns:
-                bool: False so exceptions are not suppressed.
-            """
-            return False
-
-        async def json(self, content_type: Any = None) -> Any:
-            """Json.
-
-            Args:
-                content_type (Any, optional): Mock response content type.
-
-            Returns:
-                Any: Value produced by this helper method.
-            """
-            return self._payload
-
-        @property
-        def content(self) -> Any:
-            """Content.
-
-            Returns:
-                Any: Value produced by this helper method.
-            """
-
-            class C:
-                async def iter_chunked(self, n: int) -> Any:
-                    """Iter chunked.
-
-                    Args:
-                        n (Any): Numeric value to normalize.
-
-                    Returns:
-                        Any: Value produced by this helper method.
-                    """
-                    yield b""  # not used here
-
-            return C()
+    Returns:
+        None: This test asserts successful low-level request parsing.
+    """
+    client, session = make_mock_session_client(make_client)
 
     def fake_get(*args: Any, **kwargs: Any) -> Any:
         """Fake get.
@@ -1059,7 +893,13 @@ async def test_do_get_and_do_post_success_paths() -> None:
         Returns:
             Any: Mock value returned to support test behavior.
         """
-        return FakeOKResp({"a": 1})
+        return FakeResponse(
+            status=200,
+            reason="OK",
+            ok=True,
+            json_payload={"a": 1},
+            stream_chunks=[b""],
+        )
 
     def fake_post(*args: Any, **kwargs: Any) -> Any:
         """Fake post.
@@ -1071,13 +911,16 @@ async def test_do_get_and_do_post_success_paths() -> None:
         Returns:
             Any: Mock value returned to support test behavior.
         """
-        return FakeOKResp([1, 2, 3])
+        return FakeResponse(
+            status=200,
+            reason="OK",
+            ok=True,
+            json_payload=[1, 2, 3],
+            stream_chunks=[b""],
+        )
 
     session.get = fake_get
     session.post = fake_post
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
     try:
         got = await client._do_get("/api/x", caller="t")
         assert isinstance(got, MutableMapping) and got.get("a") == 1
@@ -1089,12 +932,18 @@ async def test_do_get_and_do_post_success_paths() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_queue_exception_sets_future_exception() -> None:
-    """If a worker raises, the future should get_exception set."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_process_queue_exception_sets_future_exception(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify worker exceptions are propagated to request futures.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts queue future error propagation.
+    """
+    client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
         client._do_get = AsyncMock(side_effect=ValueError("boom"))
@@ -1123,12 +972,18 @@ async def test_process_queue_exception_sets_future_exception() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_queue_cancelled_sets_future_cancelled_error() -> None:
-    """Ensure cancelling _process_queue resolves in-flight futures with CancelledError."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_process_queue_cancelled_sets_future_cancelled_error(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify cancelling queue processing cancels in-flight request futures.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts cancellation propagation semantics.
+    """
+    client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
         for worker in client._workers:
@@ -1182,12 +1037,16 @@ async def test_process_queue_cancelled_sets_future_cancelled_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_monitor_queue_handles_qsize_exception() -> None:
-    """If queue.qsize() raises, monitor should catch and continue (task runs)."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_monitor_queue_handles_qsize_exception(make_client: MakeClientFactory) -> None:
+    """Verify queue monitor tolerates ``qsize`` exceptions and remains cancellable.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts monitor-loop exception handling.
+    """
+    client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
         # make qsize raise
@@ -1231,12 +1090,18 @@ async def test_monitor_queue_handles_qsize_exception() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_base_workers_start_lazily_on_first_queued_request() -> None:
-    """Ensure loop/workers are initialized on first queued API request, not in __init__."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_client_base_workers_start_lazily_on_first_queued_request(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify worker/loop resources are initialized lazily on first request.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts deferred startup of queue worker infrastructure.
+    """
+    client, _session = make_mock_session_client(make_client)
     try:
         assert client._loop is None
         assert client._queue_monitor is None
@@ -1254,90 +1119,33 @@ async def test_client_base_workers_start_lazily_on_first_queued_request() -> Non
 
 
 @pytest.mark.asyncio
-async def test_do_get_post_and_stream_permission_errors(make_client) -> None:
-    """_do_get/_do_post/_do_get_from_stream should not raise when 403 and initial False."""
-    session = MagicMock(spec=aiohttp.ClientSession)
+async def test_do_get_post_and_stream_permission_errors(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify permission failures do not raise when client is not in initial mode.
 
-    class Fake403:
-        def __init__(self) -> None:
-            """Initialize the Fake403 instance."""
-            self.status = 403
-            self.reason = "Forbidden"
-            self.ok = False
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
-            class RI:  # minimal request_info
-                real_url = URL("http://localhost")
-
-            self.request_info = RI()
-            self.history: list[Any] = []
-            self.headers: dict[str, Any] = {}
-
-        async def __aenter__(self) -> Self:
-            """Enter the asynchronous context.
-
-            Returns:
-                Self: The context-managed instance.
-            """
-            return self
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            tb: TracebackType | None,
-        ) -> bool:
-            """Exit the asynchronous context.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
-                exc (BaseException | None): Exception instance raised in async context teardown.
-                tb (TracebackType | None): Traceback associated with async context teardown.
-
-            Returns:
-                bool: False so exceptions are not suppressed.
-            """
-            return False
-
-        async def json(self, content_type: Any = None) -> Any:
-            """Json.
-
-            Args:
-                content_type (Any, optional): Mock response content type.
-
-            Returns:
-                Any: Value produced by this helper method.
-            """
-            return {"err": 1}
-
-        @property
-        def content(self) -> Any:  # for stream variant
-            """Content.
-
-            Returns:
-                Any: Value produced by this helper method.
-            """
-
-            class C:
-                async def iter_chunked(self, n: int) -> Any:
-                    """Iter chunked.
-
-                    Args:
-                        n (Any): Numeric value to normalize.
-
-                    Returns:
-                        Any: Value produced by this helper method.
-                    """
-                    if False:  # pragma: no cover
-                        yield b""  # never executed; placeholder
-                        return
-                    yield b""  # empty stream
-
-            return C()
-
-    session.get = lambda *a, **k: Fake403()
-    session.post = lambda *a, **k: Fake403()
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
+    Returns:
+        None: This test asserts non-raising behavior for 403 permission responses.
+    """
+    client, session = make_mock_session_client(make_client)
+    session.get = lambda *a, **k: FakeResponse(
+        status=403,
+        reason="Forbidden",
+        ok=False,
+        json_payload={"err": 1},
+        stream_chunks=[b""],
+        include_request_info=True,
+    )
+    session.post = lambda *a, **k: FakeResponse(
+        status=403,
+        reason="Forbidden",
+        ok=False,
+        json_payload={"err": 1},
+        stream_chunks=[b""],
+        include_request_info=True,
     )
     try:
         client._initial = False
@@ -1349,15 +1157,16 @@ async def test_do_get_post_and_stream_permission_errors(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_name_property() -> None:
-    """Ensure client reports a composed name property correctly."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost",
-        username="user",
-        password="pass",
-        session=session,
-    )
+async def test_client_name_property(make_client: MakeClientFactory) -> None:
+    """Verify the client reports the expected human-readable name.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts the client name property value.
+    """
+    client, _session = make_mock_session_client(make_client, username="user", password="pass")
     try:
         assert client.name == "OPNsense"
     finally:
@@ -1365,65 +1174,21 @@ async def test_client_name_property() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reset_and_get_query_counts() -> None:
-    """Reset and retrieve client query counters."""
-    session = MagicMock(spec=aiohttp.ClientSession)
+async def test_reset_and_get_query_counts(make_client: MakeClientFactory) -> None:
+    """Verify query counter retrieval and reset behavior.
 
-    class FakeOKResp:
-        def __init__(self, payload: Any) -> None:
-            """Initialize the FakeOKResp instance.
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
-            Args:
-                payload (Any): Request payload sent to the API endpoint.
-            """
-            self.status = 200
-            self.reason = "OK"
-            self.ok = True
-            self._payload = payload
-
-        async def __aenter__(self) -> Self:
-            """Enter the asynchronous context.
-
-            Returns:
-                Self: The context-managed instance.
-            """
-            return self
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            tb: TracebackType | None,
-        ) -> bool:
-            """Exit the asynchronous context.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type raised in async context teardown.
-                exc (BaseException | None): Exception instance raised in async context teardown.
-                tb (TracebackType | None): Traceback associated with async context teardown.
-
-            Returns:
-                bool: False so exceptions are not suppressed.
-            """
-            return False
-
-        async def json(self, content_type: Any = None) -> Any:
-            """Json.
-
-            Args:
-                content_type (Any, optional): Mock response content type.
-
-            Returns:
-                Any: Value produced by this helper method.
-            """
-            return self._payload
-
-    session.get = lambda *args, **kwargs: FakeOKResp({"ok": True})
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost",
-        username="user",
-        password="pass",
-        session=session,
+    Returns:
+        None: This test asserts query counter increment and reset semantics.
+    """
+    client, session = make_mock_session_client(make_client, username="user", password="pass")
+    session.get = lambda *args, **kwargs: FakeResponse(
+        status=200,
+        reason="OK",
+        ok=True,
+        json_payload={"ok": True},
     )
     try:
         await client._do_get("/api/test", caller="test_reset_and_get_query_counts")

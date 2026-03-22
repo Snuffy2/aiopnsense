@@ -1,18 +1,21 @@
 """Tests for `aiopnsense.unbound`."""
 
-from unittest.mock import AsyncMock, MagicMock
+from collections.abc import Callable
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
 
-import aiopnsense as pyopnsense
+from aiopnsense import OPNsenseClient
+from tests.conftest import make_mock_session_client
+
+ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
 async def test_get_unbound_blocklist_returns_uuid_mapping(make_client) -> None:
     """The DNSBL search response should be normalized into a UUID-keyed mapping."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+    client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(
             return_value={
@@ -107,10 +110,18 @@ async def test_enable_disable_unbound_blocklist(
 
 
 @pytest.mark.asyncio
-async def test_toggle_unbound_blocklist_handles_apply_exception(make_client) -> None:
-    """Client errors during the DNSBL apply step should return False."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = make_client(session=session)
+async def test_toggle_unbound_blocklist_handles_apply_exception(
+    make_client: ClientType,
+) -> None:
+    """Verify DNSBL toggle returns ``False`` when apply endpoint raises a client error.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates exception handling for DNSBL apply requests.
+    """
+    client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_post = AsyncMock(return_value={"result": "Enabled"})
         client._get = AsyncMock(side_effect=aiohttp.ClientError("boom"))
@@ -123,12 +134,18 @@ async def test_toggle_unbound_blocklist_handles_apply_exception(make_client) -> 
 
 
 @pytest.mark.asyncio
-async def test_toggle_unbound_blocklist_uses_expected_endpoints() -> None:
-    """The shared toggle helper should hit the expected toggle and apply endpoints."""
-    session = MagicMock(spec=aiohttp.ClientSession)
-    client = pyopnsense.OPNsenseClient(
-        url="http://localhost", username="u", password="p", session=session
-    )
+async def test_toggle_unbound_blocklist_uses_expected_endpoints(
+    make_client: ClientType,
+) -> None:
+    """Verify DNSBL toggle helper calls expected toggle and apply endpoints.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates endpoint path selection for DNSBL toggles.
+    """
+    client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_post = AsyncMock(return_value={"result": "Disabled"})
         client._get = AsyncMock(return_value={"status": "OK"})
