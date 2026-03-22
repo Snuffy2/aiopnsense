@@ -13,7 +13,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     environment:
       name: pypi
@@ -26,6 +26,35 @@ jobs:
         with:
           ref: refs/tags/${{ github.event.release.tag_name || inputs.tag }}
 
+      - name: Debug GitHub Variables
+        run: |
+          echo "github.event_name: ${{ github.event_name }}"
+          echo "github.ref_name: ${{ github.ref_name }}"
+          echo "github.event.release.tag_name: ${{ github.event.release.tag_name }}"
+          echo "github.event.repository.default_branch: ${{ github.event.repository.default_branch }}"
+          echo "github.event.release.target_commitish: ${{ github.event.release.target_commitish }}"
+          echo "github.event.release.prerelease: ${{ github.event.release.prerelease }}"
+          echo "github.event.release.draft: ${{ github.event.release.draft }}"
+
+      - name: Update Version in const.py
+        if: ${{ github.event_name == 'release' && github.event.release.draft == false }}
+        run: |
+          sed -i 's/^VERSION \= \".*\"/VERSION \= \"${{ github.event.release.tag_name }}\"/' ./aiopnsense/const.py
+
+      - name: Commit & Push Version Changes
+        if: ${{ github.event_name == 'release' && github.event.release.draft == false && github.event.release.prerelease == false  }}
+        uses: actions-js/push@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.event.release.target_commitish }}
+          message: 'Updating to version ${{ github.event.release.tag_name }} [skip ci]'
+
+      - name: Update Release with Version Changes Commit
+        if: ${{ github.event_name == 'release' && github.event.release.draft == false && github.event.release.prerelease == false  }}
+        run: |
+          git tag -f "${{ github.event.release.tag_name }}"
+          git push -f origin "${{ github.event.release.tag_name }}"
+
       - name: Setup Python 3 (with caching)
         uses: actions/setup-python@v6
         with:
@@ -33,23 +62,6 @@ jobs:
           cache: 'pip'
           cache-dependency-path: |
             pyproject.toml
-
-      - name: Verify release tag matches package version
-        run: |
-          python - <<'PY'
-          import pathlib
-          import tomllib
-
-          pyproject = pathlib.Path("pyproject.toml")
-          version = tomllib.loads(pyproject.read_text())["project"]["version"]
-          tag = "${{ github.event.release.tag_name || inputs.tag }}"
-          normalized_tag = tag.removeprefix("v")
-
-          if normalized_tag != version:
-              raise SystemExit(
-                  f"Release tag {tag!r} does not match pyproject version {version!r}"
-              )
-          PY
 
       - name: Install build tooling
         run: python -m pip install --upgrade build twine
@@ -60,7 +72,22 @@ jobs:
       - name: Check distributions
         run: python -m twine check dist/*
 
+      - name: Create Zip
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          cd ${{ github.workspace }}
+          zip -r aiopnsense.zip dist/
+
+      - name: Add Zip to Action
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: aiopnsense
+          path: ./aiopnsense.zip
+          if-no-files-found: error
+
       - name: Publish to PyPI
+        if: ${{ github.event_name == 'release' && github.event.release.draft == false && github.event.release.prerelease == false  }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
