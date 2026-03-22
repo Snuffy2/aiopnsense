@@ -121,21 +121,23 @@ async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> No
 @pytest.mark.parametrize(
     ("method_name", "endpoint"),
     [
+        ("_get_kea_dhcpv4_leases", "/api/kea/leases4/search"),
+        ("_get_dnsmasq_leases", "/api/dnsmasq/leases/search"),
         ("_get_isc_dhcpv4_leases", "/api/dhcpv4/service/status"),
         ("_get_isc_dhcpv6_leases", "/api/dhcpv6/service/status"),
     ],
 )
-async def test_isc_dhcp_endpoint_unavailable(
+async def test_dhcp_endpoint_unavailable(
     make_client: ClientType,
     method_name: str,
     endpoint: str,
 ) -> None:
-    """Verify ISC DHCP lease helpers return empty results when endpoints are unavailable.
+    """Verify DHCP lease helpers return empty results when endpoints are unavailable.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         method_name (str): Lease helper method name to invoke.
-        endpoint (str): Service-status endpoint expected for availability probing.
+        endpoint (str): Endpoint expected for availability probing.
 
     Returns:
         None: This test validates endpoint gating behavior.
@@ -144,8 +146,8 @@ async def test_isc_dhcp_endpoint_unavailable(
     try:
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
-        leases_v6 = await getattr(client, method_name)()
-        assert leases_v6 == []
+        leases = await getattr(client, method_name)()
+        assert leases == []
         client.is_endpoint_available.assert_awaited_once_with(endpoint)
         client._safe_dict_get.assert_not_awaited()
     finally:

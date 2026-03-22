@@ -110,6 +110,9 @@ class DHCPMixin(PyOPNsenseClientProtocol):
         Returns:
             list: IPv4 DHCP Leases by Kea.
         """
+        if not await self.is_endpoint_available("/api/kea/leases4/search"):
+            _LOGGER.debug("Kea DHCP not installed")
+            return []
         response = await self._safe_dict_get("/api/kea/leases4/search")
         if not isinstance(response.get("rows", None), list):
             return []
@@ -205,6 +208,9 @@ class DHCPMixin(PyOPNsenseClientProtocol):
         Returns:
             list: Dnsmasq IPv4 and IPv6 DHCP Leases.
         """
+        if not await self.is_endpoint_available("/api/dnsmasq/leases/search"):
+            _LOGGER.debug("Dnsmasq DHCP not installed")
+            return []
         response = await self._safe_dict_get("/api/dnsmasq/leases/search")
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
