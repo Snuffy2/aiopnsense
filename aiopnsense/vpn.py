@@ -15,16 +15,11 @@ class VPNMixin(PyOPNsenseClientProtocol):
     def wireguard_is_connected(past_time: datetime | None) -> bool:
         """Determine whether a WireGuard session is still considered active.
 
-        Parameters
-        ----------
-        past_time : datetime | None
-            Last peer handshake timestamp to evaluate.
+        Args:
+            past_time (datetime | None): Timestamp of the most recent WireGuard handshake.
 
-        Returns
-        -------
-        bool
-        True when the peer handshake is within 3 minutes; otherwise False.
-
+        Returns:
+            bool: True if a wireguard session is still considered active; otherwise, False.
         """
         if not past_time:
             return False
@@ -34,12 +29,8 @@ class VPNMixin(PyOPNsenseClientProtocol):
     async def get_openvpn(self) -> MutableMapping[str, Any]:
         """Return OpenVPN information.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed openvpn payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         # https://docs.opnsense.org/development/api/core/openvpn.html
         # https://github.com/opnsense/core/blob/master/src/opnsense/www/js/widgets/OpenVPNClients.js
@@ -72,13 +63,9 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> None:
         """Process OpenVPN instances into servers and clients.
 
-        Parameters
-        ----------
-        instances_info : MutableMapping[str, Any]
-            Raw OpenVPN instance payload returned by the API.
-        openvpn : MutableMapping[str, Any]
-            Mutable OpenVPN result structure updated in place.
-
+        Args:
+            instances_info (MutableMapping[str, Any]): Raw OpenVPN instance payload from the API.
+            openvpn (MutableMapping[str, Any]): Accumulated OpenVPN data structure being populated.
         """
         for instance in instances_info.get("rows", []):
             if not isinstance(instance, MutableMapping):
@@ -100,13 +87,9 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> None:
         """Add a server to the OpenVPN structure.
 
-        Parameters
-        ----------
-        instance : MutableMapping[str, Any]
-            Single OpenVPN instance record to transform.
-        openvpn : MutableMapping[str, Any]
-            Mutable OpenVPN result structure updated in place.
-
+        Args:
+            instance (MutableMapping[str, Any]): OpenVPN instance entry from the API payload.
+            openvpn (MutableMapping[str, Any]): Accumulated OpenVPN data structure being populated.
         """
         uuid = instance.get("uuid")
         if not uuid:
@@ -126,13 +109,9 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> None:
         """Process OpenVPN providers.
 
-        Parameters
-        ----------
-        providers_info : MutableMapping[str, Any]
-            Raw OpenVPN provider payload returned by the API.
-        openvpn : MutableMapping[str, Any]
-            Mutable OpenVPN result structure updated in place.
-
+        Args:
+            providers_info (MutableMapping[str, Any]): Raw OpenVPN provider payload from the API.
+            openvpn (MutableMapping[str, Any]): Accumulated OpenVPN data structure being populated.
         """
         for uuid, vpn_info in providers_info.items():
             if not uuid or not isinstance(vpn_info, MutableMapping):
@@ -148,13 +127,9 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> None:
         """Process OpenVPN sessions.
 
-        Parameters
-        ----------
-        sessions_info : MutableMapping[str, Any]
-            Raw OpenVPN session payload returned by the API.
-        openvpn : MutableMapping[str, Any]
-            Mutable OpenVPN result structure updated in place.
-
+        Args:
+            sessions_info (MutableMapping[str, Any]): Raw OpenVPN session payload from the API.
+            openvpn (MutableMapping[str, Any]): Accumulated OpenVPN data structure being populated.
         """
         for session in sessions_info.get("rows", []):
             if not isinstance(session, MutableMapping) or "id" not in session:
@@ -173,13 +148,9 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> None:
         """Update server status based on session data.
 
-        Parameters
-        ----------
-        server : MutableMapping[str, Any]
-            OpenVPN server record to update.
-        session : MutableMapping[str, Any]
-            OpenVPN session entry used to derive status and byte counters.
-
+        Args:
+            server (MutableMapping[str, Any]): Server entry to update.
+            session (MutableMapping[str, Any]): Session entry payload retrieved from the API.
         """
         status = session.get("status")
         if not session.get("is_client", False):
@@ -210,13 +181,9 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> None:
         """Process OpenVPN routes.
 
-        Parameters
-        ----------
-        routes_info : MutableMapping[str, Any]
-            Raw OpenVPN route payload returned by the API.
-        openvpn : MutableMapping[str, Any]
-            Mutable OpenVPN result structure updated in place.
-
+        Args:
+            routes_info (MutableMapping[str, Any]): Raw OpenVPN route payload from the API.
+            openvpn (MutableMapping[str, Any]): Accumulated OpenVPN data structure being populated.
         """
         for route in routes_info.get("rows", []):
             if not isinstance(route, MutableMapping):
@@ -236,11 +203,8 @@ class VPNMixin(PyOPNsenseClientProtocol):
     async def _fetch_openvpn_server_details(self, openvpn: MutableMapping[str, Any]) -> None:
         """Fetch detailed server information.
 
-        Parameters
-        ----------
-        openvpn : MutableMapping[str, Any]
-            Mutable OpenVPN result structure updated in place.
-
+        Args:
+            openvpn (MutableMapping[str, Any]): Accumulated OpenVPN data structure being populated.
         """
         for uuid, server in openvpn["servers"].items():
             server.setdefault("total_bytes_sent", 0)
@@ -262,12 +226,8 @@ class VPNMixin(PyOPNsenseClientProtocol):
     async def get_wireguard(self) -> MutableMapping[str, Any]:
         """Get the details of the WireGuard services.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed wireguard payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         data_sources = {
             "summary_raw": "/api/wireguard/service/show",
@@ -310,21 +270,13 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> MutableMapping[str, Any]:
         """Process a single WireGuard server entry.
 
-        Parameters
-        ----------
-        uid : str
-            UUID key for the current WireGuard/OpenVPN object.
-        srv : MutableMapping[str, Any]
-            WireGuard server record being processed.
-        client_summ : MutableMapping[str, Any]
-            WireGuard client summary mapping from API results.
+        Args:
+            uid (str): Unique identifier used by test fixtures.
+            srv (MutableMapping[str, Any]): WireGuard server mapping entry.
+            client_summ (MutableMapping[str, Any]): WireGuard client summary entry from API data.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        None. Updates the supplied data structures in place.
-
-
+        Returns:
+            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
         return {
             "uuid": uid,
@@ -359,21 +311,13 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> MutableMapping[str, Any]:
         """Process a single WireGuard client entry.
 
-        Parameters
-        ----------
-        uid : str
-            UUID key for the current WireGuard/OpenVPN object.
-        clnt : MutableMapping[str, Any]
-            WireGuard client record being processed.
-        servers : MutableMapping[str, Any]
-            WireGuard servers mapping keyed by UUID.
+        Args:
+            uid (str): Unique identifier used by test fixtures.
+            clnt (MutableMapping[str, Any]): WireGuard client mapping entry.
+            servers (MutableMapping[str, Any]): Server mapping keyed by server identifier.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        None. Updates the supplied data structures in place.
-
-
+        Returns:
+            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
         return {
             "uuid": uid,
@@ -401,21 +345,17 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> MutableMapping[str, Any]:
         """Link a WireGuard client to its corresponding server.
 
-        Parameters
-        ----------
-        srv_id : str
-            WireGuard server UUID used for linkage.
-        servers : MutableMapping[str, Any]
-            WireGuard servers mapping keyed by UUID.
-        srv : MutableMapping[str, Any]
-            WireGuard server record being processed.
+        Args:
+            srv_id (str): Server identifier used to match related entries.
+            servers (MutableMapping[str, Any]): Server mapping keyed by server identifier.
+            srv (MutableMapping[str, Any]): WireGuard server mapping entry.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        None. Updates the supplied data structures in place.
-
-
+        Returns:
+            MutableMapping[str, Any]: Mapping that describes the linked
+                client-to-server relationship, including keys such as
+                ``name``, ``uuid``, and ``connected``, and optionally
+                ``pubkey``, ``interface``, and ``tunnel_addresses`` when the
+                referenced server exists in ``servers``.
         """
         if srv_id in servers:
             server = servers[srv_id]
@@ -441,15 +381,10 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> None:
         """Update WireGuard server and client statuses based on the summary.
 
-        Parameters
-        ----------
-        summary : list[MutableMapping[str, Any]]
-            WireGuard summary rows returned by the API.
-        servers : MutableMapping[str, Any]
-            WireGuard servers mapping keyed by UUID.
-        clients : MutableMapping[str, Any]
-            WireGuard clients mapping keyed by UUID.
-
+        Args:
+            summary (list[MutableMapping[str, Any]]): WireGuard summary payload from the API.
+            servers (MutableMapping[str, Any]): Server mapping keyed by server identifier.
+            clients (MutableMapping[str, Any]): Client mapping keyed by client identifier.
         """
         for entry in summary:
             if not isinstance(entry, MutableMapping):
@@ -469,15 +404,10 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> None:
         """Update the WireGuard peer status for clients and servers.
 
-        Parameters
-        ----------
-        entry : MutableMapping[str, Any]
-            WireGuard summary row currently being processed.
-        servers : MutableMapping[str, Any]
-            WireGuard servers mapping keyed by UUID.
-        clients : MutableMapping[str, Any]
-            WireGuard clients mapping keyed by UUID.
-
+        Args:
+            entry (MutableMapping[str, Any]): Single lease or telemetry entry under evaluation.
+            servers (MutableMapping[str, Any]): Server mapping keyed by server identifier.
+            clients (MutableMapping[str, Any]): Client mapping keyed by client identifier.
         """
         pubkey = entry.get("public-key", "-")
         interface = entry.get("if", "-")
@@ -533,25 +463,15 @@ class VPNMixin(PyOPNsenseClientProtocol):
     ) -> None:
         """Update details of WireGuard peers.
 
-        Parameters
-        ----------
-        peer : MutableMapping[str, Any]
-            WireGuard peer record being updated.
-        server_or_client : MutableMapping[str, Any]
-            WireGuard server/client record owning the peer.
-        endpoint : str
-            Peer endpoint string (host:port) if available.
-        transfer_rx : int
-            Received byte counter for the peer.
-        transfer_tx : int
-            Transmitted byte counter for the peer.
-        handshake_time : datetime | None
-            Timestamp of the most recent peer handshake.
-        is_connected : bool
-            Whether the peer is currently considered connected.
-        connection_counter_key : str
-            Key name used to increment connection statistics.
-
+        Args:
+            peer (MutableMapping[str, Any]): WireGuard peer details payload.
+            server_or_client (MutableMapping[str, Any]): VPN entity data to evaluate for state changes.
+            endpoint (str): Remote endpoint string for peer connection.
+            transfer_rx (int): Received byte counter for peer statistics.
+            transfer_tx (int): Transmitted byte counter for peer statistics.
+            handshake_time (datetime | None): Handshake time used by this operation.
+            is_connected (bool): Connection status flag for the interface entry.
+            connection_counter_key (str): Counter key used for interface connection tracking.
         """
         if endpoint and endpoint != "(none)":
             peer["endpoint"] = endpoint
@@ -582,21 +502,13 @@ class VPNMixin(PyOPNsenseClientProtocol):
     async def toggle_vpn_instance(self, vpn_type: str, clients_servers: str, uuid: str) -> bool:
         """Toggle the specified VPN instance on or off.
 
-        Parameters
-        ----------
-        vpn_type : str
-            VPN family to toggle (openvpn or wireguard).
-        clients_servers : str
-            VPN instance group endpoint (clients or servers).
-        uuid : str
-            Target object UUID returned by OPNsense.
+        Args:
+            vpn_type (str): Vpn type used by this operation.
+            clients_servers (str): Mapping that links WireGuard clients to servers.
+            uuid (str): Unique identifier of the target OPNsense resource.
 
-        Returns
-        -------
-        bool
-        True when OPNsense reports the requested action succeeded; otherwise False.
-
-
+        Returns:
+            bool: True when the toggle operation completes successfully; otherwise, False.
         """
         if vpn_type == "openvpn":
             success = await self._safe_dict_post(f"/api/openvpn/instances/toggle/{uuid}")

@@ -28,11 +28,8 @@ class SpeedtestMixin(PyOPNsenseClientProtocol):
     async def get_speedtest(self) -> dict[str, Any]:
         """Return normalized speedtest summary payload for sensors.
 
-        Returns
-        -------
-        dict[str, Any]
-            Normalized speedtest state including last and average metrics.
-
+        Returns:
+            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         if not await self.is_endpoint_available("/api/speedtest/service/showrecent"):
             _LOGGER.debug("Speedtest not installed")
@@ -85,16 +82,11 @@ class SpeedtestMixin(PyOPNsenseClientProtocol):
     def _parse_recent_server(self, server_text: Any) -> tuple[str | None, str | None]:
         """Parse the ``showrecent.server`` field into server ID and name.
 
-        Parameters
-        ----------
-        server_text : Any
-            Raw ``server`` field from the speedtest ``showrecent`` endpoint.
+        Args:
+            server_text (Any): Raw server text field from speedtest results.
 
-        Returns
-        -------
-        tuple[str | None, str | None]
-            Parsed ``(server_id, server_name)`` tuple.
-
+        Returns:
+            tuple[str | None, str | None]: Parsed value extracted from the provided input data.
         """
         if not isinstance(server_text, str):
             return None, None
@@ -111,11 +103,8 @@ class SpeedtestMixin(PyOPNsenseClientProtocol):
     async def run_speedtest(self) -> dict[str, Any]:
         """Run speedtest and return the endpoint response payload.
 
-        Returns
-        -------
-        dict[str, Any]
-            Raw speedtest run result payload. Empty dictionary when unavailable.
-
+        Returns:
+            dict[str, Any]: Mapping containing normalized fields for downstream use.
         """
         if not await self.is_endpoint_available("/api/speedtest/service/showrecent"):
             _LOGGER.debug("Speedtest not installed")

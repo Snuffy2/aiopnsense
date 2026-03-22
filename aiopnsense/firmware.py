@@ -18,6 +18,7 @@ class FirmwareMixin(PyOPNsenseClientProtocol):
     _firmware_version: str | None
 
     async def _store_host_firmware_version(self) -> None:
+        """Store host firmware version."""
         firmware_info = await self._safe_dict_get("/api/core/firmware/status")
         firmware: str | None = dict_get(firmware_info, "product.product_version")
         if not firmware or not awesomeversion.AwesomeVersion(firmware).valid:
@@ -37,12 +38,8 @@ class FirmwareMixin(PyOPNsenseClientProtocol):
     async def get_host_firmware_version(self) -> None | str:
         """Return the OPNsense Firmware version.
 
-        Returns
-        -------
-        None | str
-        Parsed host firmware version payload returned by OPNsense APIs.
-
-
+        Returns:
+            None | str: Normalized data returned by the related OPNsense endpoint.
         """
         if self._firmware_version is None:
             await self._store_host_firmware_version()
@@ -52,12 +49,8 @@ class FirmwareMixin(PyOPNsenseClientProtocol):
     async def get_firmware_update_info(self) -> MutableMapping[str, Any]:
         """Get the details of available firmware updates.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Parsed firmware update info payload returned by OPNsense APIs.
-
-
+        Returns:
+            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         status = await self._safe_dict_get("/api/core/firmware/status")
 
@@ -130,17 +123,11 @@ class FirmwareMixin(PyOPNsenseClientProtocol):
     async def upgrade_firmware(self, type: str = "update") -> MutableMapping[str, Any] | None:
         """Trigger a firmware upgrade.
 
-        Parameters
-        ----------
-        type : str
-            Firmware upgrade type (for example update or upgrade). Defaults to 'update'.
+        Args:
+            type (str): Requested firmware upgrade type.
 
-        Returns
-        -------
-        MutableMapping[str, Any] | None
-        True when OPNsense reports the requested action succeeded; otherwise False.
-
-
+        Returns:
+            MutableMapping[str, Any] | None: Mapping containing normalized fields for downstream use.
         """
         # update = minor updates of the same opnsense version
         # upgrade = major updates to a new opnsense version
@@ -153,12 +140,8 @@ class FirmwareMixin(PyOPNsenseClientProtocol):
     async def upgrade_status(self) -> MutableMapping[str, Any]:
         """Return the status of the firmware upgrade.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        True when OPNsense reports the requested action succeeded; otherwise False.
-
-
+        Returns:
+            MutableMapping[str, Any]: The status of the firmware upgrade.
         """
         return await self._safe_dict_get("/api/core/firmware/upgradestatus")
 
@@ -166,16 +149,10 @@ class FirmwareMixin(PyOPNsenseClientProtocol):
     async def firmware_changelog(self, version: str) -> MutableMapping[str, Any]:
         """Return the changelog for the firmware upgrade.
 
-        Parameters
-        ----------
-        version : str
-            Firmware version string to fetch a changelog for.
+        Args:
+            version (str): Firmware version string to cache.
 
-        Returns
-        -------
-        MutableMapping[str, Any]
-        Firmware changelog payload returned by OPNsense.
-
-
+        Returns:
+            MutableMapping[str, Any]: The changelog for the firmware upgrade.
         """
         return await self._safe_dict_post(f"/api/core/firmware/changelog/{version}")

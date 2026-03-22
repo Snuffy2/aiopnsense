@@ -327,6 +327,14 @@ async def test_get_kea_leases_with_reservations_and_expiry_handling() -> None:
         ]
 
         async def fake_safe(path):
+            """Fake safe.
+
+            Args:
+                path (str): API endpoint path to request.
+
+            Returns:
+                Any: Mock value returned to support test behavior.
+            """
             if path == "/api/kea/dhcpv4/search_reservation":
                 return {"rows": res_rows}
             if path == "/api/kea/leases4/search":

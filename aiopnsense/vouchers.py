@@ -15,17 +15,12 @@ class VouchersMixin(PyOPNsenseClientProtocol):
     async def generate_vouchers(self, data: MutableMapping[str, Any]) -> list:
         """Generate vouchers from the Voucher Server.
 
-        Parameters
-        ----------
-        data : MutableMapping[str, Any]
-            Input mapping used to build the request payload.
+        Args:
+            data (MutableMapping[str, Any]): Configuration data used to
+                generate vouchers.
 
-        Returns
-        -------
-        list
-        List of generated voucher entries returned by the voucher service.
-
-
+        Returns:
+            list: List of normalized entries produced by this method.
         """
         if data.get("voucher_server", None):
             server = data.get("voucher_server")

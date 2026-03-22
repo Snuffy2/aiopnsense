@@ -18,16 +18,11 @@ class PyOPNsenseClientProtocol(Protocol):
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
         """Queue a GET request and return the decoded payload.
 
-        Parameters
-        ----------
-        path : str
-            Relative API path.
+        Args:
+            path (str): API endpoint path to request.
 
-        Returns
-        -------
-        MutableMapping[str, Any] | list | None
-            Decoded JSON payload, or ``None`` when unavailable.
-
+        Returns:
+            MutableMapping[str, Any] | list | None: Decoded response payload returned by the GET request.
         """
         ...
 
@@ -37,18 +32,12 @@ class PyOPNsenseClientProtocol(Protocol):
     ) -> MutableMapping[str, Any] | list | None:
         """Queue a POST request and return the decoded payload.
 
-        Parameters
-        ----------
-        path : str
-            Relative API path.
-        payload : MutableMapping[str, Any] | None
-            Optional request body.
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None, optional): Request payload sent to the API endpoint.
 
-        Returns
-        -------
-        MutableMapping[str, Any] | list | None
-            Decoded JSON payload, or ``None`` when unavailable.
-
+        Returns:
+            MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request.
         """
         ...
 
@@ -56,16 +45,11 @@ class PyOPNsenseClientProtocol(Protocol):
     async def _get_from_stream(self, path: str) -> dict[str, Any]:
         """Queue a streaming GET request and parse the first data payload.
 
-        Parameters
-        ----------
-        path : str
-            Relative API path.
+        Args:
+            path (str): API endpoint path to request.
 
-        Returns
-        -------
-        dict[str, Any]
-            Parsed stream payload.
-
+        Returns:
+            dict[str, Any]: Decoded payload extracted from the streaming API response.
         """
         ...
 
@@ -73,16 +57,11 @@ class PyOPNsenseClientProtocol(Protocol):
     async def _safe_dict_get(self, path: str) -> dict[str, Any]:
         """Fetch a GET payload and coerce non-mapping values to an empty mapping.
 
-        Parameters
-        ----------
-        path : str
-            Relative API path.
+        Args:
+            path (str): API endpoint path to request.
 
-        Returns
-        -------
-        dict[str, Any]
-            Dictionary payload.
-
+        Returns:
+            dict[str, Any]: Response payload coerced to a dictionary.
         """
         ...
 
@@ -92,18 +71,12 @@ class PyOPNsenseClientProtocol(Protocol):
     ) -> dict[str, Any]:
         """Fetch a GET payload with a custom timeout and coerce non-mapping values.
 
-        Parameters
-        ----------
-        path : str
-            Relative API path.
-        timeout_seconds : int | float
-            Total timeout window in seconds for the request.
+        Args:
+            path (str): API endpoint path to request.
+            timeout_seconds (float): Request timeout in seconds for this call.
 
-        Returns
-        -------
-        dict[str, Any]
-            Dictionary payload.
-
+        Returns:
+            dict[str, Any]: Response payload coerced to a dictionary.
         """
         ...
 
@@ -111,16 +84,11 @@ class PyOPNsenseClientProtocol(Protocol):
     async def _safe_list_get(self, path: str) -> list:
         """Fetch a GET payload and coerce non-list values to an empty list.
 
-        Parameters
-        ----------
-        path : str
-            Relative API path.
+        Args:
+            path (str): API endpoint path to request.
 
-        Returns
-        -------
-        list
-            List payload.
-
+        Returns:
+            list: Response payload coerced to a list.
         """
         ...
 
@@ -130,18 +98,12 @@ class PyOPNsenseClientProtocol(Protocol):
     ) -> dict[str, Any]:
         """Fetch a POST payload and coerce non-mapping values to an empty mapping.
 
-        Parameters
-        ----------
-        path : str
-            Relative API path.
-        payload : MutableMapping[str, Any] | None
-            Optional request body.
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None, optional): Request payload sent to the API endpoint.
 
-        Returns
-        -------
-        dict[str, Any]
-            Dictionary payload.
-
+        Returns:
+            dict[str, Any]: Response payload coerced to a dictionary.
         """
         ...
 
@@ -151,18 +113,12 @@ class PyOPNsenseClientProtocol(Protocol):
     ) -> list:
         """Fetch a POST payload and coerce non-list values to an empty list.
 
-        Parameters
-        ----------
-        path : str
-            Relative API path.
-        payload : MutableMapping[str, Any] | None
-            Optional request body.
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None, optional): Request payload sent to the API endpoint.
 
-        Returns
-        -------
-        list
-            List payload.
-
+        Returns:
+            list: Response payload coerced to a list.
         """
         ...
 
@@ -170,16 +126,11 @@ class PyOPNsenseClientProtocol(Protocol):
     async def _get_opnsense_timezone(self, datetime_str: str | None = None) -> tzinfo:
         """Resolve timezone information from OPNsense system time data.
 
-        Parameters
-        ----------
-        datetime_str : str | None
-            Optional datetime string from OPNsense ``system_time`` output.
+        Args:
+            datetime_str (str | None, optional): Datetime string parsed from API output.
 
-        Returns
-        -------
-        tzinfo
-            Parsed timezone when available, otherwise a local fixed-offset fallback.
-
+        Returns:
+            tzinfo: Resolved timezone object for OPNsense system data.
         """
         ...
 
@@ -187,11 +138,8 @@ class PyOPNsenseClientProtocol(Protocol):
     async def get_query_counts(self) -> int:
         """Return the current REST API query count.
 
-        Returns
-        -------
-        int
-            Total REST API query count recorded by the client.
-
+        Returns:
+            int: Current number of API queries performed by the client.
         """
         ...
 
@@ -199,11 +147,8 @@ class PyOPNsenseClientProtocol(Protocol):
     async def get_host_firmware_version(self) -> str | None:
         """Return the host firmware version string.
 
-        Returns
-        -------
-        str | None
-            Parsed firmware version, if available.
-
+        Returns:
+            str | None: Normalized data returned by the related OPNsense endpoint.
         """
         ...
 
@@ -211,26 +156,11 @@ class PyOPNsenseClientProtocol(Protocol):
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
         """Return whether a specific API endpoint appears available.
 
-        Parameters
-        ----------
-        path : str
-            API path to probe.
-        force_refresh : bool
-            Whether to bypass cached probe results.
+        Args:
+            path (str): API endpoint path to request.
+            force_refresh (bool): Whether to bypass cached endpoint availability.
 
-        Returns
-        -------
-        bool
-            ``True`` when endpoint probe succeeds.
-
-        Notes
-        -----
-        Implementations cache per-endpoint availability using a TTL window.
-        Successful probes and HTTP 404 "not found" probes are cached until TTL
-        expiry.
-        Other probe failures are treated as transient and retried on the next
-        check.
-        ``force_refresh=True`` bypasses cache freshness checks.
-
+        Returns:
+            bool: True if a specific api endpoint appears available; otherwise, False.
         """
         ...

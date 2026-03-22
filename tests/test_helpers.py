@@ -1,6 +1,7 @@
 """Tests for `aiopnsense.helpers` utility and decorator helpers."""
 
 from datetime import datetime
+from typing import Any, NoReturn
 from unittest.mock import MagicMock
 
 import aiohttp
@@ -106,10 +107,16 @@ async def test_log_errors_decorator_re_raise_and_suppress() -> None:
 
     class Dummy:
         def __init__(self, initial: bool):
+            """Initialize the Dummy instance.
+
+            Args:
+                initial (bool): Whether the client runs in initial-connectivity mode.
+            """
             self._initial = initial
 
         @pyopnsense_helpers._log_errors
         async def boom(self) -> None:
+            """Raise RuntimeError for testing error handling."""
             raise RuntimeError("boom")
 
     # When not initial, errors are logged and suppressed (function returns None)
@@ -130,7 +137,16 @@ async def test_log_errors_timeout_re_raise_and_suppress() -> None:
     client = pyopnsense.OPNsenseClient(url="http://x", username="u", password="p", session=session)
     try:
 
-        async def raising_timeout(*args, **kwargs):
+        async def raising_timeout(*args: Any, **kwargs: Any) -> NoReturn:
+            """Raising timeout.
+
+            Args:
+                *args (Any): Positional arguments forwarded to the wrapped callable.
+                **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+            Returns:
+                NoReturn: This helper always raises ``TimeoutError``.
+            """
             raise TimeoutError("boom")
 
         # wrap the coroutine with the decorator
@@ -156,7 +172,16 @@ async def test_log_errors_server_timeout_re_raise_and_suppress() -> None:
     client = pyopnsense.OPNsenseClient(url="http://x", username="u", password="p", session=session)
     try:
 
-        async def raising_server_timeout(*args, **kwargs):
+        async def raising_server_timeout(*args: Any, **kwargs: Any) -> Any:
+            """Raising server timeout.
+
+            Args:
+                *args (Any): Positional arguments forwarded to the wrapped callable.
+                **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+            Returns:
+                Any: Value produced by the wrapped callable.
+            """
             raise aiohttp.ServerTimeoutError("srv")
 
         decorated = pyopnsense_helpers._log_errors(raising_server_timeout)

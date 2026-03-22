@@ -172,12 +172,12 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client) -> None
             """Return mocked vnStat/system-time payloads by endpoint path.
 
             Args:
-                path: Endpoint path requested by the client.
-                *_args: Unused positional arguments passed by AsyncMock.
-                **_kwargs: Unused keyword arguments passed by AsyncMock.
+                path (str): API endpoint path to request.
+                *_args (Any):  args used by this operation.
+                **_kwargs (Any):  kwargs used by this operation.
 
             Returns:
-                Mocked dictionary payload matching the requested endpoint.
+                dict[str, Any]: Mocked vnStat/system-time payloads by endpoint path.
             """
             if path == "/api/vnstat/service/hourly":
                 return hourly_payload
@@ -227,12 +227,12 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client) -> None:
             """Return mocked payloads for system-time endpoint coverage.
 
             Args:
-                path: Endpoint path requested by the client.
-                *_args: Unused positional arguments passed by AsyncMock.
-                **_kwargs: Unused keyword arguments passed by AsyncMock.
+                path (str): API endpoint path to request.
+                *_args (Any):  args used by this operation.
+                **_kwargs (Any):  kwargs used by this operation.
 
             Returns:
-                Mocked dictionary payload for the requested endpoint.
+                dict[str, Any]: Mocked payloads for system-time endpoint coverage.
             """
             if path == "/api/diagnostics/system/system_time":
                 return {"datetime": "invalid"}

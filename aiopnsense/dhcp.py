@@ -15,17 +15,11 @@ class DHCPMixin(PyOPNsenseClientProtocol):
     async def get_arp_table(self, resolve_hostnames: bool = False) -> list:
         """Return the active ARP table.
 
-        Parameters
-        ----------
-        resolve_hostnames : bool
-            Whether reverse-DNS names should be resolved for ARP entries. Defaults to False.
+        Args:
+            resolve_hostnames (bool): Whether reverse DNS lookups should be requested.
 
-        Returns
-        -------
-        list
-        Parsed arp table payload returned by OPNsense APIs.
-
-
+        Returns:
+            list: Normalized data returned by the related OPNsense endpoint.
         """
         # [{'hostname': '?', 'ip-address': '<ip>', 'mac-address': '<mac>', 'interface': 'em0', 'expires': 1199, 'type': 'ethernet'}, ...]
         resolve_flag = "yes" if resolve_hostnames else "no"
@@ -41,17 +35,11 @@ class DHCPMixin(PyOPNsenseClientProtocol):
     async def get_dhcp_leases(self, opnsense_tz: tzinfo | None = None) -> dict[str, Any]:
         """Return list of DHCP leases.
 
-        Parameters
-        ----------
-        opnsense_tz : tzinfo | None
-            Optional pre-fetched timezone for this refresh cycle.
+        Args:
+            opnsense_tz (tzinfo | None, optional): Timezone value returned by OPNsense.
 
-        Returns
-        -------
-        dict[str, Any]
-        Parsed dhcp leases payload returned by OPNsense APIs.
-
-
+        Returns:
+            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
@@ -97,12 +85,8 @@ class DHCPMixin(PyOPNsenseClientProtocol):
     async def _get_kea_interfaces(self) -> dict[str, Any]:
         """Return interfaces setup for Kea.
 
-        Returns
-        -------
-        dict[str, Any]
-        Parsed kea interfaces payload returned by OPNsense APIs.
-
-
+        Returns:
+            dict[str, Any]: Interfaces setup for Kea.
         """
         response = await self._safe_dict_get("/api/kea/dhcpv4/get")
         lease_interfaces: dict[str, Any] = {}
@@ -120,18 +104,11 @@ class DHCPMixin(PyOPNsenseClientProtocol):
     async def _get_kea_dhcpv4_leases(self, opnsense_tz: tzinfo | None = None) -> list:
         """Return IPv4 DHCP Leases by Kea.
 
-        Parameters
-        ----------
-        opnsense_tz : tzinfo | None
-            Optional pre-fetched timezone for this refresh cycle. Kea lease timestamps
-            are parsed from epoch values and do not currently use this value.
+        Args:
+            opnsense_tz (tzinfo | None, optional): Timezone value returned by OPNsense.
 
-        Returns
-        -------
-        list
-        Parsed kea dhcpv4 leases payload returned by OPNsense APIs.
-
-
+        Returns:
+            list: IPv4 DHCP Leases by Kea.
         """
         response = await self._safe_dict_get("/api/kea/leases4/search")
         if not isinstance(response.get("rows", None), list):
@@ -193,17 +170,11 @@ class DHCPMixin(PyOPNsenseClientProtocol):
     def _keep_latest_leases(self, reservations: list[dict]) -> list[dict]:
         """Deduplicate leases and keep the entry with the latest expiration.
 
-        Parameters
-        ----------
-        reservations : list[dict]
-            Reservations used by `_keep_latest_leases`.
+        Args:
+            reservations (list[dict]): Reservation list used to enrich lease entries.
 
-        Returns
-        -------
-        list[dict]
-        De-duplicated reservations retaining the latest expiration per unique lease.
-
-
+        Returns:
+            list[dict]: List of normalized entries produced by this method.
         """
         seen: dict[tuple, dict] = {}
 
@@ -228,18 +199,11 @@ class DHCPMixin(PyOPNsenseClientProtocol):
     async def _get_dnsmasq_leases(self, opnsense_tz: tzinfo | None = None) -> list:
         """Return Dnsmasq IPv4 and IPv6 DHCP Leases.
 
-        Parameters
-        ----------
-        opnsense_tz : tzinfo | None
-            Optional pre-fetched timezone for this refresh cycle. Dnsmasq lease timestamps
-            are parsed from epoch values and do not currently use this value.
+        Args:
+            opnsense_tz (tzinfo | None, optional): Timezone value returned by OPNsense.
 
-        Returns
-        -------
-        list
-        Parsed dnsmasq leases payload returned by OPNsense APIs.
-
-
+        Returns:
+            list: Dnsmasq IPv4 and IPv6 DHCP Leases.
         """
         response = await self._safe_dict_get("/api/dnsmasq/leases/search")
         leases_info: list = response.get("rows", [])
@@ -291,17 +255,11 @@ class DHCPMixin(PyOPNsenseClientProtocol):
     async def _get_isc_dhcpv4_leases(self, opnsense_tz: tzinfo | None = None) -> list:
         """Return IPv4 DHCP Leases by ISC.
 
-        Parameters
-        ----------
-        opnsense_tz : tzinfo | None
-            Optional pre-fetched timezone for this refresh cycle.
+        Args:
+            opnsense_tz (tzinfo | None, optional): Timezone value returned by OPNsense.
 
-        Returns
-        -------
-        list
-        Parsed isc dhcpv4 leases payload returned by OPNsense APIs.
-
-
+        Returns:
+            list: IPv4 DHCP Leases by ISC.
         """
         if not await self.is_endpoint_available("/api/dhcpv4/service/status"):
             _LOGGER.debug("ISC DHCP not installed")
@@ -353,17 +311,11 @@ class DHCPMixin(PyOPNsenseClientProtocol):
     async def _get_isc_dhcpv6_leases(self, opnsense_tz: tzinfo | None = None) -> list:
         """Return IPv6 DHCP Leases by ISC.
 
-        Parameters
-        ----------
-        opnsense_tz : tzinfo | None
-            Optional pre-fetched timezone for this refresh cycle.
+        Args:
+            opnsense_tz (tzinfo | None, optional): Timezone value returned by OPNsense.
 
-        Returns
-        -------
-        list
-        Parsed isc dhcpv6 leases payload returned by OPNsense APIs.
-
-
+        Returns:
+            list: IPv6 DHCP Leases by ISC.
         """
         if not await self.is_endpoint_available("/api/dhcpv6/service/status"):
             _LOGGER.debug("ISC DHCP not installed")

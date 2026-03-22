@@ -28,6 +28,14 @@ async def test_telemetry_system_parsing_and_filesystems() -> None:
         }
 
         async def fake_safe_get(path: str) -> dict[str, Any]:
+            """Fake safe get.
+
+            Args:
+                path (str): API endpoint path to request.
+
+            Returns:
+                dict[str, Any]: Mapping containing normalized fields for downstream use.
+            """
             if "system_time" in path:
                 return time_info
             if "system_disk" in path:
@@ -164,6 +172,16 @@ async def test_telemetry_memory_swap_branches() -> None:
         swap = {"swap": [{"total": "1000", "used": "200"}]}
 
         async def fake_get(path: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            """Fake get.
+
+            Args:
+                path (str): API endpoint path to request.
+                *_args (Any):  args used by this operation.
+                **_kwargs (Any):  kwargs used by this operation.
+
+            Returns:
+                dict[str, Any]: Mapping containing normalized fields for downstream use.
+            """
             if "system_resources" in path:
                 return mem
             if "system_swap" in path:
