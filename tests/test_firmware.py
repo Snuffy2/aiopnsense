@@ -148,21 +148,15 @@ async def test_upgrade_status_and_changelog(make_client) -> None:
     """Upgrade status and changelog helpers should proxy the expected endpoints."""
     client = make_client()
     try:
-        client._safe_dict_post = AsyncMock(
-            side_effect=[{"status": "running"}, {"changelog": "..."}]
-        )
+        client._safe_dict_get = AsyncMock(return_value={"status": "running"})
+        client._safe_dict_post = AsyncMock(return_value={"changelog": "..."})
 
         status = await client.upgrade_status()
         changelog = await client.firmware_changelog("26.1.1")
 
         assert status == {"status": "running"}
         assert changelog == {"changelog": "..."}
-        assert (
-            client._safe_dict_post.await_args_list[0].args[0] == "/api/core/firmware/upgradestatus"
-        )
-        assert (
-            client._safe_dict_post.await_args_list[1].args[0]
-            == "/api/core/firmware/changelog/26.1.1"
-        )
+        client._safe_dict_get.assert_awaited_once_with("/api/core/firmware/upgradestatus")
+        client._safe_dict_post.assert_awaited_once_with("/api/core/firmware/changelog/26.1.1")
     finally:
         await client.async_close()

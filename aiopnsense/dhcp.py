@@ -28,9 +28,9 @@ class DHCPMixin(PyOPNsenseClientProtocol):
 
         """
         # [{'hostname': '?', 'ip-address': '<ip>', 'mac-address': '<mac>', 'interface': 'em0', 'expires': 1199, 'type': 'ethernet'}, ...]
-        request_body: dict[str, Any] = {"resolve": "yes" if resolve_hostnames else "no"}
-        arp_table_info = await self._safe_dict_post(
-            "/api/diagnostics/interface/search_arp", payload=request_body
+        resolve_flag = "yes" if resolve_hostnames else "no"
+        arp_table_info = await self._safe_dict_get(
+            f"/api/diagnostics/interface/search_arp?resolve={resolve_flag}"
         )
         # _LOGGER.debug(f"[get_arp_table] arp_table_info: {arp_table_info}")
         arp_table: list = arp_table_info.get("rows", [])

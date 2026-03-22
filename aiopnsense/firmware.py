@@ -160,7 +160,7 @@ class FirmwareMixin(PyOPNsenseClientProtocol):
 
 
         """
-        return await self._safe_dict_post("/api/core/firmware/upgradestatus")
+        return await self._safe_dict_get("/api/core/firmware/upgradestatus")
 
     @_log_errors
     async def firmware_changelog(self, version: str) -> MutableMapping[str, Any]:

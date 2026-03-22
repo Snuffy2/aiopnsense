@@ -83,6 +83,27 @@ async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_arp_table_uses_get_query_param(make_client) -> None:
+    """get_arp_table should call diagnostics search_arp via GET with resolve query parameter."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    client = make_client(session=session)
+    try:
+        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+
+        await client.get_arp_table(resolve_hostnames=True)
+        client._safe_dict_get.assert_awaited_with(
+            "/api/diagnostics/interface/search_arp?resolve=yes"
+        )
+
+        await client.get_arp_table(resolve_hostnames=False)
+        assert client._safe_dict_get.await_args_list[1].args[0] == (
+            "/api/diagnostics/interface/search_arp?resolve=no"
+        )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_isc_dhcp_endpoint_unavailable(make_client) -> None:
     """ISC DHCP lease methods should return empty list when endpoints are unavailable."""
     session = MagicMock(spec=aiohttp.ClientSession)
