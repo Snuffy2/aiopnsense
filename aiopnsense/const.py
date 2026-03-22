@@ -4,7 +4,7 @@ from typing import Any
 
 from dateutil.tz import gettz
 
-VERSION = "v0.0.2"
+VERSION = "v1.0.0"
 
 # Default timeout, in seconds, for API requests.
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
