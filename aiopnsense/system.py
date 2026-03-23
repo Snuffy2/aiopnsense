@@ -297,5 +297,6 @@ class SystemMixin(PyOPNsenseClientProtocol):
                     "valid_from": timestamp_to_datetime(try_to_int(cert.get("valid_from", None))),
                     "valid_to": timestamp_to_datetime(try_to_int(cert.get("valid_to", None))),
                 }
-        _LOGGER.debug("[get_certificates] certs: %s", certs)
+        # _LOGGER.debug("[get_certificates] certs: %s", certs)
+        _LOGGER.debug("[get_certificates] certs length: %s", len(certs))
         return certs

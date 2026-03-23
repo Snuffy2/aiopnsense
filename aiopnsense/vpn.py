@@ -53,8 +53,12 @@ class VPNMixin(PyOPNsenseClientProtocol):
         # _LOGGER.debug(f"[get_openvpn] instances_info: {instances_info}")
 
         await self._fetch_openvpn_server_details(openvpn)
-
-        _LOGGER.debug("[get_openvpn] openvpn: %s", openvpn)
+        # _LOGGER.debug("[get_openvpn] openvpn: %s", openvpn)
+        _LOGGER.debug(
+            "[get_openvpn] servers: %s, clients: %s",
+            len(openvpn["servers"]),
+            len(openvpn["clients"]),
+        )
         return openvpn
 
     @staticmethod
@@ -245,6 +249,7 @@ class VPNMixin(PyOPNsenseClientProtocol):
             or not isinstance(client_summ, MutableMapping)
             or not isinstance(server_summ, MutableMapping)
         ):
+            _LOGGER.debug("[get_wireguard] servers: 0, clients: 0")
             return {"servers": {}, "clients": {}}
 
         servers = {
@@ -261,7 +266,12 @@ class VPNMixin(PyOPNsenseClientProtocol):
         await self._update_wireguard_status(summary, servers, clients)
 
         wireguard = {"servers": servers, "clients": clients}
-        _LOGGER.debug("[get_wireguard] wireguard: %s", wireguard)
+        # _LOGGER.debug("[get_wireguard] wireguard: %s", wireguard)
+        _LOGGER.debug(
+            "[get_wireguard] servers: %s, clients: %s",
+            len(servers),
+            len(clients),
+        )
         return wireguard
 
     @staticmethod

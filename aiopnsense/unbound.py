@@ -29,10 +29,11 @@ class UnboundMixin(PyOPNsenseClientProtocol):
         for dnsbl in dnsbl_rows:
             if not isinstance(dnsbl, MutableMapping):
                 continue
-            _LOGGER.debug("[get_unbound_blocklist] dnsbl: %s", dnsbl)
+            # _LOGGER.debug("[get_unbound_blocklist] dnsbl: %s", dnsbl)
             if dnsbl.get("uuid"):
                 dnsbl_full.update({dnsbl["uuid"]: dnsbl})
-        _LOGGER.debug("[get_unbound_blocklist] dnsbl_full: %s", dnsbl_full)
+        # _LOGGER.debug("[get_unbound_blocklist] dnsbl_full: %s", dnsbl_full)
+        _LOGGER.debug("[get_unbound_blocklist] dnsbl_full length: %s", len(dnsbl_full))
         return dnsbl_full
 
     async def _toggle_unbound_blocklist(self, set_state: bool, uuid: str | None) -> bool:
