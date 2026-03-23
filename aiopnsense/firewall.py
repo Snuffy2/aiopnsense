@@ -48,9 +48,9 @@ class FirewallMixin(PyOPNsenseClientProtocol):
             if not uuid or "lockout" in str(uuid):
                 continue
             new_rule = dict(rule)
-            # Add any transforms here
             rules_dict[str(new_rule["uuid"])] = new_rule
-        _LOGGER.debug("[get_firewall_rules] rules_dict: %s", rules_dict)
+        # _LOGGER.debug("[get_firewall_rules] rules_dict: %s", rules_dict)
+        _LOGGER.debug("[get_firewall_rules] rules_dict length: %s", len(rules_dict))
         return rules_dict
 
     @_log_errors
@@ -78,7 +78,8 @@ class FirewallMixin(PyOPNsenseClientProtocol):
             new_rule["description"] = new_rule.pop("descr", "")
             new_rule["enabled"] = "1" if new_rule.pop("disabled", "0") == "0" else "0"
             rules_dict[str(new_rule["uuid"])] = new_rule
-        _LOGGER.debug("[get_nat_destination_rules] rules_dict: %s", rules_dict)
+        # _LOGGER.debug("[get_nat_destination_rules] rules_dict: %s", rules_dict)
+        _LOGGER.debug("[get_nat_destination_rules] rules_dict length: %s", len(rules_dict))
         return rules_dict
 
     @_log_errors
@@ -106,9 +107,9 @@ class FirewallMixin(PyOPNsenseClientProtocol):
             if not uuid or "lockout" in str(uuid):
                 continue
             new_rule = dict(rule)
-            # Add any transforms here
             rules_dict[str(new_rule["uuid"])] = new_rule
-        _LOGGER.debug("[get_nat_one_to_one_rules] rules_dict: %s", rules_dict)
+        _LOGGER.debug("[get_nat_one_to_one_rules] rules_dict length: %s", len(rules_dict))
+        # _LOGGER.debug("[get_nat_one_to_one_rules] rules_dict: %s", rules_dict)
         return rules_dict
 
     @_log_errors
@@ -133,9 +134,9 @@ class FirewallMixin(PyOPNsenseClientProtocol):
             if not uuid or "lockout" in str(uuid):
                 continue
             new_rule = dict(rule)
-            # Add any transforms here
             rules_dict[str(new_rule["uuid"])] = new_rule
-        _LOGGER.debug("[get_nat_source_rules] rules_dict: %s", rules_dict)
+        # _LOGGER.debug("[get_nat_source_rules] rules_dict: %s", rules_dict)
+        _LOGGER.debug("[get_nat_source_rules] rules_dict length: %s", len(rules_dict))
         return rules_dict
 
     @_log_errors
@@ -158,9 +159,9 @@ class FirewallMixin(PyOPNsenseClientProtocol):
             if not uuid or "lockout" in str(uuid):
                 continue
             new_rule = dict(rule)
-            # Add any transforms here
             rules_dict[str(new_rule["uuid"])] = new_rule
-        _LOGGER.debug("[get_nat_npt_rules] rules_dict: %s", rules_dict)
+        # _LOGGER.debug("[get_nat_npt_rules] rules_dict: %s", rules_dict)
+        _LOGGER.debug("[get_nat_npt_rules] rules_dict length: %s", len(rules_dict))
         return rules_dict
 
     async def toggle_firewall_rule(self, uuid: str, toggle_on_off: str | None = None) -> bool:
