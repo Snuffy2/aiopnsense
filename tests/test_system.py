@@ -109,6 +109,18 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client: ClientType)
         parsed_dt = datetime(2026, 3, 7, 12, 0, 0, tzinfo=parsed_tz)
         assert parsed_tz.utcoffset(parsed_dt) == timedelta(hours=-5)
 
+        client._safe_dict_get = AsyncMock(return_value={"datetime": "2026-06-07 12:00:00 EDT"})
+        parsed_tz = await client._get_opnsense_timezone()
+        assert parsed_tz is not None
+        parsed_dt = datetime(2026, 6, 7, 12, 0, 0, tzinfo=parsed_tz)
+        assert parsed_tz.utcoffset(parsed_dt) == timedelta(hours=-4)
+
+        client._safe_dict_get = AsyncMock(return_value={"datetime": "Sun Mar 22 21:36:07 EDT 2026"})
+        parsed_tz = await client._get_opnsense_timezone()
+        assert parsed_tz is not None
+        parsed_dt = datetime(2026, 3, 22, 21, 36, 7, tzinfo=parsed_tz)
+        assert parsed_tz.utcoffset(parsed_dt) == timedelta(hours=-4)
+
         client._safe_dict_get = AsyncMock(return_value={"datetime": "not-a-datetime"})
         fallback_tz = await client._get_opnsense_timezone()
         assert fallback_tz is not None
@@ -125,6 +137,47 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client: ClientType)
         assert fetch_fallback_tz == local_tz or fetch_fallback_tz.utcoffset(
             now_local
         ) == local_tz.utcoffset(now_local)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("datetime_str", "expected_dt", "expected_offset"),
+    [
+        ("2026-06-07 12:00:00 ADT", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=-3)),
+        ("2026-01-07 12:00:00 AEDT", datetime(2026, 1, 7, 12, 0, 0), timedelta(hours=11)),
+        ("2026-06-07 12:00:00 CEST", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=2)),
+        ("2026-06-07 12:00:00 CDT", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=-5)),
+        ("2026-06-07 12:00:00 EEST", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=3)),
+        ("2026-06-07 12:00:00 MDT", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=-6)),
+        ("2026-01-07 12:00:00 NZDT", datetime(2026, 1, 7, 12, 0, 0), timedelta(hours=13)),
+        ("2026-06-07 12:00:00 PDT", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=-7)),
+    ],
+)
+async def test_get_opnsense_timezone_supports_known_daylight_abbreviations(
+    make_client: ClientType,
+    datetime_str: str,
+    expected_dt: datetime,
+    expected_offset: timedelta,
+) -> None:
+    """Verify known daylight/summer abbreviations resolve to timezone-aware offsets.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        datetime_str (str): Datetime string parsed from mocked API output.
+        expected_dt (datetime): Naive datetime used to evaluate the resolved timezone offset.
+        expected_offset (timedelta): Expected UTC offset for the parsed timezone.
+
+    Returns:
+        None: This test validates timezone abbreviation support for DST-aware zones.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._safe_dict_get = AsyncMock(return_value={"datetime": datetime_str})
+        parsed_tz = await client._get_opnsense_timezone()
+        assert parsed_tz is not None
+        assert parsed_tz.utcoffset(expected_dt.replace(tzinfo=parsed_tz)) == expected_offset
     finally:
         await client.async_close()
 
