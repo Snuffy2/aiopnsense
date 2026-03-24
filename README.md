@@ -136,5 +136,5 @@ prek run --all-files
 [releases-shield]: https://img.shields.io/github/v/release/Snuffy2/aiopnsense?style=for-the-badge
 [releases]: https://github.com/Snuffy2/aiopnsense/releases
 [coverage]: https://htmlpreview.github.io/?https://github.com/Snuffy2/aiopnsense/blob/python-coverage-comment-action-data/htmlcov/index.html
-[coverage-shield]: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftravisghansen%2Fhass-opnsense%2Fpython-coverage-comment-action-data%2Fendpoint.json&style=for-the-badge
+[coverage-shield]: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FSnuffy2%2Faiopnsense%2Fpython-coverage-comment-action-data%2Fendpoint.json&style=for-the-badge
 [pypi-downloads-shield]: https://img.shields.io/pypi/dm/aiopnsense?style=for-the-badge
