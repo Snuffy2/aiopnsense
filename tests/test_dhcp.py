@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, MutableMapping
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -185,6 +186,96 @@ async def test_keep_latest_leases_prefers_latest_expiration(
         matching = [item for item in result if item.get(expected_key) == 1]
         assert len(matching) == 1
         assert matching[0]["expire"] == expected_expire
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_keep_latest_leases_handles_list_values(make_client: ClientType) -> None:
+    """Verify lease deduplication supports list-valued fields without key errors.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates hash-safe deduplication key construction.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        reservations: list[dict[str, object]] = [
+            {"address": "10.0.0.2", "hostnames": ["foo", "bar"], "expire": 10},
+            {"address": "10.0.0.2", "hostnames": ["foo", "bar"], "expire": 20},
+            {"address": "10.0.0.3", "hostnames": ["baz"], "expire": 5},
+        ]
+
+        result = client._keep_latest_leases(reservations)
+        matching = [item for item in result if item.get("address") == "10.0.0.2"]
+        assert len(matching) == 1
+        assert matching[0]["expire"] == 20
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_reserved", "expected"),
+    [
+        ("1", True),
+        ("0", False),
+        (["hwaddr"], True),
+        ([], False),
+        (1, True),
+        (0, False),
+        (None, False),
+    ],
+)
+async def test_is_dnsmasq_reserved_lease_handles_legacy_and_list_flags(
+    make_client: ClientType,
+    raw_reserved: Any,
+    expected: bool,
+) -> None:
+    """Verify dnsmasq reserved lease detection supports legacy and new value shapes.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        raw_reserved (Any): Raw ``is_reserved`` value from API payload.
+        expected (bool): Expected reserved/static detection result.
+
+    Returns:
+        None: This test validates reserved lease coercion behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        assert client._is_dnsmasq_reserved_lease(raw_reserved) is expected
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_normalize_lease_key_value_handles_nested_structures(make_client: ClientType) -> None:
+    """Verify lease key normalization converts nested structures into hashable tuples.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates stable normalization for dict/list/set values.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        normalized = client._normalize_lease_key_value(
+            {
+                "z": [{"n": 2}, {"n": 1}],
+                "a": {"set": {"x", "y"}, "list": [3, 4]},
+            }
+        )
+
+        assert isinstance(normalized, tuple)
+        as_dict = dict(normalized)
+        assert as_dict["z"] == ((("n", 2),), (("n", 1),))
+        a_dict = dict(as_dict["a"])
+        assert a_dict["list"] == (3, 4)
+        assert a_dict["set"] == ("x", "y")
     finally:
         await client.async_close()
 
@@ -470,16 +561,36 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
                         "hwaddr": "",
                         "expire": "never",
                     },
+                    {
+                        "address": "192.0.2.23",
+                        "hostname": "static-host-list",
+                        "if": "em0",
+                        "is_reserved": ["hwaddr"],
+                        "hwaddr": "bb:bb:bb",
+                        "expire": "never",
+                    },
+                    {
+                        "address": "192.0.2.24",
+                        "hostname": "dynamic-host-empty-list",
+                        "if": "em0",
+                        "is_reserved": [],
+                        "hwaddr": "cc:cc:cc",
+                        "expire": "never",
+                    },
                 ]
             }
         )
 
         leases = await client._get_dnsmasq_leases()
-        assert len(leases) == 1
-        assert leases[0]["address"] == "192.0.2.22"
-        assert leases[0]["type"] == "dynamic"
-        assert leases[0]["mac"] is None
-        assert leases[0]["expires"] == "never"
+        assert len(leases) == 3
+        lease_by_address = {lease["address"]: lease for lease in leases}
+
+        assert lease_by_address["192.0.2.22"]["type"] == "dynamic"
+        assert lease_by_address["192.0.2.22"]["mac"] is None
+        assert lease_by_address["192.0.2.22"]["expires"] == "never"
+
+        assert lease_by_address["192.0.2.23"]["type"] == "static"
+        assert lease_by_address["192.0.2.24"]["type"] == "dynamic"
     finally:
         await client.async_close()
 
