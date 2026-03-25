@@ -260,23 +260,23 @@ class ClientBaseMixin:
                                     if message_count == 2:
                                         response_str: str = line[len("data:") :].strip()
                                         response_json = json.loads(response_str)
-                                        _LOGGER.debug(
-                                            "[get_from_stream] response_json (%s): %s",
-                                            type(response_json).__name__,
-                                            response_json,
-                                        )
+                                        # _LOGGER.debug(
+                                        #     "[get_from_stream] response_json (%s): %s",
+                                        #     type(response_json).__name__,
+                                        #     response_json,
+                                        # )
                                         return (
                                             dict(response_json)
                                             if isinstance(response_json, MutableMapping)
                                             else {}
                                         )  # Exit after processing the second message
-                                    _LOGGER.debug(
-                                        "[get_from_stream] Ignored message %s: %s",
-                                        message_count,
-                                        line,
-                                    )
-                                else:
-                                    _LOGGER.debug("[get_from_stream] Unparsed: %s", line)
+                                    # _LOGGER.debug(
+                                    #     "[get_from_stream] Ignored message %s: %s",
+                                    #     message_count,
+                                    #     line,
+                                    # )
+                                # else:
+                                #     _LOGGER.debug("[get_from_stream] Unparsed: %s", line)
                 else:
                     if response.status == 403:
                         _LOGGER.error(
@@ -445,7 +445,7 @@ class ClientBaseMixin:
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[post] url: %s", url)
-        _LOGGER.debug("[post] payload: %s", payload)
+        # _LOGGER.debug("[post] payload: %s", payload)
         try:
             async with self._session.post(
                 url,
