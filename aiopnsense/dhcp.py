@@ -11,6 +11,40 @@ from .helpers import _LOGGER, _log_errors, get_ip_key, timestamp_to_datetime, tr
 class DHCPMixin(PyOPNsenseClientProtocol):
     """DHCP methods for OPNsenseClient."""
 
+    def _normalize_lease_key_value(self, value: Any) -> Any:
+        """Convert nested lease values into stable, hashable objects.
+
+        Args:
+            value (Any): Raw value from a lease row field.
+
+        Returns:
+            Any: Hashable representation suitable for key construction.
+        """
+        if isinstance(value, MutableMapping):
+            return tuple(
+                sorted((key, self._normalize_lease_key_value(val)) for key, val in value.items())
+            )
+        if isinstance(value, list):
+            return tuple(self._normalize_lease_key_value(item) for item in value)
+        if isinstance(value, set):
+            return tuple(sorted(self._normalize_lease_key_value(item) for item in value))
+        return value
+
+    def _is_dnsmasq_reserved_lease(self, raw_reserved: Any) -> bool:
+        """Return whether a dnsmasq lease row should be treated as reserved.
+
+        Args:
+            raw_reserved (Any): Raw ``is_reserved`` field returned by the dnsmasq API.
+
+        Returns:
+            bool: ``True`` for reserved/static lease rows, ``False`` otherwise.
+        """
+        if isinstance(raw_reserved, str):
+            return raw_reserved == "1"
+        if isinstance(raw_reserved, list):
+            return len(raw_reserved) > 0
+        return bool(raw_reserved)
+
     @_log_errors
     async def get_arp_table(self, resolve_hostnames: bool = False) -> list:
         """Return the active ARP table.
@@ -188,7 +222,13 @@ class DHCPMixin(PyOPNsenseClientProtocol):
             if expire is None:
                 continue
             # Create a key from all fields except 'expire'
-            key = tuple(sorted((k, v) for k, v in entry.items() if k != "expire"))
+            key = tuple(
+                sorted(
+                    (key, self._normalize_lease_key_value(value))
+                    for key, value in entry.items()
+                    if key != "expire"
+                )
+            )
 
             # Keep the entry with the latest expiration time
             seen_expire = try_to_int(seen.get(key, {}).get("expire"), -1)
@@ -235,7 +275,7 @@ class DHCPMixin(PyOPNsenseClientProtocol):
             )
             lease["if_descr"] = lease_info.get("if_descr", None)
             lease["if_name"] = lease_info.get("if", None)
-            if lease_info.get("is_reserved", "0") == "1":
+            if self._is_dnsmasq_reserved_lease(lease_info.get("is_reserved", "0")):
                 lease["type"] = "static"
             else:
                 lease["type"] = "dynamic"
