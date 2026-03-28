@@ -215,7 +215,7 @@ async def test_carp_summary_and_reboot_and_wol(make_client: ClientType) -> None:
                 },
             }
         )
-        summary = await client.get_carp_status_summary()
+        summary = dict((await client.get_carp()).get("status_summary", {}))
         assert summary["state"] == "healthy"
         assert summary["enabled"] is True
         assert summary["vip_count"] == 1
@@ -237,7 +237,7 @@ async def test_carp_summary_and_reboot_and_wol(make_client: ClientType) -> None:
                 {"rows": [{"mode": "carp", "interface": "em0", "subnet": "10.0.0.1", "vhid": "1"}]},
             ]
         )
-        carp = await client.get_carp_interfaces()
+        carp = (await client.get_carp()).get("interfaces", [])
         assert isinstance(carp, list)
         assert carp[0]["status"] == "MASTER"
         assert carp[0]["interface"] == "em0"
@@ -365,7 +365,7 @@ async def test_get_opnsense_timezone_without_tzinfo_string_uses_local_fallback(
 
 
 @pytest.mark.asyncio
-async def test_get_carp_interfaces_handles_invalid_payloads_and_default_status(
+async def test_get_carp_handles_invalid_payloads_and_default_status(
     make_client: ClientType,
 ) -> None:
     """Verify CARP interface parsing tolerates malformed payloads and missing status.
@@ -379,7 +379,7 @@ async def test_get_carp_interfaces_handles_invalid_payloads_and_default_status(
     client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(side_effect=[{"rows": "bad"}, {"rows": "bad"}])
-        assert await client.get_carp_interfaces() == []
+        assert (await client.get_carp()).get("interfaces", []) == []
 
         client._safe_dict_get = AsyncMock(
             side_effect=[
@@ -396,7 +396,7 @@ async def test_get_carp_interfaces_handles_invalid_payloads_and_default_status(
                 },
             ]
         )
-        carp = await client.get_carp_interfaces()
+        carp = (await client.get_carp()).get("interfaces", [])
         assert len(carp) == 1
         assert carp[0]["interface"] == "em0"
         assert carp[0]["status"] == "DISABLED"
@@ -417,7 +417,7 @@ async def test_get_carp_interfaces_handles_invalid_payloads_and_default_status(
                 {"rows": "not-a-list"},
             ]
         )
-        carp = await client.get_carp_interfaces()
+        carp = (await client.get_carp()).get("interfaces", [])
         assert len(carp) == 1
         assert carp[0]["interface"] == "wan"
         assert carp[0]["status"] == "BACKUP"
@@ -437,13 +437,13 @@ async def test_get_carp_interfaces_handles_invalid_payloads_and_default_status(
                 {"rows": []},
             ]
         )
-        assert await client.get_carp_interfaces() == []
+        assert (await client.get_carp()).get("interfaces", []) == []
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_get_carp_interfaces_matches_multiple_vips_on_same_interface(
+async def test_get_carp_matches_multiple_vips_on_same_interface(
     make_client: ClientType,
 ) -> None:
     """Verify CARP enrichment matches by VIP identity, not interface alone.
@@ -496,7 +496,7 @@ async def test_get_carp_interfaces_matches_multiple_vips_on_same_interface(
                 },
             ]
         )
-        carp = await client.get_carp_interfaces()
+        carp = (await client.get_carp()).get("interfaces", [])
         assert len(carp) == 2
         by_subnet = {entry["subnet"]: entry for entry in carp}
         assert by_subnet["10.0.0.1"]["status"] == "MASTER"
@@ -508,16 +508,16 @@ async def test_get_carp_interfaces_matches_multiple_vips_on_same_interface(
 
 
 @pytest.mark.asyncio
-async def test_get_carp_interfaces_prefers_first_candidate_for_partial_key_collisions(
+async def test_get_carp_returns_no_match_for_ambiguous_partial_key_collisions(
     make_client: ClientType,
 ) -> None:
-    """Verify deterministic fallback selection when partial VIP setting keys collide.
+    """Verify fallback selection rejects ambiguous VIP setting candidates.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test validates collision-safe fallback matching behavior.
+        None: This test validates ambiguous fallback matching behavior.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -553,10 +553,8 @@ async def test_get_carp_interfaces_prefers_first_candidate_for_partial_key_colli
                 },
             ]
         )
-        carp = await client.get_carp_interfaces()
-        assert len(carp) == 1
-        assert carp[0]["descr"] == "first-candidate"
-        assert carp[0]["subnet"] == "10.0.0.1"
+        carp = (await client.get_carp()).get("interfaces", [])
+        assert carp == []
     finally:
         await client.async_close()
 
@@ -654,9 +652,30 @@ async def test_get_carp_interfaces_prefers_first_candidate_for_partial_key_colli
             },
             "unknown",
         ),
+        (
+            {
+                "rows": [{"mode": "carp", "status": "MASTER", "interface": "wan"}],
+            },
+            "unknown",
+        ),
+        (
+            {
+                "rows": [
+                    {"mode": "carp", "status": "MASTER", "interface": "wan", "subnet": ""},
+                    {"mode": "carp", "status": "BACKUP", "subnet": "1.2.3.4"},
+                ],
+                "carp": {
+                    "allow": "1",
+                    "maintenancemode": False,
+                    "demotion": "0",
+                    "status_msg": "",
+                },
+            },
+            "not_configured",
+        ),
     ],
 )
-async def test_get_carp_status_summary_states(
+async def test_get_carp_status_states(
     make_client: ClientType,
     payload: dict[str, Any],
     expected_state: str,
@@ -674,7 +693,7 @@ async def test_get_carp_status_summary_states(
     client, _session = make_mock_session_client(make_client)
     try:
         client._safe_dict_get = AsyncMock(return_value=payload)
-        summary = await client.get_carp_status_summary()
+        summary = dict((await client.get_carp()).get("status_summary", {}))
         assert summary["state"] == expected_state
         assert "vips" in summary
         assert "vip_count" in summary
@@ -683,6 +702,148 @@ async def test_get_carp_status_summary_states(
             str,
         ):
             assert summary["status_message"] == ""
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_carp_skips_whitespace_interface_values(
+    make_client: ClientType,
+) -> None:
+    """Verify CARP merge drops entries whose interface is blank after normalization.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates normalized interface filtering behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "mode": "carp",
+                        "status": "MASTER",
+                        "interface": "   ",
+                        "subnet": "1.2.3.4",
+                    },
+                    {
+                        "mode": "carp",
+                        "status": "BACKUP",
+                        "interface": "  wan  ",
+                        "subnet": "5.6.7.8",
+                    },
+                ],
+                "carp": {
+                    "allow": "1",
+                    "maintenancemode": False,
+                    "demotion": "0",
+                    "status_msg": "",
+                },
+            }
+        )
+        snapshot = await client.get_carp()
+        assert snapshot["interfaces"] == [
+            {
+                "interface": "wan",
+                "mode": "carp",
+                "status": "BACKUP",
+                "subnet": "5.6.7.8",
+            }
+        ]
+        assert snapshot["status_summary"]["vip_count"] == 1
+        assert snapshot["status_summary"]["interfaces"] == ["wan"]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_carp_status_uses_settings_merge_for_partial_rows(
+    make_client: ClientType,
+) -> None:
+    """Verify summary uses the same status/settings merge as interface CARP discovery.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates that partial status rows can be reconstructed from settings.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {
+                    "rows": [
+                        {
+                            "mode": "carp",
+                            "status": "MASTER",
+                            "interface": "wan",
+                            "vhid": "1",
+                        }
+                    ],
+                    "carp": {
+                        "allow": "1",
+                        "maintenancemode": False,
+                        "demotion": "0",
+                        "status_msg": "",
+                    },
+                },
+                {
+                    "rows": [
+                        {
+                            "mode": "carp",
+                            "interface": "wan",
+                            "subnet": "1.2.3.4",
+                            "vhid": "1",
+                        }
+                    ]
+                },
+            ]
+        )
+        summary = dict((await client.get_carp()).get("status_summary", {}))
+        assert summary["state"] == "healthy"
+        assert summary["vip_count"] == 1
+        assert summary["interfaces"] == ["wan"]
+        assert summary["vips"][0]["subnet"] == "1.2.3.4"
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_carp_returns_interfaces_and_summary_from_one_fetch(
+    make_client: ClientType,
+) -> None:
+    """Ensure one CARP call returns both interface and summary payloads.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates one-fetch snapshot payload behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {
+                    "rows": [{"mode": "carp", "status": "MASTER", "interface": "wan", "vhid": "1"}],
+                    "carp": {
+                        "allow": "1",
+                        "maintenancemode": False,
+                        "demotion": "0",
+                        "status_msg": "",
+                    },
+                },
+                {"rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]},
+            ]
+        )
+        snapshot = await client.get_carp()
+        assert snapshot["interfaces"][0]["subnet"] == "1.2.3.4"
+        assert snapshot["status_summary"]["state"] == "healthy"
+        assert client._safe_dict_get.await_count == 2
     finally:
         await client.async_close()
 
