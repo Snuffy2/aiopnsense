@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 from ._typing import PyOPNsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, try_to_float
+from .helpers import _LOGGER, _log_errors, normalize_lookup_token, try_to_float
 
 _VSTAT_HEADER_RE = re.compile(
     r"^\s*(?P<interface>[^\s]+)\s*/\s*(?P<period>hourly|daily|monthly|yearly)\s*$",
@@ -61,7 +61,7 @@ class VnstatMixin(PyOPNsenseClientProtocol):
         Returns:
             dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
-        requested_period = period.strip().lower() if isinstance(period, str) else ""
+        requested_period = normalize_lookup_token(period)
         if requested_period not in _VSTAT_PERIODS:
             return {}
 
