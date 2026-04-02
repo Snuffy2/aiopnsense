@@ -127,36 +127,36 @@ def test_get_ip_key_sorting() -> None:
 
 @pytest.mark.asyncio
 async def test_log_errors_decorator_re_raise_and_suppress() -> None:
-    """The _log_errors decorator should re-raise when self._initial is True, otherwise suppress."""
+    """The ``_log_errors`` decorator should re-raise when errors are enabled."""
 
     class Dummy:
-        def __init__(self, initial: bool):
+        def __init__(self, throw_errors: bool) -> None:
             """Initialize the Dummy instance.
 
             Args:
-                initial (bool): Whether the client runs in initial-connectivity mode.
+                throw_errors (bool): Whether wrapped errors should be re-raised.
             """
-            self._initial = initial
+            self._throw_errors = throw_errors
 
         @pyopnsense_helpers._log_errors
         async def boom(self) -> None:
             """Raise RuntimeError for testing error handling."""
             raise RuntimeError("boom")
 
-    # When not initial, errors are logged and suppressed (function returns None)
-    d = Dummy(initial=False)
+    # When error throwing is disabled, errors are logged and suppressed.
+    d = Dummy(throw_errors=False)
     res = await d.boom()
     assert res is None
 
-    # When initial, errors are re-raised
-    d2 = Dummy(initial=True)
+    # When error throwing is enabled, errors are re-raised.
+    d2 = Dummy(throw_errors=True)
     with pytest.raises(RuntimeError):
         await d2.boom()
 
 
 @pytest.mark.asyncio
 async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType) -> None:
-    """Verify ``_log_errors`` re-raises or suppresses ``TimeoutError`` by init mode.
+    """Verify ``_log_errors`` re-raises or suppresses ``TimeoutError`` by configuration.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -182,13 +182,13 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
         # wrap the coroutine with the decorator
         decorated = pyopnsense_helpers._log_errors(raising_timeout)
 
-        # When initial is True we expect the TimeoutError to propagate
-        client._initial = True
+        # When error throwing is enabled we expect the TimeoutError to propagate.
+        client._throw_errors = True
         with pytest.raises(TimeoutError):
             await decorated(client)
 
-        # When initial is False the decorator should suppress TimeoutError and return None
-        client._initial = False
+        # When error throwing is disabled the decorator suppresses ``TimeoutError``.
+        client._throw_errors = False
         res = await decorated(client)
         assert res is None
     finally:
@@ -197,7 +197,7 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
 
 @pytest.mark.asyncio
 async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: ClientType) -> None:
-    """Verify ``_log_errors`` re-raises or suppresses ``ServerTimeoutError`` by init mode.
+    """Verify ``_log_errors`` re-raises or suppresses ``ServerTimeoutError`` by configuration.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -222,11 +222,11 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
 
         decorated = pyopnsense_helpers._log_errors(raising_server_timeout)
 
-        client._initial = True
+        client._throw_errors = True
         with pytest.raises(aiohttp.ServerTimeoutError):
             await decorated(client)
 
-        client._initial = False
+        client._throw_errors = False
         assert await decorated(client) is None
     finally:
         await client.async_close()

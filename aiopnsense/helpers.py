@@ -43,7 +43,7 @@ def _log_errors(func: Callable) -> Any:
             raise
         except (TimeoutError, aiohttp.ServerTimeoutError) as e:
             _LOGGER.warning("Timeout Error in %s. Will retry. %s", func.__name__.strip("_"), e)
-            if self._initial:
+            if self._throw_errors:
                 raise
         except Exception as e:
             redacted_message = re.sub(
@@ -58,7 +58,7 @@ def _log_errors(func: Callable) -> Any:
                 redacted_message,
                 "".join(traceback.format_tb(e.__traceback__)),
             )
-            if self._initial:
+            if self._throw_errors:
                 raise
 
     return inner
