@@ -1,5 +1,7 @@
 """Tests for `aiopnsense.firewall`."""
 
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -49,7 +51,8 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
     """Firewall search results should skip malformed rows and lockout entries."""
     client = make_client()
     try:
-        client._safe_dict_post = AsyncMock(
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
             return_value={
                 "rows": [
                     "bad-row",
@@ -64,10 +67,8 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
         result = await client._get_firewall_rules()
 
         assert result == {"rule-ok": {"uuid": "rule-ok", "enabled": "1", "descr": "Allow"}}
-        client._safe_dict_post.assert_awaited_once_with(
-            "/api/firewall/filter/search_rule",
-            payload={"current": 1, "sort": {}},
-        )
+        client.is_endpoint_available.assert_awaited_once_with("/api/firewall/filter/search_rule")
+        client._safe_dict_get.assert_awaited_once_with("/api/firewall/filter/search_rule")
     finally:
         await client.async_close()
 
@@ -111,15 +112,43 @@ async def test_nat_rule_helpers_parse_rows(
     """NAT rule helpers should return UUID-keyed mappings from REST search rows."""
     client = make_client()
     try:
-        client._safe_dict_post = AsyncMock(return_value={"rows": rows})
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value={"rows": rows})
 
         result = await getattr(client, method_name)()
 
         assert result == expected
-        client._safe_dict_post.assert_awaited_once_with(
-            api_endpoint,
-            payload={"current": 1, "sort": {}},
-        )
+        client.is_endpoint_available.assert_awaited_once_with(api_endpoint)
+        client._safe_dict_get.assert_awaited_once_with(api_endpoint)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "api_endpoint", "expected"),
+    [
+        ("_get_firewall_rules", "/api/firewall/filter/search_rule", {}),
+        ("_get_nat_destination_rules", "/api/firewall/d_nat/search_rule", {}),
+        ("_get_nat_one_to_one_rules", "/api/firewall/one_to_one/search_rule", {}),
+        ("_get_nat_source_rules", "/api/firewall/source_nat/search_rule", {}),
+        ("_get_nat_npt_rules", "/api/firewall/npt/search_rule", {}),
+    ],
+)
+async def test_rule_helpers_return_empty_when_endpoint_unavailable(
+    make_client: Callable[..., Any], method_name: str, api_endpoint: str, expected: Any
+) -> None:
+    """Rule helpers should short-circuit when the related endpoint is unavailable."""
+    client = make_client()
+    try:
+        client.is_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_get = AsyncMock()
+
+        result = await getattr(client, method_name)()
+
+        assert result == expected
+        client.is_endpoint_available.assert_awaited_once_with(api_endpoint)
+        client._safe_dict_get.assert_not_awaited()
     finally:
         await client.async_close()
 
@@ -233,15 +262,24 @@ async def test_toggle_alias_flows(make_client) -> None:
     """`toggle_alias` should return False on lookup/toggle failure and True on full success."""
     client, _ = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_get = AsyncMock()
+        assert await client.toggle_alias("missing", "on") is False
+        client.is_endpoint_available.assert_awaited_once_with("/api/firewall/alias/search_item")
+        client._safe_dict_get.assert_not_awaited()
+
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
         assert await client.toggle_alias("missing", "on") is False
 
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={"rows": [{"name": "alias1", "uuid": "aid"}]}
         )
         client._safe_dict_post = AsyncMock(return_value={"result": "failed"})
         assert await client.toggle_alias("alias1", "on") is False
 
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={"rows": [{"name": "alias1", "uuid": "aid"}]}
         )
@@ -272,6 +310,7 @@ async def test_toggle_alias_scenarios(
     """Parametrized alias toggling scenarios should match the final success state."""
     client, _session = toggle_alias_client
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": safe_get_rows})
 
         if not safe_get_rows:
