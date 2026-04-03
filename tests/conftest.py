@@ -355,6 +355,7 @@ async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClien
         username: str = "u",
         password: str = "p",
         url: str = "http://localhost",
+        **client_kwargs: Any,
     ) -> aiopnsense.OPNsenseClient:
         """Make.
 
@@ -363,6 +364,8 @@ async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClien
             username (str): Username for API authentication.
             password (str): Password for API authentication.
             url (str): Base URL of the OPNsense instance.
+            **client_kwargs (Any): Additional keyword arguments passed to
+                ``OPNsenseClient``.
 
         Returns:
             aiopnsense.OPNsenseClient: Value produced by this method.
@@ -370,7 +373,11 @@ async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClien
         if session is None:
             session = cast("aiohttp.ClientSession", FakeClientSession())
         client = aiopnsense.OPNsenseClient(
-            url=url, username=username, password=password, session=session
+            url=url,
+            username=username,
+            password=password,
+            session=session,
+            **client_kwargs,
         )
         clients.append(client)
         return client

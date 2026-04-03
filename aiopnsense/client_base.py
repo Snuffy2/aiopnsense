@@ -5,17 +5,78 @@ from collections.abc import MutableMapping
 from datetime import datetime
 import inspect
 import json
-from typing import Any
+from typing import Any, overload
 from urllib.parse import urlparse
+import warnings
 
 import aiohttp
 
 from .const import DEFAULT_CACHE_TTL_SECONDS, DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .helpers import _LOGGER
 
+_UNSET: object = object()
+
 
 class ClientBaseMixin:
     """ClientBase methods for OPNsenseClient."""
+
+    @staticmethod
+    def _validate_throw_error_flag(
+        value: bool | object,
+        parameter_name: str,
+    ) -> bool:
+        """Validate required ``throw_errors``-style arguments.
+
+        Args:
+            value (bool | object): Candidate value to validate.
+            parameter_name (str): Parameter name used in the error message.
+
+        Returns:
+            bool: Validated value.
+
+        Raises:
+            TypeError: Raised when ``value`` is not an allowed type.
+        """
+        if isinstance(value, bool):
+            return value
+        raise TypeError(f"`{parameter_name}` must be a bool.")
+
+    @staticmethod
+    @overload
+    def _validate_optional_throw_error_flag(
+        value: None,
+        parameter_name: str,
+    ) -> None: ...
+
+    @staticmethod
+    @overload
+    def _validate_optional_throw_error_flag(
+        value: bool,
+        parameter_name: str,
+    ) -> bool: ...
+
+    @staticmethod
+    def _validate_optional_throw_error_flag(
+        value: bool | None,
+        parameter_name: str,
+    ) -> bool | None:
+        """Validate optional ``throw_errors``-style arguments.
+
+        Args:
+            value (bool | None): Candidate value to validate.
+            parameter_name (str): Parameter name used in the error message.
+
+        Returns:
+            bool | None: Validated value.
+
+        Raises:
+            TypeError: Raised when ``value`` is not an allowed type.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        raise TypeError(f"`{parameter_name}` must be a bool or None.")
 
     def __init__(
         self,
@@ -24,8 +85,10 @@ class ClientBaseMixin:
         password: str,
         session: aiohttp.ClientSession,
         opts: MutableMapping[str, Any] | None = None,
-        initial: bool = False,
+        initial: bool | object = _UNSET,
         name: str = "OPNsense",
+        *,
+        throw_errors: bool | object = _UNSET,
     ) -> None:
         """Initialize the OPNsense client.
 
@@ -35,8 +98,14 @@ class ClientBaseMixin:
             password (str): Password for API authentication.
             session (aiohttp.ClientSession): HTTP client session used for API requests.
             opts (MutableMapping[str, Any] | None, optional): Optional client configuration values.
-            initial (bool): Whether the client runs in initial-connectivity mode.
+            initial (bool | object): Deprecated alias for ``throw_errors``. When provided,
+                a ``DeprecationWarning`` is emitted. Ignored when ``throw_errors`` is also set.
+            throw_errors (bool | object): Whether request and decorator errors should be
+                re-raised instead of logged and suppressed. Defaults to ``False``.
             name (str): Display name for the client instance.
+
+        Raises:
+            TypeError: Raised when ``initial`` or ``throw_errors`` is not a ``bool``.
         """
 
         self._username: str = username
@@ -48,7 +117,23 @@ class ClientBaseMixin:
         parts = urlparse(url.rstrip("/"))
         self._url: str = f"{parts.scheme}://{parts.netloc}"
         self._session: aiohttp.ClientSession = session
-        self._initial = initial
+        self._throw_errors: bool = False
+        if throw_errors is not _UNSET:
+            validated_throw_errors = self._validate_throw_error_flag(
+                throw_errors,
+                "throw_errors",
+            )
+            self._throw_errors = validated_throw_errors
+        if initial is not _UNSET:
+            validated_initial = self._validate_throw_error_flag(initial, "initial")
+            warnings.warn(
+                "In OPNsenseClient, `initial` is deprecated and will be removed in a future release. "
+                "Use `throw_errors` instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if throw_errors is _UNSET:
+                self._throw_errors = validated_initial
         self._firmware_version: str | None = None
         self._endpoint_availability: dict[str, bool] = {}
         self._endpoint_checked_at: dict[str, datetime] = {}
@@ -61,6 +146,29 @@ class ClientBaseMixin:
         self._max_workers = 2
         # Don't use directly. Use await self._get_active_loop() instead
         self._loop: asyncio.AbstractEventLoop | None = None
+
+    def toggle_throwing_errors(self, throw_errors: bool | None = None) -> bool:
+        """Set or toggle request error propagation.
+
+        Args:
+            throw_errors (bool | None): Explicit error propagation state. When ``None``,
+                the current state is inverted.
+
+        Returns:
+            bool: Updated error propagation state.
+
+        Raises:
+            TypeError: Raised when ``throw_errors`` is not a ``bool`` or ``None``.
+        """
+        if throw_errors is None:
+            self._throw_errors = not self._throw_errors
+        else:
+            validated_throw_errors = self._validate_optional_throw_error_flag(
+                throw_errors,
+                "throw_errors",
+            )
+            self._throw_errors = validated_throw_errors
+        return self._throw_errors
 
     async def _ensure_workers_started(self) -> None:
         """Ensure queue workers are running on the active event loop."""
@@ -292,7 +400,7 @@ class ClientBaseMixin:
                             response.status,
                             response.reason,
                         )
-                    if self._initial:
+                    if self._throw_errors:
                         raise aiohttp.ClientResponseError(
                             request_info=response.request_info,
                             history=response.history,
@@ -302,7 +410,7 @@ class ClientBaseMixin:
                         )
         except (aiohttp.ClientError, TimeoutError) as e:
             _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
-            if self._initial:
+            if self._throw_errors:
                 raise
 
         return {}
@@ -352,7 +460,7 @@ class ClientBaseMixin:
                         response.status,
                         response.reason,
                     )
-                if self._initial:
+                if self._throw_errors:
                     raise aiohttp.ClientResponseError(
                         request_info=response.request_info,
                         history=response.history,
@@ -362,7 +470,7 @@ class ClientBaseMixin:
                     )
         except (aiohttp.ClientError, TimeoutError) as e:
             _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
-            if self._initial:
+            if self._throw_errors:
                 raise
 
         return None
@@ -472,7 +580,7 @@ class ClientBaseMixin:
                         response.status,
                         response.reason,
                     )
-                if self._initial:
+                if self._throw_errors:
                     raise aiohttp.ClientResponseError(
                         request_info=response.request_info,
                         history=response.history,
@@ -482,7 +590,7 @@ class ClientBaseMixin:
                     )
         except (aiohttp.ClientError, TimeoutError) as e:
             _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
-            if self._initial:
+            if self._throw_errors:
                 raise
 
         return None

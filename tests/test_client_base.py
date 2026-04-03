@@ -11,7 +11,7 @@ import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient, client_base as pyopnsense_client_base
-from tests.conftest import FakeResponse, make_mock_session_client
+from tests.conftest import FakeClientSession, FakeResponse, make_mock_session_client
 
 MakeClientFactory = Callable[..., OPNsenseClient]
 FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]
@@ -366,7 +366,7 @@ async def test_do_get_post_error_initial_behavior(
     kwargs: dict[str, Any],
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify initial-mode request failures raise ``ClientResponseError``.
+    """Verify thrown request errors raise ``ClientResponseError``.
 
     Args:
         method_name (str): Client method to invoke (``_do_get`` or ``_do_post``).
@@ -376,7 +376,7 @@ async def test_do_get_post_error_initial_behavior(
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test asserts exception behavior for initial requests.
+        None: This test asserts exception behavior when thrown errors are enabled.
     """
     client, session = make_mock_session_client(make_client)
 
@@ -401,7 +401,7 @@ async def test_do_get_post_error_initial_behavior(
             include_request_info=True,
         )
 
-    client._initial = True
+    client._throw_errors = True
     try:
         with pytest.raises(aiohttp.ClientResponseError):
             await getattr(client, method_name)(*args, **kwargs)
@@ -543,13 +543,13 @@ async def test_process_queue_unknown_method_sets_future_exception(
 async def test_do_get_from_stream_error_initial_raises(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify initial-mode stream requests raise on non-OK HTTP responses.
+    """Verify thrown stream request errors raise on non-OK HTTP responses.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test asserts stream exception behavior during initialization.
+        None: This test asserts stream exception behavior when errors are thrown.
     """
     client, session = make_mock_session_client(make_client)
 
@@ -573,7 +573,7 @@ async def test_do_get_from_stream_error_initial_raises(
 
     session.get = fake_get
     try:
-        client._initial = True
+        client._throw_errors = True
         with pytest.raises(aiohttp.ClientResponseError):
             await client._do_get_from_stream("/bad", caller="t")
     finally:
@@ -1122,7 +1122,7 @@ async def test_client_base_workers_start_lazily_on_first_queued_request(
 async def test_do_get_post_and_stream_permission_errors(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify permission failures do not raise when client is not in initial mode.
+    """Verify permission failures do not raise when error throwing is disabled.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1148,10 +1148,125 @@ async def test_do_get_post_and_stream_permission_errors(
         include_request_info=True,
     )
     try:
-        client._initial = False
+        client._throw_errors = False
         assert await client._do_get("/x", caller="t") is None
         assert await client._do_post("/x", payload={}, caller="t") is None
         assert await client._do_get_from_stream("/x", caller="t") == {}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "expect_warning", "expected_throw_errors"),
+    [
+        ({}, False, False),
+        ({"throw_errors": True}, False, True),
+        ({"initial": True}, True, True),
+        ({"initial": False}, True, False),
+        ({"initial": True, "throw_errors": False}, True, False),
+    ],
+)
+async def test_client_constructor_throw_errors_configuration(
+    kwargs: dict[str, bool],
+    expect_warning: bool,
+    expected_throw_errors: bool,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify constructor error-propagation configuration and deprecation handling."""
+    client: OPNsenseClient | None = None
+    try:
+        warning_context = (
+            pytest.warns(DeprecationWarning, match="`initial` is deprecated")
+            if expect_warning
+            else contextlib.nullcontext()
+        )
+        with warning_context:
+            client = make_client(**kwargs)
+        assert client._throw_errors is expected_throw_errors
+    finally:
+        if client is not None:
+            await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_client_constructor_invalid_throw_errors_raises_type_error(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify invalid ``throw_errors`` values raise ``TypeError``."""
+    with pytest.raises(TypeError, match="`throw_errors` must be a bool"):
+        make_client(throw_errors="false")
+
+
+@pytest.mark.asyncio
+async def test_client_constructor_invalid_initial_raises_type_error(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify invalid deprecated ``initial`` values raise ``TypeError``."""
+    with pytest.raises(TypeError, match="`initial` must be a bool"):
+        make_client(initial="false")
+
+
+@pytest.mark.asyncio
+async def test_client_constructor_allows_positional_name_after_initial() -> None:
+    """Verify legacy positional ``name`` remains valid after ``initial``."""
+    with pytest.warns(DeprecationWarning, match="`initial` is deprecated"):
+        client = OPNsenseClient(
+            "http://localhost",
+            "u",
+            "p",
+            FakeClientSession(),  # type: ignore[arg-type]
+            None,
+            False,
+            "Custom",
+        )
+    try:
+        assert client.name == "Custom"
+        assert client._throw_errors is False
+    finally:
+        await client.async_close()
+
+
+def test_client_constructor_rejects_positional_throw_errors() -> None:
+    """Verify ``throw_errors`` can no longer be passed positionally."""
+    args: tuple[Any, ...] = (
+        "http://localhost",
+        "u",
+        "p",
+        FakeClientSession(),  # type: ignore[arg-type]
+        None,
+        False,
+        "Custom",
+        True,
+    )
+    with pytest.raises(TypeError):
+        OPNsenseClient(*args)
+
+
+@pytest.mark.asyncio
+async def test_toggle_throwing_errors_updates_state(make_client: MakeClientFactory) -> None:
+    """Verify ``toggle_throwing_errors`` toggles and sets the error mode."""
+    client = make_client()
+    try:
+        assert client.toggle_throwing_errors() is True
+        assert client._throw_errors is True
+        assert client.toggle_throwing_errors(False) is False
+        assert client._throw_errors is False
+        assert client.toggle_throwing_errors(True) is True
+        assert client._throw_errors is True
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_toggle_throwing_errors_invalid_value_raises_type_error(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify invalid toggle values raise ``TypeError``."""
+    client = make_client()
+    try:
+        with pytest.raises(TypeError, match="`throw_errors` must be a bool or None"):
+            client.toggle_throwing_errors("false")
     finally:
         await client.async_close()
 
