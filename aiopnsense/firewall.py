@@ -33,10 +33,12 @@ class FirewallMixin(PyOPNsenseClientProtocol):
         Returns:
             dict[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        request_body: dict[str, Any] = {"current": 1, "sort": {}}
-        response = await self._safe_dict_post(
-            "/api/firewall/filter/search_rule", payload=request_body
-        )
+        endpoint = "/api/firewall/filter/search_rule"
+        if not await self.is_endpoint_available(endpoint):
+            _LOGGER.debug("Firewall filter endpoint not available")
+            return {}
+
+        response = await self._safe_dict_get(endpoint)
         # _LOGGER.debug("[get_firewall_rules] response: %s", response)
         rules: list = response.get("rows", [])
         # _LOGGER.debug("[get_firewall_rules] rules: %s", rules)
@@ -60,10 +62,12 @@ class FirewallMixin(PyOPNsenseClientProtocol):
         Returns:
             dict[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        request_body: dict[str, Any] = {"current": 1, "sort": {}}
-        response = await self._safe_dict_post(
-            "/api/firewall/d_nat/search_rule", payload=request_body
-        )
+        endpoint = "/api/firewall/d_nat/search_rule"
+        if not await self.is_endpoint_available(endpoint):
+            _LOGGER.debug("NAT destination endpoint not available")
+            return {}
+
+        response = await self._safe_dict_get(endpoint)
         # _LOGGER.debug("[get_nat_destination_rules] response: %s", response)
         rules: list = response.get("rows", [])
         # _LOGGER.debug("[get_nat_destination_rules] rules: %s", rules)
@@ -92,10 +96,12 @@ class FirewallMixin(PyOPNsenseClientProtocol):
                 rule details (for example, source, destination, external IP,
                 and description fields when present).
         """
-        request_body: dict[str, Any] = {"current": 1, "sort": {}}
-        response = await self._safe_dict_post(
-            "/api/firewall/one_to_one/search_rule", payload=request_body
-        )
+        endpoint = "/api/firewall/one_to_one/search_rule"
+        if not await self.is_endpoint_available(endpoint):
+            _LOGGER.debug("NAT one-to-one endpoint not available")
+            return {}
+
+        response = await self._safe_dict_get(endpoint)
         # _LOGGER.debug("[get_nat_one_to_one_rules] response: %s", response)
         rules: list = response.get("rows", [])
         # _LOGGER.debug("[get_nat_one_to_one_rules] rules: %s", rules)
@@ -119,10 +125,12 @@ class FirewallMixin(PyOPNsenseClientProtocol):
         Returns:
             dict[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        request_body: dict[str, Any] = {"current": 1, "sort": {}}
-        response = await self._safe_dict_post(
-            "/api/firewall/source_nat/search_rule", payload=request_body
-        )
+        endpoint = "/api/firewall/source_nat/search_rule"
+        if not await self.is_endpoint_available(endpoint):
+            _LOGGER.debug("NAT source endpoint not available")
+            return {}
+
+        response = await self._safe_dict_get(endpoint)
         # _LOGGER.debug("[get_nat_source_rules] response: %s", response)
         rules: list = response.get("rows", [])
         # _LOGGER.debug("[get_nat_source_rules] rules: %s", rules)
@@ -146,8 +154,12 @@ class FirewallMixin(PyOPNsenseClientProtocol):
         Returns:
             dict[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        request_body: dict[str, Any] = {"current": 1, "sort": {}}
-        response = await self._safe_dict_post("/api/firewall/npt/search_rule", payload=request_body)
+        endpoint = "/api/firewall/npt/search_rule"
+        if not await self.is_endpoint_available(endpoint):
+            _LOGGER.debug("NAT NPT endpoint not available")
+            return {}
+
+        response = await self._safe_dict_get(endpoint)
         # _LOGGER.debug("[get_nat_npt_rules] response: %s", response)
         rules: list = response.get("rows", [])
         # _LOGGER.debug("[get_nat_npt_rules] rules: %s", rules)
@@ -275,7 +287,12 @@ class FirewallMixin(PyOPNsenseClientProtocol):
         Returns:
             bool: True when the toggle operation completes successfully; otherwise, False.
         """
-        alias_list_resp = await self._safe_dict_get("/api/firewall/alias/search_item")
+        endpoint = "/api/firewall/alias/search_item"
+        if not await self.is_endpoint_available(endpoint):
+            _LOGGER.debug("Firewall alias endpoint not available")
+            return False
+
+        alias_list_resp = await self._safe_dict_get(endpoint)
         alias_list: list = alias_list_resp.get("rows", [])
         if not isinstance(alias_list, list):
             return False
