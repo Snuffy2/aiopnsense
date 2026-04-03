@@ -1,10 +1,14 @@
 """Tests for `aiopnsense.speedtest`."""
 
+from collections.abc import Callable
 from unittest.mock import AsyncMock, call
 
 import pytest
 
+from aiopnsense import OPNsenseClient
 from tests.conftest import make_mock_session_client
+
+ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
@@ -66,29 +70,74 @@ async def test_get_speedtest_normalizes_recent_and_stat_payloads(make_client) ->
         await client.async_close()
 
 
-@pytest.mark.asyncio
-async def test_get_speedtest_fetches_showstat_without_endpoint_probe(make_client) -> None:
-    """get_speedtest should only probe showrecent and then fetch both payloads."""
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client.is_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
+@pytest.mark.parametrize(
+    ("endpoint_side_effect", "safe_dict_get_payload", "showstat_available"),
+    [
+        pytest.param(
+            [True, True],
+            [
                 {"download": "1", "upload": "2", "latency": "3"},
                 {},
-            ]
-        )
+            ],
+            True,
+            id="showstat-available",
+        ),
+        pytest.param(
+            [True, False],
+            {"download": "1", "upload": "2", "latency": "3"},
+            False,
+            id="showstat-missing",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
+    make_client: ClientType,
+    endpoint_side_effect: list[bool],
+    safe_dict_get_payload: list[dict[str, str]] | dict[str, str],
+    showstat_available: bool,
+) -> None:
+    """Validate ``get_speedtest`` probes ``showstat`` before optional fetches.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        endpoint_side_effect (list[bool]): Endpoint availability responses in call order.
+        safe_dict_get_payload (list[dict[str, str]] | dict[str, str]): Mocked payloads for
+            endpoint fetches.
+        showstat_available (bool): Whether the ``showstat`` endpoint should be fetched.
+
+    Returns:
+        None: This test validates endpoint probing order and conditional fetches.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(side_effect=endpoint_side_effect)
+        if showstat_available:
+            client._safe_dict_get = AsyncMock(side_effect=safe_dict_get_payload)
+        else:
+            client._safe_dict_get = AsyncMock(return_value=safe_dict_get_payload)
 
         result = await client.get_speedtest()
 
         assert result["available"] is True
         assert client.is_endpoint_available.await_args_list == [
-            call("/api/speedtest/service/showrecent")
-        ]
-        assert client._safe_dict_get.await_args_list == [
             call("/api/speedtest/service/showrecent"),
             call("/api/speedtest/service/showstat"),
         ]
+
+        if showstat_available:
+            assert client._safe_dict_get.await_args_list == [
+                call("/api/speedtest/service/showrecent"),
+                call("/api/speedtest/service/showstat"),
+            ]
+            assert result["last"]["download"]["value"] == 1.0
+            assert result["last"]["upload"]["value"] == 2.0
+            assert result["last"]["latency"]["value"] == 3.0
+        else:
+            client._safe_dict_get.assert_awaited_once_with("/api/speedtest/service/showrecent")
+            assert result["last"]["download"]["value"] == 1.0
+            assert result["last"]["upload"]["value"] == 2.0
+            assert result["last"]["latency"]["value"] == 3.0
     finally:
         await client.async_close()
 

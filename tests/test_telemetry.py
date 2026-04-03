@@ -1,7 +1,7 @@
 """Tests for `aiopnsense.telemetry`."""
 
-from collections.abc import MutableMapping
-from datetime import UTC
+from collections.abc import Callable, MutableMapping
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -11,10 +11,20 @@ from tests.conftest import make_mock_session_client
 
 
 @pytest.mark.asyncio
-async def test_telemetry_system_parsing_and_filesystems(make_client) -> None:
-    """Test telemetry system parsing when boottime missing/invalid and filesystems path."""
+async def test_telemetry_system_parsing_and_filesystems(
+    make_client: Callable[..., Any],
+) -> None:
+    """Validate telemetry system parsing and filesystem branch behavior.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates parsing fallbacks and filesystem response handling.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         # time_info with bad datetime and uptime matching regex
         time_info = {
             "datetime": "not-a-date",
@@ -48,22 +58,41 @@ async def test_telemetry_system_parsing_and_filesystems(make_client) -> None:
         client._get_opnsense_timezone.assert_awaited_once_with("not-a-date")
 
         files = await client._get_telemetry_filesystems()
-        assert files is None or isinstance(files, list)
+        assert isinstance(files, list)
+        assert all(isinstance(filesystem, MutableMapping) for filesystem in files)
+        assert all(isinstance(filesystem.get("dev"), str) for filesystem in files)
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_telemetry_cpu_variants(make_client) -> None:
-    """Test _get_telemetry_cpu behavior for empty cputype list and valid stream."""
+async def test_telemetry_cpu_variants(make_client: Callable[..., Any]) -> None:
+    """Validate CPU telemetry behavior for empty, unavailable, and valid stream branches.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates CPU count and usage normalization across branches.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         # empty cpu type -> returns {}
         client._safe_list_get = AsyncMock(return_value=[])
         cpu_empty = await client._get_telemetry_cpu()
         assert cpu_empty == {}
 
+        # available cpu type but unavailable stream endpoint -> fail closed
+        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
+        client._get_from_stream = AsyncMock()
+        cpu_stream_unavailable = await client._get_telemetry_cpu()
+        assert cpu_stream_unavailable == {"count": 2}
+        client._get_from_stream.assert_not_awaited()
+
         # valid cpu type and stream
+        client.is_endpoint_available = AsyncMock(side_effect=[True, True])
         client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
         client._get_from_stream = AsyncMock(
             return_value={
@@ -83,10 +112,18 @@ async def test_telemetry_cpu_variants(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_telemetry_mbuf_pfstate_and_temps(make_client) -> None:
-    """Test telemetry mbuf, pfstate and temps parsing branches."""
+async def test_telemetry_mbuf_pfstate_and_temps(make_client: Callable[..., Any]) -> None:
+    """Validate telemetry parsing for mbuf, pfstate, and temperature sensors.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates numeric parsing and temperature mapping behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         # mbuf and pfstate basic numeric parsing
         client._safe_dict_get = AsyncMock(
             side_effect=[
@@ -110,10 +147,18 @@ async def test_telemetry_mbuf_pfstate_and_temps(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_interfaces_status_variants(make_client) -> None:
-    """Ensure interface parsing handles status, associated mapping and mac filtering."""
+async def test_get_interfaces_status_variants(make_client: Callable[..., Any]) -> None:
+    """Validate interface parsing for status normalization and MAC filtering.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates associated-status mapping and zero-MAC filtering.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         # prepare list with various status and mac strings
         iface_list = [
             {
@@ -147,10 +192,18 @@ async def test_get_interfaces_status_variants(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_telemetry_memory_swap_branches(make_client) -> None:
-    """Cover telemetry memory path including swap data branch."""
+async def test_telemetry_memory_swap_branches(make_client: Callable[..., Any]) -> None:
+    """Validate memory telemetry parsing when swap details are available.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates base memory parsing and swap enrichment behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         # prepare memory info with swap list present
         mem = {"memory": {"total": "8000", "used": "2000"}}
         swap = {"swap": [{"total": "1000", "used": "200"}]}
@@ -180,8 +233,15 @@ async def test_telemetry_memory_swap_branches(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_telemetry_aggregates_sections(make_client) -> None:
-    """get_telemetry should aggregate all section helpers into one mapping."""
+async def test_get_telemetry_aggregates_sections(make_client: Callable[..., Any]) -> None:
+    """Validate that telemetry aggregation combines all section helper outputs.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates section aggregation into the telemetry payload.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._get_telemetry_mbuf = AsyncMock(return_value={"used": 1})
@@ -205,10 +265,18 @@ async def test_get_telemetry_aggregates_sections(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_interfaces_empty_and_invalid_rows(make_client) -> None:
-    """get_interfaces should return empty for no rows and skip invalid row entries."""
+async def test_get_interfaces_empty_and_invalid_rows(make_client: Callable[..., Any]) -> None:
+    """Validate interface helper behavior for empty and malformed row payloads.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates empty-return and invalid-row filtering behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_list_get = AsyncMock(return_value=[])
         assert await client.get_interfaces() == {}
 
@@ -233,10 +301,20 @@ async def test_get_interfaces_empty_and_invalid_rows(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_telemetry_memory_returns_without_swap_details(make_client) -> None:
-    """_get_telemetry_memory should return memory-only payload when swap data is malformed."""
+async def test_telemetry_memory_returns_without_swap_details(
+    make_client: Callable[..., Any],
+) -> None:
+    """Validate memory telemetry when swap payload shape is malformed.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates that memory fields are returned without swap enrichment.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             side_effect=[
                 {"memory": {"total": "4000", "used": "1000"}},
@@ -252,10 +330,20 @@ async def test_telemetry_memory_returns_without_swap_details(make_client) -> Non
 
 
 @pytest.mark.asyncio
-async def test_telemetry_system_branches_with_boottime_and_uptime_variants(make_client) -> None:
-    """_get_telemetry_system should handle boottime parsing and uptime match/non-match branches."""
+async def test_telemetry_system_branches_with_boottime_and_uptime_variants(
+    make_client: Callable[..., Any],
+) -> None:
+    """Validate system telemetry boottime parsing and uptime fallback branches.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates matched and unmatched uptime parsing behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
 
         client._safe_dict_get = AsyncMock(
@@ -287,10 +375,20 @@ async def test_telemetry_system_branches_with_boottime_and_uptime_variants(make_
 
 
 @pytest.mark.asyncio
-async def test_telemetry_system_invalid_uptime_without_boottime(make_client) -> None:
-    """_get_telemetry_system should still return load average when uptime and boottime are invalid."""
+async def test_telemetry_system_invalid_uptime_without_boottime(
+    make_client: Callable[..., Any],
+) -> None:
+    """Validate system telemetry when uptime and boottime are missing or malformed.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates load-average parsing without boottime fallback data.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
         client._safe_dict_get = AsyncMock(
             return_value={
@@ -307,10 +405,18 @@ async def test_telemetry_system_invalid_uptime_without_boottime(make_client) -> 
 
 
 @pytest.mark.asyncio
-async def test_get_gateways_skips_rows_without_name(make_client) -> None:
-    """get_gateways should skip malformed gateway entries that do not have a name."""
+async def test_get_gateways_skips_rows_without_name(make_client: Callable[..., Any]) -> None:
+    """Validate gateway parsing skips malformed entries without a name field.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates malformed-row filtering for gateway payloads.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={
                 "items": [
@@ -327,11 +433,158 @@ async def test_get_gateways_skips_rows_without_name(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_telemetry_temps_empty_returns_empty_mapping(make_client) -> None:
-    """_get_telemetry_temps should return an empty mapping when no sensor rows are returned."""
+async def test_telemetry_temps_empty_returns_empty_mapping(
+    make_client: Callable[..., Any],
+) -> None:
+    """Validate temperature telemetry returns an empty mapping for empty payloads.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates fail-closed behavior for empty temperature rows.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_list_get = AsyncMock(return_value=[])
         assert await client._get_telemetry_temps() == {}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_version_switched_telemetry_endpoints_return_empty_data(
+    make_client: Callable[..., Any],
+) -> None:
+    """Switched telemetry endpoints should return empty structures when unavailable.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates behavior via assertions only.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_get = AsyncMock()
+        client._safe_list_get = AsyncMock()
+
+        assert await client._get_telemetry_memory() == {
+            "physmem": None,
+            "used": None,
+            "used_percent": None,
+        }
+        assert await client._get_telemetry_system() == {}
+        assert await client._get_telemetry_cpu() == {}
+        assert await client._get_telemetry_filesystems() == []
+        assert await client._get_telemetry_temps() == {}
+        client._safe_dict_get.assert_not_awaited()
+        client._safe_list_get.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_memory_returns_base_payload_when_swap_endpoint_missing(
+    make_client: Callable[..., Any],
+) -> None:
+    """Telemetry memory should keep base memory fields when swap endpoint is unavailable.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates behavior via assertions only.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "memory": {
+                    "total": "100",
+                    "used": "50",
+                }
+            }
+        )
+
+        memory = await client._get_telemetry_memory()
+
+        assert memory == {
+            "physmem": 100,
+            "used": 50,
+            "used_percent": 50,
+        }
+        client._safe_dict_get.assert_awaited_once_with("/api/diagnostics/system/system_resources")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_version_switched_telemetry_public_endpoints_fail_closed(
+    make_client: Callable[..., Any],
+) -> None:
+    """Public telemetry endpoints should return empty data when endpoints are unavailable.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates fail-closed behavior for switched telemetry endpoints.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_get = AsyncMock()
+        client._safe_list_get = AsyncMock()
+
+        assert await client.get_interfaces() == {}
+        assert await client._get_telemetry_mbuf() == {}
+        assert await client._get_telemetry_pfstate() == {}
+        assert await client.get_gateways() == {}
+        client._safe_dict_get.assert_not_awaited()
+        client._safe_list_get.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_system_aware_datetime_boottime_and_load_fallback(
+    make_client: Callable[..., Any],
+) -> None:
+    """System telemetry should preserve aware timestamps and fallback malformed load average.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+
+    Returns:
+        None: This test validates aware timestamp parsing and malformed loadavg fallback.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "datetime": "2026-03-07T12:00:00-05:00",
+                "boottime": "2026-03-07T11:00:00-05:00",
+                "uptime": "bad-format",
+                "loadavg": "bad-load",
+            }
+        )
+
+        system = await client._get_telemetry_system()
+        expected_boottime = datetime.fromisoformat("2026-03-07T11:00:00-05:00").timestamp()
+
+        assert isinstance(system["boottime"], float)
+        assert system["boottime"] == expected_boottime
+        assert system["uptime"] == 3600
+        assert system["load_average"] == {
+            "one_minute": None,
+            "five_minute": None,
+            "fifteen_minute": None,
+        }
     finally:
         await client.async_close()

@@ -12,7 +12,7 @@ from .helpers import _LOGGER, human_friendly_duration, timestamp_to_datetime, tr
 class VouchersMixin(PyOPNsenseClientProtocol):
     """Captive portal voucher methods for OPNsenseClient."""
 
-    async def generate_vouchers(self, data: MutableMapping[str, Any]) -> list:
+    async def generate_vouchers(self, data: MutableMapping[str, Any]) -> list[dict[str, Any]]:
         """Generate vouchers from the Voucher Server.
 
         Args:
@@ -20,12 +20,17 @@ class VouchersMixin(PyOPNsenseClientProtocol):
                 generate vouchers.
 
         Returns:
-            list: List of normalized entries produced by this method.
+            list[dict[str, Any]]: List of normalized entries produced by this method.
         """
+        list_providers_endpoint = "/api/captiveportal/voucher/list_providers"
+        generate_vouchers_endpoint = "/api/captiveportal/voucher/generate_vouchers"
         if data.get("voucher_server", None):
             server = data.get("voucher_server")
         else:
-            servers = await self._safe_list_get("/api/captiveportal/voucher/list_providers")
+            if not await self.is_endpoint_available(list_providers_endpoint):
+                _LOGGER.debug("Voucher provider endpoint unavailable")
+                return []
+            servers = await self._safe_list_get(list_providers_endpoint)
             if len(servers) == 0:
                 raise VoucherServerError("No voucher servers exist")
             if len(servers) != 1:
@@ -33,16 +38,19 @@ class VouchersMixin(PyOPNsenseClientProtocol):
                     "More than one voucher server. Must specify voucher server name"
                 )
             server = servers[0]
+        if not await self.is_endpoint_available(generate_vouchers_endpoint):
+            _LOGGER.debug("Voucher generation endpoint unavailable")
+            return []
         server_slug = quote(str(server), safe="")
         payload: dict[str, Any] = dict(data).copy()
         payload.pop("voucher_server", None)
-        voucher_url: str = f"/api/captiveportal/voucher/generate_vouchers/{server_slug}/"
-        _LOGGER.debug("[generate_vouchers] url: %s, payload: %s", voucher_url, payload)
+        generate_vouchers_url = f"{generate_vouchers_endpoint}/{server_slug}/"
+        _LOGGER.debug("[generate_vouchers] url: %s, payload: %s", generate_vouchers_url, payload)
         vouchers = await self._safe_list_post(
-            voucher_url,
+            generate_vouchers_url,
             payload=payload,
         )
-        ordered_keys: list = [
+        ordered_keys: list[str] = [
             "username",
             "password",
             "vouchergroup",

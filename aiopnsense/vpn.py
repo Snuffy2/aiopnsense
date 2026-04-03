@@ -38,10 +38,33 @@ class VPNMixin(PyOPNsenseClientProtocol):
         openvpn: dict[str, Any] = {"servers": {}, "clients": {}}
 
         # Fetch data
-        sessions_info = await self._safe_dict_get("/api/openvpn/service/search_sessions")
-        routes_info = await self._safe_dict_get("/api/openvpn/service/search_routes")
-        providers_info = await self._safe_dict_get("/api/openvpn/export/providers")
-        instances_info = await self._safe_dict_get("/api/openvpn/instances/search")
+        sessions_endpoint = "/api/openvpn/service/search_sessions"
+        if await self.is_endpoint_available(sessions_endpoint):
+            sessions_info = await self._safe_dict_get(sessions_endpoint)
+        else:
+            _LOGGER.debug("OpenVPN sessions endpoint unavailable")
+            sessions_info = {}
+
+        routes_endpoint = "/api/openvpn/service/search_routes"
+        if await self.is_endpoint_available(routes_endpoint):
+            routes_info = await self._safe_dict_get(routes_endpoint)
+        else:
+            _LOGGER.debug("OpenVPN routes endpoint unavailable")
+            routes_info = {}
+
+        providers_endpoint = "/api/openvpn/export/providers"
+        if await self.is_endpoint_available(providers_endpoint):
+            providers_info = await self._safe_dict_get(providers_endpoint)
+        else:
+            _LOGGER.debug("OpenVPN providers endpoint unavailable")
+            providers_info = {}
+
+        instances_endpoint = "/api/openvpn/instances/search"
+        if await self.is_endpoint_available(instances_endpoint):
+            instances_info = await self._safe_dict_get(instances_endpoint)
+        else:
+            _LOGGER.debug("OpenVPN instances endpoint unavailable")
+            instances_info = {}
 
         await self._process_openvpn_instances(instances_info, openvpn)
         await self._process_openvpn_providers(providers_info, openvpn)
@@ -214,7 +237,12 @@ class VPNMixin(PyOPNsenseClientProtocol):
             server.setdefault("total_bytes_sent", 0)
             server.setdefault("total_bytes_recv", 0)
             server["connected_clients"] = len(server.get("clients", []))
-            details_info = await self._safe_dict_get(f"/api/openvpn/instances/get/{uuid}")
+            details_endpoint = f"/api/openvpn/instances/get/{uuid}"
+            if await self.is_endpoint_available(details_endpoint):
+                details_info = await self._safe_dict_get(details_endpoint)
+            else:
+                _LOGGER.debug("OpenVPN instance details endpoint unavailable for uuid: %s", uuid)
+                details_info = {}
             details = (
                 details_info.get("instance", {}) if isinstance(details_info, MutableMapping) else {}
             )
@@ -238,7 +266,13 @@ class VPNMixin(PyOPNsenseClientProtocol):
             "clients_raw": "/api/wireguard/client/get",
             "servers_raw": "/api/wireguard/server/get",
         }
-        data = {key: await self._safe_dict_get(path) for key, path in data_sources.items()}
+        data: dict[str, dict[str, Any]] = {}
+        for key, path in data_sources.items():
+            if await self.is_endpoint_available(path):
+                data[key] = await self._safe_dict_get(path)
+            else:
+                _LOGGER.debug("WireGuard endpoint unavailable: %s", path)
+                data[key] = {}
 
         summary = data["summary_raw"].get("rows", [])
         client_summ = data["clients_raw"].get("client", {}).get("clients", {}).get("client", {})

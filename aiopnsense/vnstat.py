@@ -51,6 +51,25 @@ _RATE_FACTORS = {
 class VnstatMixin(PyOPNsenseClientProtocol):
     """vnStat methods for OPNsenseClient."""
 
+    async def _fetch_vnstat_for(self, endpoint: str, expected_period: str) -> dict[str, Any]:
+        """Fetch and parse vnStat payload for a specific endpoint and period.
+
+        Args:
+            endpoint (str): API endpoint path to request.
+            expected_period (str): Expected period label for parser validation.
+
+        Returns:
+            dict[str, Any]: Parsed payload or fallback empty mapping when endpoint is unavailable.
+        """
+        if not await self.is_endpoint_available(endpoint):
+            _LOGGER.debug("vnStat %s endpoint unavailable", expected_period)
+            return {"period": expected_period, "interfaces": {}}
+
+        return self._parse_vnstat_payload(
+            await self._safe_dict_get(endpoint),
+            expected_period=expected_period,
+        )
+
     @_log_errors
     async def get_vnstat_metrics(self, period: str) -> dict[str, Any]:
         """Return parsed vnStat rows for the requested period endpoint.
@@ -66,14 +85,10 @@ class VnstatMixin(PyOPNsenseClientProtocol):
             return {}
 
         endpoint = f"/api/vnstat/service/{requested_period}"
-        if not await self.is_endpoint_available(endpoint):
-            _LOGGER.debug("vnStat %s endpoint unavailable", requested_period)
+        payload = await self._fetch_vnstat_for(endpoint, requested_period)
+        if not payload.get("interfaces"):
             return {}
-
-        return self._parse_vnstat_payload(
-            await self._safe_dict_get(endpoint),
-            expected_period=requested_period,
-        )
+        return payload
 
     @_log_errors
     async def get_vnstat(self) -> MutableMapping[str, Any]:
@@ -91,14 +106,8 @@ class VnstatMixin(PyOPNsenseClientProtocol):
             await self._safe_dict_get("/api/vnstat/service/hourly"),
             expected_period="hourly",
         )
-        daily = self._parse_vnstat_payload(
-            await self._safe_dict_get("/api/vnstat/service/daily"),
-            expected_period="daily",
-        )
-        monthly = self._parse_vnstat_payload(
-            await self._safe_dict_get("/api/vnstat/service/monthly"),
-            expected_period="monthly",
-        )
+        daily = await self._fetch_vnstat_for("/api/vnstat/service/daily", "daily")
+        monthly = await self._fetch_vnstat_for("/api/vnstat/service/monthly", "monthly")
         interface_names = self._collect_vnstat_interfaces(hourly, daily, monthly)
         interface_data: dict[str, Any] = {}
 

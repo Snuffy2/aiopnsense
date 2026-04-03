@@ -1,13 +1,17 @@
 """Tests for `aiopnsense.vpn`."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 import aiopnsense as pyopnsense
-from aiopnsense import vpn as pyopnsense_vpn
+from aiopnsense import OPNsenseClient, vpn as pyopnsense_vpn
 from tests.conftest import make_mock_session_client
+
+ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
@@ -15,6 +19,7 @@ async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
     """Validate openvpn server/client discovery and fetch details flow."""
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         # Prepare fake responses for safe_gets
         sessions_info = {
             "rows": [
@@ -161,10 +166,15 @@ async def test_wireguard_processing_and_updates(make_client) -> None:
     ],
 )
 async def test_toggle_vpn_instance_variants(
-    make_client, vpn_type, path, post_resp, expected
+    make_client: ClientType,
+    vpn_type: str,
+    path: str,
+    post_resp: dict[str, Any] | list[dict[str, Any]],
+    expected: bool,
 ) -> None:
     """Parametrized toggle_vpn_instance covering OpenVPN and WireGuard variants."""
     client, _session = make_mock_session_client(make_client)
+    client.is_endpoint_available = AsyncMock(return_value=True)
 
     if isinstance(post_resp, list):
         client._safe_dict_post = AsyncMock(side_effect=post_resp)
@@ -180,6 +190,7 @@ async def test_toggle_vpn_instance_variants(
 async def test_openvpn_more_detail_parsing(monkeypatch, make_client) -> None:
     """Exercise additional OpenVPN parsing branches (no sessions, missing fields)."""
     client, _session = make_mock_session_client(make_client)
+    client.is_endpoint_available = AsyncMock(return_value=True)
 
     # prepare responses that exercise missing/partial fields
     sessions_info: dict[str, list[dict]] = {"rows": []}
@@ -221,6 +232,8 @@ async def test_openvpn_processing_and_fetch_details(make_client) -> None:
     """Test processing of OpenVPN instances/providers/sessions/routes and fetching details."""
     client, _ = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
+
         # prepare fake responses for _safe_dict_get based on path
         def fake_safe_dict_get(path):
             """Fake safe dict get.
@@ -328,11 +341,77 @@ async def test_openvpn_client_session_updates_server_stats() -> None:
 
 
 @pytest.mark.asyncio
+async def test_openvpn_processing_helpers_skip_invalid_rows_and_unknown_servers() -> None:
+    """OpenVPN processing helpers should ignore malformed rows and unknown route servers.
+
+    Args:
+        None: This test takes no arguments.
+
+    Returns:
+        None: This test validates helper-level filtering and route association behavior.
+    """
+    openvpn: dict[str, Any] = {"servers": {}, "clients": {}}
+
+    await pyopnsense.OPNsenseClient._process_openvpn_instances(  # type: ignore[arg-type]
+        {
+            "rows": [
+                None,
+                {"role": "server"},  # missing uuid
+                {"role": "client", "description": "missing-uuid"},
+                {"role": "client", "uuid": "c1", "description": "client1", "enabled": "1"},
+            ]
+        },
+        openvpn,
+    )
+    assert "c1" in openvpn["clients"]
+
+    await pyopnsense.OPNsenseClient._process_openvpn_providers(  # type: ignore[arg-type]
+        {
+            "": {"name": "skip-empty-uuid"},
+            "srv1": "bad-provider",
+            "srv2": {"name": "provider-two"},
+        },
+        openvpn,
+    )
+    assert "srv1" not in openvpn["servers"]
+    assert openvpn["servers"]["srv2"]["name"] == "provider-two"
+
+    await pyopnsense.OPNsenseClient._process_openvpn_sessions(  # type: ignore[arg-type]
+        {
+            "rows": [
+                None,
+                {"id": "srv2_1", "type": "client"},  # non-server session
+                {"id": "srv2_1", "type": "server", "status": "failed"},
+            ]
+        },
+        openvpn,
+    )
+    assert openvpn["servers"]["srv2"]["status"] == "failed"
+
+    await pyopnsense.OPNsenseClient._process_openvpn_routes(  # type: ignore[arg-type]
+        {
+            "rows": [
+                {"id": "unknown", "common_name": "skip"},
+                {
+                    "id": "srv2",
+                    "common_name": "client-a",
+                    "real_address": "1.2.3.4",
+                    "virtual_address": "10.0.0.2",
+                },
+            ]
+        },
+        openvpn,
+    )
+    assert len(openvpn["servers"]["srv2"]["clients"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_fetch_openvpn_server_details_missing_server_field(make_client) -> None:
     """When instance details lack 'server' key, no tunnel_addresses should be set."""
     client, _ = make_mock_session_client(make_client)
     try:
-        openvpn = {"servers": {"srv1": {"uuid": "srv1"}}}
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        openvpn: dict[str, Any] = {"servers": {"srv1": {"uuid": "srv1"}}}
 
         async def fake_safe_dict_get(path):
             # return instance details with no 'server' key
@@ -354,6 +433,34 @@ async def test_fetch_openvpn_server_details_missing_server_field(make_client) ->
         assert "tunnel_addresses" not in openvpn["servers"]["srv1"] or (
             isinstance(ta, list) and ta == []
         )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_fetch_openvpn_server_details_skips_unavailable_endpoint(
+    make_client: ClientType,
+) -> None:
+    """Verify unsupported OpenVPN per-instance endpoints are skipped.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates behavior via assertions only.
+    """
+    client, _ = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_get = AsyncMock()
+        openvpn: dict[str, Any] = {"servers": {"srv1": {"uuid": "srv1"}}}
+
+        await client._fetch_openvpn_server_details(openvpn)
+
+        assert openvpn["servers"]["srv1"]["connected_clients"] == 0
+        assert openvpn["servers"]["srv1"]["total_bytes_sent"] == 0
+        assert openvpn["servers"]["srv1"]["total_bytes_recv"] == 0
+        client._safe_dict_get.assert_not_awaited()
     finally:
         await client.async_close()
 
@@ -482,6 +589,29 @@ async def test_get_wireguard_success_and_invalid(make_client) -> None:
     client._safe_dict_get = AsyncMock(return_value={"rows": {}})
     assert await client.get_wireguard() == {"servers": {}, "clients": {}}
     await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_version_switched_vpn_endpoints_fail_closed(make_client: ClientType) -> None:
+    """Verify switched OpenVPN GET endpoints fail closed when unavailable.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates fail-closed behavior for switched OpenVPN endpoints.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_get = AsyncMock()
+
+        openvpn = await client.get_openvpn()
+        assert openvpn == {"servers": {}, "clients": {}}
+        client.is_endpoint_available.assert_awaited()
+        client._safe_dict_get.assert_not_awaited()
+    finally:
+        await client.async_close()
 
 
 @pytest.mark.asyncio

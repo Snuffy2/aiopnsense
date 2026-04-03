@@ -19,7 +19,13 @@ class FirmwareMixin(PyOPNsenseClientProtocol):
 
     async def _store_host_firmware_version(self) -> None:
         """Store host firmware version."""
-        firmware_info = await self._safe_dict_get("/api/core/firmware/status")
+        status_endpoint = "/api/core/firmware/status"
+        if not await self.is_endpoint_available(status_endpoint):
+            _LOGGER.debug("Firmware status endpoint unavailable")
+            self._firmware_version = None
+            return
+
+        firmware_info = await self._safe_dict_get(status_endpoint)
         firmware: str | None = dict_get(firmware_info, "product.product_version")
         if not firmware or not awesomeversion.AwesomeVersion(firmware).valid:
             old = firmware
@@ -52,7 +58,12 @@ class FirmwareMixin(PyOPNsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
-        status = await self._safe_dict_get("/api/core/firmware/status")
+        status_endpoint = "/api/core/firmware/status"
+        if not await self.is_endpoint_available(status_endpoint):
+            _LOGGER.debug("Firmware status endpoint unavailable")
+            return {}
+
+        status = await self._safe_dict_get(status_endpoint)
 
         # if error or too old trigger check (only if check is not already in progress)
         # {'status_msg': 'Firmware status check was aborted internally. Please try again.', 'status': 'error'}
@@ -143,7 +154,11 @@ class FirmwareMixin(PyOPNsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: The status of the firmware upgrade.
         """
-        return await self._safe_dict_get("/api/core/firmware/upgradestatus")
+        status_endpoint = "/api/core/firmware/upgradestatus"
+        if not await self.is_endpoint_available(status_endpoint):
+            _LOGGER.debug("Firmware upgrade status endpoint unavailable")
+            return {}
+        return await self._safe_dict_get(status_endpoint)
 
     @_log_errors
     async def firmware_changelog(self, version: str) -> MutableMapping[str, Any]:

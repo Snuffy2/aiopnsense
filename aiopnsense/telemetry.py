@@ -40,7 +40,11 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
-        interface_info = await self._safe_list_get("/api/interfaces/overview/export")
+        interfaces_endpoint = "/api/interfaces/overview/export"
+        if not await self.is_endpoint_available(interfaces_endpoint):
+            _LOGGER.debug("Interface overview endpoint unavailable")
+            return {}
+        interface_info = await self._safe_list_get(interfaces_endpoint)
         # _LOGGER.debug(f"[get_interfaces] interface_info: {interface_info}")
         if not len(interface_info) > 0:
             return {}
@@ -102,7 +106,11 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        mbuf_info = await self._safe_dict_get("/api/diagnostics/system/system_mbuf")
+        mbuf_endpoint = "/api/diagnostics/system/system_mbuf"
+        if not await self.is_endpoint_available(mbuf_endpoint):
+            _LOGGER.debug("Telemetry mbuf endpoint unavailable")
+            return {}
+        mbuf_info = await self._safe_dict_get(mbuf_endpoint)
         # _LOGGER.debug(f"[get_telemetry_mbuf] mbuf_info: {mbuf_info}")
         mbuf: dict[str, Any] = {}
         mbuf["used"] = try_to_int(mbuf_info.get("mbuf-statistics", {}).get("mbuf-current", None))
@@ -124,7 +132,11 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        pfstate_info = await self._safe_dict_get("/api/diagnostics/firewall/pf_states")
+        pfstate_endpoint = "/api/diagnostics/firewall/pf_states"
+        if not await self.is_endpoint_available(pfstate_endpoint):
+            _LOGGER.debug("Telemetry pfstate endpoint unavailable")
+            return {}
+        pfstate_info = await self._safe_dict_get(pfstate_endpoint)
         # _LOGGER.debug(f"[get_telemetry_pfstate] pfstate_info: {pfstate_info}")
         pfstate: dict[str, Any] = {}
         pfstate["used"] = try_to_int(pfstate_info.get("current", None))
@@ -146,7 +158,15 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        memory_info = await self._safe_dict_get("/api/diagnostics/system/system_resources")
+        memory_endpoint = "/api/diagnostics/system/system_resources"
+        if not await self.is_endpoint_available(memory_endpoint):
+            _LOGGER.debug("Telemetry memory endpoint unavailable")
+            return {
+                "physmem": None,
+                "used": None,
+                "used_percent": None,
+            }
+        memory_info = await self._safe_dict_get(memory_endpoint)
         # _LOGGER.debug(f"[get_telemetry_memory] memory_info: {memory_info}")
         memory: dict[str, Any] = {}
         memory["physmem"] = try_to_int(memory_info.get("memory", {}).get("total", None))
@@ -158,7 +178,12 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
             and memory["physmem"] > 0
             else None
         )
-        swap_info = await self._safe_dict_get("/api/diagnostics/system/system_swap")
+        swap_endpoint = "/api/diagnostics/system/system_swap"
+        if not await self.is_endpoint_available(swap_endpoint):
+            _LOGGER.debug("Telemetry swap endpoint unavailable")
+            return memory
+
+        swap_info = await self._safe_dict_get(swap_endpoint)
         if (
             not isinstance(swap_info.get("swap", None), list)
             or not len(swap_info.get("swap", [])) > 0
@@ -185,7 +210,11 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        time_info = await self._safe_dict_get("/api/diagnostics/system/system_time")
+        time_endpoint = "/api/diagnostics/system/system_time"
+        if not await self.is_endpoint_available(time_endpoint):
+            _LOGGER.debug("Telemetry system time endpoint unavailable")
+            return {}
+        time_info = await self._safe_dict_get(time_endpoint)
         # _LOGGER.debug("[get_telemetry_system] time_info: %s", time_info)
         system: dict[str, Any] = {}
         opnsense_tz = await self._get_opnsense_timezone(time_info.get("datetime"))
@@ -265,7 +294,11 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        cputype_info = await self._safe_list_get("/api/diagnostics/cpu_usage/get_c_p_u_type")
+        cpu_type_endpoint = "/api/diagnostics/cpu_usage/get_c_p_u_type"
+        if not await self.is_endpoint_available(cpu_type_endpoint):
+            _LOGGER.debug("Telemetry CPU type endpoint unavailable")
+            return {}
+        cputype_info = await self._safe_list_get(cpu_type_endpoint)
         # _LOGGER.debug(f"[get_telemetry_cpu] cputype_info: {cputype_info}")
         if not len(cputype_info) > 0:
             return {}
@@ -273,7 +306,11 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
         cores_match = re.search(r"\((\d+) cores", cputype_info[0])
         cpu["count"] = try_to_int(cores_match.group(1)) if cores_match else 0
 
-        cpustream_info = await self._get_from_stream("/api/diagnostics/cpu_usage/stream")
+        cpu_stream_endpoint = "/api/diagnostics/cpu_usage/stream"
+        if not await self.is_endpoint_available(cpu_stream_endpoint):
+            _LOGGER.debug("Telemetry CPU stream endpoint unavailable")
+            return cpu
+        cpustream_info = await self._get_from_stream(cpu_stream_endpoint)
         # {"total":29,"user":2,"nice":0,"sys":27,"intr":0,"idle":70}
         # _LOGGER.debug(f"[get_telemetry_cpu] cpustream_info: {cpustream_info}")
         cpu["usage_total"] = try_to_int(cpustream_info.get("total", None))
@@ -292,7 +329,11 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
         Returns:
             list: List of normalized entries produced by this method.
         """
-        filesystems_info = await self._safe_dict_get("/api/diagnostics/system/system_disk")
+        filesystems_endpoint = "/api/diagnostics/system/system_disk"
+        if not await self.is_endpoint_available(filesystems_endpoint):
+            _LOGGER.debug("Telemetry filesystem endpoint unavailable")
+            return []
+        filesystems_info = await self._safe_dict_get(filesystems_endpoint)
         # _LOGGER.debug(f"[get_telemetry_filesystems] filesystems_info: {filesystems_info}")
         filesystems: list = filesystems_info.get("devices", [])
         # _LOGGER.debug(f"[get_telemetry_filesystems] filesystems: {filesystems}")
@@ -305,7 +346,11 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
-        gateways_info = await self._safe_dict_get("/api/routes/gateway/status")
+        gateway_endpoint = "/api/routes/gateway/status"
+        if not await self.is_endpoint_available(gateway_endpoint):
+            _LOGGER.debug("Gateway status endpoint unavailable")
+            return {}
+        gateways_info = await self._safe_dict_get(gateway_endpoint)
         # _LOGGER.debug(f"[get_gateways] gateways_info: {gateways_info}")
         gateways: dict[str, Any] = {}
         for gw_info in gateways_info.get("items", []):
@@ -323,7 +368,11 @@ class TelemetryMixin(PyOPNsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        temps_info = await self._safe_list_get("/api/diagnostics/system/system_temperature")
+        temperature_endpoint = "/api/diagnostics/system/system_temperature"
+        if not await self.is_endpoint_available(temperature_endpoint):
+            _LOGGER.debug("Telemetry temperature endpoint unavailable")
+            return {}
+        temps_info = await self._safe_list_get(temperature_endpoint)
         # _LOGGER.debug(f"[get_telemetry_temps] temps_info: {temps_info}")
         if not len(temps_info) > 0:
             return {}
