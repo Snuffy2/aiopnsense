@@ -25,6 +25,7 @@ async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client: ClientType) 
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         # _get_kea_interfaces returns mapping and kea leases: one valid
         client._safe_dict_get = AsyncMock(
             side_effect=[
@@ -456,6 +457,7 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         future_ts = int(datetime.now(tz=timezone.utc).timestamp()) + 3600
         past_ts = int(datetime.now(tz=timezone.utc).timestamp()) - 3600
 
@@ -513,14 +515,17 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
             lease["address"] == "192.0.2.13" and lease["type"] == "static" for lease in leases
         )
 
-        # Reservation rows not being a list should be tolerated.
+        # Reservation lookup failures should not misclassify entries as dynamic/static.
         client._safe_dict_get = AsyncMock(
             side_effect=[
                 {"rows": [{"state": "0", "hwaddr": "aa", "address": "10.0.0.1"}]},
                 {"rows": "bad"},
             ]
         )
-        assert isinstance(await client._get_kea_dhcpv4_leases(), list)
+        leases = await client._get_kea_dhcpv4_leases()
+        assert isinstance(leases, list)
+        assert len(leases) == 1
+        assert leases[0]["type"] == "unknown"
     finally:
         await client.async_close()
 
@@ -653,5 +658,174 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
         assert len(v6_leases) == 1
         assert v6_leases[0]["mac"] == "ok-v6"
         assert v6_leases[0]["expires"] is None
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_version_switched_dhcp_endpoints_rows_empty_when_reservation_unavailable(
+    make_client: ClientType,
+) -> None:
+    """Verify lease endpoints return empty rows when reservation endpoint is unavailable.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates behavior via assertions only.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+
+        assert await client._get_kea_dhcpv4_leases() == []
+        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
+        assert client.is_endpoint_available.await_count == 2
+        assert client.is_endpoint_available.await_args_list[0].args[0] == "/api/kea/leases4/search"
+        assert (
+            client.is_endpoint_available.await_args_list[1].args[0]
+            == "/api/kea/dhcpv4/search_reservation"
+        )
+
+        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._safe_dict_get = AsyncMock()
+        assert await client._get_isc_dhcpv4_leases() == []
+        assert client.is_endpoint_available.await_count == 2
+        assert (
+            client.is_endpoint_available.await_args_list[0].args[0] == "/api/dhcpv4/service/status"
+        )
+        assert (
+            client.is_endpoint_available.await_args_list[1].args[0]
+            == "/api/dhcpv4/leases/search_lease"
+        )
+        client._safe_dict_get.assert_not_awaited()
+
+        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._safe_dict_get = AsyncMock()
+        assert await client._get_isc_dhcpv6_leases() == []
+        assert client.is_endpoint_available.await_count == 2
+        assert (
+            client.is_endpoint_available.await_args_list[0].args[0] == "/api/dhcpv6/service/status"
+        )
+        assert (
+            client.is_endpoint_available.await_args_list[1].args[0]
+            == "/api/dhcpv6/leases/search_lease"
+        )
+        client._safe_dict_get.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_version_switched_kea_dhcpv4_returns_leases_when_reservation_unavailable(
+    make_client: ClientType,
+) -> None:
+    """Verify Kea returns unknown lease type when reservation endpoint is unavailable.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This async test validates behavior via assertions only.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:ff",
+                        "address": "192.0.2.10",
+                        "hostname": "host-a.",
+                    }
+                ]
+            }
+        )
+
+        leases = await client._get_kea_dhcpv4_leases()
+
+        assert len(leases) == 1
+        assert leases[0].get("mac") == "aa:bb:cc:dd:ee:ff"
+        assert leases[0].get("type") == "unknown"
+        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
+        assert client.is_endpoint_available.await_count == 2
+        assert client.is_endpoint_available.await_args_list[0].args[0] == "/api/kea/leases4/search"
+        assert (
+            client.is_endpoint_available.await_args_list[1].args[0]
+            == "/api/kea/dhcpv4/search_reservation"
+        )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_version_switched_get_arp_table_endpoint_unavailable(
+    make_client: ClientType,
+) -> None:
+    """Verify ARP table helper fails closed when endpoint becomes unavailable.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This async test validates endpoint-gating behavior via assertions only.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+
+        assert await client.get_arp_table(resolve_hostnames=True) == []
+        client._safe_dict_get.assert_awaited_once_with(
+            "/api/diagnostics/interface/search_arp?resolve=yes"
+        )
+        assert client.is_endpoint_available.await_count == 1
+        assert (
+            client.is_endpoint_available.await_args_list[0].args[0]
+            == "/api/diagnostics/interface/search_arp"
+        )
+
+        client._safe_dict_get = AsyncMock()
+        assert await client.get_arp_table(resolve_hostnames=False) == []
+        client._safe_dict_get.assert_not_awaited()
+        assert client.is_endpoint_available.await_count == 2
+        assert (
+            client.is_endpoint_available.await_args_list[1].args[0]
+            == "/api/diagnostics/interface/search_arp"
+        )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_version_switched_get_kea_interfaces_endpoint_unavailable(
+    make_client: ClientType,
+) -> None:
+    """Verify Kea interface helper fails closed when endpoint becomes unavailable.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This async test validates endpoint-gating behavior via assertions only.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._safe_dict_get = AsyncMock(return_value={"dhcpv4": {"general": {"enabled": "0"}}})
+
+        assert await client._get_kea_interfaces() == {}
+        client._safe_dict_get.assert_awaited_once_with("/api/kea/dhcpv4/get")
+        assert client.is_endpoint_available.await_count == 1
+        assert client.is_endpoint_available.await_args_list[0].args[0] == "/api/kea/dhcpv4/get"
+
+        client._safe_dict_get = AsyncMock()
+        assert await client._get_kea_interfaces() == {}
+        client._safe_dict_get.assert_not_awaited()
+        assert client.is_endpoint_available.await_count == 2
+        assert client.is_endpoint_available.await_args_list[1].args[0] == "/api/kea/dhcpv4/get"
     finally:
         await client.async_close()

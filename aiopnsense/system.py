@@ -309,10 +309,12 @@ class SystemMixin(PyOPNsenseClientProtocol):
             tzinfo: Resolved timezone object for OPNsense system data.
         """
         if datetime_str is None:
+            system_time_endpoint = "/api/diagnostics/system/system_time"
+            if not await self.is_endpoint_available(system_time_endpoint):
+                _LOGGER.debug("System time endpoint unavailable for timezone resolution")
+                return self._get_local_timezone()
             try:
-                datetime_raw = (
-                    await self._safe_dict_get("/api/diagnostics/system/system_time")
-                ).get("datetime")
+                datetime_raw = (await self._safe_dict_get(system_time_endpoint)).get("datetime")
             except (aiohttp.ClientError, TimeoutError) as err:
                 _LOGGER.debug(
                     "Failed to fetch OPNsense system time for timezone resolution: %s: %s",
@@ -352,7 +354,11 @@ class SystemMixin(PyOPNsenseClientProtocol):
         Returns:
             str | None: Normalized data returned by the related OPNsense endpoint.
         """
-        instances = await self._safe_list_get("/api/interfaces/overview/export")
+        endpoint = "/api/interfaces/overview/export"
+        if not await self.is_endpoint_available(endpoint):
+            _LOGGER.debug("Interface overview endpoint unavailable for device id resolution")
+            return None
+        instances = await self._safe_list_get(endpoint)
         mac_addresses: set[str] = set()
         for item in instances:
             if not isinstance(item, MutableMapping):
@@ -383,7 +389,11 @@ class SystemMixin(PyOPNsenseClientProtocol):
             dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         system_info: dict[str, Any] = {}
-        response = await self._safe_dict_get("/api/diagnostics/system/system_information")
+        system_information_endpoint = "/api/diagnostics/system/system_information"
+        if not await self.is_endpoint_available(system_information_endpoint):
+            _LOGGER.debug("System information endpoint unavailable")
+            return system_info
+        response = await self._safe_dict_get(system_information_endpoint)
         system_info["name"] = response.get("name", None)
         return system_info
 
@@ -408,14 +418,23 @@ class SystemMixin(PyOPNsenseClientProtocol):
             tuple[dict[str, Any], list[dict[str, Any]]]: Raw VIP status response and
             merged/normalized CARP VIP rows derived from status + settings endpoints.
         """
-        vip_status_raw = await self._safe_dict_get("/api/diagnostics/interface/get_vip_status")
-        vip_settings_raw = await self._safe_dict_get("/api/interfaces/vip_settings/get")
+        vip_status_endpoint = "/api/diagnostics/interface/get_vip_status"
+        if not await self.is_endpoint_available(vip_status_endpoint):
+            _LOGGER.debug("CARP VIP status endpoint unavailable")
+            return {}, []
+        vip_settings_endpoint = "/api/interfaces/vip_settings/get"
+        vip_status_raw = await self._safe_dict_get(vip_status_endpoint)
+        vip_settings_raw: dict[str, Any] = {"rows": []}
+        if not await self.is_endpoint_available(vip_settings_endpoint):
+            _LOGGER.debug("CARP VIP settings endpoint unavailable; using status-only VIP data")
+        else:
+            fetched_vip_settings = await self._safe_dict_get(vip_settings_endpoint)
+            if isinstance(fetched_vip_settings, MutableMapping):
+                vip_settings_raw = dict(fetched_vip_settings)
 
         vip_status = dict(vip_status_raw) if isinstance(vip_status_raw, MutableMapping) else {}
         vip_status_rows = vip_status.get("rows")
-        vip_settings_rows = (
-            vip_settings_raw.get("rows") if isinstance(vip_settings_raw, MutableMapping) else None
-        )
+        vip_settings_rows = vip_settings_raw.get("rows")
         merged_vips = self._merge_carp_vip_rows(
             vip_status_rows if isinstance(vip_status_rows, list) else [],
             vip_settings_rows if isinstance(vip_settings_rows, list) else [],
@@ -566,7 +585,15 @@ class SystemMixin(PyOPNsenseClientProtocol):
         Returns:
             dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
-        notices_info = await self._safe_dict_get("/api/core/system/status")
+        notices_endpoint = "/api/core/system/status"
+        if not await self.is_endpoint_available(notices_endpoint):
+            _LOGGER.debug("System status endpoint unavailable for notices")
+            return {
+                "pending_notices_present": False,
+                "pending_notices": [],
+            }
+
+        notices_info = await self._safe_dict_get(notices_endpoint)
         # _LOGGER.debug(f"[get_notices] notices_info: {notices_info}")
         pending_notices_present = False
         pending_notices: list = []
@@ -603,7 +630,11 @@ class SystemMixin(PyOPNsenseClientProtocol):
         # id = "all" to close all notices
         success = True
         if id.lower() == "all":
-            notices = await self._safe_dict_get("/api/core/system/status")
+            notices_endpoint = "/api/core/system/status"
+            if not await self.is_endpoint_available(notices_endpoint):
+                _LOGGER.debug("System status endpoint unavailable for closing notices")
+                return False
+            notices = await self._safe_dict_get(notices_endpoint)
             # _LOGGER.debug(f"[close_notice] notices: {notices}")
             for key, notice in notices.items():
                 if not isinstance(notice, MutableMapping):
@@ -641,7 +672,12 @@ class SystemMixin(PyOPNsenseClientProtocol):
         Returns:
             dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
-        certs_raw = await self._safe_dict_get("/api/trust/cert/search")
+        cert_endpoint = "/api/trust/cert/search"
+        if not await self.is_endpoint_available(cert_endpoint):
+            _LOGGER.debug("Certificate search endpoint unavailable")
+            return {}
+
+        certs_raw = await self._safe_dict_get(cert_endpoint)
         cert_rows = certs_raw.get("rows")
         if not isinstance(cert_rows, list):
             return {}

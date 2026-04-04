@@ -6,12 +6,26 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from aiopnsense import OPNsenseClient
 from tests.conftest import make_mock_session_client
+
+ClientType = Callable[..., OPNsenseClient]
+AliasRowType = dict[str, str]
+AliasSearchRowsType = list[AliasRowType]
+AliasPostResponseType = dict[str, str]
+AliasPostResultType = AliasPostResponseType | list[AliasPostResponseType] | None
 
 
 @pytest.fixture
-def toggle_alias_client(make_client):
-    """Provide a preconfigured OPNsenseClient for toggle_alias tests."""
+def toggle_alias_client(make_client: ClientType) -> tuple[OPNsenseClient, Any]:
+    """Provide a preconfigured OPNsenseClient for toggle_alias tests.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        tuple[OPNsenseClient, Any]: Client/session tuple from ``make_mock_session_client``.
+    """
     return make_mock_session_client(make_client)
 
 
@@ -73,7 +87,6 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
         await client.async_close()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method_name", "api_endpoint", "rows", "expected"),
     [
@@ -258,15 +271,24 @@ async def test_kill_states_returns_normalized_result(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_toggle_alias_flows(make_client) -> None:
-    """`toggle_alias` should return False on lookup/toggle failure and True on full success."""
+async def test_toggle_alias_flows(make_client: ClientType) -> None:
+    """Validate `toggle_alias` failure and success control-flow branches.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates lookup/toggle failure handling and success flow.
+    """
     client, _ = make_mock_session_client(make_client)
     try:
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
-        assert await client.toggle_alias("missing", "on") is False
+        client._safe_dict_post = AsyncMock()
+        assert await client.toggle_alias("alias1", "on") is False
         client.is_endpoint_available.assert_awaited_once_with("/api/firewall/alias/search_item")
         client._safe_dict_get.assert_not_awaited()
+        client._safe_dict_post.assert_not_awaited()
 
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
@@ -292,6 +314,45 @@ async def test_toggle_alias_flows(make_client) -> None:
 
 
 @pytest.mark.asyncio
+async def test_toggle_alias_returns_false_for_non_list_and_apply_failures(
+    make_client: ClientType,
+) -> None:
+    """`toggle_alias` should fail for malformed listings and apply/reconfigure failures.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates malformed-list and apply/reconfigure failure paths.
+    """
+    client, _ = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value={"rows": "bad"})
+        client._safe_dict_post = AsyncMock()
+        assert await client.toggle_alias("alias1", "on") is False
+        client._safe_dict_post.assert_not_awaited()
+
+        client._safe_dict_get = AsyncMock(
+            return_value={"rows": [{"name": "alias1", "uuid": "aid"}]}
+        )
+        client._safe_dict_post = AsyncMock(side_effect=[{"result": "ok"}, {"result": "not-saved"}])
+        assert await client.toggle_alias("alias1", "on") is False
+        assert client._safe_dict_post.await_count == 2
+
+        client._safe_dict_get = AsyncMock(
+            return_value={"rows": [{"name": "alias1", "uuid": "aid"}]}
+        )
+        client._safe_dict_post = AsyncMock(
+            side_effect=[{"result": "ok"}, {"result": "saved"}, {"status": "failed"}]
+        )
+        assert await client.toggle_alias("alias1", "on") is False
+        assert client._safe_dict_post.await_count == 3
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("safe_get_rows", "safe_post_result", "expected"),
     [
@@ -305,9 +366,22 @@ async def test_toggle_alias_flows(make_client) -> None:
     ],
 )
 async def test_toggle_alias_scenarios(
-    safe_get_rows, safe_post_result, expected, toggle_alias_client
+    safe_get_rows: AliasSearchRowsType,
+    safe_post_result: AliasPostResultType,
+    expected: bool,
+    toggle_alias_client: tuple[OPNsenseClient, Any],
 ) -> None:
-    """Parametrized alias toggling scenarios should match the final success state."""
+    """Parametrized alias toggling scenarios should match the final success state.
+
+    Args:
+        safe_get_rows (AliasSearchRowsType): Alias rows returned by the search endpoint.
+        safe_post_result (AliasPostResultType): Alias toggle/set/reconfigure response payload(s).
+        expected (bool): Expected final toggle result.
+        toggle_alias_client (tuple[OPNsenseClient, Any]): Preconfigured client/session fixture.
+
+    Returns:
+        None: This test validates alias toggle scenarios via assertions only.
+    """
     client, _session = toggle_alias_client
     try:
         client.is_endpoint_available = AsyncMock(return_value=True)

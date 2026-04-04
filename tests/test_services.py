@@ -23,6 +23,7 @@ async def test_service_management_and_get_services(make_client: ClientType) -> N
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={
                 "rows": [
@@ -79,16 +80,82 @@ async def test_manage_service_and_restart_if_running(
             client._safe_dict_post.await_args.args[0] == "/api/core/service/restart/svc%20%2Fname"
         )
 
-        # get_service_is_running uses get_services; test restart_service_if_running branches
+        # restart_service_if_running uses _get_service_running_state; test branch behavior
         restart_service_mock = AsyncMock(return_value=True)
         monkeypatch.setattr(client, "restart_service", restart_service_mock, raising=False)
-        client.get_service_is_running = AsyncMock(return_value=True)
+        client._get_service_running_state = AsyncMock(return_value=True)
         assert await client.restart_service_if_running("svc1") is True
         restart_service_mock.assert_awaited_once_with("svc1")
 
         restart_service_mock.reset_mock()
-        client.get_service_is_running = AsyncMock(return_value=False)
+        client._get_service_running_state = AsyncMock(return_value=False)
         assert await client.restart_service_if_running("svc1") is True
         restart_service_mock.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_service_unknown_state_fails_closed(make_client: ClientType) -> None:
+    """Unavailable service-search endpoint should produce fail-closed restart behavior.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates unknown service-state handling when endpoint probing fails.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(return_value=False)
+        client.restart_service = AsyncMock(return_value=True)
+
+        assert await client.get_services() == []
+        assert await client._fetch_normalized_services(return_none_when_unavailable=True) is None
+        assert await client.get_service_is_running("svc1") is False
+        assert await client.restart_service_if_running("svc1") is False
+        client.restart_service.assert_not_awaited()
+        client.is_endpoint_available.assert_any_await("/api/core/service/search")
+        assert client.is_endpoint_available.await_count == 4
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_services_handles_non_list_rows_and_running_coercion(
+    make_client: ClientType,
+) -> None:
+    """Service parsing should handle malformed rows and non-int running values.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates service-row normalization and status coercion.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value={"rows": "bad-shape"})
+        assert await client.get_services() == []
+
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {"name": "svc1", "running": object(), "id": "svc1"},
+                    {"name": "svc2", "running": "1", "id": "svc2"},
+                ]
+            }
+        )
+        services = await client.get_services()
+        assert len(services) == 2
+        assert services[0]["status"] is False
+        assert services[1]["status"] is True
+
+        assert await client.get_service_is_running("does-not-exist") is False
+        assert await client._get_service_running_state("does-not-exist") is None
+        client.restart_service = AsyncMock(return_value=True)
+        assert await client.restart_service_if_running("does-not-exist") is False
+        client.restart_service.assert_not_awaited()
     finally:
         await client.async_close()

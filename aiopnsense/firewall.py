@@ -287,12 +287,12 @@ class FirewallMixin(PyOPNsenseClientProtocol):
         Returns:
             bool: True when the toggle operation completes successfully; otherwise, False.
         """
-        endpoint = "/api/firewall/alias/search_item"
-        if not await self.is_endpoint_available(endpoint):
-            _LOGGER.debug("Firewall alias endpoint not available")
+        alias_search_endpoint = "/api/firewall/alias/search_item"
+        if not await self.is_endpoint_available(alias_search_endpoint):
+            _LOGGER.debug("Firewall alias search endpoint unavailable")
             return False
 
-        alias_list_resp = await self._safe_dict_get(endpoint)
+        alias_list_resp = await self._safe_dict_get(alias_search_endpoint)
         alias_list: list = alias_list_resp.get("rows", [])
         if not isinstance(alias_list, list):
             return False

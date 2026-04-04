@@ -57,9 +57,13 @@ class DHCPMixin(PyOPNsenseClientProtocol):
         """
         # [{'hostname': '?', 'ip-address': '<ip>', 'mac-address': '<mac>', 'interface': 'em0', 'expires': 1199, 'type': 'ethernet'}, ...]
         resolve_flag = "yes" if resolve_hostnames else "no"
-        arp_table_info = await self._safe_dict_get(
-            f"/api/diagnostics/interface/search_arp?resolve={resolve_flag}"
-        )
+        arp_endpoint = "/api/diagnostics/interface/search_arp"
+        if not await self.is_endpoint_available(arp_endpoint):
+            _LOGGER.debug("ARP endpoint unavailable")
+            return []
+
+        arp_endpoint_resolve = f"{arp_endpoint}?resolve={resolve_flag}"
+        arp_table_info = await self._safe_dict_get(arp_endpoint_resolve)
         # _LOGGER.debug(f"[get_arp_table] arp_table_info: {arp_table_info}")
         arp_table: list = arp_table_info.get("rows", [])
         # _LOGGER.debug(f"[get_arp_table] arp_table: {arp_table}")
@@ -122,7 +126,12 @@ class DHCPMixin(PyOPNsenseClientProtocol):
         Returns:
             dict[str, Any]: Interfaces setup for Kea.
         """
-        response = await self._safe_dict_get("/api/kea/dhcpv4/get")
+        endpoint = "/api/kea/dhcpv4/get"
+        if not await self.is_endpoint_available(endpoint):
+            _LOGGER.debug("Kea DHCP interface endpoint unavailable")
+            return {}
+
+        response = await self._safe_dict_get(endpoint)
         lease_interfaces: dict[str, Any] = {}
         general: dict[str, Any] = response.get("dhcpv4", {}).get("general", {})
         if general.get("enabled", "0") != "1":
@@ -150,17 +159,25 @@ class DHCPMixin(PyOPNsenseClientProtocol):
         response = await self._safe_dict_get("/api/kea/leases4/search")
         if not isinstance(response.get("rows", None), list):
             return []
-        res_resp = await self._safe_dict_get("/api/kea/dhcpv4/search_reservation")
-        if not isinstance(res_resp.get("rows", None), list):
-            res_info = []
+        reservation_endpoint = "/api/kea/dhcpv4/search_reservation"
+        res_info: list[Any] | None
+        if not await self.is_endpoint_available(reservation_endpoint):
+            _LOGGER.debug("Kea DHCP reservation endpoint unavailable")
+            res_info = None
         else:
-            res_info = res_resp.get("rows", [])
+            res_resp = await self._safe_dict_get(reservation_endpoint)
+            if not isinstance(res_resp.get("rows", None), list):
+                _LOGGER.debug("Kea DHCP reservation lookup returned invalid rows payload")
+                res_info = None
+            else:
+                res_info = res_resp.get("rows", [])
         reservations = {}
-        for res in res_info:
-            if not isinstance(res, MutableMapping):
-                continue
-            if res.get("hw_address", None):
-                reservations.update({res.get("hw_address"): res.get("ip_address", "")})
+        if res_info is not None:
+            for res in res_info:
+                if not isinstance(res, MutableMapping):
+                    continue
+                if res.get("hw_address", None):
+                    reservations.update({res.get("hw_address"): res.get("ip_address", "")})
         # _LOGGER.debug(f"[get_kea_dhcpv4_leases] reservations: {reservations}")
         leases_info: list = response.get("rows", [])
         # _LOGGER.debug(f"[get_kea_dhcpv4_leases] leases_info: {leases_info}")
@@ -183,7 +200,9 @@ class DHCPMixin(PyOPNsenseClientProtocol):
             )
             lease["if_descr"] = lease_info.get("if_descr", None)
             lease["if_name"] = lease_info.get("if_name", None)
-            if (
+            if res_info is None:
+                lease["type"] = "unknown"
+            elif (
                 lease_info.get("hwaddr", None)
                 and lease_info.get("hwaddr") in reservations
                 and reservations[lease_info.get("hwaddr")] == lease_info.get("address", None)
@@ -310,7 +329,11 @@ class DHCPMixin(PyOPNsenseClientProtocol):
         if not await self.is_endpoint_available("/api/dhcpv4/service/status"):
             _LOGGER.debug("ISC DHCP not installed")
             return []
-        response = await self._safe_dict_get("/api/dhcpv4/leases/search_lease")
+        lease_endpoint = "/api/dhcpv4/leases/search_lease"
+        if not await self.is_endpoint_available(lease_endpoint):
+            _LOGGER.debug("ISC DHCPv4 lease endpoint unavailable")
+            return []
+        response = await self._safe_dict_get(lease_endpoint)
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
             return []
@@ -366,7 +389,11 @@ class DHCPMixin(PyOPNsenseClientProtocol):
         if not await self.is_endpoint_available("/api/dhcpv6/service/status"):
             _LOGGER.debug("ISC DHCP not installed")
             return []
-        response = await self._safe_dict_get("/api/dhcpv6/leases/search_lease")
+        lease_endpoint = "/api/dhcpv6/leases/search_lease"
+        if not await self.is_endpoint_available(lease_endpoint):
+            _LOGGER.debug("ISC DHCPv6 lease endpoint unavailable")
+            return []
+        response = await self._safe_dict_get(lease_endpoint)
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
             return []

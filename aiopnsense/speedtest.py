@@ -31,12 +31,19 @@ class SpeedtestMixin(PyOPNsenseClientProtocol):
         Returns:
             dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
-        if not await self.is_endpoint_available("/api/speedtest/service/showrecent"):
+        show_recent_endpoint = "/api/speedtest/service/showrecent"
+        show_stat_endpoint = "/api/speedtest/service/showstat"
+
+        if not await self.is_endpoint_available(show_recent_endpoint):
             _LOGGER.debug("Speedtest not installed")
             return {"available": False}
 
-        show_recent = await self._safe_dict_get("/api/speedtest/service/showrecent")
-        show_stat = await self._safe_dict_get("/api/speedtest/service/showstat")
+        show_recent = await self._safe_dict_get(show_recent_endpoint)
+        if await self.is_endpoint_available(show_stat_endpoint):
+            show_stat = await self._safe_dict_get(show_stat_endpoint)
+        else:
+            _LOGGER.debug("Speedtest statistics endpoint unavailable")
+            show_stat = {}
 
         server_id, server_name = self._parse_recent_server(show_recent.get("server"))
         date = show_recent.get("date") if isinstance(show_recent.get("date"), str) else None

@@ -26,6 +26,7 @@ async def test_get_system_info(make_client: ClientType) -> None:
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"name": "foo"})
         info = await client.get_system_info()
         assert info["name"] == "foo"
@@ -103,6 +104,7 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client: ClientType)
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"datetime": "2026-03-07 12:00:00 EST"})
         parsed_tz = await client._get_opnsense_timezone()
         assert parsed_tz is not None
@@ -174,6 +176,7 @@ async def test_get_opnsense_timezone_supports_known_daylight_abbreviations(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"datetime": datetime_str})
         parsed_tz = await client._get_opnsense_timezone()
         assert parsed_tz is not None
@@ -268,6 +271,7 @@ async def test_reload_interface_and_certificates_and_gateways(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"message": "OK reload"})
         ok = await client.reload_interface("em0")
         assert ok is True
@@ -313,6 +317,7 @@ async def test_gateways_notices_and_close_notice_all(make_client: ClientType) ->
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={"items": [{"name": "gw1", "status_translated": "OK"}]}
         )
@@ -862,6 +867,7 @@ async def test_system_actions_and_notice_closing_failure_paths(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"status": "failed"})
         assert await client.system_reboot() is False
         assert await client.system_halt() is None
@@ -880,6 +886,56 @@ async def test_system_actions_and_notice_closing_failure_paths(
         )
         client._safe_dict_post = AsyncMock(side_effect=[{"status": "ok"}, {"status": "failed"}])
         assert await client.close_notice("all") is False
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_version_switched_system_endpoints_fail_closed(make_client: ClientType) -> None:
+    """Switched system endpoints should degrade without unsupported fetches.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates fail-closed behavior for switched system endpoints.
+    """
+    client, session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_get = AsyncMock()
+        client._safe_list_get = AsyncMock()
+
+        assert await client.get_system_info() == {}
+        assert await client.get_device_unique_id() is None
+        assert await client.get_carp() == {
+            "interfaces": [],
+            "status_summary": {
+                "state": "unknown",
+                "enabled": False,
+                "maintenance_mode": False,
+                "demotion": 0,
+                "status_message": "",
+                "vip_count": 0,
+                "master_count": 0,
+                "backup_count": 0,
+                "other_count": 0,
+                "interfaces": [],
+                "vips": [],
+            },
+        }
+        assert await client.get_notices() == {
+            "pending_notices_present": False,
+            "pending_notices": [],
+        }
+        assert await client.close_notice("all") is False
+        assert await client.get_certificates() == {}
+        tz = await client._get_opnsense_timezone()
+        now = datetime.now().astimezone()
+        assert tz.utcoffset(now) == client._get_local_timezone().utcoffset(now)
+        session.post.assert_not_called()
+        client._safe_dict_get.assert_not_awaited()
+        client._safe_list_get.assert_not_awaited()
     finally:
         await client.async_close()
 
@@ -918,5 +974,83 @@ async def test_get_certificates_handles_non_list_and_missing_description(
         certs = await client.get_certificates()
         assert list(certs) == ["cert-ok"]
         assert certs["cert-ok"]["in_use"] is False
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_system_branches_for_carp_candidate_and_notice_paths(make_client: ClientType) -> None:
+    """Exercise additional CARP helper and notice-iteration branches.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates CARP candidate and notice iteration branch behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        parsed = client._parse_carp_vip_rows(
+            [
+                "invalid-row",
+                {"mode": "other", "status": "master"},
+                {"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"},
+            ]
+        )
+        assert len(parsed) == 1
+        assert parsed[0]["status"] == "DISABLED"
+
+        settings = [{"interface": "wan", "vhid": "1", "subnet": "1.2.3.4"}]
+        indexes = client._build_carp_settings_indexes(settings)
+        assert (
+            client._find_carp_settings_match(
+                {"interface": "wan", "vhid": "1", "subnet": "1.2.3.4"},
+                indexes,
+            )
+            is not None
+        )
+
+        client.is_endpoint_available = AsyncMock(return_value=False)
+        vip_status_raw, merged = await client._fetch_and_merge_carp_vips()
+        assert vip_status_raw == {}
+        assert merged == []
+
+        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]
+            }
+        )
+        vip_status_raw, merged = await client._fetch_and_merge_carp_vips()
+        assert isinstance(vip_status_raw, dict)
+        assert len(merged) == 1
+
+        client.is_endpoint_available = AsyncMock(side_effect=[True, True])
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {"rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]},
+                ["bad-settings-payload"],
+            ]
+        )
+        _vip_status_raw, merged = await client._fetch_and_merge_carp_vips()
+        assert len(merged) == 1
+
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "n1": {"statusCode": 2, "message": "resolved"},
+                "n2": {"statusCode": 1, "message": "pending"},
+            }
+        )
+        notices = await client.get_notices()
+        assert notices["pending_notices_present"] is True
+        assert len(notices["pending_notices"]) == 1
+
+        client._safe_dict_post = AsyncMock(return_value={"status": "ok"})
+        assert await client.close_notice("n2") is True
+
+        tz = await client._get_opnsense_timezone("")
+        now = datetime.now().astimezone()
+        assert tz.utcoffset(now) == client._get_local_timezone().utcoffset(now)
     finally:
         await client.async_close()

@@ -17,6 +17,7 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client) -> None:
     """The DNSBL search response should be normalized into a UUID-keyed mapping."""
     client, _session = make_mock_session_client(make_client)
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={
                 "rows": [
@@ -34,6 +35,7 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client) -> None:
             "dnsbl1": {"uuid": "dnsbl1", "enabled": "1"},
             "dnsbl2": {"uuid": "dnsbl2", "enabled": "0"},
         }
+        client.is_endpoint_available.assert_awaited_once_with("/api/unbound/settings/search_dnsbl")
         client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/search_dnsbl")
     finally:
         await client.async_close()
@@ -47,11 +49,38 @@ async def test_get_unbound_blocklist_handles_empty_or_invalid_responses(
     """Malformed or empty DNSBL responses should normalize to an empty mapping."""
     client = make_client()
     try:
+        client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value=api_response)
 
         result = await client.get_unbound_blocklist()
 
         assert result == {}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_unbound_blocklist_returns_empty_when_endpoint_unavailable(
+    make_client: ClientType,
+) -> None:
+    """When DNSBL endpoint is unavailable, blocklist retrieval should fail closed.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates fail-closed DNSBL lookup behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_get = AsyncMock()
+
+        result = await client.get_unbound_blocklist()
+
+        assert result == {}
+        client.is_endpoint_available.assert_awaited_once_with("/api/unbound/settings/search_dnsbl")
+        client._safe_dict_get.assert_not_awaited()
     finally:
         await client.async_close()
 

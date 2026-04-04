@@ -19,7 +19,12 @@ class UnboundMixin(PyOPNsenseClientProtocol):
         Returns:
             dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
-        dnsbl_raw = await self._safe_dict_get("/api/unbound/settings/search_dnsbl")
+        dnsbl_endpoint = "/api/unbound/settings/search_dnsbl"
+        if not await self.is_endpoint_available(dnsbl_endpoint):
+            _LOGGER.debug("Unbound DNSBL endpoint unavailable")
+            return {}
+
+        dnsbl_raw = await self._safe_dict_get(dnsbl_endpoint)
         if not isinstance(dnsbl_raw, MutableMapping):
             return {}
         dnsbl_rows = dnsbl_raw.get("rows", [])
