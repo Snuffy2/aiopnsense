@@ -22,6 +22,12 @@ dynamic = ["version"]
 Homepage = "https://github.com/Snuffy2/aiopnsense"
 Repository = "https://github.com/Snuffy2/aiopnsense"
 
+[project.optional-dependencies]
+docs = [
+    "sphinx>=8,<9",
+    "furo>=2024.8.6",
+]
+
 [dependency-groups]
 lint = [
     "aiohttp",
