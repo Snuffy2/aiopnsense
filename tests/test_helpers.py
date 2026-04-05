@@ -1,6 +1,6 @@
 """Tests for `aiopnsense.helpers` utility and decorator helpers."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Callable, NoReturn
 
 import aiohttp
@@ -72,7 +72,7 @@ def test_dict_get() -> None:
 
 def test_timestamp_to_datetime() -> None:
     """Convert timestamp integers to datetime objects, handling None."""
-    ts = int(datetime.now(tz=timezone.utc).timestamp())
+    ts = int(datetime.now(tz=UTC).timestamp())
     dt = aiopnsense_helpers.timestamp_to_datetime(ts)
     assert isinstance(dt, datetime)
     assert dt.tzinfo is not None
