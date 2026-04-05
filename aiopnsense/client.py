@@ -75,6 +75,8 @@ class OPNsenseClient(
 
     async def validate(self) -> None:
         """Validate connectivity, authentication, and minimum firmware support.
+           Note that this will throw errors, regardless of what self._throw_errors is set to.
+
 
         Raises:
             OPNsenseInvalidURL: Raised when the configured URL is invalid.
