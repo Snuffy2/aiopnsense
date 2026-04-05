@@ -1,5 +1,18 @@
 # Changelog
 
+## [v1.0.7](https://github.com/Snuffy2/aiopnsense/tree/v1.0.7) (2026-04-05)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.6...v1.0.7)
+
+**Bug Fixes**
+
+- Fix conf.py [\#32](https://github.com/Snuffy2/aiopnsense/pull/32) ([Snuffy2](https://github.com/Snuffy2))
+
+**Documentation**
+
+- Refine changelog [\#33](https://github.com/Snuffy2/aiopnsense/pull/33) ([Snuffy2](https://github.com/Snuffy2))
+- Further documentation refinement [\#31](https://github.com/Snuffy2/aiopnsense/pull/31) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.0.6](https://github.com/Snuffy2/aiopnsense/tree/v1.0.6) (2026-04-05)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.5...v1.0.6)
