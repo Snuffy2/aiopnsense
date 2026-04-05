@@ -33,10 +33,3 @@ test environments.
            await client.validate()
 
    asyncio.run(main())
-
-Operational recommendation
---------------------------
-
-Document the expected authentication prerequisites for each installation method and keep
-certificate verification enabled unless you are working in a controlled environment with
-private CA or self-signed certificates.

@@ -21,9 +21,3 @@ To work on the documentation only, install the docs extra instead:
 .. code-block:: bash
 
    pip install -e .[docs]
-
-Python Version
---------------
-
-The package metadata currently declares Python ``>=3.14``. Confirm that your local
-runtime and CI environment match the package requirement before publishing docs.
