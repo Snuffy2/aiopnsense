@@ -1,13 +1,11 @@
 Client API
 ==========
 
-.. automodule:: aiopnsense.client
-   :show-inheritance:
+``OPNsenseClient`` is the public entry point for the library.
 
 Primary client
 --------------
 
-.. autoclass:: aiopnsense.client.OPNsenseClient
+.. autoclass:: aiopnsense.OPNsenseClient
    :members:
-   :undoc-members:
    :show-inheritance:

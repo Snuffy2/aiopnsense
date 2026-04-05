@@ -1,0 +1,5 @@
+user=Snuffy2
+project=aiopnsense
+output=docs/source/changelog.md
+unreleased=false
+date-format=%Y-%m-%d

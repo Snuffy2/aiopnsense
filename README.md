@@ -4,10 +4,13 @@
 [![GitHub Release Date][release-date-shield]][releases]
 [![GitHub Activity][commits-shield]][commits]
 [![Coverage][coverage-shield]][coverage]
+[![Documentation][docs-shield]][docs]
 [![License][license-shield]](LICENSE)
 
 
 `aiopnsense` is an async Python client library for [OPNsense](https://opnsense.org).
+
+Documentation: <https://aiopnsense.readthedocs.io>
 
 **Requires OPNsense Firmware 26.1.1+**
 
@@ -130,6 +133,8 @@ prek run --all-files
 [commits-shield]: https://img.shields.io/github/last-commit/Snuffy2/aiopnsense?style=for-the-badge
 [commits]: https://github.com/Snuffy2/aiopnsense/commits/main
 [license-shield]: https://img.shields.io/github/license/Snuffy2/aiopnsense.svg?style=for-the-badge
+[docs]: https://aiopnsense.readthedocs.io
+[docs-shield]: https://app.readthedocs.org/projects/aiopnsense/badge/?version=stable&style=for-the-badge
 [release-date-shield]: https://img.shields.io/github/release-date/Snuffy2/aiopnsense?display_date=published_at&style=for-the-badge
 [releases-shield]: https://img.shields.io/github/v/release/Snuffy2/aiopnsense?style=for-the-badge
 [releases]: https://github.com/Snuffy2/aiopnsense/releases

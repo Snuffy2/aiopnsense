@@ -20,10 +20,11 @@ extensions: list[str] = [
     "sphinx.ext.doctest",
     "sphinx.ext.intersphinx",
     "sphinx.ext.viewcode",
+    "myst_parser",
 ]
 
 templates_path: list[str] = ["_templates"]
-exclude_patterns: list[str] = ["_build"]
+exclude_patterns: list[str] = ["_build", "_generated"]
 
 autosummary_generate = True
 autodoc_typehints = "description"
@@ -34,7 +35,7 @@ napoleon_numpy_docstring = False
 napoleon_use_param = True
 napoleon_use_rtype = True
 
-html_theme: str = "furo"
+html_theme: str = "sphinx_rtd_theme"
 html_title: str = "aiopnsense documentation"
 
 intersphinx_mapping: dict[str, tuple[str, None]] = {
