@@ -4,11 +4,11 @@ rev = "v6.0.0"
 
 [[repos.hooks]]
 id = "trailing-whitespace"
-exclude = ".*\\.md$"
+exclude = "(.*\\.md$|^docs/_build/)"
 
 [[repos.hooks]]
 id = "end-of-file-fixer"
-exclude = ".*\\.md$"
+exclude = "(.*\\.md$|^docs/_build/)"
 
 [[repos.hooks]]
 id = "check-yaml"
@@ -18,6 +18,7 @@ id = "check-toml"
 
 [[repos.hooks]]
 id = "check-added-large-files"
+exclude = "^docs/_build/"
 
 [[repos]]
 repo = "https://github.com/rhysd/actionlint"
@@ -36,6 +37,7 @@ rev = "v2.4.2"
 [[repos.hooks]]
 id = "codespell"
 args = ["--ignore-words-list=hass,IST"]
+exclude = "^docs/_build/"
 
 [[repos]]
 repo = "https://github.com/pre-commit/mirrors-mypy"
