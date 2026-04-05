@@ -1,10 +1,29 @@
-"""aiopnsense package to manage OPNsense from HA."""
+"""aiopnsense package to manage OPNsense."""
 
 from .client import OPNsenseClient
-from .exceptions import UnknownFirmware, VoucherServerError
+from .exceptions import (
+    OPNsenseBelowMinFirmware,
+    OPNsenseConnectionError,
+    OPNsenseError,
+    OPNsenseInvalidAuth,
+    OPNsenseInvalidURL,
+    OPNsensePrivilegeMissing,
+    OPNsenseSSLError,
+    OPNsenseTimeoutError,
+    OPNsenseUnknownFirmware,
+    OPNsenseVoucherServerError,
+)
 
 __all__ = [
+    "OPNsenseBelowMinFirmware",
     "OPNsenseClient",
-    "UnknownFirmware",
-    "VoucherServerError",
+    "OPNsenseConnectionError",
+    "OPNsenseError",
+    "OPNsenseInvalidAuth",
+    "OPNsenseInvalidURL",
+    "OPNsensePrivilegeMissing",
+    "OPNsenseSSLError",
+    "OPNsenseTimeoutError",
+    "OPNsenseUnknownFirmware",
+    "OPNsenseVoucherServerError",
 ]

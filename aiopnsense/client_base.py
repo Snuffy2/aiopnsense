@@ -46,14 +46,18 @@ class ClientBaseMixin:
     def _validate_optional_throw_error_flag(
         value: None,
         parameter_name: str,
-    ) -> None: ...
+    ) -> None:
+        """Type overload for optional ``throw_errors``-style arguments set to ``None``."""
+        ...
 
     @staticmethod
     @overload
     def _validate_optional_throw_error_flag(
         value: bool,
         parameter_name: str,
-    ) -> bool: ...
+    ) -> bool:
+        """Type overload for optional ``throw_errors``-style arguments set to ``bool``."""
+        ...
 
     @staticmethod
     def _validate_optional_throw_error_flag(

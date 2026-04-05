@@ -5,16 +5,57 @@ from collections.abc import Callable, MutableMapping
 import contextlib
 from datetime import datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient, client_base as pyopnsense_client_base
+from aiopnsense import (
+    OPNsenseClient,
+    client as pyopnsense_client,
+    client_base as pyopnsense_client_base,
+)
+from aiopnsense.const import OPNSENSE_LTD_FIRMWARE, OPNSENSE_MIN_FIRMWARE
+from aiopnsense.exceptions import (
+    OPNsenseBelowMinFirmware,
+    OPNsenseConnectionError,
+    OPNsenseInvalidAuth,
+    OPNsenseInvalidURL,
+    OPNsensePrivilegeMissing,
+    OPNsenseSSLError,
+    OPNsenseTimeoutError,
+    OPNsenseUnknownFirmware,
+)
 from tests.conftest import FakeClientSession, FakeResponse, make_mock_session_client
 
 MakeClientFactory = Callable[..., OPNsenseClient]
 FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]
+
+
+class _TestClientSSLError(aiohttp.ClientSSLError):
+    """Minimal ``ClientSSLError`` subclass used for validation tests."""
+
+    def __init__(self) -> None:
+        """Initialize the synthetic SSL error instance."""
+        Exception.__init__(self, "ssl")
+
+
+def _client_response_error(status: int) -> aiohttp.ClientResponseError:
+    """Build a minimal ``ClientResponseError`` for validation tests.
+
+    Args:
+        status (int): HTTP status code exposed by the error.
+
+    Returns:
+        aiohttp.ClientResponseError: Response error instance with the requested status.
+    """
+    return aiohttp.ClientResponseError(
+        request_info=MagicMock(),
+        history=(),
+        status=status,
+        message="boom",
+        headers={},
+    )
 
 
 @pytest.mark.asyncio
@@ -146,6 +187,112 @@ async def test_normalize_timeout_seconds(
     client, _session = make_mock_session_client(make_client)
     try:
         assert client._normalize_timeout_seconds(timeout_seconds) == expected
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "expected_exception"),
+    [
+        (aiohttp.InvalidURL("http://bad"), OPNsenseInvalidURL),
+        (_TestClientSSLError(), OPNsenseSSLError),
+        (TimeoutError("timeout"), OPNsenseTimeoutError),
+        (aiohttp.ServerTimeoutError("server-timeout"), OPNsenseTimeoutError),
+        (_client_response_error(401), OPNsenseInvalidAuth),
+        (_client_response_error(403), OPNsensePrivilegeMissing),
+        (_client_response_error(500), OPNsenseConnectionError),
+        (aiohttp.ClientConnectionError("connection"), OPNsenseConnectionError),
+        (None, OPNsenseUnknownFirmware),
+    ],
+)
+@pytest.mark.asyncio
+async def test_validate_maps_failures_and_restores_throw_errors(
+    side_effect: BaseException | None,
+    expected_exception: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify ``validate`` maps transport failures and restores state.
+
+    Args:
+        side_effect (BaseException | None): Firmware lookup result or exception to inject.
+        expected_exception (type[Exception]): Public exception expected from ``validate``.
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts exception mapping and state restoration behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._throw_errors = False
+    try:
+        if side_effect is None:
+            get_host_firmware_version = AsyncMock(return_value=None)
+        else:
+            get_host_firmware_version = AsyncMock(side_effect=side_effect)
+
+        monkeypatch.setattr(
+            client,
+            "get_host_firmware_version",
+            get_host_firmware_version,
+            raising=False,
+        )
+
+        with pytest.raises(expected_exception):
+            await client.validate()
+
+        assert client._throw_errors is False
+        get_host_firmware_version.assert_awaited_once()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_validate_handles_firmware_thresholds_and_restores_throw_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify ``validate`` enforces firmware thresholds and preserves state.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts minimum-version rejection, warning emission, and success behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._throw_errors = False
+    try:
+        get_host_firmware_version = AsyncMock(
+            side_effect=["24.7", OPNSENSE_MIN_FIRMWARE, OPNSENSE_LTD_FIRMWARE]
+        )
+        logger_warning = MagicMock()
+
+        monkeypatch.setattr(
+            client,
+            "get_host_firmware_version",
+            get_host_firmware_version,
+            raising=False,
+        )
+        monkeypatch.setattr(pyopnsense_client._LOGGER, "warning", logger_warning)
+
+        with pytest.raises(OPNsenseBelowMinFirmware):
+            await client.validate()
+        assert client._throw_errors is False
+
+        await client.validate()
+        logger_warning.assert_called_once_with(
+            "OPNsense Firmware of %s is below the recommended >= %s. aiopnsense will work, but there may be some missing features.",
+            OPNSENSE_MIN_FIRMWARE,
+            OPNSENSE_LTD_FIRMWARE,
+        )
+        assert client._throw_errors is False
+
+        await client.validate()
+        assert logger_warning.call_count == 1
+        assert client._throw_errors is False
+        assert get_host_firmware_version.await_count == 3
     finally:
         await client.async_close()
 
@@ -345,6 +492,42 @@ async def test_opnsenseclient_async_close(make_client: MakeClientFactory) -> Non
         assert monitor.cancelled()
         assert worker1.cancelled()
         assert worker2.cancelled()
+        assert future.done()
+        assert isinstance(future.exception(), asyncio.CancelledError)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_opnsenseclient_async_context_manager_closes_background_tasks(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify ``async with`` cleanup delegates to ``async_close``.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts context manager cleanup behavior.
+    """
+    client, _session = make_mock_session_client(make_client, username="user", password="pass")
+    client.validate = AsyncMock()
+    try:
+        loop = asyncio.get_running_loop()
+        monitor = loop.create_task(asyncio.sleep(60))
+        worker = loop.create_task(asyncio.sleep(60))
+        client._queue_monitor = monitor
+        client._workers = [worker]
+        client._request_queue = asyncio.Queue()
+        future = loop.create_future()
+        await client._request_queue.put(("get", "/api/test", None, future, "test"))
+
+        async with client as managed_client:
+            assert managed_client is client
+            client.validate.assert_awaited_once()
+
+        assert monitor.cancelled()
+        assert worker.cancelled()
         assert future.done()
         assert isinstance(future.exception(), asyncio.CancelledError)
     finally:
