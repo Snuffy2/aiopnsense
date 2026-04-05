@@ -1,5 +1,4 @@
-Firmware API
+Firmware
 ============
 
-.. autoclass:: aiopnsense.firmware.FirmwareMixin
-   :members:
+.. opnsense-client-api:: aiopnsense.firmware.FirmwareMixin

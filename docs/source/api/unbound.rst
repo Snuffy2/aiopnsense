@@ -1,5 +1,4 @@
-Unbound API
+Unbound
 ===========
 
-.. autoclass:: aiopnsense.unbound.UnboundMixin
-   :members:
+.. opnsense-client-api:: aiopnsense.unbound.UnboundMixin

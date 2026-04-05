@@ -1,5 +1,4 @@
-Vouchers API
+Vouchers
 ============
 
-.. autoclass:: aiopnsense.vouchers.VouchersMixin
-   :members:
+.. opnsense-client-api:: aiopnsense.vouchers.VouchersMixin

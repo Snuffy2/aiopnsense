@@ -1,5 +1,4 @@
-Telemetry API
+Telemetry
 =============
 
-.. autoclass:: aiopnsense.telemetry.TelemetryMixin
-   :members:
+.. opnsense-client-api:: aiopnsense.telemetry.TelemetryMixin

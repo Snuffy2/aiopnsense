@@ -1,5 +1,4 @@
-Services API
+Services
 ============
 
-.. autoclass:: aiopnsense.services.ServicesMixin
-   :members:
+.. opnsense-client-api:: aiopnsense.services.ServicesMixin

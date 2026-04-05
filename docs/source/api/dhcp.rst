@@ -1,5 +1,4 @@
-DHCP and ARP API
+DHCP and ARP
 ================
 
-.. autoclass:: aiopnsense.dhcp.DHCPMixin
-   :members:
+.. opnsense-client-api:: aiopnsense.dhcp.DHCPMixin

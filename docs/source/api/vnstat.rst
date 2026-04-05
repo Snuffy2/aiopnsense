@@ -1,5 +1,4 @@
-vnStat API
+vnStat
 ==========
 
-.. autoclass:: aiopnsense.vnstat.VnstatMixin
-   :members:
+.. opnsense-client-api:: aiopnsense.vnstat.VnstatMixin

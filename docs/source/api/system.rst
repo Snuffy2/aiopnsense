@@ -1,5 +1,4 @@
-System API
+System
 ==========
 
-.. autoclass:: aiopnsense.system.SystemMixin
-   :members:
+.. opnsense-client-api:: aiopnsense.system.SystemMixin

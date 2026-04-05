@@ -1,6 +1,7 @@
 """Tests for `aiopnsense.helpers` utility and decorator helpers."""
 
 from datetime import UTC, datetime
+import inspect
 from typing import Any, Callable, NoReturn
 
 import aiohttp
@@ -152,6 +153,30 @@ async def test_log_errors_decorator_re_raise_and_suppress() -> None:
     d2 = Dummy(throw_errors=True)
     with pytest.raises(RuntimeError):
         await d2.boom()
+
+
+def test_log_errors_preserves_wrapped_metadata() -> None:
+    """Verify ``_log_errors`` preserves wrapped method metadata for autodoc."""
+
+    class Dummy:
+        """Test helper exposing a decorated async echo method for autodoc checks."""
+
+        @aiopnsense_helpers._log_errors
+        async def boom(self, value: str) -> str:
+            """Return the provided value unchanged.
+
+            Args:
+                value (str): Input value to echo.
+
+            Returns:
+                str: Echoed input value.
+            """
+            return value
+
+    assert Dummy.boom.__name__ == "boom"
+    assert Dummy.boom.__doc__ is not None
+    assert "Return the provided value unchanged." in Dummy.boom.__doc__
+    assert str(inspect.signature(Dummy.boom)) == "(self, value: str) -> str"
 
 
 @pytest.mark.asyncio
