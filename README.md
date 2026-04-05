@@ -7,12 +7,7 @@
 [![Documentation][docs-shield]][docs]
 [![License][license-shield]](LICENSE)
 
-
 `aiopnsense` is an async Python client library for [OPNsense](https://opnsense.org).
-
-Documentation: <https://aiopnsense.readthedocs.io>
-
-**Requires OPNsense Firmware 26.1.1+**
 
 ## What this library does
 
@@ -31,100 +26,17 @@ The client currently includes helpers for:
 - OpenVPN and WireGuard status plus VPN instance toggling
 - vnStat metrics, captive portal vouchers, and speed test data
 
-## Installation
+## Requirements
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install aiopnsense
-```
+* ### Requires OPNsense Firmware >= 25.1
 
-## OPNsense documentation
+* #### Recommended OPNsense Firmware >= 26.1.1
 
-- OPNsense API reference: <https://docs.opnsense.org/development/api.html>
-- OPNsense API usage guide: <https://docs.opnsense.org/development/how-tos/api.html>
-- Creating and maintaining API keys: <https://docs.opnsense.org/manual/how-tos/user-local.html#creating-and-maintaining-api-keys>
+  - For firmware < 26.1.1, the `Firewall and NAT` methods will return empty data.
 
-In practice, use the generated OPNsense API key as the `username` and the generated secret as the `password` when constructing `OPNsenseClient`.
+## Documentation
 
-## Simple usage
-
-The client expects an existing `aiohttp.ClientSession`. Most applications create one session for the lifetime of the integration or service and reuse it for all requests.
-
-Call `await client.validate()` when you want an explicit startup check before reusing a long-lived client. If you prefer context-manager lifecycle handling, `async with client:` validates on entry and calls `async_close()` on exit.
-
-### Read system state and telemetry
-
-```python
-import asyncio
-import aiohttp
-from aiopnsense import OPNsenseClient
-
-async def main() -> None:
-    async with aiohttp.ClientSession() as session:
-        client = OPNsenseClient(
-            url="https://opnsense.example.com",
-            username="YOUR_API_KEY",
-            password="YOUR_API_SECRET",
-            session=session,
-        )
-        await client.validate()
-
-        system_info = await client.get_system_info()
-        telemetry = await client.get_telemetry()
-
-        print(f"Firewall name: {system_info.get('name')}")
-        print(f"CPU telemetry: {telemetry.get('cpu')}")
-        print(f"Filesystem telemetry: {telemetry.get('filesystems')}")
-
-        await client.async_close()
-
-
-asyncio.run(main())
-```
-
-### Check firmware or control a service with `async with`
-
-```python
-import asyncio
-import aiohttp
-from aiopnsense import OPNsenseClient
-
-async def main() -> None:
-    async with aiohttp.ClientSession() as session:
-        async with OPNsenseClient(
-            url="https://opnsense.example.com",
-            username="YOUR_API_KEY",
-            password="YOUR_API_SECRET",
-            session=session,
-            opts={"verify_ssl": True},
-        ) as client:
-            firmware = await client.get_firmware_update_info()
-            services = await client.get_services()
-
-            print(f"Current firmware: {firmware.get('product', {}).get('product_version')}")
-            print(f"Available services: {[service.get('name') for service in services[:5]]}")
-
-            restarted = await client.restart_service_if_running("unbound")
-            print(f"Restarted unbound: {restarted}")
-
-asyncio.run(main())
-```
-
-If the OPNsense router uses a private CA or self-signed certificate, pass `opts={"verify_ssl": False}`.
-
-## Development
-
-Install the package in editable mode with test dependencies and run:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install --group dev -e .
-pytest
-prek run --all-files
-```
+- Read the Docs: <https://aiopnsense.readthedocs.io>
 
 ## Origin and Purpose
 
