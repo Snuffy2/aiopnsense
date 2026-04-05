@@ -26,6 +26,7 @@ async def test_get_system_info(make_client: ClientType) -> None:
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"name": "foo"})
         info = await client.get_system_info()
@@ -271,6 +272,7 @@ async def test_reload_interface_and_certificates_and_gateways(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"message": "OK reload"})
         ok = await client.reload_interface("em0")
@@ -317,6 +319,7 @@ async def test_gateways_notices_and_close_notice_all(make_client: ClientType) ->
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={"items": [{"name": "gw1", "status_translated": "OK"}]}
@@ -867,6 +870,7 @@ async def test_system_actions_and_notice_closing_failure_paths(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"status": "failed"})
         assert await client.system_reboot() is False
@@ -902,6 +906,7 @@ async def test_version_switched_system_endpoints_fail_closed(make_client: Client
     """
     client, session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         client._safe_list_get = AsyncMock()
@@ -979,6 +984,61 @@ async def test_get_certificates_handles_non_list_and_missing_description(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_snake_case", "expected_info", "expected_dismiss", "expected_reload"),
+    [
+        (
+            True,
+            "/api/diagnostics/system/system_information",
+            "/api/core/system/dismiss_status",
+            "/api/interfaces/overview/reload_interface/em0",
+        ),
+        (
+            False,
+            "/api/diagnostics/system/systemInformation",
+            "/api/core/system/dismissStatus",
+            "/api/interfaces/overview/reloadInterface/em0",
+        ),
+    ],
+)
+async def test_system_switched_endpoints_follow_selected_case(
+    make_client: ClientType,
+    use_snake_case: bool,
+    expected_info: str,
+    expected_dismiss: str,
+    expected_reload: str,
+) -> None:
+    """Verify switched system endpoints follow the selected endpoint style.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
+        expected_info (str): Expected system information endpoint path.
+        expected_dismiss (str): Expected notice-dismiss endpoint path.
+        expected_reload (str): Expected interface-reload endpoint path.
+
+    Returns:
+        None: This test validates system endpoint selection behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = use_snake_case
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value={"name": "fw"})
+        client._safe_dict_post = AsyncMock(side_effect=[{"status": "ok"}, {"message": "OK reload"}])
+
+        await client.get_system_info()
+        await client.close_notice("notice-1")
+        await client.reload_interface("em0")
+
+        client._safe_dict_get.assert_awaited_once_with(expected_info)
+        assert client._safe_dict_post.await_args_list[0].args[0] == expected_dismiss
+        assert client._safe_dict_post.await_args_list[1].args[0] == expected_reload
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_system_branches_for_carp_candidate_and_notice_paths(make_client: ClientType) -> None:
     """Exercise additional CARP helper and notice-iteration branches.
 
@@ -990,6 +1050,7 @@ async def test_system_branches_for_carp_candidate_and_notice_paths(make_client: 
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         parsed = client._parse_carp_vip_rows(
             [
                 "invalid-row",

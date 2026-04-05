@@ -5,12 +5,14 @@ from collections.abc import MutableMapping
 from datetime import datetime
 import inspect
 import json
-from typing import Any, overload
+from typing import Any, cast, overload
 from urllib.parse import urlparse
 import warnings
 
 import aiohttp
+import awesomeversion
 
+from ._typing import AiopnsenseClientProtocol
 from .const import DEFAULT_CACHE_TTL_SECONDS, DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .helpers import _LOGGER
 
@@ -139,6 +141,7 @@ class ClientBaseMixin:
             if throw_errors is _UNSET:
                 self._throw_errors = validated_initial
         self._firmware_version: str | None = None
+        self._use_snake_case: bool | None = None
         self._endpoint_availability: dict[str, bool] = {}
         self._endpoint_checked_at: dict[str, datetime] = {}
         self._endpoint_cache_ttl_seconds = DEFAULT_CACHE_TTL_SECONDS
@@ -216,6 +219,54 @@ class ClientBaseMixin:
             int: Current number of API queries performed by the client.
         """
         return self._rest_api_query_count
+
+    async def set_use_snake_case(self) -> None:
+        """Set the endpoint naming mode based on the detected firmware version.
+
+        Returns:
+            None: This method updates internal client state only.
+        """
+        firmware_version = await cast(
+            AiopnsenseClientProtocol,
+            self,
+        ).get_host_firmware_version()
+        self._use_snake_case = True
+        if firmware_version is None:
+            _LOGGER.debug("Using snake_case endpoints because firmware version is unavailable")
+            return
+        try:
+            if awesomeversion.AwesomeVersion(firmware_version) < awesomeversion.AwesomeVersion(
+                "25.7"
+            ):
+                _LOGGER.debug("Using camelCase endpoints for OPNsense < 25.7")
+                self._use_snake_case = False
+            else:
+                _LOGGER.debug("Using snake_case endpoints for OPNsense >= 25.7")
+        except (
+            awesomeversion.exceptions.AwesomeVersionCompareException,
+            TypeError,
+            ValueError,
+        ) as err:
+            _LOGGER.debug(
+                "Unable to compare firmware version %s for endpoint style. %s: %s",
+                firmware_version,
+                type(err).__name__,
+                err,
+            )
+
+    async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str:
+        """Return the firmware-appropriate endpoint path.
+
+        Args:
+            snake_case_path (str): Endpoint path for newer snake_case firmware.
+            camel_case_path (str): Endpoint path for older camelCase firmware.
+
+        Returns:
+            str: Selected endpoint path for the active firmware family.
+        """
+        if self._use_snake_case is None:
+            await self.set_use_snake_case()
+        return snake_case_path if self._use_snake_case is not False else camel_case_path
 
     async def _get_from_stream(self, path: str) -> dict[str, Any]:
         """Queue a streaming GET request and return the parsed payload.

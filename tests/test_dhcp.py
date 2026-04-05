@@ -25,6 +25,7 @@ async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client: ClientType) 
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=True)
         # _get_kea_interfaces returns mapping and kea leases: one valid
         client._safe_dict_get = AsyncMock(
@@ -293,6 +294,7 @@ async def test_get_isc_dhcpv4_and_v6_parsing(make_client: ClientType) -> None:
     """
     client, _ = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         local_tz = datetime.now().astimezone().tzinfo
         assert local_tz is not None
         client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
@@ -457,6 +459,7 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=True)
         future_ts = int(datetime.now(tz=timezone.utc).timestamp()) + 3600
         past_ts = int(datetime.now(tz=timezone.utc).timestamp()) - 3600
@@ -614,6 +617,7 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         local_tz = datetime.now().astimezone().tzinfo
         assert local_tz is not None
         client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
@@ -676,6 +680,7 @@ async def test_version_switched_dhcp_endpoints_rows_empty_when_reservation_unava
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(side_effect=[True, False])
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
 
@@ -731,6 +736,7 @@ async def test_version_switched_kea_dhcpv4_returns_leases_when_reservation_unava
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(side_effect=[True, False])
         client._safe_dict_get = AsyncMock(
             return_value={
@@ -757,6 +763,66 @@ async def test_version_switched_kea_dhcpv4_returns_leases_when_reservation_unava
             client.is_endpoint_available.await_args_list[1].args[0]
             == "/api/kea/dhcpv4/search_reservation"
         )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_snake_case", "expected_kea", "expected_v4", "expected_v6"),
+    [
+        (
+            True,
+            "/api/kea/dhcpv4/search_reservation",
+            "/api/dhcpv4/leases/search_lease",
+            "/api/dhcpv6/leases/search_lease",
+        ),
+        (
+            False,
+            "/api/kea/dhcpv4/searchReservation",
+            "/api/dhcpv4/leases/searchLease",
+            "/api/dhcpv6/leases/searchLease",
+        ),
+    ],
+)
+async def test_dhcp_switched_endpoints_follow_selected_case(
+    make_client: ClientType,
+    use_snake_case: bool,
+    expected_kea: str,
+    expected_v4: str,
+    expected_v6: str,
+) -> None:
+    """Verify DHCP helpers choose snake_case or camelCase endpoints consistently.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
+        expected_kea (str): Expected reservation lookup endpoint path.
+        expected_v4 (str): Expected ISC DHCPv4 lease endpoint path.
+        expected_v6 (str): Expected ISC DHCPv6 lease endpoint path.
+
+    Returns:
+        None: This test validates DHCP endpoint selection behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = use_snake_case
+        local_tz = datetime.now().astimezone().tzinfo
+        assert local_tz is not None
+        client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
+        client.is_endpoint_available = AsyncMock(return_value=True)
+
+        client._safe_dict_get = AsyncMock(side_effect=[{"rows": []}, {"rows": []}])
+        await client._get_kea_dhcpv4_leases()
+        assert client._safe_dict_get.await_args_list[1].args[0] == expected_kea
+
+        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        await client._get_isc_dhcpv4_leases()
+        client._safe_dict_get.assert_awaited_once_with(expected_v4)
+
+        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        await client._get_isc_dhcpv6_leases()
+        client._safe_dict_get.assert_awaited_once_with(expected_v6)
     finally:
         await client.async_close()
 

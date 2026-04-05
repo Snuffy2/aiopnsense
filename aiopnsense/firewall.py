@@ -287,7 +287,10 @@ class FirewallMixin(AiopnsenseClientProtocol):
         Returns:
             bool: True when the toggle operation completes successfully; otherwise, False.
         """
-        alias_search_endpoint = "/api/firewall/alias/search_item"
+        alias_search_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/firewall/alias/search_item",
+            camel_case_path="/api/firewall/alias/searchItem",
+        )
         if not await self.is_endpoint_available(alias_search_endpoint):
             _LOGGER.debug("Firewall alias search endpoint unavailable")
             return False
@@ -306,7 +309,10 @@ class FirewallMixin(AiopnsenseClientProtocol):
         if not uuid:
             return False
         payload: dict[str, Any] = {}
-        url: str = f"/api/firewall/alias/toggle_item/{uuid}"
+        url: str = await self._get_endpoint_path(
+            snake_case_path=f"/api/firewall/alias/toggle_item/{uuid}",
+            camel_case_path=f"/api/firewall/alias/toggleItem/{uuid}",
+        )
         if toggle_on_off == "on":
             url = f"{url}/1"
         elif toggle_on_off == "off":

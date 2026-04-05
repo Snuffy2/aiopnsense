@@ -22,8 +22,14 @@ class VouchersMixin(AiopnsenseClientProtocol):
         Returns:
             list[dict[str, Any]]: List of normalized entries produced by this method.
         """
-        list_providers_endpoint = "/api/captiveportal/voucher/list_providers"
-        generate_vouchers_endpoint = "/api/captiveportal/voucher/generate_vouchers"
+        list_providers_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/captiveportal/voucher/list_providers",
+            camel_case_path="/api/captiveportal/voucher/listProviders",
+        )
+        generate_vouchers_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/captiveportal/voucher/generate_vouchers",
+            camel_case_path="/api/captiveportal/voucher/generateVouchers",
+        )
         if data.get("voucher_server", None):
             server = data.get("voucher_server")
         else:

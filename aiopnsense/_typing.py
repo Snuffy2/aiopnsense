@@ -10,6 +10,7 @@ class AiopnsenseClientProtocol(Protocol):
     """Structural typing contract used by split aiopnsense mixins."""
 
     _firmware_version: str | None
+    _use_snake_case: bool | None
     _endpoint_availability: dict[str, bool]
     _endpoint_checked_at: dict[str, datetime]
     _endpoint_cache_ttl_seconds: int
@@ -149,6 +150,28 @@ class AiopnsenseClientProtocol(Protocol):
 
         Returns:
             str | None: Normalized data returned by the related OPNsense endpoint.
+        """
+        ...
+
+    @abstractmethod
+    async def set_use_snake_case(self) -> None:
+        """Set firmware-specific endpoint naming behavior.
+
+        Returns:
+            None: This method updates internal client state only.
+        """
+        ...
+
+    @abstractmethod
+    async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str:
+        """Return the selected endpoint path for the current firmware family.
+
+        Args:
+            snake_case_path (str): Endpoint path for newer snake_case firmware.
+            camel_case_path (str): Endpoint path for older camelCase firmware.
+
+        Returns:
+            str: Selected endpoint path for the current firmware family.
         """
         ...
 

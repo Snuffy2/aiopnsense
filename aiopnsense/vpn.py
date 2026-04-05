@@ -38,14 +38,20 @@ class VPNMixin(AiopnsenseClientProtocol):
         openvpn: dict[str, Any] = {"servers": {}, "clients": {}}
 
         # Fetch data
-        sessions_endpoint = "/api/openvpn/service/search_sessions"
+        sessions_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/openvpn/service/search_sessions",
+            camel_case_path="/api/openvpn/service/searchSessions",
+        )
         if await self.is_endpoint_available(sessions_endpoint):
             sessions_info = await self._safe_dict_get(sessions_endpoint)
         else:
             _LOGGER.debug("OpenVPN sessions endpoint unavailable")
             sessions_info = {}
 
-        routes_endpoint = "/api/openvpn/service/search_routes"
+        routes_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/openvpn/service/search_routes",
+            camel_case_path="/api/openvpn/service/searchRoutes",
+        )
         if await self.is_endpoint_available(routes_endpoint):
             routes_info = await self._safe_dict_get(routes_endpoint)
         else:
@@ -562,9 +568,15 @@ class VPNMixin(AiopnsenseClientProtocol):
             return reconfigure.get("result", "") == "ok"
         if vpn_type == "wireguard":
             if clients_servers == "clients":
-                endpoint = f"/api/wireguard/client/toggle_client/{uuid}"
+                endpoint = await self._get_endpoint_path(
+                    snake_case_path=f"/api/wireguard/client/toggle_client/{uuid}",
+                    camel_case_path=f"/api/wireguard/client/toggleClient/{uuid}",
+                )
             elif clients_servers == "servers":
-                endpoint = f"/api/wireguard/server/toggle_server/{uuid}"
+                endpoint = await self._get_endpoint_path(
+                    snake_case_path=f"/api/wireguard/server/toggle_server/{uuid}",
+                    camel_case_path=f"/api/wireguard/server/toggleServer/{uuid}",
+                )
             else:
                 return False
             success = await self._safe_dict_post(endpoint)
