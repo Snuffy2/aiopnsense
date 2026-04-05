@@ -1,6 +1,9 @@
 Quickstart
 ==========
 
+The client expects an existing ``aiohttp.ClientSession``. Most applications create one
+session for the lifetime of the integration or service and reuse it for all requests.
+
 Minimal client setup
 --------------------
 
@@ -23,15 +26,12 @@ Minimal client setup
 
    asyncio.run(main())
 
-Guidance
---------
+Explicit validation
+-------------------
 
 Use ``async with`` for normal lifecycle management. Entering the client context already
 calls ``validate()``. Call ``await client.validate()`` yourself only when you want an
 explicit startup check before reusing a long-lived client outside the context manager.
-
-Explicit validation
--------------------
 
 .. code-block:: python
 

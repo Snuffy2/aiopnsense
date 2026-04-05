@@ -40,6 +40,13 @@ napoleon_use_rtype = True
 html_theme: str = "sphinx_rtd_theme"
 html_title: str = "aiopnsense documentation"
 
+html_theme_options = {
+    "collapse_navigation": True,  # Items collapse when not in use (default)
+    "navigation_depth": 2,  # Max depth of the TOC tree
+    "display_version": True,  # If True, the version number is shown at the top of the sidebar.
+    "version_selector": True,  # Display a version selector below the title.
+}
+
 intersphinx_mapping: dict[str, tuple[str, None]] = {
     "python": ("https://docs.python.org/3", None),
 }
