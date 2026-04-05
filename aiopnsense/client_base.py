@@ -13,7 +13,11 @@ import aiohttp
 import awesomeversion
 
 from ._typing import AiopnsenseClientProtocol
-from .const import DEFAULT_CACHE_TTL_SECONDS, DEFAULT_REQUEST_TIMEOUT_SECONDS
+from .const import (
+    DEFAULT_CACHE_TTL_SECONDS,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
+)
 from .helpers import _LOGGER
 
 _UNSET: object = object()
@@ -236,12 +240,18 @@ class ClientBaseMixin:
             return
         try:
             if awesomeversion.AwesomeVersion(firmware_version) < awesomeversion.AwesomeVersion(
-                "25.7"
+                LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
             ):
-                _LOGGER.debug("Using camelCase endpoints for OPNsense < 25.7")
+                _LOGGER.debug(
+                    "Using camelCase endpoints for OPNsense < %s",
+                    LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
+                )
                 self._use_snake_case = False
             else:
-                _LOGGER.debug("Using snake_case endpoints for OPNsense >= 25.7")
+                _LOGGER.debug(
+                    "Using snake_case endpoints for OPNsense >= %s",
+                    LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
+                )
         except (
             awesomeversion.exceptions.AwesomeVersionCompareException,
             TypeError,
