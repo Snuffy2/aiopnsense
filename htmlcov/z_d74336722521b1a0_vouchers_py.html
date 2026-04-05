@@ -67,7 +67,7 @@
             <a id="nextFileLink" class="nav" href="z_d74336722521b1a0_vpn_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.13.5">coverage.py v7.13.5</a>,
-            created at 2026-04-04 03:57 +0000
+            created at 2026-04-05 00:44 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -89,7 +89,7 @@
     <p class="run"><span class="n"><a id="t5" href="#t5">5</a></span><span class="t"><span class="key">from</span> <span class="nam">urllib</span><span class="op">.</span><span class="nam">parse</span> <span class="key">import</span> <span class="nam">quote</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t6" href="#t6">6</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t7" href="#t7">7</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">_typing</span> <span class="key">import</span> <span class="nam">PyOPNsenseClientProtocol</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t8" href="#t8">8</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">exceptions</span> <span class="key">import</span> <span class="nam">VoucherServerError</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t8" href="#t8">8</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">exceptions</span> <span class="key">import</span> <span class="nam">OPNsenseVoucherServerError</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t9" href="#t9">9</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">helpers</span> <span class="key">import</span> <span class="nam">_LOGGER</span><span class="op">,</span> <span class="nam">human_friendly_duration</span><span class="op">,</span> <span class="nam">timestamp_to_datetime</span><span class="op">,</span> <span class="nam">try_to_int</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t10" href="#t10">10</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t11" href="#t11">11</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
@@ -116,9 +116,9 @@
     <p class="run"><span class="n"><a id="t32" href="#t32">32</a></span><span class="t">                <span class="key">return</span> <span class="op">[</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t33" href="#t33">33</a></span><span class="t">            <span class="nam">servers</span> <span class="op">=</span> <span class="key">await</span> <span class="nam">self</span><span class="op">.</span><span class="nam">_safe_list_get</span><span class="op">(</span><span class="nam">list_providers_endpoint</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t34" href="#t34">34</a></span><span class="t">            <span class="key">if</span> <span class="nam">len</span><span class="op">(</span><span class="nam">servers</span><span class="op">)</span> <span class="op">==</span> <span class="num">0</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t35" href="#t35">35</a></span><span class="t">                <span class="key">raise</span> <span class="nam">VoucherServerError</span><span class="op">(</span><span class="str">"No voucher servers exist"</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t35" href="#t35">35</a></span><span class="t">                <span class="key">raise</span> <span class="nam">OPNsenseVoucherServerError</span><span class="op">(</span><span class="str">"No voucher servers exist"</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t36" href="#t36">36</a></span><span class="t">            <span class="key">if</span> <span class="nam">len</span><span class="op">(</span><span class="nam">servers</span><span class="op">)</span> <span class="op">!=</span> <span class="num">1</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t37" href="#t37">37</a></span><span class="t">                <span class="key">raise</span> <span class="nam">VoucherServerError</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t37" href="#t37">37</a></span><span class="t">                <span class="key">raise</span> <span class="nam">OPNsenseVoucherServerError</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t38" href="#t38">38</a></span><span class="t">                    <span class="str">"More than one voucher server. Must specify voucher server name"</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t39" href="#t39">39</a></span><span class="t">                <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t40" href="#t40">40</a></span><span class="t">            <span class="nam">server</span> <span class="op">=</span> <span class="nam">servers</span><span class="op">[</span><span class="num">0</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
@@ -171,7 +171,7 @@
             <a class="nav" href="z_d74336722521b1a0_vpn_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.13.5">coverage.py v7.13.5</a>,
-            created at 2026-04-04 03:57 +0000
+            created at 2026-04-05 00:44 +0000
         </p>
     </div>
 </footer>
