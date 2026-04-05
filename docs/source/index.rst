@@ -11,8 +11,8 @@ aiopnsense
    requirements
    quickstart
    authentication
-   development
    api/index
    examples
    changelog
    external
+   development

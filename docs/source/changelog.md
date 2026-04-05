@@ -1,10 +1,37 @@
 # Changelog
 
+## [v1.0.6](https://github.com/Snuffy2/aiopnsense/tree/v1.0.6) (2026-04-05)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.5...v1.0.6)
+
+**Enhancements**
+
+- Add back legacy unbound blocklist support [\#26](https://github.com/Snuffy2/aiopnsense/pull/26) ([Snuffy2](https://github.com/Snuffy2))
+- Add back legacy camelCase support [\#25](https://github.com/Snuffy2/aiopnsense/pull/25) ([Snuffy2](https://github.com/Snuffy2))
+- Add validate method [\#23](https://github.com/Snuffy2/aiopnsense/pull/23) ([Snuffy2](https://github.com/Snuffy2))
+- Add endpoint checks to prevent errors [\#22](https://github.com/Snuffy2/aiopnsense/pull/22) ([Snuffy2](https://github.com/Snuffy2))
+- Firewall endpoints to GET and don't fail if unavailable [\#21](https://github.com/Snuffy2/aiopnsense/pull/21) ([Snuffy2](https://github.com/Snuffy2))
+
+**Bug Fixes**
+
+- Fix showing docstrings in documentation [\#29](https://github.com/Snuffy2/aiopnsense/pull/29) ([Snuffy2](https://github.com/Snuffy2))
+
+**Documentation**
+
+- Clarify opts documentation [\#30](https://github.com/Snuffy2/aiopnsense/pull/30) ([Snuffy2](https://github.com/Snuffy2))
+- Introduce GitHub Actions changelog workflow and reorganize docs [\#28](https://github.com/Snuffy2/aiopnsense/pull/28) ([Snuffy2](https://github.com/Snuffy2))
+- Add documentation [\#27](https://github.com/Snuffy2/aiopnsense/pull/27) ([Snuffy2](https://github.com/Snuffy2))
+
+**Code Quality**
+
+- Finish rename to aiopnsense [\#24](https://github.com/Snuffy2/aiopnsense/pull/24) ([Snuffy2](https://github.com/Snuffy2))
+- Change to prek.toml [\#20](https://github.com/Snuffy2/aiopnsense/pull/20) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.0.5](https://github.com/Snuffy2/aiopnsense/tree/v1.0.5) (2026-04-03)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.4...v1.0.5)
 
-**Implemented enhancements:**
+**Enhancements**
 
 - In OPNsenseClient, change from initial to throw\_errors [\#19](https://github.com/Snuffy2/aiopnsense/pull/19) ([Snuffy2](https://github.com/Snuffy2))
 
@@ -12,34 +39,39 @@
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.3...v1.0.4)
 
-**Implemented enhancements:**
+**Enhancements**
 
 - Add CARP status summary and improve VIP interface matching [\#16](https://github.com/Snuffy2/aiopnsense/pull/16) ([Snuffy2](https://github.com/Snuffy2))
 
-**Merged pull requests:**
+**Bug Fixes**
+
+- Further CARP refinement [\#17](https://github.com/Snuffy2/aiopnsense/pull/17) ([Snuffy2](https://github.com/Snuffy2))
+
+**Maintenance**
 
 - Update release Github Action [\#18](https://github.com/Snuffy2/aiopnsense/pull/18) ([Snuffy2](https://github.com/Snuffy2))
-- Further CARP refinement [\#17](https://github.com/Snuffy2/aiopnsense/pull/17) ([Snuffy2](https://github.com/Snuffy2))
 
 ## [v1.0.3](https://github.com/Snuffy2/aiopnsense/tree/v1.0.3) (2026-03-26)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.2...v1.0.3)
 
-**Merged pull requests:**
+**Bug Fixes**
+
+- Handle 26.1.5+ changes in dnsmasq leases API [\#14](https://github.com/Snuffy2/aiopnsense/pull/14) ([Snuffy2](https://github.com/Snuffy2))
+
+**Code Quality**
 
 - Turn down more debug logging [\#15](https://github.com/Snuffy2/aiopnsense/pull/15) ([Snuffy2](https://github.com/Snuffy2))
-- Handle 26.1.5+ changes in dnsmasq leases API [\#14](https://github.com/Snuffy2/aiopnsense/pull/14) ([Snuffy2](https://github.com/Snuffy2))
-- Bump j178/prek-action from 1 to 2 [\#13](https://github.com/Snuffy2/aiopnsense/pull/13) ([dependabot[bot]](https://github.com/apps/dependabot))
 
 ## [v1.0.2](https://github.com/Snuffy2/aiopnsense/tree/v1.0.2) (2026-03-23)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.1...v1.0.2)
 
-**Implemented enhancements:**
+**Enhancements**
 
 - Expand ambiguous time zone list [\#12](https://github.com/Snuffy2/aiopnsense/pull/12) ([Snuffy2](https://github.com/Snuffy2))
 
-**Merged pull requests:**
+**Code Quality**
 
 - Turn down firewall debug logging [\#11](https://github.com/Snuffy2/aiopnsense/pull/11) ([Snuffy2](https://github.com/Snuffy2))
 
@@ -47,7 +79,7 @@
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.0...v1.0.1)
 
-**Merged pull requests:**
+**Documentation**
 
 - Update Documentation [\#10](https://github.com/Snuffy2/aiopnsense/pull/10) ([Snuffy2](https://github.com/Snuffy2))
 
@@ -59,23 +91,29 @@
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v0.0.2...v0.0.3)
 
-**Implemented enhancements:**
+**Enhancements**
 
 - Improve pytest coverage and Refactor test infrastructure with reusable HTTP response mocking [\#8](https://github.com/Snuffy2/aiopnsense/pull/8) ([Snuffy2](https://github.com/Snuffy2))
 
-**Merged pull requests:**
+**Bug Fixes**
+
+- Fix some endpoints from POST to GET [\#6](https://github.com/Snuffy2/aiopnsense/pull/6) ([Snuffy2](https://github.com/Snuffy2))
+- Fix GitHub release Workflow [\#4](https://github.com/Snuffy2/aiopnsense/pull/4) ([Snuffy2](https://github.com/Snuffy2))
+
+**Documentation**
+
+- Standardize docstring formatting across codebase [\#7](https://github.com/Snuffy2/aiopnsense/pull/7) ([Snuffy2](https://github.com/Snuffy2))
+
+**Other Changes**
 
 - Handle if DHCP endpoints are unavailable [\#9](https://github.com/Snuffy2/aiopnsense/pull/9) ([Snuffy2](https://github.com/Snuffy2))
-- Standardize docstring formatting across codebase [\#7](https://github.com/Snuffy2/aiopnsense/pull/7) ([Snuffy2](https://github.com/Snuffy2))
-- Fix some endpoints from POST to GET [\#6](https://github.com/Snuffy2/aiopnsense/pull/6) ([Snuffy2](https://github.com/Snuffy2))
 - Remove legacy code [\#5](https://github.com/Snuffy2/aiopnsense/pull/5) ([Snuffy2](https://github.com/Snuffy2))
-- Fix GitHub release Workflow [\#4](https://github.com/Snuffy2/aiopnsense/pull/4) ([Snuffy2](https://github.com/Snuffy2))
 
 ## [v0.0.2](https://github.com/Snuffy2/aiopnsense/tree/v0.0.2) (2026-03-22)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v0.0.1...v0.0.2)
 
-**Merged pull requests:**
+**Other Changes**
 
 - Update version in const.py on release [\#3](https://github.com/Snuffy2/aiopnsense/pull/3) ([Snuffy2](https://github.com/Snuffy2))
 
@@ -83,7 +121,7 @@
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/0931722e696e8e3270e8b80682ee8ff74ab0f5bb...v0.0.1)
 
-**Merged pull requests:**
+**Other Changes**
 
 - Create AGENTS.md [\#2](https://github.com/Snuffy2/aiopnsense/pull/2) ([Snuffy2](https://github.com/Snuffy2))
 - GitHub Workflows and Linting [\#1](https://github.com/Snuffy2/aiopnsense/pull/1) ([Snuffy2](https://github.com/Snuffy2))
