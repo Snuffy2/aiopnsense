@@ -8,7 +8,7 @@ import warnings
 import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
-from ._typing import PyOPNsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
 from .helpers import (
     _LOGGER,
@@ -20,7 +20,7 @@ from .helpers import (
 )
 
 
-class SystemMixin(PyOPNsenseClientProtocol):
+class SystemMixin(AiopnsenseClientProtocol):
     """System methods for OPNsenseClient."""
 
     def _parse_carp_vip_rows(self, rows: list[Any]) -> list[dict[str, Any]]:

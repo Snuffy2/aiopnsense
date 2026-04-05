@@ -1,1 +1,1 @@
-"""pytest for pyopnsense."""
+"""pytest for aiopnsense."""

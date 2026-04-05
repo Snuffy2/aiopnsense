@@ -7,12 +7,12 @@ from typing import Any
 import awesomeversion
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
-from ._typing import PyOPNsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
 from .helpers import _LOGGER, _log_errors, dict_get
 
 
-class FirmwareMixin(PyOPNsenseClientProtocol):
+class FirmwareMixin(AiopnsenseClientProtocol):
     """Firmware methods for OPNsenseClient."""
 
     _firmware_version: str | None

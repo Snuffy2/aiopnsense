@@ -1,4 +1,4 @@
-"""Typing protocol contracts for pyopnsense mixins."""
+"""Typing protocol contracts for aiopnsense mixins."""
 
 from abc import abstractmethod
 from collections.abc import MutableMapping
@@ -6,8 +6,8 @@ from datetime import datetime, tzinfo
 from typing import Any, Protocol
 
 
-class PyOPNsenseClientProtocol(Protocol):
-    """Structural typing contract used by split pyopnsense mixins."""
+class AiopnsenseClientProtocol(Protocol):
+    """Structural typing contract used by split aiopnsense mixins."""
 
     _firmware_version: str | None
     _endpoint_availability: dict[str, bool]

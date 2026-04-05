@@ -4,11 +4,11 @@ from collections.abc import MutableMapping
 from datetime import datetime, timedelta
 from typing import Any
 
-from ._typing import PyOPNsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors, timestamp_to_datetime, try_to_int
 
 
-class VPNMixin(PyOPNsenseClientProtocol):
+class VPNMixin(AiopnsenseClientProtocol):
     """VPN methods for OPNsenseClient."""
 
     @staticmethod

@@ -1,4 +1,4 @@
-"""Constants for pyopnsense."""
+"""Constants for aiopnsense."""
 
 from typing import Any
 
