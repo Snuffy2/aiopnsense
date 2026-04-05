@@ -6,14 +6,13 @@ Connection model
 
 ``aiopnsense`` uses asynchronous client access to an OPNsense endpoint and should be
 initialized with the base URL, an ``aiohttp.ClientSession``, and API credentials
-appropriate for your deployment. In OPNsense, the generated API key is typically used
+appropriate for your deployment. In OPNsense, the generated API key is used
 as the ``username`` and the generated secret as the ``password``.
 
 TLS verification
 ----------------
 
-Enable certificate validation in production. Only disable TLS verification in controlled
-test environments.
+Only disable TLS verification if you understand the risks in doing so.
 
 .. code-block:: python
 

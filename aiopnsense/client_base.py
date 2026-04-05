@@ -107,7 +107,8 @@ class ClientBaseMixin:
             username (str): Username for API authentication.
             password (str): Password for API authentication.
             session (aiohttp.ClientSession): HTTP client session used for API requests.
-            opts (MutableMapping[str, Any] | None, optional): Optional client configuration values.
+            opts (MutableMapping[str, Any] | None, optional): Optional client configuration values
+                (e.g. ``opts={"verify_ssl": True}``).
             initial (bool | object): Deprecated alias for ``throw_errors``. When provided,
                 a ``DeprecationWarning`` is emitted. Ignored when ``throw_errors`` is also set.
             throw_errors (bool | object): Whether request and decorator errors should be
