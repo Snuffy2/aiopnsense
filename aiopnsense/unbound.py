@@ -5,11 +5,11 @@ from typing import Any
 
 import aiohttp
 
-from ._typing import PyOPNsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors
 
 
-class UnboundMixin(PyOPNsenseClientProtocol):
+class UnboundMixin(AiopnsenseClientProtocol):
     """Unbound DNS blocklist methods for OPNsenseClient."""
 
     @_log_errors

@@ -1,4 +1,4 @@
-"""Shared pyopnsense helper utilities and decorators."""
+"""Shared aiopnsense helper utilities and decorators."""
 
 import asyncio
 from collections.abc import Callable, MutableMapping

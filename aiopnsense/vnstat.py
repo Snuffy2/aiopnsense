@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, tzinfo
 import re
 from typing import Any
 
-from ._typing import PyOPNsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors, normalize_lookup_token, try_to_float
 
 _VSTAT_HEADER_RE = re.compile(
@@ -48,7 +48,7 @@ _RATE_FACTORS = {
 }
 
 
-class VnstatMixin(PyOPNsenseClientProtocol):
+class VnstatMixin(AiopnsenseClientProtocol):
     """vnStat methods for OPNsenseClient."""
 
     async def _fetch_vnstat_for(self, endpoint: str, expected_period: str) -> dict[str, Any]:

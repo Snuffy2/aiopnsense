@@ -6,7 +6,7 @@ from typing import Any, Callable, NoReturn
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient, helpers as pyopnsense_helpers
+from aiopnsense import OPNsenseClient, helpers as aiopnsense_helpers
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -14,9 +14,9 @@ ClientType = Callable[..., OPNsenseClient]
 
 def test_human_friendly_duration() -> None:
     """Convert seconds into a human-friendly duration string."""
-    assert pyopnsense_helpers.human_friendly_duration(65) == "1 minute, 5 seconds"
-    assert pyopnsense_helpers.human_friendly_duration(0) == "0 seconds"
-    assert "month" in pyopnsense_helpers.human_friendly_duration(2419200)
+    assert aiopnsense_helpers.human_friendly_duration(65) == "1 minute, 5 seconds"
+    assert aiopnsense_helpers.human_friendly_duration(0) == "0 seconds"
+    assert "month" in aiopnsense_helpers.human_friendly_duration(2419200)
 
 
 def test_human_friendly_duration_singular_and_plural() -> None:
@@ -27,87 +27,87 @@ def test_human_friendly_duration_singular_and_plural() -> None:
     otherwise.
     """
     # seconds
-    assert pyopnsense_helpers.human_friendly_duration(1) == "1 second"
-    assert pyopnsense_helpers.human_friendly_duration(2) == "2 seconds"
+    assert aiopnsense_helpers.human_friendly_duration(1) == "1 second"
+    assert aiopnsense_helpers.human_friendly_duration(2) == "2 seconds"
 
     # minutes + seconds
-    assert pyopnsense_helpers.human_friendly_duration(60) == "1 minute"
-    assert pyopnsense_helpers.human_friendly_duration(61) == "1 minute, 1 second"
+    assert aiopnsense_helpers.human_friendly_duration(60) == "1 minute"
+    assert aiopnsense_helpers.human_friendly_duration(61) == "1 minute, 1 second"
 
     # hours
-    assert pyopnsense_helpers.human_friendly_duration(3600) == "1 hour"
-    assert pyopnsense_helpers.human_friendly_duration(7200) == "2 hours"
+    assert aiopnsense_helpers.human_friendly_duration(3600) == "1 hour"
+    assert aiopnsense_helpers.human_friendly_duration(7200) == "2 hours"
 
     # days
-    assert pyopnsense_helpers.human_friendly_duration(86400) == "1 day"
+    assert aiopnsense_helpers.human_friendly_duration(86400) == "1 day"
 
     # weeks
-    assert pyopnsense_helpers.human_friendly_duration(604800) == "1 week"
-    assert pyopnsense_helpers.human_friendly_duration(1209600) == "2 weeks"
+    assert aiopnsense_helpers.human_friendly_duration(604800) == "1 week"
+    assert aiopnsense_helpers.human_friendly_duration(1209600) == "2 weeks"
 
     # months (28-day month used in implementation)
-    assert pyopnsense_helpers.human_friendly_duration(2419200) == "1 month"
-    assert pyopnsense_helpers.human_friendly_duration(4838400) == "2 months"
+    assert aiopnsense_helpers.human_friendly_duration(2419200) == "1 month"
+    assert aiopnsense_helpers.human_friendly_duration(4838400) == "2 months"
 
 
 def test_get_ip_key() -> None:
     """Compute sorting key for IP addresses across IPv4, IPv6, and invalid forms."""
-    assert pyopnsense_helpers.get_ip_key({"address": "192.168.1.1"})[0] == 0
-    assert pyopnsense_helpers.get_ip_key({"address": "::1"})[0] == 1
-    assert pyopnsense_helpers.get_ip_key({"address": "notanip"})[0] == 2
-    assert pyopnsense_helpers.get_ip_key({"address": "notanip"}) == (2, "")
-    assert pyopnsense_helpers.get_ip_key({})[0] == 3
-    assert pyopnsense_helpers.get_ip_key({}) == (3, "")
+    assert aiopnsense_helpers.get_ip_key({"address": "192.168.1.1"})[0] == 0
+    assert aiopnsense_helpers.get_ip_key({"address": "::1"})[0] == 1
+    assert aiopnsense_helpers.get_ip_key({"address": "notanip"})[0] == 2
+    assert aiopnsense_helpers.get_ip_key({"address": "notanip"}) == (2, "")
+    assert aiopnsense_helpers.get_ip_key({})[0] == 3
+    assert aiopnsense_helpers.get_ip_key({}) == (3, "")
 
 
 def test_dict_get() -> None:
     """Retrieve nested values from dicts and lists using dotted paths."""
     data = {"a": {"b": {"c": 1}}, "x": [0, 1, 2]}
-    assert pyopnsense_helpers.dict_get(data, "a.b.c") == 1
-    assert pyopnsense_helpers.dict_get(data, "x.1") == 1
-    assert pyopnsense_helpers.dict_get(data, "x.10", default=42) == 42
-    assert pyopnsense_helpers.dict_get({"a": {"b": [10, {"c": 3}]}}, "a.b") == [10, {"c": 3}]
-    assert pyopnsense_helpers.dict_get(data, "missing.path", default=5) == 5
+    assert aiopnsense_helpers.dict_get(data, "a.b.c") == 1
+    assert aiopnsense_helpers.dict_get(data, "x.1") == 1
+    assert aiopnsense_helpers.dict_get(data, "x.10", default=42) == 42
+    assert aiopnsense_helpers.dict_get({"a": {"b": [10, {"c": 3}]}}, "a.b") == [10, {"c": 3}]
+    assert aiopnsense_helpers.dict_get(data, "missing.path", default=5) == 5
 
 
 def test_timestamp_to_datetime() -> None:
     """Convert timestamp integers to datetime objects, handling None."""
     ts = int(datetime.now(tz=timezone.utc).timestamp())
-    dt = pyopnsense_helpers.timestamp_to_datetime(ts)
+    dt = aiopnsense_helpers.timestamp_to_datetime(ts)
     assert isinstance(dt, datetime)
     assert dt.tzinfo is not None
-    assert pyopnsense_helpers.timestamp_to_datetime(None) is None
+    assert aiopnsense_helpers.timestamp_to_datetime(None) is None
 
 
 def test_try_to_int_and_float() -> None:
     """Coerce numeric-like strings to int/float with defaults."""
-    assert pyopnsense_helpers.try_to_int("5") == 5
-    assert pyopnsense_helpers.try_to_int(None, 7) == 7
-    assert pyopnsense_helpers.try_to_float("5.5") == 5.5
-    assert pyopnsense_helpers.try_to_float(None, 3.3) == 3.3
+    assert aiopnsense_helpers.try_to_int("5") == 5
+    assert aiopnsense_helpers.try_to_int(None, 7) == 7
+    assert aiopnsense_helpers.try_to_float("5.5") == 5.5
+    assert aiopnsense_helpers.try_to_float(None, 3.3) == 3.3
 
 
 def test_coerce_bool() -> None:
     """Verify ``coerce_bool`` handles common bool-like edge cases."""
-    assert pyopnsense_helpers.coerce_bool(True) is True
-    assert pyopnsense_helpers.coerce_bool(False) is False
-    assert pyopnsense_helpers.coerce_bool(1) is True
-    assert pyopnsense_helpers.coerce_bool(0) is False
-    assert pyopnsense_helpers.coerce_bool(0.0) is False
-    assert pyopnsense_helpers.coerce_bool("1") is True
-    assert pyopnsense_helpers.coerce_bool("true") is True
-    assert pyopnsense_helpers.coerce_bool("yes") is True
-    assert pyopnsense_helpers.coerce_bool("on") is True
-    assert pyopnsense_helpers.coerce_bool("") is False
-    assert pyopnsense_helpers.coerce_bool(None) is False
+    assert aiopnsense_helpers.coerce_bool(True) is True
+    assert aiopnsense_helpers.coerce_bool(False) is False
+    assert aiopnsense_helpers.coerce_bool(1) is True
+    assert aiopnsense_helpers.coerce_bool(0) is False
+    assert aiopnsense_helpers.coerce_bool(0.0) is False
+    assert aiopnsense_helpers.coerce_bool("1") is True
+    assert aiopnsense_helpers.coerce_bool("true") is True
+    assert aiopnsense_helpers.coerce_bool("yes") is True
+    assert aiopnsense_helpers.coerce_bool("on") is True
+    assert aiopnsense_helpers.coerce_bool("") is False
+    assert aiopnsense_helpers.coerce_bool(None) is False
 
 
 def test_normalize_lookup_token() -> None:
     """Verify ``normalize_lookup_token`` lower-cases and trims lookup values."""
-    assert pyopnsense_helpers.normalize_lookup_token("Hello") == "hello"
-    assert pyopnsense_helpers.normalize_lookup_token("  WORLD  ") == "world"
-    assert pyopnsense_helpers.normalize_lookup_token(42) == "42"
-    assert pyopnsense_helpers.normalize_lookup_token(None) == ""
+    assert aiopnsense_helpers.normalize_lookup_token("Hello") == "hello"
+    assert aiopnsense_helpers.normalize_lookup_token("  WORLD  ") == "world"
+    assert aiopnsense_helpers.normalize_lookup_token(42) == "42"
+    assert aiopnsense_helpers.normalize_lookup_token(None) == ""
 
 
 def test_get_ip_key_sorting() -> None:
@@ -118,7 +118,7 @@ def test_get_ip_key_sorting() -> None:
         {"address": "notanip"},
         {},
     ]
-    sorted_items = sorted(items, key=pyopnsense_helpers.get_ip_key)
+    sorted_items = sorted(items, key=aiopnsense_helpers.get_ip_key)
     assert sorted_items[0]["address"] == "192.168.1.2"
     assert sorted_items[1]["address"] == "::1"
     assert sorted_items[2]["address"] == "notanip"
@@ -138,7 +138,7 @@ async def test_log_errors_decorator_re_raise_and_suppress() -> None:
             """
             self._throw_errors = throw_errors
 
-        @pyopnsense_helpers._log_errors
+        @aiopnsense_helpers._log_errors
         async def boom(self) -> None:
             """Raise RuntimeError for testing error handling."""
             raise RuntimeError("boom")
@@ -180,7 +180,7 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
             raise TimeoutError("boom")
 
         # wrap the coroutine with the decorator
-        decorated = pyopnsense_helpers._log_errors(raising_timeout)
+        decorated = aiopnsense_helpers._log_errors(raising_timeout)
 
         # When error throwing is enabled we expect the TimeoutError to propagate.
         client._throw_errors = True
@@ -220,7 +220,7 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
             """
             raise aiohttp.ServerTimeoutError("srv")
 
-        decorated = pyopnsense_helpers._log_errors(raising_server_timeout)
+        decorated = aiopnsense_helpers._log_errors(raising_server_timeout)
 
         client._throw_errors = True
         with pytest.raises(aiohttp.ServerTimeoutError):

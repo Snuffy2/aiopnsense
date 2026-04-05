@@ -4,11 +4,11 @@ from collections.abc import MutableMapping
 from typing import Any
 from urllib.parse import quote
 
-from ._typing import PyOPNsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors
 
 
-class ServicesMixin(PyOPNsenseClientProtocol):
+class ServicesMixin(AiopnsenseClientProtocol):
     """Service management methods for OPNsenseClient."""
 
     def _normalize_services_rows(self, rows: object) -> list[dict[str, Any]]:

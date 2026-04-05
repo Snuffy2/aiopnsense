@@ -3,11 +3,11 @@
 from collections.abc import MutableMapping
 from typing import Any
 
-from ._typing import PyOPNsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors
 
 
-class FirewallMixin(PyOPNsenseClientProtocol):
+class FirewallMixin(AiopnsenseClientProtocol):
     """Firewall methods for OPNsenseClient."""
 
     @_log_errors

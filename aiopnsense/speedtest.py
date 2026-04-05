@@ -17,11 +17,11 @@ from __future__ import annotations
 from collections.abc import MutableMapping
 from typing import Any
 
-from ._typing import PyOPNsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors, try_to_float, try_to_int
 
 
-class SpeedtestMixin(PyOPNsenseClientProtocol):
+class SpeedtestMixin(AiopnsenseClientProtocol):
     """Speedtest methods for OPNsenseClient."""
 
     @_log_errors

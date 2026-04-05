@@ -12,8 +12,8 @@ import pytest
 
 from aiopnsense import (
     OPNsenseClient,
-    client as pyopnsense_client,
-    client_base as pyopnsense_client_base,
+    client as aiopnsense_client,
+    client_base as aiopnsense_client_base,
 )
 from aiopnsense.const import OPNSENSE_LTD_FIRMWARE, OPNSENSE_MIN_FIRMWARE
 from aiopnsense.exceptions import (
@@ -161,10 +161,10 @@ async def test_safe_dict_get_with_timeout(
 @pytest.mark.parametrize(
     ("timeout_seconds", "expected"),
     [
-        ("bad", float(pyopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
-        (object(), float(pyopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
-        (0, float(pyopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
-        (-5, float(pyopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
+        ("bad", float(aiopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
+        (object(), float(aiopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
+        (0, float(aiopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
+        (-5, float(aiopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
         (1.75, 1.75),
     ],
 )
@@ -275,7 +275,7 @@ async def test_validate_handles_firmware_thresholds_and_restores_throw_errors(
             get_host_firmware_version,
             raising=False,
         )
-        monkeypatch.setattr(pyopnsense_client._LOGGER, "warning", logger_warning)
+        monkeypatch.setattr(aiopnsense_client._LOGGER, "warning", logger_warning)
 
         with pytest.raises(OPNsenseBelowMinFirmware):
             await client.validate()
@@ -899,7 +899,7 @@ async def test_get_uses_unknown_when_inspect_stack_raises(
                 """
                 raise IndexError("no stack")
 
-        monkeypatch.setattr(pyopnsense_client_base, "inspect", _BadInspect)
+        monkeypatch.setattr(aiopnsense_client_base, "inspect", _BadInspect)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
@@ -1015,7 +1015,7 @@ async def test_post_uses_unknown_when_inspect_stack_raises(
                 """
                 raise IndexError("no stack")
 
-        monkeypatch.setattr(pyopnsense_client_base, "inspect", _BadInspect)
+        monkeypatch.setattr(aiopnsense_client_base, "inspect", _BadInspect)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q

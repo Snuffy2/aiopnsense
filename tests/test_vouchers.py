@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, call
 
 import pytest
 
-import aiopnsense as pyopnsense
+import aiopnsense as aiopnsense_module
 from aiopnsense import OPNsenseClient
 from tests.conftest import make_mock_session_client
 
@@ -17,8 +17,8 @@ ClientType = Callable[..., OPNsenseClient]
 @pytest.mark.parametrize(
     "safe_get_ret,safe_post_ret,data,expect_exc,expect_username,expect_extras",
     [
-        ([], None, {}, pyopnsense.OPNsenseVoucherServerError, None, None),
-        (["s1", "s2"], None, {}, pyopnsense.OPNsenseVoucherServerError, None, None),
+        ([], None, {}, aiopnsense_module.OPNsenseVoucherServerError, None, None),
+        (["s1", "s2"], None, {}, aiopnsense_module.OPNsenseVoucherServerError, None, None),
         (
             None,
             [

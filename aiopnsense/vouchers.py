@@ -4,12 +4,12 @@ from collections.abc import MutableMapping
 from typing import Any
 from urllib.parse import quote
 
-from ._typing import PyOPNsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol
 from .exceptions import OPNsenseVoucherServerError
 from .helpers import _LOGGER, human_friendly_duration, timestamp_to_datetime, try_to_int
 
 
-class VouchersMixin(PyOPNsenseClientProtocol):
+class VouchersMixin(AiopnsenseClientProtocol):
     """Captive portal voucher methods for OPNsenseClient."""
 
     async def generate_vouchers(self, data: MutableMapping[str, Any]) -> list[dict[str, Any]]:

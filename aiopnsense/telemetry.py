@@ -7,12 +7,12 @@ from typing import Any
 
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
-from ._typing import PyOPNsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
 from .helpers import _LOGGER, _log_errors, try_to_float, try_to_int
 
 
-class TelemetryMixin(PyOPNsenseClientProtocol):
+class TelemetryMixin(AiopnsenseClientProtocol):
     """Telemetry methods for OPNsenseClient."""
 
     @_log_errors

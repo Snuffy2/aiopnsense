@@ -4,11 +4,11 @@ from collections.abc import MutableMapping
 from datetime import datetime, tzinfo
 from typing import Any
 
-from ._typing import PyOPNsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors, get_ip_key, timestamp_to_datetime, try_to_int
 
 
-class DHCPMixin(PyOPNsenseClientProtocol):
+class DHCPMixin(AiopnsenseClientProtocol):
     """DHCP methods for OPNsenseClient."""
 
     def _normalize_lease_key_value(self, value: Any) -> Any:
