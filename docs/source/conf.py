@@ -43,7 +43,6 @@ html_title: str = "aiopnsense documentation"
 html_theme_options = {
     "collapse_navigation": True,  # Items collapse when not in use (default)
     "navigation_depth": 2,  # Max depth of the TOC tree
-    "display_version": True,  # If True, the version number is shown at the top of the sidebar.
     "version_selector": True,  # Display a version selector below the title.
 }
 
