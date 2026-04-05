@@ -158,7 +158,10 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        memory_endpoint = "/api/diagnostics/system/system_resources"
+        memory_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/diagnostics/system/system_resources",
+            camel_case_path="/api/diagnostics/system/systemResources",
+        )
         if not await self.is_endpoint_available(memory_endpoint):
             _LOGGER.debug("Telemetry memory endpoint unavailable")
             return {
@@ -210,7 +213,10 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        time_endpoint = "/api/diagnostics/system/system_time"
+        time_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/diagnostics/system/system_time",
+            camel_case_path="/api/diagnostics/system/systemTime",
+        )
         if not await self.is_endpoint_available(time_endpoint):
             _LOGGER.debug("Telemetry system time endpoint unavailable")
             return {}
@@ -294,7 +300,10 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        cpu_type_endpoint = "/api/diagnostics/cpu_usage/get_c_p_u_type"
+        cpu_type_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/diagnostics/cpu_usage/get_c_p_u_type",
+            camel_case_path="/api/diagnostics/cpu_usage/getCPUType",
+        )
         if not await self.is_endpoint_available(cpu_type_endpoint):
             _LOGGER.debug("Telemetry CPU type endpoint unavailable")
             return {}
@@ -329,7 +338,10 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         Returns:
             list: List of normalized entries produced by this method.
         """
-        filesystems_endpoint = "/api/diagnostics/system/system_disk"
+        filesystems_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/diagnostics/system/system_disk",
+            camel_case_path="/api/diagnostics/system/systemDisk",
+        )
         if not await self.is_endpoint_available(filesystems_endpoint):
             _LOGGER.debug("Telemetry filesystem endpoint unavailable")
             return []
@@ -368,7 +380,10 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
-        temperature_endpoint = "/api/diagnostics/system/system_temperature"
+        temperature_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/diagnostics/system/system_temperature",
+            camel_case_path="/api/diagnostics/system/systemTemperature",
+        )
         if not await self.is_endpoint_available(temperature_endpoint):
             _LOGGER.debug("Telemetry temperature endpoint unavailable")
             return {}

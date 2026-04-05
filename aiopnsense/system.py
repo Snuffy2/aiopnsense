@@ -389,7 +389,10 @@ class SystemMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
         """
         system_info: dict[str, Any] = {}
-        system_information_endpoint = "/api/diagnostics/system/system_information"
+        system_information_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/diagnostics/system/system_information",
+            camel_case_path="/api/diagnostics/system/systemInformation",
+        )
         if not await self.is_endpoint_available(system_information_endpoint):
             _LOGGER.debug("System information endpoint unavailable")
             return system_info
@@ -625,7 +628,10 @@ class SystemMixin(AiopnsenseClientProtocol):
         Returns:
             bool: True when the operation succeeds; otherwise, False.
         """
-        dismiss_endpoint = "/api/core/system/dismiss_status"
+        dismiss_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/core/system/dismiss_status",
+            camel_case_path="/api/core/system/dismissStatus",
+        )
 
         # id = "all" to close all notices
         success = True
@@ -662,7 +668,11 @@ class SystemMixin(AiopnsenseClientProtocol):
         Returns:
             bool: True when the operation succeeds; otherwise, False.
         """
-        reload = await self._safe_dict_post(f"/api/interfaces/overview/reload_interface/{if_name}")
+        reload_endpoint = await self._get_endpoint_path(
+            snake_case_path=f"/api/interfaces/overview/reload_interface/{if_name}",
+            camel_case_path=f"/api/interfaces/overview/reloadInterface/{if_name}",
+        )
+        reload = await self._safe_dict_post(reload_endpoint)
         return reload.get("message", "").startswith("OK")
 
     @_log_errors

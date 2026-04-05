@@ -1455,6 +1455,69 @@ async def test_toggle_throwing_errors_invalid_value_raises_type_error(
 
 
 @pytest.mark.asyncio
+async def test_client_constructor_initializes_snake_case_state(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify the client starts with unset snake-case endpoint state."""
+    client = make_client()
+    try:
+        assert client._use_snake_case is None
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("firmware_version", "expected_use_snake_case", "expected_path"),
+    [
+        ("25.1", False, "/camelCase"),
+        ("25.7", True, "/snake_case"),
+        ("26.1.1", True, "/snake_case"),
+        (None, True, "/snake_case"),
+        ("invalid-version", True, "/snake_case"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_set_use_snake_case_selects_expected_endpoint_style(
+    firmware_version: str | None,
+    expected_use_snake_case: bool,
+    expected_path: str,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify firmware-driven snake-case selection and endpoint resolution."""
+    client = make_client()
+    try:
+        client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
+
+        await client.set_use_snake_case()
+
+        assert client._use_snake_case is expected_use_snake_case
+        client.get_host_firmware_version.assert_awaited_once_with()
+        assert await client._get_endpoint_path("/snake_case", "/camelCase") == expected_path
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_endpoint_path_lazily_initializes_snake_case_state(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify endpoint selection lazily initializes snake-case mode."""
+    client = make_client()
+    try:
+
+        async def fake_set_use_snake_case() -> None:
+            """Populate snake-case mode for the lazy helper."""
+            client._use_snake_case = False
+
+        client.set_use_snake_case = AsyncMock(side_effect=fake_set_use_snake_case)
+
+        assert await client._get_endpoint_path("/snake_case", "/camelCase") == "/camelCase"
+        client.set_use_snake_case.assert_awaited_once_with()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_client_name_property(make_client: MakeClientFactory) -> None:
     """Verify the client reports the expected human-readable name.
 

@@ -26,7 +26,9 @@ def toggle_alias_client(make_client: ClientType) -> tuple[OPNsenseClient, Any]:
     Returns:
         tuple[OPNsenseClient, Any]: Client/session tuple from ``make_mock_session_client``.
     """
-    return make_mock_session_client(make_client)
+    client, session = make_mock_session_client(make_client)
+    client._use_snake_case = True
+    return client, session
 
 
 @pytest.mark.asyncio
@@ -282,6 +284,7 @@ async def test_toggle_alias_flows(make_client: ClientType) -> None:
     """
     client, _ = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         client._safe_dict_post = AsyncMock()
@@ -327,6 +330,7 @@ async def test_toggle_alias_returns_false_for_non_list_and_apply_failures(
     """
     client, _ = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": "bad"})
         client._safe_dict_post = AsyncMock()
@@ -348,6 +352,48 @@ async def test_toggle_alias_returns_false_for_non_list_and_apply_failures(
         )
         assert await client.toggle_alias("alias1", "on") is False
         assert client._safe_dict_post.await_count == 3
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_snake_case", "expected_search", "expected_toggle"),
+    [
+        (
+            True,
+            "/api/firewall/alias/search_item",
+            "/api/firewall/alias/toggle_item/aid/1",
+        ),
+        (
+            False,
+            "/api/firewall/alias/searchItem",
+            "/api/firewall/alias/toggleItem/aid/1",
+        ),
+    ],
+)
+async def test_firewall_switched_endpoints_follow_selected_case(
+    make_client: ClientType,
+    use_snake_case: bool,
+    expected_search: str,
+    expected_toggle: str,
+) -> None:
+    """Verify alias helpers choose snake_case or camelCase endpoints consistently."""
+    client, _ = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = use_snake_case
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={"rows": [{"name": "alias1", "uuid": "aid"}]}
+        )
+        client._safe_dict_post = AsyncMock(
+            side_effect=[{"result": "ok"}, {"result": "saved"}, {"status": "ok"}]
+        )
+
+        assert await client.toggle_alias("alias1", "on") is True
+        client.is_endpoint_available.assert_awaited_once_with(expected_search)
+        client._safe_dict_get.assert_awaited_once_with(expected_search)
+        assert client._safe_dict_post.await_args_list[0].args[0] == expected_toggle
     finally:
         await client.async_close()
 

@@ -63,6 +63,7 @@ async def test_generate_vouchers_server_selection_errors_and_success(
     """
     client, _ = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         if safe_get_ret is not None:
             client.is_endpoint_available = AsyncMock(return_value=True)
             client._safe_list_get = AsyncMock(return_value=safe_get_ret)
@@ -98,6 +99,7 @@ async def test_generate_vouchers_returns_empty_when_version_switched_endpoints_u
     """
     client, _ = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_list_get = AsyncMock()
         client._safe_list_post = AsyncMock()
@@ -123,6 +125,7 @@ async def test_generate_vouchers_auto_selects_single_provider(make_client: Clien
     """
     client, _ = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=True)
         client._safe_list_get = AsyncMock(return_value=["srv one"])
         client._safe_list_post = AsyncMock(
@@ -157,6 +160,7 @@ async def test_generate_vouchers_returns_empty_when_generation_endpoint_unavaila
     """
     client, _ = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(side_effect=[True, False])
         client._safe_list_get = AsyncMock(return_value=["srv one"])
         client._safe_list_post = AsyncMock()
@@ -168,5 +172,43 @@ async def test_generate_vouchers_returns_empty_when_generation_endpoint_unavaila
         ]
         client._safe_list_get.assert_awaited_once_with("/api/captiveportal/voucher/list_providers")
         client._safe_list_post.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_snake_case", "expected_provider", "expected_generate"),
+    [
+        (
+            True,
+            "/api/captiveportal/voucher/list_providers",
+            "/api/captiveportal/voucher/generate_vouchers/srv/",
+        ),
+        (
+            False,
+            "/api/captiveportal/voucher/listProviders",
+            "/api/captiveportal/voucher/generateVouchers/srv/",
+        ),
+    ],
+)
+async def test_voucher_switched_endpoints_follow_selected_case(
+    make_client: ClientType,
+    use_snake_case: bool,
+    expected_provider: str,
+    expected_generate: str,
+) -> None:
+    """Verify voucher helpers choose snake_case or camelCase endpoints consistently."""
+    client, _ = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = use_snake_case
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._safe_list_get = AsyncMock(return_value=["srv"])
+        client._safe_list_post = AsyncMock(return_value=[])
+
+        await client.generate_vouchers({})
+
+        client._safe_list_get.assert_awaited_once_with(expected_provider)
+        client._safe_list_post.assert_awaited_once_with(expected_generate, payload={})
     finally:
         await client.async_close()

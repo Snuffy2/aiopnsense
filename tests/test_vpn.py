@@ -19,6 +19,7 @@ async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
     """Validate openvpn server/client discovery and fetch details flow."""
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=True)
         # Prepare fake responses for safe_gets
         sessions_info = {
@@ -176,6 +177,7 @@ async def test_toggle_vpn_instance_variants(
 ) -> None:
     """Parametrized toggle_vpn_instance covering OpenVPN and WireGuard variants."""
     client, _session = make_mock_session_client(make_client)
+    client._use_snake_case = True
     client.is_endpoint_available = AsyncMock(return_value=True)
 
     if isinstance(post_resp, list):
@@ -192,6 +194,7 @@ async def test_toggle_vpn_instance_variants(
 async def test_openvpn_more_detail_parsing(monkeypatch, make_client) -> None:
     """Exercise additional OpenVPN parsing branches (no sessions, missing fields)."""
     client, _session = make_mock_session_client(make_client)
+    client._use_snake_case = True
     client.is_endpoint_available = AsyncMock(return_value=True)
 
     # prepare responses that exercise missing/partial fields
@@ -234,6 +237,7 @@ async def test_openvpn_processing_and_fetch_details(make_client) -> None:
     """Test processing of OpenVPN instances/providers/sessions/routes and fetching details."""
     client, _ = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=True)
 
         # prepare fake responses for _safe_dict_get based on path
@@ -607,6 +611,7 @@ async def test_version_switched_vpn_endpoints_fail_closed(make_client: ClientTyp
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client.is_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
 
@@ -614,6 +619,49 @@ async def test_version_switched_vpn_endpoints_fail_closed(make_client: ClientTyp
         assert openvpn == {"servers": {}, "clients": {}}
         client.is_endpoint_available.assert_awaited()
         client._safe_dict_get.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_snake_case", "expected_sessions", "expected_routes", "expected_client_toggle"),
+    [
+        (
+            True,
+            "/api/openvpn/service/search_sessions",
+            "/api/openvpn/service/search_routes",
+            "/api/wireguard/client/toggle_client/uuid",
+        ),
+        (
+            False,
+            "/api/openvpn/service/searchSessions",
+            "/api/openvpn/service/searchRoutes",
+            "/api/wireguard/client/toggleClient/uuid",
+        ),
+    ],
+)
+async def test_vpn_switched_endpoints_follow_selected_case(
+    make_client: ClientType,
+    use_snake_case: bool,
+    expected_sessions: str,
+    expected_routes: str,
+    expected_client_toggle: str,
+) -> None:
+    """Verify switched VPN endpoints follow the selected endpoint style."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = use_snake_case
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value={})
+        client._safe_dict_post = AsyncMock(side_effect=[{"changed": True}, {"result": "ok"}])
+
+        await client.get_openvpn()
+        await client.toggle_vpn_instance("wireguard", "clients", "uuid")
+
+        assert client._safe_dict_get.await_args_list[0].args[0] == expected_sessions
+        assert client._safe_dict_get.await_args_list[1].args[0] == expected_routes
+        assert client._safe_dict_post.await_args_list[0].args[0] == expected_client_toggle
     finally:
         await client.async_close()
 

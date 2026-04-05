@@ -159,7 +159,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
         response = await self._safe_dict_get("/api/kea/leases4/search")
         if not isinstance(response.get("rows", None), list):
             return []
-        reservation_endpoint = "/api/kea/dhcpv4/search_reservation"
+        reservation_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/kea/dhcpv4/search_reservation",
+            camel_case_path="/api/kea/dhcpv4/searchReservation",
+        )
         res_info: list[Any] | None
         if not await self.is_endpoint_available(reservation_endpoint):
             _LOGGER.debug("Kea DHCP reservation endpoint unavailable")
@@ -329,7 +332,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if not await self.is_endpoint_available("/api/dhcpv4/service/status"):
             _LOGGER.debug("ISC DHCP not installed")
             return []
-        lease_endpoint = "/api/dhcpv4/leases/search_lease"
+        lease_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/dhcpv4/leases/search_lease",
+            camel_case_path="/api/dhcpv4/leases/searchLease",
+        )
         if not await self.is_endpoint_available(lease_endpoint):
             _LOGGER.debug("ISC DHCPv4 lease endpoint unavailable")
             return []
@@ -389,7 +395,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if not await self.is_endpoint_available("/api/dhcpv6/service/status"):
             _LOGGER.debug("ISC DHCP not installed")
             return []
-        lease_endpoint = "/api/dhcpv6/leases/search_lease"
+        lease_endpoint = await self._get_endpoint_path(
+            snake_case_path="/api/dhcpv6/leases/search_lease",
+            camel_case_path="/api/dhcpv6/leases/searchLease",
+        )
         if not await self.is_endpoint_available(lease_endpoint):
             _LOGGER.debug("ISC DHCPv6 lease endpoint unavailable")
             return []
