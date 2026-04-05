@@ -1,5 +1,6 @@
-Firewall API
-============
+Firewall and NAT
+================
 
-.. autoclass:: aiopnsense.firewall.FirewallMixin
-   :members:
+**Requires OPNsense Firmware >= 26.1.1**
+
+.. opnsense-client-api:: aiopnsense.firewall.FirewallMixin

@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Callable, MutableMapping
 from datetime import UTC, datetime
+from functools import wraps
 import ipaddress
 import logging
 import re
@@ -15,18 +16,19 @@ import aiohttp
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
-def _log_errors(func: Callable) -> Any:
+def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap coroutine methods with shared timeout/error logging behavior.
 
     Args:
-        func (Callable): Coroutine function to decorate and execute with shared
-            behavior.
+        func (Callable[..., Any]): Coroutine function to decorate and execute
+            with shared behavior.
 
     Returns:
-        Any: Decorator wrapper that applies shared exception logging and
-            returns the wrapped coroutine result.
+        Callable[..., Any]: Decorator wrapper that applies shared exception
+            logging and returns the wrapped coroutine result.
     """
 
+    @wraps(func)
     async def inner(self: Any, *args: Any, **kwargs: Any) -> Any:
         """Execute wrapped coroutine with shared timeout/exception logging.
 
@@ -35,7 +37,8 @@ def _log_errors(func: Callable) -> Any:
             **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
 
         Returns:
-            Any: Value produced by this helper method.
+            Any: Value produced by the wrapped callable, or ``None`` when an
+                error is suppressed.
         """
         try:
             return await func(self, *args, **kwargs)
@@ -60,6 +63,7 @@ def _log_errors(func: Callable) -> Any:
             )
             if self._throw_errors:
                 raise
+        return None
 
     return inner
 

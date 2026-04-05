@@ -1,5 +1,4 @@
-Speedtest API
+Speedtest
 =============
 
-.. autoclass:: aiopnsense.speedtest.SpeedtestMixin
-   :members:
+.. opnsense-client-api:: aiopnsense.speedtest.SpeedtestMixin

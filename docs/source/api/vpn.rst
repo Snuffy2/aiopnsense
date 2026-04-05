@@ -1,5 +1,4 @@
-VPN API
+VPN
 =======
 
-.. autoclass:: aiopnsense.vpn.VPNMixin
-   :members:
+.. opnsense-client-api:: aiopnsense.vpn.VPNMixin
