@@ -4,7 +4,7 @@ from typing import Any
 
 from dateutil.tz import gettz
 
-VERSION = "v1.0.6"
+VERSION = "v1.0.7"
 
 OPNSENSE_LTD_FIRMWARE = "26.1.1"  # If less than this, some functions may not work but the integration in general should work.
 OPNSENSE_MIN_FIRMWARE = "25.1"  # If less than this, don't allow install. It will not work.
