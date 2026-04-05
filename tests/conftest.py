@@ -15,6 +15,31 @@ from yarl import URL
 import aiopnsense
 
 
+@pytest.fixture
+def legacy_dnsbl_payload() -> dict[str, Any]:
+    """Return a reusable legacy Unbound DNSBL payload.
+
+    Returns:
+        dict[str, Any]: Legacy Unbound DNSBL payload returned by older OPNsense
+        firmware.
+    """
+    return {
+        "unbound": {
+            "dnsbl": {
+                "enabled": "0",
+                "safesearch": "0",
+                "nxdomain": "1",
+                "address": "0.0.0.0",
+                "type": {},
+                "lists": {},
+                "whitelists": {},
+                "blocklists": {},
+                "wildcards": {},
+            }
+        }
+    }
+
+
 class FakeClientSession:
     """Minimal fake aiohttp session for unit tests."""
 
