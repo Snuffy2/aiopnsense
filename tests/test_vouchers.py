@@ -198,7 +198,17 @@ async def test_voucher_switched_endpoints_follow_selected_case(
     expected_provider: str,
     expected_generate: str,
 ) -> None:
-    """Verify voucher helpers choose snake_case or camelCase endpoints consistently."""
+    """Verify voucher helpers choose snake_case or camelCase endpoints consistently.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
+        expected_provider (str): Expected voucher-provider endpoint path.
+        expected_generate (str): Expected voucher-generation endpoint path.
+
+    Returns:
+        None: This test validates voucher endpoint selection behavior.
+    """
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case

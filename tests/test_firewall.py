@@ -378,7 +378,17 @@ async def test_firewall_switched_endpoints_follow_selected_case(
     expected_search: str,
     expected_toggle: str,
 ) -> None:
-    """Verify alias helpers choose snake_case or camelCase endpoints consistently."""
+    """Verify alias helpers choose snake_case or camelCase endpoints consistently.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
+        expected_search (str): Expected alias-search endpoint path.
+        expected_toggle (str): Expected alias-toggle endpoint path.
+
+    Returns:
+        None: This test validates firewall endpoint selection behavior.
+    """
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case

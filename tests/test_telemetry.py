@@ -570,7 +570,20 @@ async def test_telemetry_switched_endpoints_follow_selected_case(
     expected_disk: str,
     expected_temp: str,
 ) -> None:
-    """Verify switched telemetry helpers follow the selected endpoint style."""
+    """Verify switched telemetry helpers follow the selected endpoint style.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
+        expected_memory (str): Expected memory endpoint path.
+        expected_system (str): Expected system-time endpoint path.
+        expected_cpu (str): Expected CPU-type endpoint path.
+        expected_disk (str): Expected filesystem endpoint path.
+        expected_temp (str): Expected temperature endpoint path.
+
+    Returns:
+        None: This test validates telemetry endpoint selection behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case

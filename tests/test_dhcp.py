@@ -792,7 +792,18 @@ async def test_dhcp_switched_endpoints_follow_selected_case(
     expected_v4: str,
     expected_v6: str,
 ) -> None:
-    """Verify DHCP helpers choose snake_case or camelCase endpoints consistently."""
+    """Verify DHCP helpers choose snake_case or camelCase endpoints consistently.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
+        expected_kea (str): Expected reservation lookup endpoint path.
+        expected_v4 (str): Expected ISC DHCPv4 lease endpoint path.
+        expected_v6 (str): Expected ISC DHCPv6 lease endpoint path.
+
+    Returns:
+        None: This test validates DHCP endpoint selection behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case

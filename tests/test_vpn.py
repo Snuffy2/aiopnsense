@@ -648,7 +648,18 @@ async def test_vpn_switched_endpoints_follow_selected_case(
     expected_routes: str,
     expected_client_toggle: str,
 ) -> None:
-    """Verify switched VPN endpoints follow the selected endpoint style."""
+    """Verify switched VPN endpoints follow the selected endpoint style.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
+        expected_sessions (str): Expected OpenVPN session-search endpoint path.
+        expected_routes (str): Expected OpenVPN route-search endpoint path.
+        expected_client_toggle (str): Expected WireGuard client-toggle endpoint path.
+
+    Returns:
+        None: This test validates VPN endpoint selection behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case

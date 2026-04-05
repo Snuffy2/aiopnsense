@@ -1458,7 +1458,14 @@ async def test_toggle_throwing_errors_invalid_value_raises_type_error(
 async def test_client_constructor_initializes_snake_case_state(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify the client starts with unset snake-case endpoint state."""
+    """Verify the client starts with unset snake-case endpoint state.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates the initial snake-case state.
+    """
     client = make_client()
     try:
         assert client._use_snake_case is None
@@ -1483,7 +1490,17 @@ async def test_set_use_snake_case_selects_expected_endpoint_style(
     expected_path: str,
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify firmware-driven snake-case selection and endpoint resolution."""
+    """Verify firmware-driven snake-case selection and endpoint resolution.
+
+    Args:
+        firmware_version (str | None): Firmware version returned by the mocked client.
+        expected_use_snake_case (bool): Expected endpoint-style flag after initialization.
+        expected_path (str): Expected endpoint path returned by the selector helper.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates firmware-based endpoint-style selection.
+    """
     client = make_client()
     try:
         client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
@@ -1501,12 +1518,23 @@ async def test_set_use_snake_case_selects_expected_endpoint_style(
 async def test_get_endpoint_path_lazily_initializes_snake_case_state(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify endpoint selection lazily initializes snake-case mode."""
+    """Verify endpoint selection lazily initializes snake-case mode.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates lazy snake-case initialization behavior.
+    """
     client = make_client()
     try:
 
         async def fake_set_use_snake_case() -> None:
-            """Populate snake-case mode for the lazy helper."""
+            """Populate snake-case mode for the lazy helper.
+
+            Returns:
+                None: This helper mutates client state for the test.
+            """
             client._use_snake_case = False
 
         client.set_use_snake_case = AsyncMock(side_effect=fake_set_use_snake_case)

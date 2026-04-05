@@ -1008,7 +1008,18 @@ async def test_system_switched_endpoints_follow_selected_case(
     expected_dismiss: str,
     expected_reload: str,
 ) -> None:
-    """Verify switched system endpoints follow the selected endpoint style."""
+    """Verify switched system endpoints follow the selected endpoint style.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
+        expected_info (str): Expected system information endpoint path.
+        expected_dismiss (str): Expected notice-dismiss endpoint path.
+        expected_reload (str): Expected interface-reload endpoint path.
+
+    Returns:
+        None: This test validates system endpoint selection behavior.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case
