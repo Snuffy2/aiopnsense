@@ -1,5 +1,13 @@
 # Changelog
 
+## [v1.0.8](https://github.com/Snuffy2/aiopnsense/tree/v1.0.8) (2026-04-06)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.7...v1.0.8)
+
+**Maintenance**
+
+- Merge changelog and release actions [\#35](https://github.com/Snuffy2/aiopnsense/pull/35) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.0.7](https://github.com/Snuffy2/aiopnsense/tree/v1.0.7) (2026-04-05)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.6...v1.0.7)
