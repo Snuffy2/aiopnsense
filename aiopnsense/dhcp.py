@@ -189,7 +189,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             if (
                 lease_info is None
                 or not isinstance(lease_info, MutableMapping)
-                or lease_info.get("state", "0") != "0"
+                or lease_info.get("state", 0) != 0
                 or not lease_info.get("hwaddr", None)
             ):
                 continue
