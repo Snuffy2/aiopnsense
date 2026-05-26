@@ -758,6 +758,8 @@ class ClientBaseMixin:
                 type(e).__name__,
                 e,
             )
+            if self._throw_errors:
+                raise
             return False
 
     async def async_close(self) -> None:
