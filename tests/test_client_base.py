@@ -444,16 +444,25 @@ async def test_is_endpoint_available_raises_transport_error_when_throw_enabled(
     client._throw_errors = True
     calls = 0
 
-    def _get(*args: Any, **kwargs: Any) -> Any:
+    def _get(
+        _url: object,
+        *,
+        auth: object,
+        timeout: object,
+        ssl: object,
+    ) -> FakeResponse:
         """Get.
 
         Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+            _url (object): Requested endpoint URL.
+            auth (object): Authentication object passed by the client.
+            timeout (object): Timeout object passed by the client.
+            ssl (object): SSL verification setting passed by the client.
 
         Returns:
-            Any: Decoded response payload returned by the GET request.
+            FakeResponse: Response object returned by the mocked session getter.
         """
+        del _url, auth, timeout, ssl
         nonlocal calls
         calls += 1
         raise _TestClientSSLError()
@@ -486,16 +495,25 @@ async def test_validate_maps_endpoint_probe_ssl_to_opnsense_ssl_error(
     client._throw_errors = False
     calls = 0
 
-    def _get(*args: Any, **kwargs: Any) -> Any:
+    def _get(
+        _url: object,
+        *,
+        auth: object,
+        timeout: object,
+        ssl: object,
+    ) -> FakeResponse:
         """Get.
 
         Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+            _url (object): Requested endpoint URL.
+            auth (object): Authentication object passed by the client.
+            timeout (object): Timeout object passed by the client.
+            ssl (object): SSL verification setting passed by the client.
 
         Returns:
-            Any: Decoded response payload returned by the GET request.
+            FakeResponse: Response object returned by the mocked session getter.
         """
+        del _url, auth, timeout, ssl
         nonlocal calls
         calls += 1
         raise _TestClientSSLError()

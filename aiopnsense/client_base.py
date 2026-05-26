@@ -700,6 +700,18 @@ class ClientBaseMixin:
 
         Returns:
             bool: True if a specific api endpoint appears to be available; otherwise, False.
+                When no exception is raised, this method always returns a ``bool``.
+
+        Raises:
+            aiohttp.ClientError: Raised when a transport/network client error occurs and
+                ``self._throw_errors`` is ``True``.
+            TimeoutError: Raised when endpoint probing times out and ``self._throw_errors``
+                is ``True``.
+
+        Side Effects:
+            Increments the REST query counter for uncached probes and updates endpoint
+            availability caches. On transient transport errors, cache entries for ``path``
+            are removed before returning ``False`` or re-raising in throw mode.
         """
         if not isinstance(path, str) or not path:
             return False
