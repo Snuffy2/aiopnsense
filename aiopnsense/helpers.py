@@ -293,7 +293,7 @@ def normalize_lookup_token(value: Any) -> str:
 
 
 def api_value_matches(value: Any, expected: str, default: str = "") -> bool:
-    """Compare OPNsense API values across string and numeric representations.
+    """Compare OPNsense API values across string, numeric, and boolean values.
 
     Parameters
     ----------
@@ -312,4 +312,6 @@ def api_value_matches(value: Any, expected: str, default: str = "") -> bool:
     """
     if value is None:
         value = default
+    if isinstance(value, bool):
+        value = int(value)
     return str(value) == expected

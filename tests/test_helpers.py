@@ -115,9 +115,13 @@ def test_api_value_matches() -> None:
     """Compare OPNsense API flag values consistently across string and integer payloads."""
     assert aiopnsense_helpers.api_value_matches("0", "0") is True
     assert aiopnsense_helpers.api_value_matches(0, "0") is True
+    assert aiopnsense_helpers.api_value_matches(False, "0") is True
     assert aiopnsense_helpers.api_value_matches("1", "1") is True
     assert aiopnsense_helpers.api_value_matches(1, "1") is True
+    assert aiopnsense_helpers.api_value_matches(True, "1") is True
     assert aiopnsense_helpers.api_value_matches("active", "active") is True
+    assert aiopnsense_helpers.api_value_matches(False, "1") is False
+    assert aiopnsense_helpers.api_value_matches(True, "0") is False
     assert aiopnsense_helpers.api_value_matches(1, "0") is False
     assert aiopnsense_helpers.api_value_matches(None, "0") is False
     assert aiopnsense_helpers.api_value_matches(None, "0", default="0") is True
