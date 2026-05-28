@@ -81,7 +81,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             new_rule = dict(rule)
             new_rule["description"] = new_rule.pop("descr", "")
             new_rule["enabled"] = (
-                "1" if api_value_matches(new_rule.pop("disabled", None), "0", default="0") else "0"
+                "1" if api_value_matches(new_rule.pop("disabled", "0"), "0") else "0"
             )
             rules_dict[str(new_rule["uuid"])] = new_rule
         # _LOGGER.debug("[get_nat_destination_rules] rules_dict: %s", rules_dict)

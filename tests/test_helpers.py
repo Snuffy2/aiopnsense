@@ -124,7 +124,6 @@ def test_api_value_matches() -> None:
     assert aiopnsense_helpers.api_value_matches(True, "0") is False
     assert aiopnsense_helpers.api_value_matches(1, "0") is False
     assert aiopnsense_helpers.api_value_matches(None, "0") is False
-    assert aiopnsense_helpers.api_value_matches(None, "0", default="0") is True
 
 
 def test_get_ip_key_sorting() -> None:

@@ -71,7 +71,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
                     key
                     for key, value in dnsbl_settings[attr].items()
                     if isinstance(value, MutableMapping)
-                    and api_value_matches(value.get("selected"), "1", default="0")
+                    and api_value_matches(value.get("selected", 0), "1")
                 )
             else:
                 dnsbl[attr] = ""
