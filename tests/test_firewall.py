@@ -96,7 +96,7 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
             "_get_nat_destination_rules",
             "/api/firewall/d_nat/search_rule",
             [
-                {"uuid": "dst1", "descr": "DNAT rule", "disabled": "0"},
+                {"uuid": "dst1", "descr": "DNAT rule", "disabled": 0},
                 {"uuid": "lockout-1", "descr": "ignored", "disabled": "0"},
             ],
             {"dst1": {"uuid": "dst1", "description": "DNAT rule", "enabled": "1"}},

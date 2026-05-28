@@ -146,10 +146,12 @@ async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
                         "type": {
                             "ads": {"selected": 1},
                             "malware": {"selected": 0},
+                            "tracking": {"selected": "1"},
                         },
                         "lists": {
                             "list-a": {"selected": 1},
                             "list-b": {"selected": 1},
+                            "list-c": {"selected": "1"},
                         },
                         "whitelists": {
                             "allow-a": {"selected": 1},
@@ -173,8 +175,8 @@ async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
                 "safesearch": "0",
                 "nxdomain": "1",
                 "address": "0.0.0.0",
-                "type": "ads",
-                "lists": "list-a,list-b",
+                "type": "ads,tracking",
+                "lists": "list-a,list-b,list-c",
                 "whitelists": "allow-a",
                 "blocklists": "deny-a",
                 "wildcards": "wild-a",

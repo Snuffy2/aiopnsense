@@ -293,7 +293,7 @@ async def test_openvpn_processing_and_fetch_details(make_client) -> None:
                 return {
                     "instance": {
                         "server": "10.0.0.1",
-                        "dns_servers": {"0": {"selected": 1, "value": "8.8.8.8"}},
+                        "dns_servers": {"0": {"selected": "1", "value": "8.8.8.8"}},
                     }
                 }
             return {}
@@ -561,9 +561,9 @@ async def test_get_wireguard_success_and_invalid(make_client) -> None:
                     "c1": {
                         "name": "client1",
                         "pubkey": "cpk",
-                        "enabled": "1",
+                        "enabled": 1,
                         "tunneladdress": {},
-                        "servers": {"s1": {"selected": 1, "value": "srv1"}},
+                        "servers": {"s1": {"selected": "1", "value": "srv1"}},
                     }
                 }
             }
@@ -576,10 +576,10 @@ async def test_get_wireguard_success_and_invalid(make_client) -> None:
                     "s1": {
                         "name": "srv1",
                         "pubkey": "spk",
-                        "enabled": "1",
+                        "enabled": 1,
                         "instance": "1",
-                        "tunneladdress": {"0": {"selected": 1, "value": "10.0.0.1"}},
-                        "peers": {"c1": {"selected": 1, "value": "client1"}},
+                        "tunneladdress": {"0": {"selected": "1", "value": "10.0.0.1"}},
+                        "peers": {"c1": {"selected": "1", "value": "client1"}},
                     }
                 }
             }

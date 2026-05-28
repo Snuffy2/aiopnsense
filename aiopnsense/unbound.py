@@ -8,7 +8,7 @@ import awesomeversion
 
 from ._typing import AiopnsenseClientProtocol
 from .const import LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
-from .helpers import _LOGGER, _log_errors
+from .helpers import _LOGGER, _log_errors, api_value_matches
 
 
 class UnboundMixin(AiopnsenseClientProtocol):
@@ -70,7 +70,8 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 dnsbl[attr] = ",".join(
                     key
                     for key, value in dnsbl_settings[attr].items()
-                    if isinstance(value, MutableMapping) and value.get("selected", 0) == 1
+                    if isinstance(value, MutableMapping)
+                    and api_value_matches(value.get("selected"), "1", default="0")
                 )
             else:
                 dnsbl[attr] = ""

@@ -111,6 +111,18 @@ def test_normalize_lookup_token() -> None:
     assert aiopnsense_helpers.normalize_lookup_token(None) == ""
 
 
+def test_api_value_matches() -> None:
+    """Compare OPNsense API flag values consistently across string and integer payloads."""
+    assert aiopnsense_helpers.api_value_matches("0", "0") is True
+    assert aiopnsense_helpers.api_value_matches(0, "0") is True
+    assert aiopnsense_helpers.api_value_matches("1", "1") is True
+    assert aiopnsense_helpers.api_value_matches(1, "1") is True
+    assert aiopnsense_helpers.api_value_matches("active", "active") is True
+    assert aiopnsense_helpers.api_value_matches(1, "0") is False
+    assert aiopnsense_helpers.api_value_matches(None, "0") is False
+    assert aiopnsense_helpers.api_value_matches(None, "0", default="0") is True
+
+
 def test_get_ip_key_sorting() -> None:
     """Sort IP-like items using get_ip_key ordering."""
     items = [

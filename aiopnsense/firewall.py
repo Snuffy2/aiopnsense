@@ -4,7 +4,7 @@ from collections.abc import MutableMapping
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors
+from .helpers import _LOGGER, _log_errors, api_value_matches
 
 
 class FirewallMixin(AiopnsenseClientProtocol):
@@ -80,7 +80,9 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 continue  # skip lockout rules
             new_rule = dict(rule)
             new_rule["description"] = new_rule.pop("descr", "")
-            new_rule["enabled"] = "1" if new_rule.pop("disabled", "0") == "0" else "0"
+            new_rule["enabled"] = (
+                "1" if api_value_matches(new_rule.pop("disabled", None), "0", default="0") else "0"
+            )
             rules_dict[str(new_rule["uuid"])] = new_rule
         # _LOGGER.debug("[get_nat_destination_rules] rules_dict: %s", rules_dict)
         _LOGGER.debug("[get_nat_destination_rules] rules_dict length: %s", len(rules_dict))

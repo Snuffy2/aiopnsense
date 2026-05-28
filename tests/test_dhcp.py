@@ -489,13 +489,14 @@ async def test_get_kea_interfaces_filters_enabled_and_selected(make_client: Clie
                             "em1": {"selected": 0, "value": "WAN"},
                             "em2": {"selected": 1, "value": ""},
                             "em3": "invalid",
+                            "em4": {"selected": "1", "value": "OPT"},
                         },
                     }
                 }
             }
         )
 
-        assert await client._get_kea_interfaces() == {"em0": "LAN"}
+        assert await client._get_kea_interfaces() == {"em0": "LAN", "em4": "OPT"}
     finally:
         await client.async_close()
 
