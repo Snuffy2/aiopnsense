@@ -111,19 +111,25 @@ def test_normalize_lookup_token() -> None:
     assert aiopnsense_helpers.normalize_lookup_token(None) == ""
 
 
-def test_api_value_matches() -> None:
-    """Compare OPNsense API flag values consistently across string and integer payloads."""
-    assert aiopnsense_helpers.api_value_matches("0", "0") is True
-    assert aiopnsense_helpers.api_value_matches(0, "0") is True
-    assert aiopnsense_helpers.api_value_matches(False, "0") is True
-    assert aiopnsense_helpers.api_value_matches("1", "1") is True
-    assert aiopnsense_helpers.api_value_matches(1, "1") is True
-    assert aiopnsense_helpers.api_value_matches(True, "1") is True
-    assert aiopnsense_helpers.api_value_matches("active", "active") is True
-    assert aiopnsense_helpers.api_value_matches(False, "1") is False
-    assert aiopnsense_helpers.api_value_matches(True, "0") is False
-    assert aiopnsense_helpers.api_value_matches(1, "0") is False
-    assert aiopnsense_helpers.api_value_matches(None, "0") is False
+@pytest.mark.parametrize(
+    ("value", "expected", "matches"),
+    [
+        ("0", "0", True),
+        (0, "0", True),
+        (False, "0", True),
+        ("1", "1", True),
+        (1, "1", True),
+        (True, "1", True),
+        ("active", "active", True),
+        (False, "1", False),
+        (True, "0", False),
+        (1, "0", False),
+        (None, "0", False),
+    ],
+)
+def test_api_value_matches(value: object, expected: str, matches: bool) -> None:
+    """Compare API flag values consistently across mixed payload types."""
+    assert aiopnsense_helpers.api_value_matches(value, expected) is matches
 
 
 def test_get_ip_key_sorting() -> None:

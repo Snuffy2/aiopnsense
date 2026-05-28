@@ -292,20 +292,15 @@ def normalize_lookup_token(value: Any) -> str:
     return str(value).strip().lower()
 
 
-def api_value_matches(value: Any, expected: str) -> bool:
-    """Compare OPNsense API values across string, numeric, and boolean values.
+def api_value_matches(value: object, expected: str) -> bool:
+    """Compare OPNsense API values across string, numeric, and boolean forms.
 
-    Parameters
-    ----------
-    value : Any
-        Raw value returned by OPNsense APIs.
-    expected : str
-        Normalized expected value.
-    Returns
-    -------
-    bool
+    Args:
+        value: Raw value returned by OPNsense APIs.
+        expected: Normalized expected value.
+
+    Returns:
         ``True`` when the normalized API value matches ``expected``.
-
     """
     if isinstance(value, bool):
         value = int(value)

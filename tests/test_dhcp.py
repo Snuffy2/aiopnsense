@@ -125,6 +125,11 @@ async def test_get_kea_leases_accepts_integer_active_state(make_client: ClientTy
                             "state": 1,
                             "if_name": "em0",
                         },
+                        {
+                            "address": "192.0.2.12",
+                            "hwaddr": "aa:bb:cc:dd:ee:11",
+                            "if_name": "em0",
+                        },
                     ]
                 },
                 {"rows": []},
