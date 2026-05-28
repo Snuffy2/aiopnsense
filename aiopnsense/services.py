@@ -5,7 +5,7 @@ from typing import Any
 from urllib.parse import quote
 
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors
+from .helpers import _LOGGER, _log_errors, api_value_matches
 
 
 class ServicesMixin(AiopnsenseClientProtocol):
@@ -26,11 +26,7 @@ class ServicesMixin(AiopnsenseClientProtocol):
             if not isinstance(service, MutableMapping):
                 continue
             running = service.get("running", 0)
-            try:
-                is_running = int(running) == 1
-            except TypeError, ValueError:
-                is_running = str(running) == "1"
-            service["status"] = is_running
+            service["status"] = api_value_matches(running, "1")
             normalized_services.append(service)
         return normalized_services
 

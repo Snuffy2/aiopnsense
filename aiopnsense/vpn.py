@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, timestamp_to_datetime, try_to_int
+from .helpers import _LOGGER, _log_errors, api_value_matches, timestamp_to_datetime, try_to_int
 
 
 class VPNMixin(AiopnsenseClientProtocol):
@@ -111,7 +111,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 openvpn["clients"][uuid] = {
                     "name": instance.get("description"),
                     "uuid": uuid,
-                    "enabled": instance.get("enabled") == "1",
+                    "enabled": api_value_matches(instance.get("enabled"), "1"),
                 }
 
     @staticmethod
@@ -131,7 +131,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             openvpn["servers"][uuid] = {
                 "uuid": uuid,
                 "name": instance.get("description"),
-                "enabled": instance.get("enabled") == "1",
+                "enabled": api_value_matches(instance.get("enabled"), "1"),
                 "dev_type": instance.get("dev_type"),
                 "clients": [],
             }
@@ -257,7 +257,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             server["dns_servers"] = [
                 dns["value"]
                 for dns in details.get("dns_servers", {}).values()
-                if dns.get("selected") == 1 and dns.get("value")
+                if api_value_matches(dns.get("selected"), "1") and dns.get("value")
             ]
 
     @_log_errors
@@ -332,13 +332,13 @@ class VPNMixin(AiopnsenseClientProtocol):
             "uuid": uid,
             "name": srv.get("name"),
             "pubkey": srv.get("pubkey"),
-            "enabled": srv.get("enabled", "") == "1",
+            "enabled": api_value_matches(srv.get("enabled"), "1"),
             "interface": f"wg{srv.get('instance', '')}",
             "dns_servers": [srv.get("peer_dns")] if srv.get("peer_dns") else [],
             "tunnel_addresses": [
                 addr.get("value")
                 for addr in srv.get("tunneladdress", {}).values()
-                if addr.get("selected") == 1 and addr.get("value")
+                if api_value_matches(addr.get("selected"), "1") and addr.get("value")
             ],
             "clients": [
                 {
@@ -348,7 +348,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                     "connected": False,
                 }
                 for peer_id, peer in srv.get("peers", {}).items()
-                if peer.get("selected") == 1 and peer.get("value")
+                if api_value_matches(peer.get("selected"), "1") and peer.get("value")
             ],
             "connected_clients": 0,
             "total_bytes_recv": 0,
@@ -373,16 +373,16 @@ class VPNMixin(AiopnsenseClientProtocol):
             "uuid": uid,
             "name": clnt.get("name"),
             "pubkey": clnt.get("pubkey"),
-            "enabled": clnt.get("enabled", "") == "1",
+            "enabled": api_value_matches(clnt.get("enabled"), "1"),
             "tunnel_addresses": [
                 addr.get("value")
                 for addr in clnt.get("tunneladdress", {}).values()
-                if addr.get("selected") == 1 and addr.get("value")
+                if api_value_matches(addr.get("selected"), "1") and addr.get("value")
             ],
             "servers": [
                 await VPNMixin._link_wireguard_client_to_server(srv_id, servers, srv)
                 for srv_id, srv in clnt.get("servers", {}).items()
-                if srv.get("selected") == 1 and srv.get("value")
+                if api_value_matches(srv.get("selected"), "1") and srv.get("value")
             ],
             "connected_servers": 0,
             "total_bytes_recv": 0,

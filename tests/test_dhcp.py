@@ -94,6 +94,66 @@ async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client: ClientType) 
 
 
 @pytest.mark.asyncio
+async def test_get_kea_leases_accepts_integer_active_state(make_client: ClientType) -> None:
+    """Kea active leases should parse when OPNsense returns integer state 0.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates mixed integer/string Kea lease state handling.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {
+                    "rows": [
+                        {
+                            "address": "192.0.2.10",
+                            "hwaddr": "aa:bb:cc:dd:ee:ff",
+                            "state": 0,
+                            "if_name": "em0",
+                            "if_descr": "LAN",
+                            "hostname": "host.",
+                        },
+                        {
+                            "address": "192.0.2.11",
+                            "hwaddr": "aa:bb:cc:dd:ee:00",
+                            "state": 1,
+                            "if_name": "em0",
+                        },
+                        {
+                            "address": "192.0.2.12",
+                            "hwaddr": "aa:bb:cc:dd:ee:11",
+                            "if_name": "em0",
+                        },
+                    ]
+                },
+                {"rows": []},
+            ]
+        )
+
+        leases = await client._get_kea_dhcpv4_leases()
+
+        assert leases == [
+            {
+                "address": "192.0.2.10",
+                "hostname": "host",
+                "if_descr": "LAN",
+                "if_name": "em0",
+                "type": "dynamic",
+                "mac": "aa:bb:cc:dd:ee:ff",
+                "expires": None,
+            }
+        ]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> None:
     """Verify ARP table lookup uses GET endpoint with the expected query parameter.
 
@@ -434,13 +494,14 @@ async def test_get_kea_interfaces_filters_enabled_and_selected(make_client: Clie
                             "em1": {"selected": 0, "value": "WAN"},
                             "em2": {"selected": 1, "value": ""},
                             "em3": "invalid",
+                            "em4": {"selected": "1", "value": "OPT"},
                         },
                     }
                 }
             }
         )
 
-        assert await client._get_kea_interfaces() == {"em0": "LAN"}
+        assert await client._get_kea_interfaces() == {"em0": "LAN", "em4": "OPT"}
     finally:
         await client.async_close()
 

@@ -973,12 +973,20 @@ async def test_get_certificates_handles_non_list_and_missing_description(
                         "valid_from": 0,
                         "valid_to": 0,
                     },
+                    {
+                        "descr": "cert-used",
+                        "uuid": "u2",
+                        "in_use": 1,
+                        "valid_from": 0,
+                        "valid_to": 0,
+                    },
                 ]
             }
         )
         certs = await client.get_certificates()
-        assert list(certs) == ["cert-ok"]
+        assert list(certs) == ["cert-ok", "cert-used"]
         assert certs["cert-ok"]["in_use"] is False
+        assert certs["cert-used"]["in_use"] is True
     finally:
         await client.async_close()
 

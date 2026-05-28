@@ -13,6 +13,7 @@ from .const import AMBIGUOUS_TZINFOS
 from .helpers import (
     _LOGGER,
     _log_errors,
+    api_value_matches,
     coerce_bool,
     normalize_lookup_token,
     timestamp_to_datetime,
@@ -698,7 +699,7 @@ class SystemMixin(AiopnsenseClientProtocol):
                     "uuid": cert.get("uuid", None),
                     "issuer": cert.get("caref", None),
                     "purpose": cert.get("rfc3280_purpose", None),
-                    "in_use": bool(cert.get("in_use", "0") == "1"),
+                    "in_use": api_value_matches(cert.get("in_use", "0"), "1"),
                     "valid_from": timestamp_to_datetime(try_to_int(cert.get("valid_from", None))),
                     "valid_to": timestamp_to_datetime(try_to_int(cert.get("valid_to", None))),
                 }

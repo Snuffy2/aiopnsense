@@ -5,7 +5,14 @@ from datetime import datetime, tzinfo
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, get_ip_key, timestamp_to_datetime, try_to_int
+from .helpers import (
+    _LOGGER,
+    _log_errors,
+    api_value_matches,
+    get_ip_key,
+    timestamp_to_datetime,
+    try_to_int,
+)
 
 
 class DHCPMixin(AiopnsenseClientProtocol):
@@ -40,7 +47,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             bool: ``True`` for reserved/static lease rows, ``False`` otherwise.
         """
         if isinstance(raw_reserved, str):
-            return raw_reserved == "1"
+            return api_value_matches(raw_reserved, "1")
         if isinstance(raw_reserved, list):
             return len(raw_reserved) > 0
         return bool(raw_reserved)
@@ -134,12 +141,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
         response = await self._safe_dict_get(endpoint)
         lease_interfaces: dict[str, Any] = {}
         general: dict[str, Any] = response.get("dhcpv4", {}).get("general", {})
-        if general.get("enabled", "0") != "1":
+        if not api_value_matches(general.get("enabled", "0"), "1"):
             return {}
         for if_name, iface in general.get("interfaces", {}).items():
             if not isinstance(iface, MutableMapping):
                 continue
-            if iface.get("selected", 0) == 1 and iface.get("value", None):
+            if api_value_matches(iface.get("selected", 0), "1") and iface.get("value", None):
                 lease_interfaces[if_name] = iface.get("value")
         # _LOGGER.debug(f"[get_kea_interfaces] lease_interfaces: {lease_interfaces}")
         return lease_interfaces
@@ -189,7 +196,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             if (
                 lease_info is None
                 or not isinstance(lease_info, MutableMapping)
-                or lease_info.get("state", "0") != "0"
+                or not api_value_matches(lease_info.get("state"), "0")
                 or not lease_info.get("hwaddr", None)
             ):
                 continue
@@ -297,7 +304,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             )
             lease["if_descr"] = lease_info.get("if_descr", None)
             lease["if_name"] = lease_info.get("if", None)
-            if self._is_dnsmasq_reserved_lease(lease_info.get("is_reserved", "0")):
+            if self._is_dnsmasq_reserved_lease(lease_info.get("is_reserved")):
                 lease["type"] = "static"
             else:
                 lease["type"] = "dynamic"
