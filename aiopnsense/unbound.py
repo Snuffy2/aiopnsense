@@ -169,11 +169,10 @@ class UnboundMixin(AiopnsenseClientProtocol):
         """Return Unbound DNS blocklist configuration.
 
         Returns:
-            dict[str, Any]: For legacy firmware, a mapping with ``legacy`` set
-                to the regular DNSBL settings. For extended-blocklist
-                firmware, a UUID-keyed mapping of DNSBL rows from
-                ``search_dnsbl``. Returns an empty mapping when the endpoint is
-                unavailable or malformed.
+            dict[str, Any]:  A UUID-keyed mapping of DNSBL rows from
+                ``search_dnsbl``. For legacy firmware, a mapping with ``legacy``
+                set to the regular DNSBL settings. Returns an empty mapping when
+                the endpoint is unavailable or malformed.
         """
         use_legacy = await self._uses_legacy_unbound_blocklist()
         if use_legacy is not False:
