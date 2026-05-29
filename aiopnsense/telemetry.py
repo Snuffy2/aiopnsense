@@ -9,11 +9,31 @@ from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
-from .helpers import _LOGGER, _log_errors, try_to_float, try_to_int
+from .helpers import _LOGGER, _log_errors, dict_get, try_to_float, try_to_int
 
 
 class TelemetryMixin(AiopnsenseClientProtocol):
     """Telemetry methods for OPNsenseClient."""
+
+    @staticmethod
+    def _usage_percent(
+        used: int | None,
+        total: int | None,
+        default: int | None = None,
+    ) -> int | None:
+        """Calculate a rounded usage percentage for valid integer counters.
+
+        Args:
+            used (int | None): Used amount.
+            total (int | None): Total capacity.
+            default (int | None, optional): Value returned for invalid or zero totals.
+
+        Returns:
+            int | None: Rounded percentage, or ``default`` when counters are invalid.
+        """
+        if isinstance(used, int) and isinstance(total, int) and total > 0:
+            return round(used / total * 100)
+        return default
 
     @_log_errors
     async def get_telemetry(self) -> MutableMapping[str, Any]:
@@ -30,7 +50,6 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         telemetry["cpu"] = await self._get_telemetry_cpu()
         telemetry["filesystems"] = await self._get_telemetry_filesystems()
         telemetry["temps"] = await self._get_telemetry_temps()
-        # _LOGGER.debug(f"[get_telemetry] telemetry: {telemetry}")
         return telemetry
 
     @_log_errors
@@ -45,7 +64,6 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("Interface overview endpoint unavailable")
             return {}
         interface_info = await self._safe_list_get(interfaces_endpoint)
-        # _LOGGER.debug(f"[get_interfaces] interface_info: {interface_info}")
         if not len(interface_info) > 0:
             return {}
         interfaces: dict[str, Any] = {}
@@ -53,31 +71,22 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             interface: dict[str, Any] = {}
             if not isinstance(ifinfo, MutableMapping) or ifinfo.get("identifier", "") == "":
                 continue
-            interface["inpkts"] = try_to_int(
-                ifinfo.get("statistics", {}).get("packets received", None)
-            )
-            interface["outpkts"] = try_to_int(
-                ifinfo.get("statistics", {}).get("packets transmitted", None)
-            )
-            interface["inbytes"] = try_to_int(
-                ifinfo.get("statistics", {}).get("bytes received", None)
-            )
-            interface["outbytes"] = try_to_int(
-                ifinfo.get("statistics", {}).get("bytes transmitted", None)
-            )
-            interface["inbytes_frmt"] = try_to_int(
-                ifinfo.get("statistics", {}).get("bytes received", None)
-            )
-            interface["outbytes_frmt"] = try_to_int(
-                ifinfo.get("statistics", {}).get("bytes transmitted", None)
-            )
-            interface["inerrs"] = try_to_int(ifinfo.get("statistics", {}).get("input errors", None))
-            interface["outerrs"] = try_to_int(
-                ifinfo.get("statistics", {}).get("output errors", None)
-            )
-            interface["collisions"] = try_to_int(
-                ifinfo.get("statistics", {}).get("collisions", None)
-            )
+            statistics = ifinfo.get("statistics", {})
+            if not isinstance(statistics, MutableMapping):
+                statistics = {}
+            packets_received = try_to_int(statistics.get("packets received"))
+            packets_transmitted = try_to_int(statistics.get("packets transmitted"))
+            bytes_received = try_to_int(statistics.get("bytes received"))
+            bytes_transmitted = try_to_int(statistics.get("bytes transmitted"))
+            interface["inpkts"] = packets_received
+            interface["outpkts"] = packets_transmitted
+            interface["inbytes"] = bytes_received
+            interface["outbytes"] = bytes_transmitted
+            interface["inbytes_frmt"] = bytes_received
+            interface["outbytes_frmt"] = bytes_transmitted
+            interface["inerrs"] = try_to_int(statistics.get("input errors"))
+            interface["outerrs"] = try_to_int(statistics.get("output errors"))
+            interface["collisions"] = try_to_int(statistics.get("collisions"))
             interface["interface"] = ifinfo.get("identifier", "")
             interface["name"] = ifinfo.get("description", "")
             interface["status"] = ""
@@ -96,7 +105,6 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             interface["enabled"] = ifinfo.get("enabled", None)
             interface["vlan_tag"] = ifinfo.get("vlan_tag", None)
             interfaces[ifinfo.get("identifier", "")] = interface
-        # _LOGGER.debug(f"[get_interfaces] interfaces: {interfaces}")
         return interfaces
 
     @_log_errors
@@ -111,18 +119,10 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("Telemetry mbuf endpoint unavailable")
             return {}
         mbuf_info = await self._safe_dict_get(mbuf_endpoint)
-        # _LOGGER.debug(f"[get_telemetry_mbuf] mbuf_info: {mbuf_info}")
         mbuf: dict[str, Any] = {}
-        mbuf["used"] = try_to_int(mbuf_info.get("mbuf-statistics", {}).get("mbuf-current", None))
-        mbuf["total"] = try_to_int(mbuf_info.get("mbuf-statistics", {}).get("mbuf-total", None))
-        mbuf["used_percent"] = (
-            round(mbuf["used"] / mbuf["total"] * 100)
-            if isinstance(mbuf["used"], int)
-            and isinstance(mbuf["total"], int)
-            and mbuf["total"] > 0
-            else None
-        )
-        # _LOGGER.debug(f"[get_telemetry_mbuf] mbuf: {mbuf}")
+        mbuf["used"] = try_to_int(dict_get(mbuf_info, "mbuf-statistics.mbuf-current"))
+        mbuf["total"] = try_to_int(dict_get(mbuf_info, "mbuf-statistics.mbuf-total"))
+        mbuf["used_percent"] = self._usage_percent(mbuf["used"], mbuf["total"])
         return mbuf
 
     @_log_errors
@@ -137,18 +137,10 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("Telemetry pfstate endpoint unavailable")
             return {}
         pfstate_info = await self._safe_dict_get(pfstate_endpoint)
-        # _LOGGER.debug(f"[get_telemetry_pfstate] pfstate_info: {pfstate_info}")
         pfstate: dict[str, Any] = {}
         pfstate["used"] = try_to_int(pfstate_info.get("current", None))
         pfstate["total"] = try_to_int(pfstate_info.get("limit", None))
-        pfstate["used_percent"] = (
-            round(pfstate["used"] / pfstate["total"] * 100)
-            if isinstance(pfstate["used"], int)
-            and isinstance(pfstate["total"], int)
-            and pfstate["total"] > 0
-            else None
-        )
-        # _LOGGER.debug(f"[get_telemetry_pfstate] pfstate: {pfstate}")
+        pfstate["used_percent"] = self._usage_percent(pfstate["used"], pfstate["total"])
         return pfstate
 
     @_log_errors
@@ -170,40 +162,27 @@ class TelemetryMixin(AiopnsenseClientProtocol):
                 "used_percent": None,
             }
         memory_info = await self._safe_dict_get(memory_endpoint)
-        # _LOGGER.debug(f"[get_telemetry_memory] memory_info: {memory_info}")
         memory: dict[str, Any] = {}
-        memory["physmem"] = try_to_int(memory_info.get("memory", {}).get("total", None))
-        memory["used"] = try_to_int(memory_info.get("memory", {}).get("used", None))
-        memory["used_percent"] = (
-            round(memory["used"] / memory["physmem"] * 100)
-            if isinstance(memory["used"], int)
-            and isinstance(memory["physmem"], int)
-            and memory["physmem"] > 0
-            else None
-        )
+        memory["physmem"] = try_to_int(dict_get(memory_info, "memory.total"))
+        memory["used"] = try_to_int(dict_get(memory_info, "memory.used"))
+        memory["used_percent"] = self._usage_percent(memory["used"], memory["physmem"])
         swap_endpoint = "/api/diagnostics/system/system_swap"
         if not await self.is_endpoint_available(swap_endpoint):
             _LOGGER.debug("Telemetry swap endpoint unavailable")
             return memory
 
         swap_info = await self._safe_dict_get(swap_endpoint)
-        if (
-            not isinstance(swap_info.get("swap", None), list)
-            or not len(swap_info.get("swap", [])) > 0
-            or not isinstance(swap_info.get("swap", [])[0], MutableMapping)
-        ):
+        swap_rows = swap_info.get("swap")
+        if not isinstance(swap_rows, list) or not swap_rows:
             return memory
-        # _LOGGER.debug(f"[get_telemetry_memory] swap_info: {swap_info}")
-        memory["swap_total"] = try_to_int(swap_info.get("swap", [])[0].get("total", None))
-        memory["swap_reserved"] = try_to_int(swap_info["swap"][0].get("used", None))
-        memory["swap_used_percent"] = (
-            round(memory["swap_reserved"] / memory["swap_total"] * 100)
-            if isinstance(memory["swap_reserved"], int)
-            and isinstance(memory["swap_total"], int)
-            and memory["swap_total"] > 0
-            else 0
+        swap_row = swap_rows[0]
+        if not isinstance(swap_row, MutableMapping):
+            return memory
+        memory["swap_total"] = try_to_int(swap_row.get("total"))
+        memory["swap_reserved"] = try_to_int(swap_row.get("used"))
+        memory["swap_used_percent"] = self._usage_percent(
+            memory["swap_reserved"], memory["swap_total"], default=0
         )
-        # _LOGGER.debug(f"[get_telemetry_memory] memory: {memory}")
         return memory
 
     @_log_errors
@@ -221,7 +200,6 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("Telemetry system time endpoint unavailable")
             return {}
         time_info = await self._safe_dict_get(time_endpoint)
-        # _LOGGER.debug("[get_telemetry_system] time_info: %s", time_info)
         system: dict[str, Any] = {}
         opnsense_tz = await self._get_opnsense_timezone(time_info.get("datetime"))
 
@@ -290,7 +268,6 @@ class TelemetryMixin(AiopnsenseClientProtocol):
                 "five_minute": None,
                 "fifteen_minute": None,
             }
-        # _LOGGER.debug(f"[get_telemetry_system] system: {system}")
         return system
 
     @_log_errors
@@ -308,7 +285,6 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("Telemetry CPU type endpoint unavailable")
             return {}
         cputype_info = await self._safe_list_get(cpu_type_endpoint)
-        # _LOGGER.debug(f"[get_telemetry_cpu] cputype_info: {cputype_info}")
         if not len(cputype_info) > 0:
             return {}
         cpu: dict[str, Any] = {}
@@ -321,14 +297,12 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             return cpu
         cpustream_info = await self._get_from_stream(cpu_stream_endpoint)
         # {"total":29,"user":2,"nice":0,"sys":27,"intr":0,"idle":70}
-        # _LOGGER.debug(f"[get_telemetry_cpu] cpustream_info: {cpustream_info}")
         cpu["usage_total"] = try_to_int(cpustream_info.get("total", None))
         cpu["usage_user"] = try_to_int(cpustream_info.get("user", None))
         cpu["usage_nice"] = try_to_int(cpustream_info.get("nice", None))
         cpu["usage_system"] = try_to_int(cpustream_info.get("sys", None))
         cpu["usage_interrupt"] = try_to_int(cpustream_info.get("intr", None))
         cpu["usage_idle"] = try_to_int(cpustream_info.get("idle", None))
-        # _LOGGER.debug(f"[get_telemetry_cpu] cpu: {cpu}")
         return cpu
 
     @_log_errors
@@ -346,9 +320,7 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("Telemetry filesystem endpoint unavailable")
             return []
         filesystems_info = await self._safe_dict_get(filesystems_endpoint)
-        # _LOGGER.debug(f"[get_telemetry_filesystems] filesystems_info: {filesystems_info}")
         filesystems: list = filesystems_info.get("devices", [])
-        # _LOGGER.debug(f"[get_telemetry_filesystems] filesystems: {filesystems}")
         return filesystems
 
     @_log_errors
@@ -363,14 +335,12 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("Gateway status endpoint unavailable")
             return {}
         gateways_info = await self._safe_dict_get(gateway_endpoint)
-        # _LOGGER.debug(f"[get_gateways] gateways_info: {gateways_info}")
         gateways: dict[str, Any] = {}
         for gw_info in gateways_info.get("items", []):
             if isinstance(gw_info, MutableMapping) and "name" in gw_info:
                 gateways[gw_info["name"]] = gw_info
         for gateway in gateways.values():
             gateway["status"] = gateway.pop("status_translated", gateway.get("status", "")).lower()
-        # _LOGGER.debug(f"[get_gateways] gateways: {gateways}")
         return gateways
 
     @_log_errors
@@ -388,7 +358,6 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("Telemetry temperature endpoint unavailable")
             return {}
         temps_info = await self._safe_list_get(temperature_endpoint)
-        # _LOGGER.debug(f"[get_telemetry_temps] temps_info: {temps_info}")
         if not len(temps_info) > 0:
             return {}
         temps: dict[str, Any] = {}
@@ -400,5 +369,4 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             )
             temp["device_id"] = temp_info.get("device", str(i))
             temps[temp_info.get("device", str(i)).replace(".", "_")] = temp
-        # _LOGGER.debug(f"[get_telemetry_temps] temps: {temps}")
         return temps

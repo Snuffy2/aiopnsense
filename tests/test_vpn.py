@@ -132,9 +132,7 @@ async def test_wireguard_processing_and_updates(make_client) -> None:
 
     # peer entry representing interface update
     entry_interface = {"type": "interface", "public-key": "pk", "status": "up"}
-    await aiopnsense_module.OPNsenseClient._update_wireguard_status(
-        [entry_interface], servers, clients
-    )
+    aiopnsense_module.OPNsenseClient._update_wireguard_status([entry_interface], servers, clients)
     # server status set
     assert any(s.get("status") == "up" for s in servers.values())
 
@@ -148,7 +146,7 @@ async def test_wireguard_processing_and_updates(make_client) -> None:
         "transfer-tx": "200",
         "latest-handshake": "0",
     }
-    await aiopnsense_module.OPNsenseClient._update_wireguard_status([entry_peer], servers, clients)
+    aiopnsense_module.OPNsenseClient._update_wireguard_status([entry_peer], servers, clients)
     # ensure client's server linkage updated: require explicit connected state or measurable traffic
     srv = clients["c1"]["servers"][0]
     has_connected_flag = bool(srv.get("connected"))
@@ -332,7 +330,7 @@ async def test_openvpn_client_session_updates_server_stats() -> None:
         "latest-handshake": int(datetime.now(tz=UTC).timestamp()),
     }
 
-    await aiopnsense_module.OPNsenseClient._update_wireguard_peer_status(entry, servers, clients)
+    aiopnsense_module.OPNsenseClient._update_wireguard_peer_status(entry, servers, clients)
 
     # ensure totals updated on either server or client as implementation may update parent
     server_updated = any(
@@ -358,7 +356,7 @@ async def test_openvpn_processing_helpers_skip_invalid_rows_and_unknown_servers(
     """
     openvpn: dict[str, Any] = {"servers": {}, "clients": {}}
 
-    await aiopnsense_module.OPNsenseClient._process_openvpn_instances(  # type: ignore[arg-type]
+    aiopnsense_module.OPNsenseClient._process_openvpn_instances(  # type: ignore[arg-type]
         {
             "rows": [
                 None,
@@ -371,7 +369,7 @@ async def test_openvpn_processing_helpers_skip_invalid_rows_and_unknown_servers(
     )
     assert "c1" in openvpn["clients"]
 
-    await aiopnsense_module.OPNsenseClient._process_openvpn_providers(  # type: ignore[arg-type]
+    aiopnsense_module.OPNsenseClient._process_openvpn_providers(  # type: ignore[arg-type]
         {
             "": {"name": "skip-empty-uuid"},
             "srv1": "bad-provider",
@@ -382,7 +380,7 @@ async def test_openvpn_processing_helpers_skip_invalid_rows_and_unknown_servers(
     assert "srv1" not in openvpn["servers"]
     assert openvpn["servers"]["srv2"]["name"] == "provider-two"
 
-    await aiopnsense_module.OPNsenseClient._process_openvpn_sessions(  # type: ignore[arg-type]
+    aiopnsense_module.OPNsenseClient._process_openvpn_sessions(  # type: ignore[arg-type]
         {
             "rows": [
                 None,
@@ -394,7 +392,7 @@ async def test_openvpn_processing_helpers_skip_invalid_rows_and_unknown_servers(
     )
     assert openvpn["servers"]["srv2"]["status"] == "failed"
 
-    await aiopnsense_module.OPNsenseClient._process_openvpn_routes(  # type: ignore[arg-type]
+    aiopnsense_module.OPNsenseClient._process_openvpn_routes(  # type: ignore[arg-type]
         {
             "rows": [
                 {"id": "unknown", "common_name": "skip"},
@@ -493,9 +491,7 @@ async def test_get_wireguard_full_processing_and_peer_details() -> None:
     clients_map: dict = {"c1": {"uuid": "c1", "pubkey": "pk1", "servers": [{"interface": "wg1"}]}}
 
     entry = summary["peers"][0]
-    await aiopnsense_module.OPNsenseClient._update_wireguard_peer_status(
-        entry, servers, clients_map
-    )
+    aiopnsense_module.OPNsenseClient._update_wireguard_peer_status(entry, servers, clients_map)
     updated = any(
         s.get("total_bytes_recv", 0) >= 100 or s.get("total_bytes_sent", 0) >= 200
         for s in servers.values()
@@ -687,7 +683,7 @@ async def test_update_wireguard_peer_details_endpoint_none_does_not_override() -
         "latest_handshake": None,
     }
     peer = {"endpoint": "keep"}
-    await aiopnsense_module.OPNsenseClient._update_wireguard_peer_details(  # type: ignore[arg-type]
+    aiopnsense_module.OPNsenseClient._update_wireguard_peer_details(  # type: ignore[arg-type]
         peer=peer,
         server_or_client=server,
         endpoint="(none)",
@@ -708,7 +704,7 @@ async def test_update_wireguard_peer_details_latest_handshake() -> None:
     old_time = datetime.now().astimezone() - timedelta(minutes=10)
     server["latest_handshake"] = old_time
     new_time = datetime.now().astimezone()
-    await aiopnsense_module.OPNsenseClient._update_wireguard_peer_details(  # type: ignore[arg-type]
+    aiopnsense_module.OPNsenseClient._update_wireguard_peer_details(  # type: ignore[arg-type]
         peer=peer,
         server_or_client=server,
         endpoint="1.2.3.4:51820",

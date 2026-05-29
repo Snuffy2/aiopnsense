@@ -5,11 +5,33 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, api_value_matches, timestamp_to_datetime, try_to_int
+from .helpers import (
+    _LOGGER,
+    _log_errors,
+    api_value_matches,
+    dict_get,
+    timestamp_to_datetime,
+    try_to_int,
+)
 
 
 class VPNMixin(AiopnsenseClientProtocol):
     """VPN methods for OPNsenseClient."""
+
+    @staticmethod
+    def _mapping_value(data: MutableMapping[str, Any], key: str) -> MutableMapping[str, Any]:
+        """Return a nested mapping field or an empty mapping.
+
+        Args:
+            data (MutableMapping[str, Any]): Source mapping.
+            key (str): Field expected to contain a nested mapping.
+
+        Returns:
+            MutableMapping[str, Any]: Nested mapping, or an empty mapping when
+            the field is unavailable or malformed.
+        """
+        value = data.get(key, {})
+        return value if isinstance(value, MutableMapping) else {}
 
     @staticmethod
     def wireguard_is_connected(past_time: datetime | None) -> bool:
@@ -72,17 +94,11 @@ class VPNMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("OpenVPN instances endpoint unavailable")
             instances_info = {}
 
-        await self._process_openvpn_instances(instances_info, openvpn)
-        await self._process_openvpn_providers(providers_info, openvpn)
-        await self._process_openvpn_sessions(sessions_info, openvpn)
-        await self._process_openvpn_routes(routes_info, openvpn)
-        # _LOGGER.debug(f"[get_openvpn] sessions_info: {sessions_info}")
-        # _LOGGER.debug(f"[get_openvpn] routes_info: {routes_info}")
-        # _LOGGER.debug(f"[get_openvpn] providers_info: {providers_info}")
-        # _LOGGER.debug(f"[get_openvpn] instances_info: {instances_info}")
-
+        self._process_openvpn_instances(instances_info, openvpn)
+        self._process_openvpn_providers(providers_info, openvpn)
+        self._process_openvpn_sessions(sessions_info, openvpn)
+        self._process_openvpn_routes(routes_info, openvpn)
         await self._fetch_openvpn_server_details(openvpn)
-        # _LOGGER.debug("[get_openvpn] openvpn: %s", openvpn)
         _LOGGER.debug(
             "[get_openvpn] servers: %s, clients: %s",
             len(openvpn["servers"]),
@@ -91,7 +107,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         return openvpn
 
     @staticmethod
-    async def _process_openvpn_instances(
+    def _process_openvpn_instances(
         instances_info: MutableMapping[str, Any], openvpn: MutableMapping[str, Any]
     ) -> None:
         """Process OpenVPN instances into servers and clients.
@@ -106,7 +122,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             role = instance.get("role", "").lower()
             uuid = instance.get("uuid")
             if role == "server":
-                await VPNMixin._add_openvpn_server(instance, openvpn)
+                VPNMixin._add_openvpn_server(instance, openvpn)
             elif role == "client" and uuid:
                 openvpn["clients"][uuid] = {
                     "name": instance.get("description"),
@@ -115,7 +131,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 }
 
     @staticmethod
-    async def _add_openvpn_server(
+    def _add_openvpn_server(
         instance: MutableMapping[str, Any], openvpn: MutableMapping[str, Any]
     ) -> None:
         """Add a server to the OpenVPN structure.
@@ -137,7 +153,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             }
 
     @staticmethod
-    async def _process_openvpn_providers(
+    def _process_openvpn_providers(
         providers_info: MutableMapping[str, Any], openvpn: MutableMapping[str, Any]
     ) -> None:
         """Process OpenVPN providers.
@@ -155,7 +171,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 server["endpoint"] = f"{vpn_info['hostname']}:{vpn_info['local_port']}"
 
     @staticmethod
-    async def _process_openvpn_sessions(
+    def _process_openvpn_sessions(
         sessions_info: MutableMapping[str, Any], openvpn: MutableMapping[str, Any]
     ) -> None:
         """Process OpenVPN sessions.
@@ -173,10 +189,10 @@ class VPNMixin(AiopnsenseClientProtocol):
             server = openvpn["servers"].setdefault(server_id, {"uuid": server_id, "clients": []})
             if description := session.get("description"):
                 server["name"] = description
-            await VPNMixin._update_openvpn_server_status(server, session)
+            VPNMixin._update_openvpn_server_status(server, session)
 
     @staticmethod
-    async def _update_openvpn_server_status(
+    def _update_openvpn_server_status(
         server: MutableMapping[str, Any], session: MutableMapping[str, Any]
     ) -> None:
         """Update server status based on session data.
@@ -209,7 +225,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             )
 
     @staticmethod
-    async def _process_openvpn_routes(
+    def _process_openvpn_routes(
         routes_info: MutableMapping[str, Any], openvpn: MutableMapping[str, Any]
     ) -> None:
         """Process OpenVPN routes.
@@ -249,15 +265,15 @@ class VPNMixin(AiopnsenseClientProtocol):
             else:
                 _LOGGER.debug("OpenVPN instance details endpoint unavailable for uuid: %s", uuid)
                 details_info = {}
-            details = (
-                details_info.get("instance", {}) if isinstance(details_info, MutableMapping) else {}
-            )
+            details = self._mapping_value(details_info, "instance")
             if details.get("server"):
                 server["tunnel_addresses"] = [details["server"]]
             server["dns_servers"] = [
                 dns["value"]
-                for dns in details.get("dns_servers", {}).values()
-                if api_value_matches(dns.get("selected"), "1") and dns.get("value")
+                for dns in self._mapping_value(details, "dns_servers").values()
+                if isinstance(dns, MutableMapping)
+                and api_value_matches(dns.get("selected"), "1")
+                and dns.get("value")
             ]
 
     @_log_errors
@@ -281,8 +297,8 @@ class VPNMixin(AiopnsenseClientProtocol):
                 data[key] = {}
 
         summary = data["summary_raw"].get("rows", [])
-        client_summ = data["clients_raw"].get("client", {}).get("clients", {}).get("client", {})
-        server_summ = data["servers_raw"].get("server", {}).get("servers", {}).get("server", {})
+        client_summ = dict_get(data["clients_raw"], "client.clients.client", {})
+        server_summ = dict_get(data["servers_raw"], "server.servers.server", {})
 
         if (
             not isinstance(summary, list)
@@ -293,20 +309,19 @@ class VPNMixin(AiopnsenseClientProtocol):
             return {"servers": {}, "clients": {}}
 
         servers = {
-            uid: await self._process_wireguard_server(uid, srv, client_summ)
+            uid: self._process_wireguard_server(uid, srv, client_summ)
             for uid, srv in server_summ.items()
             if isinstance(srv, MutableMapping)
         }
         clients = {
-            uid: await self._process_wireguard_client(uid, clnt, servers)
+            uid: self._process_wireguard_client(uid, clnt, servers)
             for uid, clnt in client_summ.items()
             if isinstance(clnt, MutableMapping)
         }
 
-        await self._update_wireguard_status(summary, servers, clients)
+        self._update_wireguard_status(summary, servers, clients)
 
         wireguard = {"servers": servers, "clients": clients}
-        # _LOGGER.debug("[get_wireguard] wireguard: %s", wireguard)
         _LOGGER.debug(
             "[get_wireguard] servers: %s, clients: %s",
             len(servers),
@@ -315,7 +330,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         return wireguard
 
     @staticmethod
-    async def _process_wireguard_server(
+    def _process_wireguard_server(
         uid: str, srv: MutableMapping[str, Any], client_summ: MutableMapping[str, Any]
     ) -> MutableMapping[str, Any]:
         """Process a single WireGuard server entry.
@@ -328,6 +343,8 @@ class VPNMixin(AiopnsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
+        tunnel_addresses = VPNMixin._mapping_value(srv, "tunneladdress")
+        peers = VPNMixin._mapping_value(srv, "peers")
         return {
             "uuid": uid,
             "name": srv.get("name"),
@@ -337,8 +354,10 @@ class VPNMixin(AiopnsenseClientProtocol):
             "dns_servers": [srv.get("peer_dns")] if srv.get("peer_dns") else [],
             "tunnel_addresses": [
                 addr.get("value")
-                for addr in srv.get("tunneladdress", {}).values()
-                if api_value_matches(addr.get("selected"), "1") and addr.get("value")
+                for addr in tunnel_addresses.values()
+                if isinstance(addr, MutableMapping)
+                and api_value_matches(addr.get("selected"), "1")
+                and addr.get("value")
             ],
             "clients": [
                 {
@@ -347,8 +366,10 @@ class VPNMixin(AiopnsenseClientProtocol):
                     "pubkey": client_summ.get(peer_id, {}).get("pubkey"),
                     "connected": False,
                 }
-                for peer_id, peer in srv.get("peers", {}).items()
-                if api_value_matches(peer.get("selected"), "1") and peer.get("value")
+                for peer_id, peer in peers.items()
+                if isinstance(peer, MutableMapping)
+                and api_value_matches(peer.get("selected"), "1")
+                and peer.get("value")
             ],
             "connected_clients": 0,
             "total_bytes_recv": 0,
@@ -356,7 +377,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         }
 
     @staticmethod
-    async def _process_wireguard_client(
+    def _process_wireguard_client(
         uid: str, clnt: MutableMapping[str, Any], servers: MutableMapping[str, Any]
     ) -> MutableMapping[str, Any]:
         """Process a single WireGuard client entry.
@@ -369,6 +390,8 @@ class VPNMixin(AiopnsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
+        tunnel_addresses = VPNMixin._mapping_value(clnt, "tunneladdress")
+        server_links = VPNMixin._mapping_value(clnt, "servers")
         return {
             "uuid": uid,
             "name": clnt.get("name"),
@@ -376,13 +399,17 @@ class VPNMixin(AiopnsenseClientProtocol):
             "enabled": api_value_matches(clnt.get("enabled"), "1"),
             "tunnel_addresses": [
                 addr.get("value")
-                for addr in clnt.get("tunneladdress", {}).values()
-                if api_value_matches(addr.get("selected"), "1") and addr.get("value")
+                for addr in tunnel_addresses.values()
+                if isinstance(addr, MutableMapping)
+                and api_value_matches(addr.get("selected"), "1")
+                and addr.get("value")
             ],
             "servers": [
-                await VPNMixin._link_wireguard_client_to_server(srv_id, servers, srv)
-                for srv_id, srv in clnt.get("servers", {}).items()
-                if api_value_matches(srv.get("selected"), "1") and srv.get("value")
+                VPNMixin._link_wireguard_client_to_server(srv_id, servers, srv)
+                for srv_id, srv in server_links.items()
+                if isinstance(srv, MutableMapping)
+                and api_value_matches(srv.get("selected"), "1")
+                and srv.get("value")
             ],
             "connected_servers": 0,
             "total_bytes_recv": 0,
@@ -390,7 +417,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         }
 
     @staticmethod
-    async def _link_wireguard_client_to_server(
+    def _link_wireguard_client_to_server(
         srv_id: str, servers: MutableMapping[str, Any], srv: MutableMapping[str, Any]
     ) -> MutableMapping[str, Any]:
         """Link a WireGuard client to its corresponding server.
@@ -424,7 +451,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         }
 
     @staticmethod
-    async def _update_wireguard_status(
+    def _update_wireguard_status(
         summary: list[MutableMapping[str, Any]],
         servers: MutableMapping[str, Any],
         clients: MutableMapping[str, Any],
@@ -444,10 +471,10 @@ class VPNMixin(AiopnsenseClientProtocol):
                     if server.get("pubkey") == entry.get("public-key"):
                         server["status"] = entry.get("status")
             elif entry.get("type") == "peer":
-                await VPNMixin._update_wireguard_peer_status(entry, servers, clients)
+                VPNMixin._update_wireguard_peer_status(entry, servers, clients)
 
     @staticmethod
-    async def _update_wireguard_peer_status(
+    def _update_wireguard_peer_status(
         entry: MutableMapping[str, Any],
         servers: MutableMapping[str, Any],
         clients: MutableMapping[str, Any],
@@ -473,7 +500,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             if server.get("interface") == interface:
                 for client in server.get("clients", []):
                     if client.get("pubkey") == pubkey:
-                        await VPNMixin._update_wireguard_peer_details(
+                        VPNMixin._update_wireguard_peer_details(
                             peer=client,
                             server_or_client=server,
                             endpoint=endpoint,
@@ -489,7 +516,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             if client.get("pubkey") == pubkey:
                 for server in client.get("servers", []):
                     if server.get("interface") == interface:
-                        await VPNMixin._update_wireguard_peer_details(
+                        VPNMixin._update_wireguard_peer_details(
                             peer=server,
                             server_or_client=client,
                             endpoint=endpoint,
@@ -501,7 +528,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                         )
 
     @staticmethod
-    async def _update_wireguard_peer_details(
+    def _update_wireguard_peer_details(
         peer: MutableMapping[str, Any],
         server_or_client: MutableMapping[str, Any],
         endpoint: str,

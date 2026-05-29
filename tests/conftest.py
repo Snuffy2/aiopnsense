@@ -14,6 +14,8 @@ from yarl import URL
 
 import aiopnsense
 
+MakeClientFactory = Callable[..., aiopnsense.OPNsenseClient]
+
 
 @pytest.fixture
 def legacy_dnsbl_payload() -> dict[str, Any]:
@@ -213,6 +215,9 @@ class FakeResponse:
         return FakeStreamContent(self._stream_chunks)
 
 
+FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]
+
+
 def make_mock_session_client(
     make_client: Callable[..., aiopnsense.OPNsenseClient],
     *,
@@ -241,7 +246,10 @@ def _patch_asyncio_create_task(
 ) -> None:
     """Prevent background worker tasks from running in tests."""
 
-    if request.node.fspath and request.node.fspath.basename == "test_client_base.py":
+    if request.node.fspath and request.node.fspath.basename in {
+        "test_client_base.py",
+        "test_client_queue.py",
+    }:
         return
 
     original_create_task = asyncio.create_task

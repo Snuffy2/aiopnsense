@@ -71,17 +71,12 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
 def human_friendly_duration(seconds: int) -> str:
     """Convert a duration in seconds into a human-readable string.
 
-    Parameters
-    ----------
-    seconds : int
-        Duration value, in seconds.
+    Args:
+        seconds (int): Duration value, in seconds.
 
-    Returns
-    -------
-    str
-    Duration rendered as a readable string with month/week/day/hour/minute/second units.
-
-
+    Returns:
+        str: Duration rendered as a readable string with
+            month/week/day/hour/minute/second units.
     """
     months, seconds = divmod(
         seconds, 2419200
@@ -111,17 +106,13 @@ def human_friendly_duration(seconds: int) -> str:
 def get_ip_key(item: MutableMapping[str, Any]) -> tuple:
     """Produce a sorting key for DHCP leases based on their IP addresses.
 
-    Parameters
-    ----------
-    item : MutableMapping[str, Any]
-        Lease record used to derive an IP-aware sort key.
+    Args:
+        item (MutableMapping[str, Any]): Lease record used to derive an IP-aware
+            sort key.
 
-    Returns
-    -------
-    tuple
-    Sort key tuple that prioritizes valid IPv4/IPv6 addresses and pushes invalid/empty entries last.
-
-
+    Returns:
+        tuple: Sort key that prioritizes valid IPv4/IPv6 addresses and pushes
+            invalid or empty entries last.
     """
     address = item.get("address", None)
 
@@ -140,25 +131,18 @@ def get_ip_key(item: MutableMapping[str, Any]) -> tuple:
 def dict_get(data: MutableMapping[str, Any], path: str, default: Any | None = None) -> Any | None:
     """Extract a nested value from a mapping using dot notation.
 
-    Parameters
-    ----------
-    data : MutableMapping[str, Any]
-        Source mapping to traverse.
-    path : str
-        Dot-separated lookup path (supports numeric list indexes).
-    default : Any | None
-        Fallback value returned when the path does not exist.
+    Args:
+        data (MutableMapping[str, Any]): Source mapping to traverse.
+        path (str): Dot-separated lookup path, including numeric list indexes.
+        default (Any | None): Value returned when the path does not exist.
 
-    Returns
-    -------
-    Any | None
-    Nested value resolved from the provided dotted path, or the default when the path is missing.
-
-
+    Returns:
+        Any | None: Nested value resolved from the dotted path, or the default
+            when the path is missing.
     """
-    pathList: list = re.split(r"\.", path, flags=re.IGNORECASE)
+    path_parts: list = re.split(r"\.", path, flags=re.IGNORECASE)
     result: Any | None = data
-    for key in pathList:
+    for key in path_parts:
         if key.isnumeric():
             key = int(key)
         if (isinstance(result, MutableMapping) and key in result) or (
@@ -175,17 +159,12 @@ def dict_get(data: MutableMapping[str, Any], path: str, default: Any | None = No
 def timestamp_to_datetime(timestamp: int | None) -> datetime | None:
     """Convert a Unix timestamp into a timezone-aware datetime.
 
-    Parameters
-    ----------
-    timestamp : int | None
-        Unix timestamp value to convert.
+    Args:
+        timestamp (int | None): Unix timestamp value to convert.
 
-    Returns
-    -------
-    datetime | None
-    Timezone-aware datetime derived from the timestamp, or None if no timestamp was provided.
-
-
+    Returns:
+        datetime | None: Timezone-aware datetime derived from the timestamp, or
+            ``None`` if no timestamp was provided.
     """
     if timestamp is None:
         return None
@@ -202,50 +181,40 @@ def timestamp_to_datetime(timestamp: int | None) -> datetime | None:
     return utc_datetime.astimezone()
 
 
-def try_to_int(input: Any | None, retval: int | None = None) -> int | None:
+def try_to_int(value: Any | None, retval: int | None = None) -> int | None:
     """Convert a value to ``int`` and return a fallback on conversion failure.
 
-    Parameters
-    ----------
-    input : Any | None
-        Value to coerce.
-    retval : int | None
-        Value returned when conversion fails.
+    Args:
+        value (Any | None): Value to coerce.
+        retval (int | None): Value returned when conversion fails.
 
-    Returns
-    -------
-    int | None
-        Converted integer value, or ``retval`` when conversion is not possible.
-
+    Returns:
+        int | None: Converted integer value, or ``retval`` when conversion is
+            not possible.
     """
-    if input is None:
+    if value is None:
         return retval
     try:
-        return int(input)
+        return int(value)
     except ValueError, TypeError:
         return retval
 
 
-def try_to_float(input: Any | None, retval: float | None = None) -> float | None:
+def try_to_float(value: Any | None, retval: float | None = None) -> float | None:
     """Convert a value to ``float`` and return a fallback on conversion failure.
 
-    Parameters
-    ----------
-    input : Any | None
-        Value to coerce.
-    retval : float | None
-        Value returned when conversion fails.
+    Args:
+        value (Any | None): Value to coerce.
+        retval (float | None): Value returned when conversion fails.
 
-    Returns
-    -------
-    float | None
-        Converted float value, or ``retval`` when conversion is not possible.
-
+    Returns:
+        float | None: Converted float value, or ``retval`` when conversion is
+            not possible.
     """
-    if input is None:
+    if value is None:
         return retval
     try:
-        return float(input)
+        return float(value)
     except ValueError, TypeError:
         return retval
 
@@ -253,16 +222,11 @@ def try_to_float(input: Any | None, retval: float | None = None) -> float | None
 def coerce_bool(value: Any) -> bool:
     """Normalize values that may represent booleans.
 
-    Parameters
-    ----------
-    value : Any
-        Arbitrary state value returned by backend APIs.
+    Args:
+        value (Any): Arbitrary state value returned by backend APIs.
 
-    Returns
-    -------
-    bool
-        Parsed boolean interpretation for common numeric/string variants.
-
+    Returns:
+        bool: Parsed boolean interpretation for common numeric/string variants.
     """
     if isinstance(value, bool):
         return value
@@ -276,16 +240,11 @@ def coerce_bool(value: Any) -> bool:
 def normalize_lookup_token(value: Any) -> str:
     """Normalize values for case-insensitive token matching.
 
-    Parameters
-    ----------
-    value : Any
-        Arbitrary value to normalize.
+    Args:
+        value (Any): Arbitrary value to normalize.
 
-    Returns
-    -------
-    str
-        Lower-cased, stripped string token used for comparisons.
-
+    Returns:
+        str: Lower-cased, stripped string token used for comparisons.
     """
     if value is None:
         return ""
