@@ -2,18 +2,12 @@
 
 from abc import abstractmethod
 from collections.abc import MutableMapping
-from datetime import datetime, tzinfo
+from datetime import tzinfo
 from typing import Any, Protocol
 
 
 class AiopnsenseClientProtocol(Protocol):
     """Structural typing contract used by split aiopnsense mixins."""
-
-    _firmware_version: str | None
-    _use_snake_case: bool | None
-    _endpoint_availability: dict[str, bool]
-    _endpoint_checked_at: dict[str, datetime]
-    _endpoint_cache_ttl_seconds: int
 
     @abstractmethod
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
@@ -136,29 +130,11 @@ class AiopnsenseClientProtocol(Protocol):
         ...
 
     @abstractmethod
-    async def get_query_counts(self) -> int:
-        """Return the current REST API query count.
-
-        Returns:
-            int: Current number of API queries performed by the client.
-        """
-        ...
-
-    @abstractmethod
     async def get_host_firmware_version(self) -> str | None:
         """Return the host firmware version string.
 
         Returns:
             str | None: Normalized data returned by the related OPNsense endpoint.
-        """
-        ...
-
-    @abstractmethod
-    async def set_use_snake_case(self) -> None:
-        """Set firmware-specific endpoint naming behavior.
-
-        Returns:
-            None: This method updates internal client state only.
         """
         ...
 
