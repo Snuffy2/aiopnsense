@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+import inspect
+import logging
 from pathlib import Path
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sphinx.application import Sphinx
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "_ext"))
+
+_LOGGER = logging.getLogger(__name__)
 
 project: str = "aiopnsense"
 author: str = "Snuffy2"
@@ -49,3 +57,57 @@ html_theme_options = {
 intersphinx_mapping: dict[str, tuple[str, None]] = {
     "python": ("https://docs.python.org/3", None),
 }
+
+
+def append_pep702_deprecation(
+    app: Sphinx,
+    what: str,
+    name: str,
+    obj: object,
+    options: object,
+    lines: list[str],
+) -> None:
+    """Append PEP 702 deprecation metadata to autodoc docstrings.
+
+    Args:
+        app: The Sphinx application emitting the event.
+        what: The type of object being documented.
+        name: The fully qualified object name.
+        obj: The object being documented.
+        options: The autodoc options for the object.
+        lines: The docstring lines Sphinx will render.
+    """
+    del app, what, name, options
+
+    deprecated_obj = obj.fget if isinstance(obj, property) else obj
+    if not (
+        deprecated_obj is not None
+        and (inspect.isroutine(deprecated_obj) or inspect.isclass(deprecated_obj))
+    ):
+        return
+
+    if not (message := getattr(deprecated_obj, "__deprecated__", None)):
+        return
+
+    if not isinstance(message, str):
+        _LOGGER.warning("Ignoring non-string PEP 702 deprecation message for %s", deprecated_obj)
+        return
+
+    # PEP 702 does not include a "deprecated since" version. If we add our own
+    # version metadata later, this can become a Sphinx versioned deprecation
+    # directive.
+    deprecation_lines = [f"   {message_line}" for message_line in message.splitlines()]
+    lines[:0] = ["", ".. admonition:: Deprecated", "", *deprecation_lines, ""]
+
+
+def setup(app: Sphinx) -> dict[str, bool]:
+    """Register Sphinx event hooks.
+
+    Args:
+        app: The Sphinx application to configure.
+
+    Returns:
+        Sphinx extension metadata.
+    """
+    app.connect("autodoc-process-docstring", append_pep702_deprecation)
+    return {"parallel_read_safe": True, "parallel_write_safe": True}

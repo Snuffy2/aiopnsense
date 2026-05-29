@@ -6,10 +6,10 @@ from importlib import import_module
 import inspect
 from typing import Any
 
-from docutils import nodes  # type: ignore[import-untyped]
-from docutils.parsers.rst import Directive, directives  # type: ignore[import-untyped]
-from docutils.statemachine import ViewList  # type: ignore[import-untyped]
-from sphinx.application import Sphinx  # type: ignore[import-not-found]
+from docutils import nodes
+from docutils.parsers.rst import Directive, directives
+from docutils.statemachine import StringList
+from sphinx.application import Sphinx
 
 
 def _import_object(dotted_path: str) -> Any:
@@ -92,7 +92,7 @@ class OPNsenseClientAPIDirective(Directive):
             )
             raise self.error(msg)
 
-        generated_lines = ViewList()
+        generated_lines = StringList()
         for method_name in method_names:
             generated_lines.append(
                 f".. automethod:: {client_path}.{method_name}",
