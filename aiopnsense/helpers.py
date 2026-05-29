@@ -181,40 +181,40 @@ def timestamp_to_datetime(timestamp: int | None) -> datetime | None:
     return utc_datetime.astimezone()
 
 
-def try_to_int(input: Any | None, retval: int | None = None) -> int | None:
+def try_to_int(value: Any | None, retval: int | None = None) -> int | None:
     """Convert a value to ``int`` and return a fallback on conversion failure.
 
     Args:
-        input (Any | None): Value to coerce.
+        value (Any | None): Value to coerce.
         retval (int | None): Value returned when conversion fails.
 
     Returns:
         int | None: Converted integer value, or ``retval`` when conversion is
             not possible.
     """
-    if input is None:
+    if value is None:
         return retval
     try:
-        return int(input)
+        return int(value)
     except ValueError, TypeError:
         return retval
 
 
-def try_to_float(input: Any | None, retval: float | None = None) -> float | None:
+def try_to_float(value: Any | None, retval: float | None = None) -> float | None:
     """Convert a value to ``float`` and return a fallback on conversion failure.
 
     Args:
-        input (Any | None): Value to coerce.
+        value (Any | None): Value to coerce.
         retval (float | None): Value returned when conversion fails.
 
     Returns:
         float | None: Converted float value, or ``retval`` when conversion is
             not possible.
     """
-    if input is None:
+    if value is None:
         return retval
     try:
-        return float(input)
+        return float(value)
     except ValueError, TypeError:
         return retval
 
@@ -222,16 +222,11 @@ def try_to_float(input: Any | None, retval: float | None = None) -> float | None
 def coerce_bool(value: Any) -> bool:
     """Normalize values that may represent booleans.
 
-    Parameters
-    ----------
-    value : Any
-        Arbitrary state value returned by backend APIs.
+    Args:
+        value (Any): Arbitrary state value returned by backend APIs.
 
-    Returns
-    -------
-    bool
-        Parsed boolean interpretation for common numeric/string variants.
-
+    Returns:
+        bool: Parsed boolean interpretation for common numeric/string variants.
     """
     if isinstance(value, bool):
         return value
@@ -245,16 +240,11 @@ def coerce_bool(value: Any) -> bool:
 def normalize_lookup_token(value: Any) -> str:
     """Normalize values for case-insensitive token matching.
 
-    Parameters
-    ----------
-    value : Any
-        Arbitrary value to normalize.
+    Args:
+        value (Any): Arbitrary value to normalize.
 
-    Returns
-    -------
-    str
-        Lower-cased, stripped string token used for comparisons.
-
+    Returns:
+        str: Lower-cased, stripped string token used for comparisons.
     """
     if value is None:
         return ""
