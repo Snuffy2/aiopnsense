@@ -57,10 +57,12 @@ class ServicesMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_services(self) -> list[dict[str, Any]]:
-        """Get the list of OPNsense services.
+        """Return all manageable OPNsense services.
 
         Returns:
-            list[dict[str, Any]]: Normalized data returned by the related OPNsense endpoint.
+            list[dict[str, Any]]: Service rows from the core service search
+                endpoint with a derived boolean ``status`` field indicating
+                whether each service is currently running.
         """
         return await self._fetch_normalized_services(return_none_when_unavailable=False) or []
 
@@ -86,13 +88,14 @@ class ServicesMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_service_is_running(self, service: str) -> bool:
-        """Return if the OPNsense service is running.
+        """Return whether a named OPNsense service is running.
 
         Args:
-            service (str): Service name as reported by OPNsense.
+            service (str): Service name or service id as reported by OPNsense.
 
         Returns:
-            bool: True when the checked condition is met; otherwise, False.
+            bool: ``True`` when the service exists and is running; ``False``
+                when it is stopped, unavailable, or cannot be found.
         """
         state = await self._get_service_running_state(service)
         return state is True
@@ -101,8 +104,10 @@ class ServicesMixin(AiopnsenseClientProtocol):
         """Run a service control action for a named service.
 
         Args:
-            action (str): Service control action to perform.
-            service (str): Service name as reported by OPNsense.
+            action (str): Core service action to perform, such as ``start``,
+                ``stop``, or ``restart``.
+            service (str): Service name or id to encode into the control
+                endpoint path.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.

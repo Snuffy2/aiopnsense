@@ -338,13 +338,19 @@ class SystemMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_device_unique_id(self, expected_id: str | None = None) -> str | None:
-        """Get the OPNsense Unique ID.
+        """Return the stable device identifier derived from physical MAC addresses.
 
         Args:
-            expected_id (str | None, optional): Identifier for the related expected entry.
+            expected_id (str | None, optional): Previously known identifier to
+                prefer when it is still present among physical interface MAC
+                addresses.
 
         Returns:
-            str | None: Normalized data returned by the related OPNsense endpoint.
+            str | None: MAC-address-based identifier with colons replaced by
+                underscores. Returns ``expected_id`` when it still matches a
+                physical interface, otherwise the first sorted physical MAC
+                identifier, or ``None`` when no physical MAC addresses are
+                available.
         """
         endpoint = "/api/interfaces/overview/export"
         if not await self.is_endpoint_available(endpoint):
@@ -375,10 +381,11 @@ class SystemMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_system_info(self) -> dict[str, Any]:
-        """Return the system info from OPNsense.
+        """Return basic OPNsense system identity information.
 
         Returns:
-            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            dict[str, Any]: Mapping containing the OPNsense host ``name`` when
+                the system-information endpoint is available.
         """
         system_info: dict[str, Any] = {}
         system_information_endpoint = await self._get_endpoint_path(
@@ -559,7 +566,8 @@ class SystemMixin(AiopnsenseClientProtocol):
         """Send a wake on lan packet to the specified MAC address.
 
         Args:
-            interface (str): Interface identifier to reload or inspect.
+            interface (str): OPNsense interface identifier used as the
+                Wake-on-LAN egress interface.
             mac (str): MAC address to use for Wake-on-LAN.
 
         Returns:
@@ -575,10 +583,13 @@ class SystemMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_notices(self) -> dict[str, Any]:
-        """Get active OPNsense notices.
+        """Return active OPNsense dashboard notices.
 
         Returns:
-            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            dict[str, Any]: Mapping with ``pending_notices_present`` and a
+                ``pending_notices`` list. Each notice includes its message,
+                subject ``id``, and parsed ``created_at`` timestamp when
+                available.
         """
         notices_endpoint = "/api/core/system/status"
         if not await self.is_endpoint_available(notices_endpoint):
@@ -666,10 +677,12 @@ class SystemMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_certificates(self) -> dict[str, Any]:
-        """Return the active encryption certificates.
+        """Return trust certificates known to OPNsense.
 
         Returns:
-            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            dict[str, Any]: Mapping keyed by certificate description. Each
+                certificate contains its UUID, issuer reference, RFC 3280
+                purpose, in-use flag, and validity timestamps.
         """
         cert_endpoint = "/api/trust/cert/search"
         if not await self.is_endpoint_available(cert_endpoint):

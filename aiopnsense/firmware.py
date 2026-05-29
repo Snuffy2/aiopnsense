@@ -18,7 +18,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
     _firmware_version: str | None
 
     async def _store_host_firmware_version(self) -> None:
-        """Store host firmware version."""
+        """Cache the installed OPNsense firmware version or product series."""
         status_endpoint = "/api/core/firmware/status"
         if not await self.is_endpoint_available(status_endpoint):
             _LOGGER.debug("Firmware status endpoint unavailable")
@@ -42,10 +42,12 @@ class FirmwareMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_host_firmware_version(self) -> None | str:
-        """Return the OPNsense Firmware version.
+        """Return the cached OPNsense firmware version.
 
         Returns:
-            None | str: Normalized data returned by the related OPNsense endpoint.
+            None | str: Installed firmware version, falling back to the product
+                series for non-SemVer version strings, or ``None`` when the
+                firmware status endpoint is unavailable.
         """
         if self._firmware_version is None:
             await self._store_host_firmware_version()
@@ -53,10 +55,13 @@ class FirmwareMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_firmware_update_info(self) -> MutableMapping[str, Any]:
-        """Get the details of available firmware updates.
+        """Return firmware status and trigger a refresh when cached data is stale.
 
         Returns:
-            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            MutableMapping[str, Any]: Firmware status payload from OPNsense,
+                including product version, latest version, check status, and
+                update metadata when available. Returns an empty mapping when
+                the firmware status endpoint is unavailable.
         """
         status_endpoint = "/api/core/firmware/status"
         if not await self.is_endpoint_available(status_endpoint):
@@ -133,10 +138,14 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         """Trigger a firmware upgrade.
 
         Args:
-            type (str): Requested firmware upgrade type.
+            type (str): Firmware action to trigger. ``update`` applies minor
+                updates on the current series, while ``upgrade`` starts a major
+                series upgrade.
 
         Returns:
-            MutableMapping[str, Any] | None: Mapping containing normalized fields for downstream use.
+            MutableMapping[str, Any] | None: Firmware action response for
+                supported action types, or ``None`` when ``type`` is not
+                ``update`` or ``upgrade``.
         """
         # update = minor updates of the same opnsense version
         # upgrade = major updates to a new opnsense version
@@ -147,10 +156,11 @@ class FirmwareMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def upgrade_status(self) -> MutableMapping[str, Any]:
-        """Return the status of the firmware upgrade.
+        """Return the status of the active firmware upgrade.
 
         Returns:
-            MutableMapping[str, Any]: The status of the firmware upgrade.
+            MutableMapping[str, Any]: Upgrade status payload, or an empty
+                mapping when the upgrade-status endpoint is unavailable.
         """
         status_endpoint = "/api/core/firmware/upgradestatus"
         if not await self.is_endpoint_available(status_endpoint):
@@ -163,9 +173,10 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         """Return the changelog for the firmware upgrade.
 
         Args:
-            version (str): Firmware version string to cache.
+            version (str): Firmware version whose changelog should be fetched.
 
         Returns:
-            MutableMapping[str, Any]: The changelog for the firmware upgrade.
+            MutableMapping[str, Any]: Changelog response for the requested
+                firmware version.
         """
         return await self._safe_dict_post(f"/api/core/firmware/changelog/{version}")

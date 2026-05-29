@@ -131,10 +131,11 @@ class AiopnsenseClientProtocol(Protocol):
 
     @abstractmethod
     async def get_host_firmware_version(self) -> str | None:
-        """Return the host firmware version string.
+        """Return the cached or fetched host firmware version string.
 
         Returns:
-            str | None: Normalized data returned by the related OPNsense endpoint.
+            str | None: Installed OPNsense firmware version or product series,
+                or ``None`` when the version cannot be determined.
         """
         ...
 

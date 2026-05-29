@@ -390,7 +390,7 @@ async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClien
         url: str = "http://localhost",
         **client_kwargs: Any,
     ) -> aiopnsense.OPNsenseClient:
-        """Make.
+        """Create an OPNsense test client with a fake session by default.
 
         Args:
             session (aiohttp.ClientSession | None, optional): HTTP client session used for API requests.
@@ -401,7 +401,9 @@ async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClien
                 ``OPNsenseClient``.
 
         Returns:
-            aiopnsense.OPNsenseClient: Value produced by this method.
+            aiopnsense.OPNsenseClient: Configured client instance using the
+                supplied credentials, URL, session, and extra constructor
+                options.
         """
         if session is None:
             session = cast("aiohttp.ClientSession", FakeClientSession())

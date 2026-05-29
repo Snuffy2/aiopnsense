@@ -59,7 +59,8 @@ class ClientQueueMixin:
         """Ensure workers are started and return the active event loop.
 
         Returns:
-            asyncio.AbstractEventLoop: Value produced by this method.
+            asyncio.AbstractEventLoop: Running event loop used to create
+                queued request futures.
         """
         await self._ensure_workers_started()
         if self._loop is None:
