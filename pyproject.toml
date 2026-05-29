@@ -24,9 +24,9 @@ Repository = "https://github.com/Snuffy2/aiopnsense"
 
 [project.optional-dependencies]
 docs = [
-    "sphinx>=8,<9",
+    "sphinx>=9,<10",
     "sphinx-rtd-theme>=3,<4",
-    "myst-parser>=4,<6",
+    "myst-parser>=5,<6",
 ]
 
 [dependency-groups]

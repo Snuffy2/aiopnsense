@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+import inspect
 from pathlib import Path
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sphinx.application import Sphinx
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -49,3 +54,46 @@ html_theme_options = {
 intersphinx_mapping: dict[str, tuple[str, None]] = {
     "python": ("https://docs.python.org/3", None),
 }
+
+
+def append_pep702_deprecation(
+    app: Sphinx,
+    what: str,
+    name: str,
+    obj: object,
+    options: object,
+    lines: list[str],
+) -> None:
+    """Append PEP 702 deprecation metadata to autodoc docstrings.
+
+    Args:
+        app: The Sphinx application emitting the event.
+        what: The type of object being documented.
+        name: The fully qualified object name.
+        obj: The object being documented.
+        options: The autodoc options for the object.
+        lines: The docstring lines Sphinx will render.
+    """
+    del app, what, name, options
+
+    if not (inspect.isroutine(obj) or inspect.isclass(obj)):
+        return
+
+    if message := getattr(obj, "__deprecated__", None):
+        # PEP 702 does not include a "deprecated since" version. If we add our
+        # own version metadata later, this can become a Sphinx versioned
+        # deprecation directive.
+        lines[:0] = ["", ".. admonition:: Deprecated", "", f"   {message}", ""]
+
+
+def setup(app: Sphinx) -> dict[str, bool]:
+    """Register Sphinx event hooks.
+
+    Args:
+        app: The Sphinx application to configure.
+
+    Returns:
+        Sphinx extension metadata.
+    """
+    app.connect("autodoc-process-docstring", append_pep702_deprecation)
+    return {"parallel_read_safe": True, "parallel_write_safe": True}
