@@ -67,7 +67,7 @@
             <a id="nextFileLink" class="nav" href="index.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.14.1">coverage.py v7.14.1</a>,
-            created at 2026-05-29 16:40 +0000
+            created at 2026-05-29 21:14 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -118,7 +118,7 @@
     <p class="run"><span class="n"><a id="t34" href="#t34">34</a></span><span class="t">        <span class="key">return</span> <span class="nam">value</span> <span class="key">if</span> <span class="nam">isinstance</span><span class="op">(</span><span class="nam">value</span><span class="op">,</span> <span class="nam">MutableMapping</span><span class="op">)</span> <span class="key">else</span> <span class="op">{</span><span class="op">}</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t35" href="#t35">35</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t36" href="#t36">36</a></span><span class="t">    <span class="op">@</span><span class="nam">staticmethod</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t37" href="#t37">37</a></span><span class="t">    <span class="key">def</span> <span class="nam">wireguard_is_connected</span><span class="op">(</span><span class="nam">past_time</span><span class="op">:</span> <span class="nam">datetime</span> <span class="op">|</span> <span class="key">None</span><span class="op">)</span> <span class="op">-></span> <span class="nam">bool</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t37" href="#t37">37</a></span><span class="t">    <span class="key">def</span> <span class="nam">_wireguard_is_connected</span><span class="op">(</span><span class="nam">past_time</span><span class="op">:</span> <span class="nam">datetime</span> <span class="op">|</span> <span class="key">None</span><span class="op">)</span> <span class="op">-></span> <span class="nam">bool</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t38" href="#t38">38</a></span><span class="t">        <span class="str">"""Determine whether a WireGuard session is still considered active.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t39" href="#t39">39</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t40" href="#t40">40</a></span><span class="t"><span class="str">        Args:</span>&nbsp;</span><span class="r"></span></p>
@@ -590,7 +590,7 @@
     <p class="run"><span class="n"><a id="t506" href="#t506">506</a></span><span class="t">        <span class="nam">transfer_tx</span><span class="op">:</span> <span class="nam">int</span> <span class="op">=</span> <span class="nam">try_to_int</span><span class="op">(</span><span class="nam">entry</span><span class="op">.</span><span class="nam">get</span><span class="op">(</span><span class="str">"transfer-tx"</span><span class="op">,</span> <span class="num">0</span><span class="op">)</span><span class="op">,</span> <span class="num">0</span><span class="op">)</span> <span class="key">or</span> <span class="num">0</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t507" href="#t507">507</a></span><span class="t">        <span class="nam">latest_handshake</span> <span class="op">=</span> <span class="nam">try_to_int</span><span class="op">(</span><span class="nam">entry</span><span class="op">.</span><span class="nam">get</span><span class="op">(</span><span class="str">"latest-handshake"</span><span class="op">,</span> <span class="num">0</span><span class="op">)</span><span class="op">,</span> <span class="num">0</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t508" href="#t508">508</a></span><span class="t">        <span class="nam">handshake_time</span> <span class="op">=</span> <span class="nam">timestamp_to_datetime</span><span class="op">(</span><span class="nam">latest_handshake</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t509" href="#t509">509</a></span><span class="t">        <span class="nam">is_connected</span> <span class="op">=</span> <span class="nam">VPNMixin</span><span class="op">.</span><span class="nam">wireguard_is_connected</span><span class="op">(</span><span class="nam">handshake_time</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t509" href="#t509">509</a></span><span class="t">        <span class="nam">is_connected</span> <span class="op">=</span> <span class="nam">VPNMixin</span><span class="op">.</span><span class="nam">_wireguard_is_connected</span><span class="op">(</span><span class="nam">handshake_time</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t510" href="#t510">510</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t511" href="#t511">511</a></span><span class="t">        <span class="com"># Update servers</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t512" href="#t512">512</a></span><span class="t">        <span class="key">for</span> <span class="nam">server</span> <span class="key">in</span> <span class="nam">servers</span><span class="op">.</span><span class="nam">values</span><span class="op">(</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
@@ -721,7 +721,7 @@
             <a class="nav" href="index.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.14.1">coverage.py v7.14.1</a>,
-            created at 2026-05-29 16:40 +0000
+            created at 2026-05-29 21:14 +0000
         </p>
     </div>
 </footer>
