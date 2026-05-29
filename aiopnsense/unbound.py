@@ -194,10 +194,8 @@ class UnboundMixin(AiopnsenseClientProtocol):
         for dnsbl in dnsbl_rows:
             if not isinstance(dnsbl, MutableMapping):
                 continue
-            # _LOGGER.debug("[get_unbound_blocklist] dnsbl: %s", dnsbl)
             if dnsbl.get("uuid"):
                 dnsbl_full.update({dnsbl["uuid"]: dnsbl})
-        # _LOGGER.debug("[get_unbound_blocklist] dnsbl_full: %s", dnsbl_full)
         _LOGGER.debug("[get_unbound_blocklist] dnsbl_full length: %s", len(dnsbl_full))
         return dnsbl_full
 
@@ -240,6 +238,47 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 )
         return False
 
+    async def _set_unbound_blocklist(self, set_state: bool, uuid: str | None = None) -> bool:
+        """Route an Unbound blocklist state change to the correct backend mode.
+
+        Args:
+            set_state (bool): Desired enabled state.
+            uuid (str | None, optional): Unique identifier of the target OPNsense resource.
+
+        Returns:
+            bool: True when the operation succeeds; otherwise, False.
+        """
+        use_legacy = await self._uses_legacy_unbound_blocklist()
+        state_name = "enable" if set_state else "disable"
+        if use_legacy is True:
+            if uuid is not None:
+                _LOGGER.error(
+                    "Blocklist uuid %s is unsupported when trying to %s legacy Unbound blocklists on OPNsense < %s",
+                    uuid,
+                    state_name,
+                    LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
+                )
+                return False
+            _LOGGER.debug(
+                "Using Unbound regular blocklists for OPNsense < %s",
+                LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
+            )
+            return await self._set_unbound_blocklist_legacy(set_state=set_state)
+        if use_legacy is False:
+            _LOGGER.debug(
+                "Using Unbound extended blocklists for OPNsense >= %s",
+                LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
+            )
+            return await self._toggle_unbound_blocklist(set_state=set_state, uuid=uuid)
+
+        _LOGGER.debug(
+            "Unable to determine Unbound blocklist mode from firmware; using %s fallback",
+            "extended" if uuid is not None else "legacy",
+        )
+        if uuid is not None:
+            return await self._toggle_unbound_blocklist(set_state=set_state, uuid=uuid)
+        return await self._set_unbound_blocklist_legacy(set_state=set_state)
+
     @_log_errors
     async def enable_unbound_blocklist(self, uuid: str | None = None) -> bool:
         """Enable the unbound blocklist.
@@ -250,34 +289,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
         Returns:
             bool: True when the operation succeeds; otherwise, False.
         """
-        use_legacy = await self._uses_legacy_unbound_blocklist()
-        if use_legacy is True:
-            if uuid is not None:
-                _LOGGER.error(
-                    "Blocklist uuid %s is unsupported for legacy Unbound blocklists on OPNsense < %s",
-                    uuid,
-                    LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
-                )
-                return False
-            _LOGGER.debug(
-                "Using Unbound regular blocklists for OPNsense < %s",
-                LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
-            )
-            return await self._set_unbound_blocklist_legacy(set_state=True)
-        if use_legacy is False:
-            _LOGGER.debug(
-                "Using Unbound extended blocklists for OPNsense >= %s",
-                LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
-            )
-            return await self._toggle_unbound_blocklist(set_state=True, uuid=uuid)
-
-        _LOGGER.debug(
-            "Unable to determine Unbound blocklist mode from firmware; using %s fallback",
-            "extended" if uuid is not None else "legacy",
-        )
-        if uuid is not None:
-            return await self._toggle_unbound_blocklist(set_state=True, uuid=uuid)
-        return await self._set_unbound_blocklist_legacy(set_state=True)
+        return await self._set_unbound_blocklist(set_state=True, uuid=uuid)
 
     @_log_errors
     async def disable_unbound_blocklist(self, uuid: str | None = None) -> bool:
@@ -289,31 +301,4 @@ class UnboundMixin(AiopnsenseClientProtocol):
         Returns:
             bool: True when the operation succeeds; otherwise, False.
         """
-        use_legacy = await self._uses_legacy_unbound_blocklist()
-        if use_legacy is True:
-            if uuid is not None:
-                _LOGGER.error(
-                    "Blocklist uuid %s is unsupported for legacy Unbound blocklists on OPNsense < %s",
-                    uuid,
-                    LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
-                )
-                return False
-            _LOGGER.debug(
-                "Using Unbound regular blocklists for OPNsense < %s",
-                LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
-            )
-            return await self._set_unbound_blocklist_legacy(set_state=False)
-        if use_legacy is False:
-            _LOGGER.debug(
-                "Using Unbound extended blocklists for OPNsense >= %s",
-                LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
-            )
-            return await self._toggle_unbound_blocklist(set_state=False, uuid=uuid)
-
-        _LOGGER.debug(
-            "Unable to determine Unbound blocklist mode from firmware; using %s fallback",
-            "extended" if uuid is not None else "legacy",
-        )
-        if uuid is not None:
-            return await self._toggle_unbound_blocklist(set_state=False, uuid=uuid)
-        return await self._set_unbound_blocklist_legacy(set_state=False)
+        return await self._set_unbound_blocklist(set_state=False, uuid=uuid)

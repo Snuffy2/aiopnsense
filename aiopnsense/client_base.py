@@ -204,6 +204,41 @@ class ClientBaseMixin:
             raise RuntimeError("Event loop is not initialized")
         return self._loop
 
+    @staticmethod
+    def _get_caller_name() -> str:
+        """Return the public caller above the queue wrapper.
+
+        Returns:
+            str: Function name used for diagnostics, or ``"Unknown"`` when stack
+            inspection is unavailable.
+        """
+        try:
+            return inspect.stack()[3].function
+        except IndexError, AttributeError:
+            return "Unknown"
+
+    async def _queue_request(
+        self,
+        method: str,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+    ) -> Any:
+        """Queue one API request and return its future result.
+
+        Args:
+            method (str): Internal request method handled by ``_process_queue``.
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None, optional): Request payload
+                sent with POST requests.
+
+        Returns:
+            Any: Result set by the queue processor.
+        """
+        loop = await self._get_active_loop()
+        future = loop.create_future()
+        await self._request_queue.put((method, path, payload, future, self._get_caller_name()))
+        return await future
+
     @property
     def name(self) -> str:
         """Return the name of the client.
@@ -288,14 +323,7 @@ class ClientBaseMixin:
         Returns:
             dict[str, Any]: Decoded payload extracted from the streaming API response.
         """
-        loop = await self._get_active_loop()
-        try:
-            caller = inspect.stack()[1].function
-        except IndexError, AttributeError:
-            caller = "Unknown"
-        future = loop.create_future()
-        await self._request_queue.put(("get_from_stream", path, None, future, caller))
-        return await future
+        return cast(dict[str, Any], await self._queue_request("get_from_stream", path))
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
         """Queue a GET request and return the result.
@@ -306,14 +334,7 @@ class ClientBaseMixin:
         Returns:
             MutableMapping[str, Any] | list | None: Decoded response payload returned by the GET request.
         """
-        loop = await self._get_active_loop()
-        try:
-            caller = inspect.stack()[1].function
-        except IndexError, AttributeError:
-            caller = "Unknown"
-        future = loop.create_future()
-        await self._request_queue.put(("get", path, None, future, caller))
-        return await future
+        return await self._queue_request("get", path)
 
     async def _post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
@@ -327,14 +348,7 @@ class ClientBaseMixin:
         Returns:
             MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request.
         """
-        loop = await self._get_active_loop()
-        try:
-            caller = inspect.stack()[1].function
-        except IndexError, AttributeError:
-            caller = "Unknown"
-        future = loop.create_future()
-        await self._request_queue.put(("post", path, payload, future, caller))
-        return await future
+        return await self._queue_request("post", path, payload)
 
     async def _process_queue(self) -> None:
         """Continuously process queued API requests and resolve waiting futures."""
@@ -423,8 +437,6 @@ class ClientBaseMixin:
 
                     async for chunk in response.content.iter_chunked(1024):
                         buffer += chunk.decode("utf-8")
-                        # _LOGGER.debug("[get_from_stream] buffer: %s", buffer)
-
                         while "\n\n" in buffer:
                             message, buffer = buffer.split("\n\n", 1)
                             lines = message.splitlines()
@@ -434,23 +446,11 @@ class ClientBaseMixin:
                                     if message_count == 2:
                                         response_str: str = line[len("data:") :].strip()
                                         response_json = json.loads(response_str)
-                                        # _LOGGER.debug(
-                                        #     "[get_from_stream] response_json (%s): %s",
-                                        #     type(response_json).__name__,
-                                        #     response_json,
-                                        # )
                                         return (
                                             dict(response_json)
                                             if isinstance(response_json, MutableMapping)
                                             else {}
                                         )  # Exit after processing the second message
-                                    # _LOGGER.debug(
-                                    #     "[get_from_stream] Ignored message %s: %s",
-                                    #     message_count,
-                                    #     line,
-                                    # )
-                                # else:
-                                #     _LOGGER.debug("[get_from_stream] Unparsed: %s", line)
                 else:
                     if response.status == 403:
                         _LOGGER.error(
@@ -619,7 +619,6 @@ class ClientBaseMixin:
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[post] url: %s", url)
-        # _LOGGER.debug("[post] payload: %s", payload)
         try:
             async with self._session.post(
                 url,

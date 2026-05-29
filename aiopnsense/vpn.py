@@ -76,13 +76,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         await self._process_openvpn_providers(providers_info, openvpn)
         await self._process_openvpn_sessions(sessions_info, openvpn)
         await self._process_openvpn_routes(routes_info, openvpn)
-        # _LOGGER.debug(f"[get_openvpn] sessions_info: {sessions_info}")
-        # _LOGGER.debug(f"[get_openvpn] routes_info: {routes_info}")
-        # _LOGGER.debug(f"[get_openvpn] providers_info: {providers_info}")
-        # _LOGGER.debug(f"[get_openvpn] instances_info: {instances_info}")
-
         await self._fetch_openvpn_server_details(openvpn)
-        # _LOGGER.debug("[get_openvpn] openvpn: %s", openvpn)
         _LOGGER.debug(
             "[get_openvpn] servers: %s, clients: %s",
             len(openvpn["servers"]),
@@ -306,7 +300,6 @@ class VPNMixin(AiopnsenseClientProtocol):
         await self._update_wireguard_status(summary, servers, clients)
 
         wireguard = {"servers": servers, "clients": clients}
-        # _LOGGER.debug("[get_wireguard] wireguard: %s", wireguard)
         _LOGGER.debug(
             "[get_wireguard] servers: %s, clients: %s",
             len(servers),

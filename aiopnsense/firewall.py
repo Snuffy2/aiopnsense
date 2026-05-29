@@ -23,7 +23,6 @@ class FirewallMixin(AiopnsenseClientProtocol):
         firewall["nat"]["one_to_one"] = await self._get_nat_one_to_one_rules()
         firewall["nat"]["source_nat"] = await self._get_nat_source_rules()
         firewall["nat"]["npt"] = await self._get_nat_npt_rules()
-        # _LOGGER.debug("[get_firewall] firewall: %s", firewall)
         return firewall
 
     @_log_errors
@@ -39,9 +38,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             return {}
 
         response = await self._safe_dict_get(endpoint)
-        # _LOGGER.debug("[get_firewall_rules] response: %s", response)
         rules: list = response.get("rows", [])
-        # _LOGGER.debug("[get_firewall_rules] rules: %s", rules)
         rules_dict: dict[str, Any] = {}
         for rule in rules:
             if not isinstance(rule, MutableMapping):
@@ -51,7 +48,6 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 continue
             new_rule = dict(rule)
             rules_dict[str(new_rule["uuid"])] = new_rule
-        # _LOGGER.debug("[get_firewall_rules] rules_dict: %s", rules_dict)
         _LOGGER.debug("[get_firewall_rules] rules_dict length: %s", len(rules_dict))
         return rules_dict
 
@@ -68,9 +64,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             return {}
 
         response = await self._safe_dict_get(endpoint)
-        # _LOGGER.debug("[get_nat_destination_rules] response: %s", response)
         rules: list = response.get("rows", [])
-        # _LOGGER.debug("[get_nat_destination_rules] rules: %s", rules)
         rules_dict: dict[str, Any] = {}
         for rule in rules:
             if not isinstance(rule, MutableMapping):
@@ -84,7 +78,6 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 "1" if api_value_matches(new_rule.pop("disabled", "0"), "0") else "0"
             )
             rules_dict[str(new_rule["uuid"])] = new_rule
-        # _LOGGER.debug("[get_nat_destination_rules] rules_dict: %s", rules_dict)
         _LOGGER.debug("[get_nat_destination_rules] rules_dict length: %s", len(rules_dict))
         return rules_dict
 
@@ -104,9 +97,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             return {}
 
         response = await self._safe_dict_get(endpoint)
-        # _LOGGER.debug("[get_nat_one_to_one_rules] response: %s", response)
         rules: list = response.get("rows", [])
-        # _LOGGER.debug("[get_nat_one_to_one_rules] rules: %s", rules)
         rules_dict: dict[str, Any] = {}
         for rule in rules:
             if not isinstance(rule, MutableMapping):
@@ -117,7 +108,6 @@ class FirewallMixin(AiopnsenseClientProtocol):
             new_rule = dict(rule)
             rules_dict[str(new_rule["uuid"])] = new_rule
         _LOGGER.debug("[get_nat_one_to_one_rules] rules_dict length: %s", len(rules_dict))
-        # _LOGGER.debug("[get_nat_one_to_one_rules] rules_dict: %s", rules_dict)
         return rules_dict
 
     @_log_errors
@@ -133,9 +123,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             return {}
 
         response = await self._safe_dict_get(endpoint)
-        # _LOGGER.debug("[get_nat_source_rules] response: %s", response)
         rules: list = response.get("rows", [])
-        # _LOGGER.debug("[get_nat_source_rules] rules: %s", rules)
         rules_dict: dict[str, Any] = {}
         for rule in rules:
             if not isinstance(rule, MutableMapping):
@@ -145,7 +133,6 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 continue
             new_rule = dict(rule)
             rules_dict[str(new_rule["uuid"])] = new_rule
-        # _LOGGER.debug("[get_nat_source_rules] rules_dict: %s", rules_dict)
         _LOGGER.debug("[get_nat_source_rules] rules_dict length: %s", len(rules_dict))
         return rules_dict
 
@@ -162,9 +149,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             return {}
 
         response = await self._safe_dict_get(endpoint)
-        # _LOGGER.debug("[get_nat_npt_rules] response: %s", response)
         rules: list = response.get("rows", [])
-        # _LOGGER.debug("[get_nat_npt_rules] rules: %s", rules)
         rules_dict: dict[str, Any] = {}
         for rule in rules:
             if not isinstance(rule, MutableMapping):
@@ -174,7 +159,6 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 continue
             new_rule = dict(rule)
             rules_dict[str(new_rule["uuid"])] = new_rule
-        # _LOGGER.debug("[get_nat_npt_rules] rules_dict: %s", rules_dict)
         _LOGGER.debug("[get_nat_npt_rules] rules_dict length: %s", len(rules_dict))
         return rules_dict
 

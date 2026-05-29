@@ -71,9 +71,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
 
         arp_endpoint_resolve = f"{arp_endpoint}?resolve={resolve_flag}"
         arp_table_info = await self._safe_dict_get(arp_endpoint_resolve)
-        # _LOGGER.debug(f"[get_arp_table] arp_table_info: {arp_table_info}")
         arp_table: list = arp_table_info.get("rows", [])
-        # _LOGGER.debug(f"[get_arp_table] arp_table: {arp_table}")
         return arp_table
 
     @_log_errors
@@ -94,7 +92,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
         leases_raw += await self._get_dnsmasq_leases(opnsense_tz=opnsense_tz)
         # TODO: Add Kea dhcpv6 leases if API ever gets added
 
-        # _LOGGER.debug(f"[get_dhcp_leases] leases_raw: {leases_raw}")
         leases: dict[str, Any] = {}
         lease_interfaces: dict[str, Any] = await self._get_kea_interfaces()
         for lease in leases_raw:
@@ -123,8 +120,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
             "lease_interfaces": sorted_lease_interfaces,
             "leases": sorted_leases,
         }
-        # _LOGGER.debug(f"[get_dhcp_leases] dhcp_leases: {dhcp_leases}")
-
         return dhcp_leases
 
     async def _get_kea_interfaces(self) -> dict[str, Any]:
@@ -148,7 +143,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 continue
             if api_value_matches(iface.get("selected", 0), "1") and iface.get("value", None):
                 lease_interfaces[if_name] = iface.get("value")
-        # _LOGGER.debug(f"[get_kea_interfaces] lease_interfaces: {lease_interfaces}")
         return lease_interfaces
 
     async def _get_kea_dhcpv4_leases(self, opnsense_tz: tzinfo | None = None) -> list:
@@ -188,9 +182,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                     continue
                 if res.get("hw_address", None):
                     reservations.update({res.get("hw_address"): res.get("ip_address", "")})
-        # _LOGGER.debug(f"[get_kea_dhcpv4_leases] reservations: {reservations}")
         leases_info: list = response.get("rows", [])
-        # _LOGGER.debug(f"[get_kea_dhcpv4_leases] leases_info: {leases_info}")
         leases: list = []
         for lease_info in leases_info:
             if (
@@ -230,7 +222,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
             else:
                 lease["expires"] = lease_info.get("expire", None)
             leases.append(lease)
-        # _LOGGER.debug(f"[get_kea_dhcpv4_leases] leases: {leases}")
         return leases
 
     def _keep_latest_leases(self, reservations: list[dict]) -> list[dict]:
@@ -284,13 +275,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
             return []
-        # _LOGGER.debug("[get_dnsmasq_leases] leases_info: %s", leases_info)
         cleaned_leases = self._keep_latest_leases(leases_info)
-        # _LOGGER.debug("[get_dnsmasq_leases] cleaned_leases: %s", cleaned_leases)
 
         leases: list = []
         for lease_info in cleaned_leases:
-            # _LOGGER.debug("[get_dnsmasq_leases] lease_info: %s", lease_info)
             if not isinstance(lease_info, MutableMapping):
                 continue
             lease: dict[str, Any] = {}
@@ -324,7 +312,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
             else:
                 lease["expires"] = lease_info.get("expire", None)
             leases.append(lease)
-        # _LOGGER.debug("[get_dnsmasq_leases] leases: %s", leases)
         return leases
 
     async def _get_isc_dhcpv4_leases(self, opnsense_tz: tzinfo | None = None) -> list:
@@ -352,10 +339,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
             return []
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
-        # _LOGGER.debug(f"[get_isc_dhcpv4_leases] leases_info: {leases_info}")
         leases: list = []
         for lease_info in leases_info:
-            # _LOGGER.debug(f"[get_isc_dhcpv4_leases] lease_info: {lease_info}")
             if (
                 not isinstance(lease_info, MutableMapping)
                 or lease_info.get("state", "") != "active"
@@ -387,7 +372,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
             else:
                 lease["expires"] = lease_info.get("ends", None)
             leases.append(lease)
-        # _LOGGER.debug(f"[get_isc_dhcpv4_leases] leases: {leases}")
         return leases
 
     async def _get_isc_dhcpv6_leases(self, opnsense_tz: tzinfo | None = None) -> list:
@@ -415,10 +399,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
             return []
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
-        # _LOGGER.debug(f"[get_isc_dhcpv6_leases] leases_info: {leases_info}")
         leases: list = []
         for lease_info in leases_info:
-            # _LOGGER.debug(f"[get_isc_dhcpv6_leases] lease_info: {lease_info}")
             if (
                 not isinstance(lease_info, MutableMapping)
                 or lease_info.get("state", "") != "active"
@@ -450,5 +432,4 @@ class DHCPMixin(AiopnsenseClientProtocol):
             else:
                 lease["expires"] = lease_info.get("ends", None)
             leases.append(lease)
-        # _LOGGER.debug(f"[get_isc_dhcpv6_leases] leases: {leases}")
         return leases

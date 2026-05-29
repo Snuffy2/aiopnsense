@@ -68,8 +68,6 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         # if error or too old trigger check (only if check is not already in progress)
         # {'status_msg': 'Firmware status check was aborted internally. Please try again.', 'status': 'error'}
         # error could be because data has not been refreshed at all OR an upgrade is currently in progress
-        # _LOGGER.debug("[get_firmware_update_info] status: %s", status)
-
         if error_status := bool(status.get("status") == "error"):
             _LOGGER.debug("Last firmware status check returned an error")
 

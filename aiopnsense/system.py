@@ -598,7 +598,6 @@ class SystemMixin(AiopnsenseClientProtocol):
             }
 
         notices_info = await self._safe_dict_get(notices_endpoint)
-        # _LOGGER.debug(f"[get_notices] notices_info: {notices_info}")
         pending_notices_present = False
         pending_notices: list = []
         for key, notice in notices_info.items():
@@ -642,13 +641,11 @@ class SystemMixin(AiopnsenseClientProtocol):
                 _LOGGER.debug("System status endpoint unavailable for closing notices")
                 return False
             notices = await self._safe_dict_get(notices_endpoint)
-            # _LOGGER.debug(f"[close_notice] notices: {notices}")
             for key, notice in notices.items():
                 if not isinstance(notice, MutableMapping):
                     continue
                 if notice.get("statusCode", 2) != 2:
                     dismiss = await self._safe_dict_post(dismiss_endpoint, payload={"subject": key})
-                    # _LOGGER.debug(f"[close_notice] id: {key}, dismiss: {dismiss}")
                     if dismiss.get("status", "failed") != "ok":
                         success = False
         else:
@@ -703,6 +700,5 @@ class SystemMixin(AiopnsenseClientProtocol):
                     "valid_from": timestamp_to_datetime(try_to_int(cert.get("valid_from", None))),
                     "valid_to": timestamp_to_datetime(try_to_int(cert.get("valid_to", None))),
                 }
-        # _LOGGER.debug("[get_certificates] certs: %s", certs)
         _LOGGER.debug("[get_certificates] certs length: %s", len(certs))
         return certs
