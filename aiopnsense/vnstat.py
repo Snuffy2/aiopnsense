@@ -72,13 +72,17 @@ class VnstatMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_vnstat_metrics(self, period: str) -> dict[str, Any]:
-        """Return parsed vnStat rows for the requested period endpoint.
+        """Return parsed vnStat traffic rows for one supported reporting period.
 
         Args:
-            period (str): Requested vnStat period identifier.
+            period (str): Requested vnStat period identifier. Supported values
+                are ``hourly``, ``daily``, ``monthly``, and ``yearly``.
 
         Returns:
-            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            dict[str, Any]: Parsed vnStat payload containing the selected
+                ``period`` and an ``interfaces`` mapping of interface names to
+                traffic rows. Returns an empty mapping for unsupported periods
+                or when no interface rows are available.
         """
         requested_period = normalize_lookup_token(period)
         if requested_period not in _VSTAT_PERIODS:
@@ -92,10 +96,14 @@ class VnstatMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_vnstat(self) -> MutableMapping[str, Any]:
-        """Collect vnStat hourly, daily, and monthly usage data.
+        """Collect summarized vnStat usage data across available interfaces.
 
         Returns:
-            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            MutableMapping[str, Any]: Mapping with ``interfaces`` keyed by
+                interface name and ``interface_count``. Each interface contains
+                parsed ``hourly``, ``daily``, and ``monthly`` rows plus
+                convenience byte counters for today, this month, yesterday,
+                last month, and the last complete hour.
         """
         if not await self.is_endpoint_available("/api/vnstat/service/hourly"):
             _LOGGER.debug("vnStat not installed")
@@ -156,11 +164,14 @@ class VnstatMixin(AiopnsenseClientProtocol):
         """Parse a vnStat endpoint payload into normalized rows.
 
         Args:
-            payload (MutableMapping[str, Any]): Request payload sent to the API endpoint.
-            expected_period (str): Expected period label for validation.
+            payload (MutableMapping[str, Any]): Raw vnStat API payload whose
+                ``response`` field contains the textual vnStat table.
+            expected_period (str): Period label expected in the table header.
 
         Returns:
-            dict[str, Any]: Parsed value extracted from the provided input data.
+            dict[str, Any]: Mapping with the parsed ``period`` and an
+                ``interfaces`` dictionary of interface names to normalized row
+                dictionaries.
         """
         response_text = payload.get("response", "")
         if not isinstance(response_text, str):
@@ -220,10 +231,13 @@ class VnstatMixin(AiopnsenseClientProtocol):
         """Parse a single vnStat data row from fixed-width text output.
 
         Args:
-            line (str): Single line from vnStat output.
+            line (str): Single table row from vnStat output.
 
         Returns:
-            dict[str, Any] | None: Parsed value extracted from the provided input data.
+            dict[str, Any] | None: Normalized row containing ``label``,
+                ``rx_bytes``, ``tx_bytes``, ``total_bytes``, and
+                ``avg_rate_bits_per_second``. Returns ``None`` for separators,
+                estimated rows, and malformed values.
         """
         lowered = line.lower()
         if lowered.startswith(("-", "estimated")):
@@ -253,11 +267,13 @@ class VnstatMixin(AiopnsenseClientProtocol):
         """Convert vnStat byte strings into integer bytes.
 
         Args:
-            value (str): Input value to convert or normalize.
-            unit (str): Unit suffix detected in vnStat values.
+            value (str): Numeric byte value parsed from vnStat text.
+            unit (str): Byte unit suffix such as ``B``, ``KiB``, ``MiB``, or
+                ``GB``.
 
         Returns:
-            int | None: Converted numeric value in the expected unit.
+            int | None: Converted byte count, or ``None`` when the value or
+                unit cannot be parsed.
         """
         parsed_value = try_to_float(value)
         factor = _BYTE_FACTORS.get(unit.upper())
@@ -269,11 +285,13 @@ class VnstatMixin(AiopnsenseClientProtocol):
         """Convert vnStat rate strings into integer bits-per-second.
 
         Args:
-            value (str): Input value to convert or normalize.
-            unit (str): Unit suffix detected in vnStat values.
+            value (str): Numeric rate value parsed from vnStat text.
+            unit (str): Rate unit suffix such as ``bit/s``, ``kbit/s``, or
+                ``Mbit/s``.
 
         Returns:
-            int | None: Converted numeric value in the expected unit.
+            int | None: Converted bits-per-second value, or ``None`` when the
+                value or unit cannot be parsed.
         """
         parsed_value = try_to_float(value)
         factor = _RATE_FACTORS.get(unit.upper())
@@ -289,10 +307,12 @@ class VnstatMixin(AiopnsenseClientProtocol):
         Args:
             rows (Sequence[dict[str, Any]]): Collection of parsed table rows.
             days_ago (int): Day offset used for fallback selection.
-            current_tz (tzinfo): Current local timezone fallback value.
+            current_tz (tzinfo): Timezone used to determine the current date.
 
         Returns:
-            dict[str, Any] | None: Selected row that best matches the requested criteria.
+            dict[str, Any] | None: Daily row matching ``days_ago`` in
+                ``current_tz``. Falls back to the latest row for today and the
+                second-latest row for yesterday when labels cannot be parsed.
         """
         target_day = datetime.now(tz=current_tz).date() - timedelta(days=days_ago)
         for row in rows:
@@ -313,10 +333,13 @@ class VnstatMixin(AiopnsenseClientProtocol):
         Args:
             rows (Sequence[dict[str, Any]]): Collection of parsed table rows.
             months_ago (int): Month offset used for fallback selection.
-            current_tz (tzinfo): Current local timezone fallback value.
+            current_tz (tzinfo): Timezone used to determine the current month.
 
         Returns:
-            dict[str, Any] | None: Selected row that best matches the requested criteria.
+            dict[str, Any] | None: Monthly row matching ``months_ago`` in
+                ``current_tz``. Falls back to the latest row for this month and
+                the second-latest row for last month when labels cannot be
+                parsed.
         """
         now = datetime.now(tz=current_tz).date()
         target_year = now.year
@@ -342,10 +365,13 @@ class VnstatMixin(AiopnsenseClientProtocol):
 
         Args:
             rows (Sequence[dict[str, Any]]): Collection of parsed table rows.
-            current_tz (tzinfo): Current local timezone fallback value.
+            current_tz (tzinfo): Timezone used to determine the current and
+                previous hour.
 
         Returns:
-            dict[str, Any] | None: Selected row that best matches the requested criteria.
+            dict[str, Any] | None: Row for the last complete hour, or the most
+                recent completed row when exact timestamp matching is
+                unavailable.
         """
         now = datetime.now(tz=current_tz)
         current_hour = now.replace(minute=0, second=0, microsecond=0)
@@ -365,10 +391,13 @@ class VnstatMixin(AiopnsenseClientProtocol):
         """Extract metric values from a parsed row.
 
         Args:
-            row (Mapping[str, Any] | None): Single parsed table row.
+            row (Mapping[str, Any] | None): Parsed vnStat row to extract byte
+                counters from.
 
         Returns:
-            dict[str, int] | None: Mapping containing normalized fields for downstream use.
+            dict[str, int] | None: Mapping with integer ``total_bytes``,
+                ``rx_bytes``, and ``tx_bytes`` counters, or ``None`` when the
+                row is missing any required counter.
         """
         if not isinstance(row, Mapping):
             return None
@@ -385,10 +414,13 @@ class VnstatMixin(AiopnsenseClientProtocol):
         """Collect interface names present across parsed vnStat payloads.
 
         Args:
-            *payloads (Mapping[str, Any] | MutableMapping[str, Any]): Parsed vnStat payload mappings to inspect.
+            *payloads (Mapping[str, Any] | MutableMapping[str, Any]): Parsed
+                vnStat payload mappings whose ``interfaces`` keys should be
+                merged.
 
         Returns:
-            list[str]: Collection assembled from the provided inputs.
+            list[str]: Sorted unique interface names found across all supplied
+                payloads.
         """
         interfaces: set[str] = set()
         for payload in payloads:
@@ -404,8 +436,9 @@ class VnstatMixin(AiopnsenseClientProtocol):
         """Return parsed rows for a specific interface from a payload.
 
         Args:
-            payload (Mapping[str, Any]): Request payload sent to the API endpoint.
-            interface (str): Interface identifier to reload or inspect.
+            payload (Mapping[str, Any]): Parsed vnStat payload containing an
+                ``interfaces`` mapping.
+            interface (str): Interface name whose rows should be returned.
 
         Returns:
             list[dict[str, Any]]: Parsed rows for a specific interface from a payload.
@@ -420,10 +453,11 @@ class VnstatMixin(AiopnsenseClientProtocol):
         """Parse daily row labels into ``date`` values.
 
         Args:
-            label (Any): Text label parsed from vnStat output.
+            label (Any): Daily row label parsed from vnStat output.
 
         Returns:
-            date | None: Parsed value extracted from the provided input data.
+            date | None: Parsed date for ``MM/DD/YY`` or ``YYYY-MM-DD`` labels,
+                or ``None`` when the label is not recognized.
         """
         if not isinstance(label, str):
             return None
@@ -438,10 +472,12 @@ class VnstatMixin(AiopnsenseClientProtocol):
         """Parse monthly row labels into year/month tuples.
 
         Args:
-            label (Any): Text label parsed from vnStat output.
+            label (Any): Monthly row label parsed from vnStat output.
 
         Returns:
-            tuple[int, int] | None: Parsed value extracted from the provided input data.
+            tuple[int, int] | None: ``(year, month)`` parsed from labels such
+                as ``YYYY-MM``, ``Jan '26``, or ``January '26``. Returns
+                ``None`` for unrecognized labels.
         """
         if not isinstance(label, str):
             return None
@@ -458,11 +494,12 @@ class VnstatMixin(AiopnsenseClientProtocol):
         """Parse hourly row labels into minute-precision datetimes.
 
         Args:
-            label (Any): Text label parsed from vnStat output.
-            current_tz (tzinfo): Current local timezone fallback value.
+            label (Any): Hourly row label parsed from vnStat output.
+            current_tz (tzinfo): Timezone assigned to parsed hourly labels.
 
         Returns:
-            datetime | None: Parsed value extracted from the provided input data.
+            datetime | None: Parsed hour timestamp for ``MM/DD/YY HH:MM`` or
+                ``YYYY-MM-DD HH:MM`` labels, or ``None`` when parsing fails.
         """
         if not isinstance(label, str):
             return None

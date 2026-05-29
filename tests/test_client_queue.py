@@ -481,14 +481,15 @@ async def test_process_queue_cancelled_sets_future_cancelled_error(
         release = asyncio.Event()
 
         async def _blocked_get(_path: str, _caller: str) -> MutableMapping[str, Any]:
-            """Blocked get.
+            """Block a queued GET request until the test releases it.
 
             Args:
-                _path (str):  path used by this operation.
-                _caller (str):  caller used by this operation.
+                _path (str): Queued API path passed by the queue worker.
+                _caller (str): Caller name passed by the queue worker.
 
             Returns:
-                MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
+                MutableMapping[str, Any]: Empty response payload after the
+                    release event is set.
             """
             started.set()
             await release.wait()

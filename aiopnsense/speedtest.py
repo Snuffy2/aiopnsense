@@ -26,10 +26,14 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_speedtest(self) -> dict[str, Any]:
-        """Return normalized speedtest summary payload for sensors.
+        """Return the latest and average Speedtest result summaries.
 
         Returns:
-            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            dict[str, Any]: Mapping with ``available`` plus ``last`` and
+                ``average`` sections for download, upload, and latency. Latest
+                results include server, date, and URL metadata; averages
+                include min, max, sample count, and period bounds. Returns
+                ``{"available": False}`` when the plugin endpoint is missing.
         """
         show_recent_endpoint = "/api/speedtest/service/showrecent"
         show_stat_endpoint = "/api/speedtest/service/showstat"
@@ -90,10 +94,13 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
         """Parse the ``showrecent.server`` field into server ID and name.
 
         Args:
-            server_text (Any): Raw server text field from speedtest results.
+            server_text (Any): Raw ``showrecent.server`` text, commonly either
+                ``"<id> <name>"`` or just the server name.
 
         Returns:
-            tuple[str | None, str | None]: Parsed value extracted from the provided input data.
+            tuple[str | None, str | None]: Parsed server id and server name.
+                The id is ``None`` when the field has no numeric prefix; both
+                values are ``None`` when the field is missing or empty.
         """
         if not isinstance(server_text, str):
             return None, None
@@ -108,10 +115,12 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def run_speedtest(self) -> dict[str, Any]:
-        """Run speedtest and return the endpoint response payload.
+        """Start a Speedtest run and return the raw run response.
 
         Returns:
-            dict[str, Any]: Mapping containing normalized fields for downstream use.
+            dict[str, Any]: Response mapping from the Speedtest ``run``
+                endpoint, or an empty mapping when the plugin endpoint is
+                unavailable or returns a malformed payload.
         """
         if not await self.is_endpoint_available("/api/speedtest/service/showrecent"):
             _LOGGER.debug("Speedtest not installed")

@@ -49,10 +49,13 @@ class VPNMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_openvpn(self) -> MutableMapping[str, Any]:
-        """Return OpenVPN information.
+        """Return OpenVPN server and client status information.
 
         Returns:
-            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            MutableMapping[str, Any]: Mapping with ``servers`` and ``clients``
+                keyed by UUID. Server entries combine instance, provider,
+                session, route, tunnel-address, DNS, status, byte-counter, and
+                connected-client data when available.
         """
         # https://docs.opnsense.org/development/api/core/openvpn.html
         # https://github.com/opnsense/core/blob/master/src/opnsense/www/js/widgets/OpenVPNClients.js
@@ -278,10 +281,13 @@ class VPNMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_wireguard(self) -> MutableMapping[str, Any]:
-        """Get the details of the WireGuard services.
+        """Return WireGuard server and client status information.
 
         Returns:
-            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            MutableMapping[str, Any]: Mapping with ``servers`` and ``clients``
+                keyed by UUID. Entries combine configured tunnel addresses,
+                peer links, enabled state, interface names, handshake status,
+                byte counters, and connected peer counts where available.
         """
         data_sources = {
             "summary_raw": "/api/wireguard/service/show",
@@ -336,12 +342,15 @@ class VPNMixin(AiopnsenseClientProtocol):
         """Process a single WireGuard server entry.
 
         Args:
-            uid (str): Unique identifier used by test fixtures.
-            srv (MutableMapping[str, Any]): WireGuard server mapping entry.
-            client_summ (MutableMapping[str, Any]): WireGuard client summary entry from API data.
+            uid (str): WireGuard server UUID from the server settings payload.
+            srv (MutableMapping[str, Any]): WireGuard server settings row.
+            client_summ (MutableMapping[str, Any]): Client settings mapping
+                used to enrich selected peer links with public keys.
 
         Returns:
-            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
+            MutableMapping[str, Any]: Normalized server mapping with identity,
+                enabled state, interface, DNS servers, tunnel addresses,
+                configured client peers, and initialized connection counters.
         """
         tunnel_addresses = VPNMixin._mapping_value(srv, "tunneladdress")
         peers = VPNMixin._mapping_value(srv, "peers")
@@ -383,12 +392,15 @@ class VPNMixin(AiopnsenseClientProtocol):
         """Process a single WireGuard client entry.
 
         Args:
-            uid (str): Unique identifier used by test fixtures.
-            clnt (MutableMapping[str, Any]): WireGuard client mapping entry.
-            servers (MutableMapping[str, Any]): Server mapping keyed by server identifier.
+            uid (str): WireGuard client UUID from the client settings payload.
+            clnt (MutableMapping[str, Any]): WireGuard client settings row.
+            servers (MutableMapping[str, Any]): Normalized server mapping used
+                to enrich configured server links.
 
         Returns:
-            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
+            MutableMapping[str, Any]: Normalized client mapping with identity,
+                enabled state, tunnel addresses, configured server links, and
+                initialized connection counters.
         """
         tunnel_addresses = VPNMixin._mapping_value(clnt, "tunneladdress")
         server_links = VPNMixin._mapping_value(clnt, "servers")
@@ -482,7 +494,8 @@ class VPNMixin(AiopnsenseClientProtocol):
         """Update the WireGuard peer status for clients and servers.
 
         Args:
-            entry (MutableMapping[str, Any]): Single lease or telemetry entry under evaluation.
+            entry (MutableMapping[str, Any]): WireGuard summary peer row from
+                ``/api/wireguard/service/show``.
             servers (MutableMapping[str, Any]): Server mapping keyed by server identifier.
             clients (MutableMapping[str, Any]): Client mapping keyed by client identifier.
         """
@@ -538,12 +551,13 @@ class VPNMixin(AiopnsenseClientProtocol):
         is_connected: bool,
         connection_counter_key: str,
     ) -> None:
-        """Update details of WireGuard peers.
+        """Apply live WireGuard peer counters to a linked server or client.
 
         Args:
-            peer (MutableMapping[str, Any]): WireGuard peer details payload.
-            server_or_client (MutableMapping[str, Any]): VPN entity data to evaluate for state changes.
-            endpoint (str): Remote endpoint string for peer connection.
+            peer (MutableMapping[str, Any]): Linked peer mapping to update.
+            server_or_client (MutableMapping[str, Any]): Parent server or
+                client mapping whose aggregate counters should be incremented.
+            endpoint (str): Remote endpoint string reported by WireGuard.
             transfer_rx (int): Received byte counter for peer statistics.
             transfer_tx (int): Transmitted byte counter for peer statistics.
             handshake_time (datetime | None): Handshake time used by this operation.
@@ -581,8 +595,10 @@ class VPNMixin(AiopnsenseClientProtocol):
 
         Args:
             vpn_type (str): Vpn type used by this operation.
-            clients_servers (str): Mapping that links WireGuard clients to servers.
-            uuid (str): Unique identifier of the target OPNsense resource.
+            clients_servers (str): WireGuard collection to toggle. Use
+                ``clients`` for a client entry or ``servers`` for a server
+                entry. Ignored for OpenVPN.
+            uuid (str): UUID of the VPN instance to toggle.
 
         Returns:
             bool: True when the toggle operation completes successfully; otherwise, False.

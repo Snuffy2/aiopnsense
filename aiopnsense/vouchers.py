@@ -13,14 +13,18 @@ class VouchersMixin(AiopnsenseClientProtocol):
     """Captive portal voucher methods for OPNsenseClient."""
 
     async def generate_vouchers(self, data: MutableMapping[str, Any]) -> list[dict[str, Any]]:
-        """Generate vouchers from the Voucher Server.
+        """Generate captive portal vouchers from a voucher server.
 
         Args:
-            data (MutableMapping[str, Any]): Configuration data used to
-                generate vouchers.
+            data (MutableMapping[str, Any]): Voucher generation options passed
+                to OPNsense. Include ``voucher_server`` to choose a specific
+                server when more than one provider exists.
 
         Returns:
-            list[dict[str, Any]]: List of normalized entries produced by this method.
+            list[dict[str, Any]]: Generated vouchers with keys ordered for
+                consumers and with ``expirytime`` converted to a timestamped
+                datetime plus ``expiry_timestamp`` and human-readable
+                ``validity_str`` when those values are available.
         """
         list_providers_endpoint = await self._get_endpoint_path(
             snake_case_path="/api/captiveportal/voucher/list_providers",

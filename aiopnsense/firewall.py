@@ -81,10 +81,13 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_firewall(self) -> dict[str, Any]:
-        """Retrieve all firewall and NAT rules from OPNsense.
+        """Return firewall filter rules and all supported NAT rule groups.
 
         Returns:
-            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            dict[str, Any]: Mapping with top-level ``rules`` for firewall
+                filter rules and ``nat`` groups for destination NAT,
+                one-to-one NAT, source NAT, and NPT rules. Rule groups are
+                keyed by rule UUID.
         """
         firewall: dict[str, Any] = {"nat": {}}
         firewall["rules"] = await self._get_firewall_rules()
@@ -99,7 +102,8 @@ class FirewallMixin(AiopnsenseClientProtocol):
         """Retrieve firewall rules from OPNsense.
 
         Returns:
-            dict[str, Any]: Mapping containing normalized fields for downstream use.
+            dict[str, Any]: Firewall filter rules keyed by UUID, excluding
+                malformed rows and lockout rules.
         """
         return await self._get_uuid_indexed_rules(
             endpoint="/api/firewall/filter/search_rule",
@@ -111,7 +115,9 @@ class FirewallMixin(AiopnsenseClientProtocol):
         """Retrieve NAT destination rules from OPNsense.
 
         Returns:
-            dict[str, Any]: Mapping containing normalized fields for downstream use.
+            dict[str, Any]: Destination NAT rules keyed by UUID, with
+                ``descr`` normalized to ``description`` and disabled-state
+                values converted into an ``enabled`` flag.
         """
         return await self._get_uuid_indexed_rules(
             endpoint="/api/firewall/d_nat/search_rule",
@@ -139,7 +145,8 @@ class FirewallMixin(AiopnsenseClientProtocol):
         """Retrieve NAT source rules from OPNsense.
 
         Returns:
-            dict[str, Any]: Mapping containing normalized fields for downstream use.
+            dict[str, Any]: Source NAT rules keyed by UUID, excluding
+                malformed rows and lockout rules.
         """
         return await self._get_uuid_indexed_rules(
             endpoint="/api/firewall/source_nat/search_rule",
@@ -151,7 +158,8 @@ class FirewallMixin(AiopnsenseClientProtocol):
         """Retrieve NAT NPT rules from OPNsense.
 
         Returns:
-            dict[str, Any]: Mapping containing normalized fields for downstream use.
+            dict[str, Any]: NPT NAT rules keyed by UUID, excluding malformed
+                rows and lockout rules.
         """
         return await self._get_uuid_indexed_rules(
             endpoint="/api/firewall/npt/search_rule",
@@ -162,8 +170,10 @@ class FirewallMixin(AiopnsenseClientProtocol):
         """Toggle Firewall Rule on and off.
 
         Args:
-            uuid (str): Unique identifier of the target OPNsense resource.
-            toggle_on_off (str | None, optional): Target enabled state for the selected item.
+            uuid (str): UUID of the firewall filter rule to toggle.
+            toggle_on_off (str | None, optional): Target state. Use ``on`` to
+                enable, ``off`` to disable, or ``None`` to let OPNsense toggle
+                the current state.
 
         Returns:
             bool: True when the toggle operation completes successfully; otherwise, False.
@@ -200,9 +210,12 @@ class FirewallMixin(AiopnsenseClientProtocol):
         """Toggle NAT Rule on and off.
 
         Args:
-            nat_rule_type (str): NAT rule category to toggle.
-            uuid (str): Unique identifier of the target OPNsense resource.
-            toggle_on_off (str | None, optional): Target enabled state for the selected item.
+            nat_rule_type (str): NAT rule category path segment, such as
+                ``d_nat``, ``source_nat``, ``one_to_one``, or ``npt``.
+            uuid (str): UUID of the NAT rule to toggle.
+            toggle_on_off (str | None, optional): Target state. Use ``on`` to
+                enable, ``off`` to disable, or ``None`` to let OPNsense toggle
+                the current state.
 
         Returns:
             bool: True when the toggle operation completes successfully; otherwise, False.
@@ -246,7 +259,8 @@ class FirewallMixin(AiopnsenseClientProtocol):
             ip_addr (str): IP address whose states should be terminated.
 
         Returns:
-            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
+            MutableMapping[str, Any]: Mapping with ``success`` and
+                ``dropped_states`` from the firewall state-kill response.
         """
         payload: dict[str, Any] = {"filter": ip_addr}
         response = await self._safe_dict_post(
@@ -264,7 +278,9 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         Args:
             alias (str): Alias name to toggle in firewall configuration.
-            toggle_on_off (str | None, optional): Target enabled state for the selected item.
+            toggle_on_off (str | None, optional): Target state. Use ``on`` to
+                enable, ``off`` to disable, or ``None`` to let OPNsense toggle
+                the current state.
 
         Returns:
             bool: True when the toggle operation completes successfully; otherwise, False.

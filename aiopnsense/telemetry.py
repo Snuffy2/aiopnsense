@@ -37,10 +37,13 @@ class TelemetryMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_telemetry(self) -> MutableMapping[str, Any]:
-        """Get telemetry data from OPNsense.
+        """Return consolidated system telemetry from OPNsense.
 
         Returns:
-            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            MutableMapping[str, Any]: Mapping containing ``mbuf``,
+                ``pfstate``, ``memory``, ``system``, ``cpu``,
+                ``filesystems``, and ``temps`` sections populated from the
+                corresponding diagnostics endpoints.
         """
         telemetry: dict[str, Any] = {}
         telemetry["mbuf"] = await self._get_telemetry_mbuf()
@@ -54,10 +57,14 @@ class TelemetryMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_interfaces(self) -> MutableMapping[str, Any]:
-        """Return all OPNsense interfaces.
+        """Return normalized interface status and counters.
 
         Returns:
-            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            MutableMapping[str, Any]: Mapping keyed by OPNsense interface
+                identifier. Each interface includes packet and byte counters,
+                error counters, status, addresses, media, gateway and route
+                metadata, MAC address, enabled flag, and VLAN tag when
+                available.
         """
         interfaces_endpoint = "/api/interfaces/overview/export"
         if not await self.is_endpoint_available(interfaces_endpoint):
@@ -112,7 +119,8 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         """Collect mbuf usage telemetry.
 
         Returns:
-            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
+            MutableMapping[str, Any]: Mapping containing current and total mbuf
+                counts plus ``used_percent``.
         """
         mbuf_endpoint = "/api/diagnostics/system/system_mbuf"
         if not await self.is_endpoint_available(mbuf_endpoint):
@@ -130,7 +138,8 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         """Collect PF state table telemetry.
 
         Returns:
-            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
+            MutableMapping[str, Any]: Mapping containing current and maximum PF
+                state counts plus ``used_percent``.
         """
         pfstate_endpoint = "/api/diagnostics/firewall/pf_states"
         if not await self.is_endpoint_available(pfstate_endpoint):
@@ -148,7 +157,9 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         """Collect memory and swap telemetry.
 
         Returns:
-            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
+            MutableMapping[str, Any]: Mapping containing physical memory,
+                memory used, and ``used_percent``. Adds swap totals and usage
+                percentage when swap telemetry is available.
         """
         memory_endpoint = await self._get_endpoint_path(
             snake_case_path="/api/diagnostics/system/system_resources",
@@ -190,7 +201,8 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         """Collect system time, uptime, boottime, and load telemetry.
 
         Returns:
-            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
+            MutableMapping[str, Any]: Mapping containing boot time, uptime, and
+                one-, five-, and fifteen-minute load averages when parseable.
         """
         time_endpoint = await self._get_endpoint_path(
             snake_case_path="/api/diagnostics/system/system_time",
@@ -275,7 +287,9 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         """Collect CPU core count and usage telemetry.
 
         Returns:
-            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
+            MutableMapping[str, Any]: Mapping containing CPU core count and
+                total/user/nice/system/interrupt/idle usage percentages when
+                available.
         """
         cpu_type_endpoint = await self._get_endpoint_path(
             snake_case_path="/api/diagnostics/cpu_usage/get_c_p_u_type",
@@ -310,7 +324,8 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         """Collect filesystem telemetry entries from diagnostics.
 
         Returns:
-            list: List of normalized entries produced by this method.
+            list: Filesystem device rows from OPNsense disk diagnostics, or an
+                empty list when the endpoint is unavailable.
         """
         filesystems_endpoint = await self._get_endpoint_path(
             snake_case_path="/api/diagnostics/system/system_disk",
@@ -325,10 +340,12 @@ class TelemetryMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_gateways(self) -> MutableMapping[str, Any]:
-        """Return OPNsense Gateway details.
+        """Return OPNsense gateway status details.
 
         Returns:
-            MutableMapping[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            MutableMapping[str, Any]: Mapping keyed by gateway name, with each
+                gateway row preserved from OPNsense and ``status`` normalized
+                from the translated status when available.
         """
         gateway_endpoint = "/api/routes/gateway/status"
         if not await self.is_endpoint_available(gateway_endpoint):
@@ -348,7 +365,9 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         """Collect temperature sensor telemetry.
 
         Returns:
-            MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
+            MutableMapping[str, Any]: Mapping keyed by temperature device id,
+                with each value containing the numeric temperature, display
+                name, and original device id.
         """
         temperature_endpoint = await self._get_endpoint_path(
             snake_case_path="/api/diagnostics/system/system_temperature",

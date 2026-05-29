@@ -166,10 +166,14 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def get_unbound_blocklist(self) -> dict[str, Any]:
-        """Return the Unbound Blocklist details.
+        """Return Unbound DNS blocklist configuration.
 
         Returns:
-            dict[str, Any]: Normalized data returned by the related OPNsense endpoint.
+            dict[str, Any]: For legacy firmware, a mapping with ``legacy`` set
+                to the regular DNSBL settings. For extended-blocklist
+                firmware, a UUID-keyed mapping of DNSBL rows from
+                ``search_dnsbl``. Returns an empty mapping when the endpoint is
+                unavailable or malformed.
         """
         use_legacy = await self._uses_legacy_unbound_blocklist()
         if use_legacy is not False:
@@ -200,14 +204,15 @@ class UnboundMixin(AiopnsenseClientProtocol):
         return dnsbl_full
 
     async def _toggle_unbound_blocklist(self, set_state: bool, uuid: str | None) -> bool:
-        """Enable or disable the unbound blocklist.
+        """Enable or disable one extended Unbound DNSBL entry.
 
         Args:
-            set_state (bool): Target alias enabled state.
-            uuid (str | None): Unique identifier of the target OPNsense resource.
+            set_state (bool): Desired enabled state for the DNSBL entry.
+            uuid (str | None): UUID of the extended DNSBL entry to toggle.
 
         Returns:
-            bool: True when the toggle operation completes successfully; otherwise, False.
+            bool: ``True`` when OPNsense reports the expected toggle result
+                and the DNSBL apply step succeeds; otherwise, ``False``.
         """
         if not uuid:
             _LOGGER.error("Blocklist uuid must be provided for Unbound Extended Blocklists")
@@ -243,7 +248,8 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         Args:
             set_state (bool): Desired enabled state.
-            uuid (str | None, optional): Unique identifier of the target OPNsense resource.
+            uuid (str | None, optional): UUID of an extended DNSBL entry. Omit
+                for legacy firmware where regular DNSBL has no per-entry UUID.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
@@ -281,10 +287,11 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def enable_unbound_blocklist(self, uuid: str | None = None) -> bool:
-        """Enable the unbound blocklist.
+        """Enable Unbound DNS blocklist filtering.
 
         Args:
-            uuid (str | None, optional): Unique identifier of the target OPNsense resource.
+            uuid (str | None, optional): UUID of an extended DNSBL entry. Omit
+                when enabling the legacy regular DNSBL setting.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
@@ -293,10 +300,11 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
     @_log_errors
     async def disable_unbound_blocklist(self, uuid: str | None = None) -> bool:
-        """Disable the unbound blocklist.
+        """Disable Unbound DNS blocklist filtering.
 
         Args:
-            uuid (str | None, optional): Unique identifier of the target OPNsense resource.
+            uuid (str | None, optional): UUID of an extended DNSBL entry. Omit
+                when disabling the legacy regular DNSBL setting.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
