@@ -15,6 +15,26 @@ from .helpers import _LOGGER, _log_errors, dict_get, try_to_float, try_to_int
 class TelemetryMixin(AiopnsenseClientProtocol):
     """Telemetry methods for OPNsenseClient."""
 
+    @staticmethod
+    def _usage_percent(
+        used: int | None,
+        total: int | None,
+        default: int | None = None,
+    ) -> int | None:
+        """Calculate a rounded usage percentage for valid integer counters.
+
+        Args:
+            used (int | None): Used amount.
+            total (int | None): Total capacity.
+            default (int | None, optional): Value returned for invalid or zero totals.
+
+        Returns:
+            int | None: Rounded percentage, or ``default`` when counters are invalid.
+        """
+        if isinstance(used, int) and isinstance(total, int) and total > 0:
+            return round(used / total * 100)
+        return default
+
     @_log_errors
     async def get_telemetry(self) -> MutableMapping[str, Any]:
         """Get telemetry data from OPNsense.
@@ -102,13 +122,7 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         mbuf: dict[str, Any] = {}
         mbuf["used"] = try_to_int(dict_get(mbuf_info, "mbuf-statistics.mbuf-current"))
         mbuf["total"] = try_to_int(dict_get(mbuf_info, "mbuf-statistics.mbuf-total"))
-        mbuf["used_percent"] = (
-            round(mbuf["used"] / mbuf["total"] * 100)
-            if isinstance(mbuf["used"], int)
-            and isinstance(mbuf["total"], int)
-            and mbuf["total"] > 0
-            else None
-        )
+        mbuf["used_percent"] = self._usage_percent(mbuf["used"], mbuf["total"])
         return mbuf
 
     @_log_errors
@@ -126,13 +140,7 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         pfstate: dict[str, Any] = {}
         pfstate["used"] = try_to_int(pfstate_info.get("current", None))
         pfstate["total"] = try_to_int(pfstate_info.get("limit", None))
-        pfstate["used_percent"] = (
-            round(pfstate["used"] / pfstate["total"] * 100)
-            if isinstance(pfstate["used"], int)
-            and isinstance(pfstate["total"], int)
-            and pfstate["total"] > 0
-            else None
-        )
+        pfstate["used_percent"] = self._usage_percent(pfstate["used"], pfstate["total"])
         return pfstate
 
     @_log_errors
@@ -157,13 +165,7 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         memory: dict[str, Any] = {}
         memory["physmem"] = try_to_int(dict_get(memory_info, "memory.total"))
         memory["used"] = try_to_int(dict_get(memory_info, "memory.used"))
-        memory["used_percent"] = (
-            round(memory["used"] / memory["physmem"] * 100)
-            if isinstance(memory["used"], int)
-            and isinstance(memory["physmem"], int)
-            and memory["physmem"] > 0
-            else None
-        )
+        memory["used_percent"] = self._usage_percent(memory["used"], memory["physmem"])
         swap_endpoint = "/api/diagnostics/system/system_swap"
         if not await self.is_endpoint_available(swap_endpoint):
             _LOGGER.debug("Telemetry swap endpoint unavailable")
@@ -178,12 +180,8 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             return memory
         memory["swap_total"] = try_to_int(swap_row.get("total"))
         memory["swap_reserved"] = try_to_int(swap_row.get("used"))
-        memory["swap_used_percent"] = (
-            round(memory["swap_reserved"] / memory["swap_total"] * 100)
-            if isinstance(memory["swap_reserved"], int)
-            and isinstance(memory["swap_total"], int)
-            and memory["swap_total"] > 0
-            else 0
+        memory["swap_used_percent"] = self._usage_percent(
+            memory["swap_reserved"], memory["swap_total"], default=0
         )
         return memory
 
