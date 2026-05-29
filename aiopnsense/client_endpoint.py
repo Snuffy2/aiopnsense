@@ -79,6 +79,10 @@ class ClientEndpointMixin:
         """
         if self._use_snake_case is None:
             await self.set_use_snake_case()
+        # _get_endpoint_path treats _use_snake_case as a three-state flag:
+        # None means set_use_snake_case has not determined the endpoint style yet,
+        # True selects snake_case, and False selects camelCase. Use "is not False"
+        # so an indeterminate or newer-firmware value stays on the snake_case path.
         return snake_case_path if self._use_snake_case is not False else camel_case_path
 
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
