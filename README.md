@@ -1,11 +1,12 @@
 # aiopnsense
-[![PyPI Downloads][pypi-downloads-shield]](https://pypi.org/project/aiopnsense/)
 [![GitHub Release][releases-shield]][releases]
 [![GitHub Release Date][release-date-shield]][releases]
 [![GitHub Activity][commits-shield]][commits]
 [![Coverage][coverage-shield]][coverage]
 [![Documentation][docs-shield]][docs]
 [![License][license-shield]](LICENSE)
+
+[![PyPI][pypi-logo]][pypi]
 
 `aiopnsense` is an async Python client library for [OPNsense](https://opnsense.org).
 
@@ -52,4 +53,5 @@ The client currently includes helpers for:
 [releases]: https://github.com/Snuffy2/aiopnsense/releases
 [coverage]: https://htmlpreview.github.io/?https://github.com/Snuffy2/aiopnsense/blob/python-coverage-comment-action-data/htmlcov/index.html
 [coverage-shield]: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FSnuffy2%2Faiopnsense%2Fpython-coverage-comment-action-data%2Fendpoint.json&style=for-the-badge
-[pypi-downloads-shield]: https://img.shields.io/pypi/dm/aiopnsense?style=for-the-badge
+[pypi-logo]: https://img.shields.io/badge/PyPI-3775A9?logo=pypi&logoColor=fff&style=for-the-badge
+[pypi]: https://pypi.org/project/aiopnsense/
