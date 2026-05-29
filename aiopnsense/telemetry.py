@@ -9,7 +9,7 @@ from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
-from .helpers import _LOGGER, _log_errors, try_to_float, try_to_int
+from .helpers import _LOGGER, _log_errors, dict_get, try_to_float, try_to_int
 
 
 class TelemetryMixin(AiopnsenseClientProtocol):
@@ -51,31 +51,22 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             interface: dict[str, Any] = {}
             if not isinstance(ifinfo, MutableMapping) or ifinfo.get("identifier", "") == "":
                 continue
-            interface["inpkts"] = try_to_int(
-                ifinfo.get("statistics", {}).get("packets received", None)
-            )
-            interface["outpkts"] = try_to_int(
-                ifinfo.get("statistics", {}).get("packets transmitted", None)
-            )
-            interface["inbytes"] = try_to_int(
-                ifinfo.get("statistics", {}).get("bytes received", None)
-            )
-            interface["outbytes"] = try_to_int(
-                ifinfo.get("statistics", {}).get("bytes transmitted", None)
-            )
-            interface["inbytes_frmt"] = try_to_int(
-                ifinfo.get("statistics", {}).get("bytes received", None)
-            )
-            interface["outbytes_frmt"] = try_to_int(
-                ifinfo.get("statistics", {}).get("bytes transmitted", None)
-            )
-            interface["inerrs"] = try_to_int(ifinfo.get("statistics", {}).get("input errors", None))
-            interface["outerrs"] = try_to_int(
-                ifinfo.get("statistics", {}).get("output errors", None)
-            )
-            interface["collisions"] = try_to_int(
-                ifinfo.get("statistics", {}).get("collisions", None)
-            )
+            statistics = ifinfo.get("statistics", {})
+            if not isinstance(statistics, MutableMapping):
+                statistics = {}
+            packets_received = try_to_int(statistics.get("packets received"))
+            packets_transmitted = try_to_int(statistics.get("packets transmitted"))
+            bytes_received = try_to_int(statistics.get("bytes received"))
+            bytes_transmitted = try_to_int(statistics.get("bytes transmitted"))
+            interface["inpkts"] = packets_received
+            interface["outpkts"] = packets_transmitted
+            interface["inbytes"] = bytes_received
+            interface["outbytes"] = bytes_transmitted
+            interface["inbytes_frmt"] = bytes_received
+            interface["outbytes_frmt"] = bytes_transmitted
+            interface["inerrs"] = try_to_int(statistics.get("input errors"))
+            interface["outerrs"] = try_to_int(statistics.get("output errors"))
+            interface["collisions"] = try_to_int(statistics.get("collisions"))
             interface["interface"] = ifinfo.get("identifier", "")
             interface["name"] = ifinfo.get("description", "")
             interface["status"] = ""
@@ -109,8 +100,8 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             return {}
         mbuf_info = await self._safe_dict_get(mbuf_endpoint)
         mbuf: dict[str, Any] = {}
-        mbuf["used"] = try_to_int(mbuf_info.get("mbuf-statistics", {}).get("mbuf-current", None))
-        mbuf["total"] = try_to_int(mbuf_info.get("mbuf-statistics", {}).get("mbuf-total", None))
+        mbuf["used"] = try_to_int(dict_get(mbuf_info, "mbuf-statistics.mbuf-current"))
+        mbuf["total"] = try_to_int(dict_get(mbuf_info, "mbuf-statistics.mbuf-total"))
         mbuf["used_percent"] = (
             round(mbuf["used"] / mbuf["total"] * 100)
             if isinstance(mbuf["used"], int)
@@ -164,8 +155,8 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             }
         memory_info = await self._safe_dict_get(memory_endpoint)
         memory: dict[str, Any] = {}
-        memory["physmem"] = try_to_int(memory_info.get("memory", {}).get("total", None))
-        memory["used"] = try_to_int(memory_info.get("memory", {}).get("used", None))
+        memory["physmem"] = try_to_int(dict_get(memory_info, "memory.total"))
+        memory["used"] = try_to_int(dict_get(memory_info, "memory.used"))
         memory["used_percent"] = (
             round(memory["used"] / memory["physmem"] * 100)
             if isinstance(memory["used"], int)
@@ -179,14 +170,14 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             return memory
 
         swap_info = await self._safe_dict_get(swap_endpoint)
-        if (
-            not isinstance(swap_info.get("swap", None), list)
-            or not len(swap_info.get("swap", [])) > 0
-            or not isinstance(swap_info.get("swap", [])[0], MutableMapping)
-        ):
+        swap_rows = swap_info.get("swap")
+        if not isinstance(swap_rows, list) or not swap_rows:
             return memory
-        memory["swap_total"] = try_to_int(swap_info.get("swap", [])[0].get("total", None))
-        memory["swap_reserved"] = try_to_int(swap_info["swap"][0].get("used", None))
+        swap_row = swap_rows[0]
+        if not isinstance(swap_row, MutableMapping):
+            return memory
+        memory["swap_total"] = try_to_int(swap_row.get("total"))
+        memory["swap_reserved"] = try_to_int(swap_row.get("used"))
         memory["swap_used_percent"] = (
             round(memory["swap_reserved"] / memory["swap_total"] * 100)
             if isinstance(memory["swap_reserved"], int)

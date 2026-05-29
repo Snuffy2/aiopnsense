@@ -5,11 +5,33 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, api_value_matches, timestamp_to_datetime, try_to_int
+from .helpers import (
+    _LOGGER,
+    _log_errors,
+    api_value_matches,
+    dict_get,
+    timestamp_to_datetime,
+    try_to_int,
+)
 
 
 class VPNMixin(AiopnsenseClientProtocol):
     """VPN methods for OPNsenseClient."""
+
+    @staticmethod
+    def _mapping_value(data: MutableMapping[str, Any], key: str) -> MutableMapping[str, Any]:
+        """Return a nested mapping field or an empty mapping.
+
+        Args:
+            data (MutableMapping[str, Any]): Source mapping.
+            key (str): Field expected to contain a nested mapping.
+
+        Returns:
+            MutableMapping[str, Any]: Nested mapping, or an empty mapping when
+            the field is unavailable or malformed.
+        """
+        value = data.get(key, {})
+        return value if isinstance(value, MutableMapping) else {}
 
     @staticmethod
     def wireguard_is_connected(past_time: datetime | None) -> bool:
@@ -243,15 +265,15 @@ class VPNMixin(AiopnsenseClientProtocol):
             else:
                 _LOGGER.debug("OpenVPN instance details endpoint unavailable for uuid: %s", uuid)
                 details_info = {}
-            details = (
-                details_info.get("instance", {}) if isinstance(details_info, MutableMapping) else {}
-            )
+            details = self._mapping_value(details_info, "instance")
             if details.get("server"):
                 server["tunnel_addresses"] = [details["server"]]
             server["dns_servers"] = [
                 dns["value"]
-                for dns in details.get("dns_servers", {}).values()
-                if api_value_matches(dns.get("selected"), "1") and dns.get("value")
+                for dns in self._mapping_value(details, "dns_servers").values()
+                if isinstance(dns, MutableMapping)
+                and api_value_matches(dns.get("selected"), "1")
+                and dns.get("value")
             ]
 
     @_log_errors
@@ -275,8 +297,8 @@ class VPNMixin(AiopnsenseClientProtocol):
                 data[key] = {}
 
         summary = data["summary_raw"].get("rows", [])
-        client_summ = data["clients_raw"].get("client", {}).get("clients", {}).get("client", {})
-        server_summ = data["servers_raw"].get("server", {}).get("servers", {}).get("server", {})
+        client_summ = dict_get(data["clients_raw"], "client.clients.client", {})
+        server_summ = dict_get(data["servers_raw"], "server.servers.server", {})
 
         if (
             not isinstance(summary, list)
@@ -321,6 +343,8 @@ class VPNMixin(AiopnsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
+        tunnel_addresses = VPNMixin._mapping_value(srv, "tunneladdress")
+        peers = VPNMixin._mapping_value(srv, "peers")
         return {
             "uuid": uid,
             "name": srv.get("name"),
@@ -330,8 +354,10 @@ class VPNMixin(AiopnsenseClientProtocol):
             "dns_servers": [srv.get("peer_dns")] if srv.get("peer_dns") else [],
             "tunnel_addresses": [
                 addr.get("value")
-                for addr in srv.get("tunneladdress", {}).values()
-                if api_value_matches(addr.get("selected"), "1") and addr.get("value")
+                for addr in tunnel_addresses.values()
+                if isinstance(addr, MutableMapping)
+                and api_value_matches(addr.get("selected"), "1")
+                and addr.get("value")
             ],
             "clients": [
                 {
@@ -340,8 +366,10 @@ class VPNMixin(AiopnsenseClientProtocol):
                     "pubkey": client_summ.get(peer_id, {}).get("pubkey"),
                     "connected": False,
                 }
-                for peer_id, peer in srv.get("peers", {}).items()
-                if api_value_matches(peer.get("selected"), "1") and peer.get("value")
+                for peer_id, peer in peers.items()
+                if isinstance(peer, MutableMapping)
+                and api_value_matches(peer.get("selected"), "1")
+                and peer.get("value")
             ],
             "connected_clients": 0,
             "total_bytes_recv": 0,
@@ -362,6 +390,8 @@ class VPNMixin(AiopnsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Mapping containing normalized fields for downstream use.
         """
+        tunnel_addresses = VPNMixin._mapping_value(clnt, "tunneladdress")
+        server_links = VPNMixin._mapping_value(clnt, "servers")
         return {
             "uuid": uid,
             "name": clnt.get("name"),
@@ -369,13 +399,17 @@ class VPNMixin(AiopnsenseClientProtocol):
             "enabled": api_value_matches(clnt.get("enabled"), "1"),
             "tunnel_addresses": [
                 addr.get("value")
-                for addr in clnt.get("tunneladdress", {}).values()
-                if api_value_matches(addr.get("selected"), "1") and addr.get("value")
+                for addr in tunnel_addresses.values()
+                if isinstance(addr, MutableMapping)
+                and api_value_matches(addr.get("selected"), "1")
+                and addr.get("value")
             ],
             "servers": [
                 await VPNMixin._link_wireguard_client_to_server(srv_id, servers, srv)
-                for srv_id, srv in clnt.get("servers", {}).items()
-                if api_value_matches(srv.get("selected"), "1") and srv.get("value")
+                for srv_id, srv in server_links.items()
+                if isinstance(srv, MutableMapping)
+                and api_value_matches(srv.get("selected"), "1")
+                and srv.get("value")
             ],
             "connected_servers": 0,
             "total_bytes_recv": 0,

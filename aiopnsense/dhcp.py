@@ -9,6 +9,7 @@ from .helpers import (
     _LOGGER,
     _log_errors,
     api_value_matches,
+    dict_get,
     get_ip_key,
     timestamp_to_datetime,
     try_to_int,
@@ -135,10 +136,15 @@ class DHCPMixin(AiopnsenseClientProtocol):
 
         response = await self._safe_dict_get(endpoint)
         lease_interfaces: dict[str, Any] = {}
-        general: dict[str, Any] = response.get("dhcpv4", {}).get("general", {})
+        general = dict_get(response, "dhcpv4.general", {})
+        if not isinstance(general, MutableMapping):
+            return {}
         if not api_value_matches(general.get("enabled", "0"), "1"):
             return {}
-        for if_name, iface in general.get("interfaces", {}).items():
+        interfaces = general.get("interfaces", {})
+        if not isinstance(interfaces, MutableMapping):
+            return {}
+        for if_name, iface in interfaces.items():
             if not isinstance(iface, MutableMapping):
                 continue
             if api_value_matches(iface.get("selected", 0), "1") and iface.get("value", None):
