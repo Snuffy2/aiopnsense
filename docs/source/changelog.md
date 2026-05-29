@@ -1,5 +1,19 @@
 # Changelog
 
+## [v1.0.9](https://github.com/Snuffy2/aiopnsense/tree/v1.0.9) (2026-05-29)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.8...v1.0.9)
+
+**Bug Fixes**
+
+- Map validation endpoint probe errors [\#39](https://github.com/Snuffy2/aiopnsense/pull/39) ([Snuffy2](https://github.com/Snuffy2))
+- Fix for kea lease state change in OPNsense 26.1.8 [\#38](https://github.com/Snuffy2/aiopnsense/pull/38) ([Snuffy2](https://github.com/Snuffy2))
+- Raise SSL errors during validate call [\#37](https://github.com/Snuffy2/aiopnsense/pull/37) ([HarlemSquirrel](https://github.com/HarlemSquirrel))
+
+**Code Quality**
+
+- Clean up code noise [\#40](https://github.com/Snuffy2/aiopnsense/pull/40) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.0.8](https://github.com/Snuffy2/aiopnsense/tree/v1.0.8) (2026-04-06)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.7...v1.0.8)
