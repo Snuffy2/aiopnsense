@@ -39,6 +39,14 @@ class _TestClientSSLError(aiohttp.ClientSSLError):
         """Initialize the synthetic SSL error instance."""
         Exception.__init__(self, "ssl")
 
+    def __str__(self) -> str:
+        """Return a stable string for logging and assertion output.
+
+        Returns:
+            str: Constant error message for deterministic test behavior.
+        """
+        return "ssl"
+
 
 def _client_response_error(status: int) -> aiohttp.ClientResponseError:
     """Build a minimal ``ClientResponseError`` for validation tests.
@@ -416,6 +424,106 @@ async def test_is_endpoint_available_handles_timeout(make_client: MakeClientFact
         assert await client.is_endpoint_available("/api/test/endpoint") is False
         assert await client.is_endpoint_available("/api/test/endpoint") is False
         assert calls == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_is_endpoint_available_raises_transport_error_when_throw_enabled(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify endpoint probing re-raises transport errors in throw mode.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts throw-mode transport exception behavior.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._throw_errors = True
+    calls = 0
+
+    def _get(
+        _url: object,
+        *,
+        auth: object,
+        timeout: object,
+        ssl: object,
+    ) -> FakeResponse:
+        """Get.
+
+        Args:
+            _url (object): Requested endpoint URL.
+            auth (object): Authentication object passed by the client.
+            timeout (object): Timeout object passed by the client.
+            ssl (object): SSL verification setting passed by the client.
+
+        Returns:
+            FakeResponse: Response object returned by the mocked session getter.
+        """
+        del _url, auth, timeout, ssl
+        nonlocal calls
+        calls += 1
+        raise _TestClientSSLError()
+
+    session.get = _get
+    try:
+        path = "/api/test/endpoint"
+        with pytest.raises(_TestClientSSLError):
+            await client.is_endpoint_available(path)
+        assert calls == 1
+        assert path not in client._endpoint_checked_at
+        assert path not in client._endpoint_availability
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_validate_maps_endpoint_probe_ssl_to_opnsense_ssl_error(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify validate maps probe-time SSL failures to ``OPNsenseSSLError``.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts validate SSL mapping through endpoint probing.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._throw_errors = False
+    calls = 0
+
+    def _get(
+        _url: object,
+        *,
+        auth: object,
+        timeout: object,
+        ssl: object,
+    ) -> FakeResponse:
+        """Get.
+
+        Args:
+            _url (object): Requested endpoint URL.
+            auth (object): Authentication object passed by the client.
+            timeout (object): Timeout object passed by the client.
+            ssl (object): SSL verification setting passed by the client.
+
+        Returns:
+            FakeResponse: Response object returned by the mocked session getter.
+        """
+        del _url, auth, timeout, ssl
+        nonlocal calls
+        calls += 1
+        raise _TestClientSSLError()
+
+    session.get = _get
+    try:
+        with pytest.raises(OPNsenseSSLError):
+            await client.validate()
+        assert calls == 1
+        assert client._throw_errors is False
     finally:
         await client.async_close()
 
