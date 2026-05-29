@@ -13,7 +13,7 @@
 ## What this library does
 
 `aiopnsense` wraps supported OPNsense REST endpoints behind a single async client,
-[`OPNsenseClient`](./aiopnsense/client.py). It is designed for applications that need to query router state or trigger supported OPNsense actions without manually building HTTP requests.
+[`OPNsenseClient`](https://aiopnsense.readthedocs.io/en/stable/api/client.html#aiopnsense.OPNsenseClient). It is designed for applications that need to query router state or trigger supported OPNsense actions without manually building HTTP requests.
 
 The client currently includes helpers for:
 
