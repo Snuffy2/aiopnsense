@@ -1,57 +1,21 @@
 """Tests for client transport helpers and HTTP response handling."""
 
-from collections.abc import Callable, MutableMapping
+from collections.abc import MutableMapping
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
 
-from aiopnsense import (
-    OPNsenseClient,
-)
 from aiopnsense.const import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
 )
-from tests.conftest import FakeResponse, make_mock_session_client
-
-MakeClientFactory = Callable[..., OPNsenseClient]
-FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]
-
-
-class _TestClientSSLError(aiohttp.ClientSSLError):
-    """Minimal ``ClientSSLError`` subclass used for validation tests."""
-
-    def __init__(self) -> None:
-        """Initialize the synthetic SSL error instance."""
-        Exception.__init__(self, "ssl")
-
-    def __str__(self) -> str:
-        """Return a stable string for logging and assertion output.
-
-        Returns:
-            str: Constant error message for deterministic test behavior.
-        """
-        return "ssl"
-
-
-def _client_response_error(status: int) -> aiohttp.ClientResponseError:
-    """Build a minimal ``ClientResponseError`` for validation tests.
-
-    Args:
-        status (int): HTTP status code exposed by the error.
-
-    Returns:
-        aiohttp.ClientResponseError: Response error instance with the requested status.
-    """
-    return aiohttp.ClientResponseError(
-        request_info=MagicMock(),
-        history=(),
-        status=status,
-        message="boom",
-        headers={},
-    )
-
+from tests.conftest import (
+    FakeResponse,
+    FakeStreamResponseFactory,
+    MakeClientFactory,
+    make_mock_session_client,
+)
 
 
 @pytest.mark.asyncio
@@ -473,4 +437,3 @@ async def test_do_get_post_and_stream_permission_errors(
         assert await client._do_get_from_stream("/x", caller="t") == {}
     finally:
         await client.async_close()
-

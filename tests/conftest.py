@@ -14,6 +14,8 @@ from yarl import URL
 
 import aiopnsense
 
+MakeClientFactory = Callable[..., aiopnsense.OPNsenseClient]
+
 
 @pytest.fixture
 def legacy_dnsbl_payload() -> dict[str, Any]:
@@ -211,6 +213,9 @@ class FakeResponse:
             FakeStreamContent: Content wrapper used by stream tests.
         """
         return FakeStreamContent(self._stream_chunks)
+
+
+FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]
 
 
 def make_mock_session_client(

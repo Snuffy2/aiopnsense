@@ -1,6 +1,5 @@
 """Tests for client validation and base object behavior."""
 
-from collections.abc import Callable
 import contextlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -26,10 +25,12 @@ from aiopnsense.exceptions import (
     OPNsenseTimeoutError,
     OPNsenseUnknownFirmware,
 )
-from tests.conftest import FakeClientSession, FakeResponse, make_mock_session_client
-
-MakeClientFactory = Callable[..., OPNsenseClient]
-FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]
+from tests.conftest import (
+    FakeClientSession,
+    FakeResponse,
+    MakeClientFactory,
+    make_mock_session_client,
+)
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):

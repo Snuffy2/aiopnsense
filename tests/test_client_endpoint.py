@@ -1,26 +1,19 @@
 """Tests for client endpoint availability and endpoint-style selection."""
 
-from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
 
-from aiopnsense import (
-    OPNsenseClient,
-)
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseInvalidAuth,
     OPNsensePrivilegeMissing,
     OPNsenseSSLError,
 )
-from tests.conftest import FakeResponse, make_mock_session_client
-
-MakeClientFactory = Callable[..., OPNsenseClient]
-FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]
+from tests.conftest import FakeResponse, MakeClientFactory, make_mock_session_client
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):
@@ -37,25 +30,6 @@ class _TestClientSSLError(aiohttp.ClientSSLError):
             str: Constant error message for deterministic test behavior.
         """
         return "ssl"
-
-
-def _client_response_error(status: int) -> aiohttp.ClientResponseError:
-    """Build a minimal ``ClientResponseError`` for validation tests.
-
-    Args:
-        status (int): HTTP status code exposed by the error.
-
-    Returns:
-        aiohttp.ClientResponseError: Response error instance with the requested status.
-    """
-    return aiohttp.ClientResponseError(
-        request_info=MagicMock(),
-        history=(),
-        status=status,
-        message="boom",
-        headers={},
-    )
-
 
 
 @pytest.mark.asyncio
@@ -500,4 +474,3 @@ async def test_get_endpoint_path_lazily_initializes_snake_case_state(
         client.set_use_snake_case.assert_awaited_once_with()
     finally:
         await client.async_close()
-
