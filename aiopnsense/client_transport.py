@@ -2,7 +2,7 @@
 
 from collections.abc import MutableMapping
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
@@ -12,6 +12,25 @@ from .helpers import _LOGGER
 
 class ClientTransportMixin:
     """Immediate request execution and safe response methods for OPNsenseClient."""
+
+    if TYPE_CHECKING:
+        _password: str
+        _rest_api_query_count: int
+        _session: aiohttp.ClientSession
+        _throw_errors: bool
+        _url: str
+        _username: str
+        _verify_ssl: bool
+
+        async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
+            """Queue a GET request and return the decoded payload."""
+            ...
+
+        async def _post(
+            self, path: str, payload: MutableMapping[str, Any] | None = None
+        ) -> MutableMapping[str, Any] | list | None:
+            """Queue a POST request and return the decoded payload."""
+            ...
 
     async def _do_get_from_stream(self, path: str, caller: str = "Unknown") -> dict[str, Any]:
         """Execute a streaming GET request immediately.

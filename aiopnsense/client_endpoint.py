@@ -1,8 +1,7 @@
 """Endpoint selection and availability helpers for OPNsenseClient."""
 
-from collections.abc import MutableMapping
 from datetime import datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, cast
 
 import aiohttp
 import awesomeversion
@@ -14,6 +13,19 @@ from .helpers import _LOGGER
 
 class ClientEndpointMixin:
     """Endpoint selection and availability methods for OPNsenseClient."""
+
+    if TYPE_CHECKING:
+        _endpoint_availability: dict[str, bool]
+        _endpoint_cache_ttl_seconds: int
+        _endpoint_checked_at: dict[str, datetime]
+        _password: str
+        _rest_api_query_count: int
+        _session: aiohttp.ClientSession
+        _throw_errors: bool
+        _url: str
+        _use_snake_case: bool | None
+        _username: str
+        _verify_ssl: bool
 
     async def set_use_snake_case(self) -> None:
         """Set the endpoint naming mode based on the detected firmware version.

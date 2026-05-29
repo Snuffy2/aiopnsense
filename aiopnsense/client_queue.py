@@ -3,13 +3,46 @@
 import asyncio
 from collections.abc import MutableMapping
 import inspect
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from .helpers import _LOGGER
 
 
 class ClientQueueMixin:
     """Request queue and background task methods for OPNsenseClient."""
+
+    if TYPE_CHECKING:
+        _loop: asyncio.AbstractEventLoop | None
+        _max_workers: int
+        _queue_monitor: asyncio.Task[Any] | None
+        _request_queue: asyncio.Queue[Any]
+        _workers: list[asyncio.Task[Any]]
+
+        async def _do_get(
+            self,
+            path: str,
+            caller: str = "Unknown",
+            timeout_seconds: float | None = None,
+        ) -> MutableMapping[str, Any] | list | None:
+            """Execute a queued GET request."""
+            ...
+
+        async def _do_get_from_stream(
+            self,
+            path: str,
+            caller: str = "Unknown",
+        ) -> dict[str, Any]:
+            """Execute a queued streaming GET request."""
+            ...
+
+        async def _do_post(
+            self,
+            path: str,
+            payload: MutableMapping[str, Any] | None = None,
+            caller: str = "Unknown",
+        ) -> MutableMapping[str, Any] | list | None:
+            """Execute a queued POST request."""
+            ...
 
     async def _ensure_workers_started(self) -> None:
         """Ensure queue workers are running on the active event loop."""
