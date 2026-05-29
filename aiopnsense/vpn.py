@@ -34,7 +34,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         return value if isinstance(value, MutableMapping) else {}
 
     @staticmethod
-    def wireguard_is_connected(past_time: datetime | None) -> bool:
+    def _wireguard_is_connected(past_time: datetime | None) -> bool:
         """Determine whether a WireGuard session is still considered active.
 
         Args:
@@ -506,7 +506,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         transfer_tx: int = try_to_int(entry.get("transfer-tx", 0), 0) or 0
         latest_handshake = try_to_int(entry.get("latest-handshake", 0), 0)
         handshake_time = timestamp_to_datetime(latest_handshake)
-        is_connected = VPNMixin.wireguard_is_connected(handshake_time)
+        is_connected = VPNMixin._wireguard_is_connected(handshake_time)
 
         # Update servers
         for server in servers.values():

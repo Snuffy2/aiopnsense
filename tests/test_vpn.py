@@ -507,7 +507,7 @@ async def test_get_wireguard_full_processing_and_peer_details() -> None:
         (5, False),  # beyond threshold => not connected
     ],
 )
-def test_wireguard_is_connected_variants(monkeypatch, delta_minutes: int, expected: bool) -> None:
+def test__wireguard_is_connected_variants(monkeypatch, delta_minutes: int, expected: bool) -> None:
     """WireGuard connection considered active when last handshake within threshold.
 
     Monkeypatch `datetime.now` in the module under test to a fixed value with no
@@ -518,14 +518,14 @@ def test_wireguard_is_connected_variants(monkeypatch, delta_minutes: int, expect
     FakeDT = type("FakeDT", (), {"now": staticmethod(lambda: fixed_now)})
     monkeypatch.setattr(aiopnsense_vpn, "datetime", FakeDT)
     assert (
-        aiopnsense_module.OPNsenseClient.wireguard_is_connected(
+        aiopnsense_vpn.VPNMixin._wireguard_is_connected(
             fixed_now - timedelta(minutes=delta_minutes)
         )
         is expected
     )
     # None always False
     if delta_minutes == 5:  # only need to assert once in param set
-        assert aiopnsense_module.OPNsenseClient.wireguard_is_connected(None) is False
+        assert aiopnsense_vpn.VPNMixin._wireguard_is_connected(None) is False
 
 
 @pytest.mark.asyncio
