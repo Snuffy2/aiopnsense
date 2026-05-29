@@ -13,9 +13,13 @@ import pytest
 from aiopnsense import (
     OPNsenseClient,
     client as aiopnsense_client,
-    client_base as aiopnsense_client_base,
+    client_queue as aiopnsense_client_queue,
 )
-from aiopnsense.const import OPNSENSE_LTD_FIRMWARE, OPNSENSE_MIN_FIRMWARE
+from aiopnsense.const import (
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    OPNSENSE_LTD_FIRMWARE,
+    OPNSENSE_MIN_FIRMWARE,
+)
 from aiopnsense.exceptions import (
     OPNsenseBelowMinFirmware,
     OPNsenseConnectionError,
@@ -169,10 +173,10 @@ async def test_safe_dict_get_with_timeout(
 @pytest.mark.parametrize(
     ("timeout_seconds", "expected"),
     [
-        ("bad", float(aiopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
-        (object(), float(aiopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
-        (0, float(aiopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
-        (-5, float(aiopnsense_client_base.DEFAULT_REQUEST_TIMEOUT_SECONDS)),
+        ("bad", float(DEFAULT_REQUEST_TIMEOUT_SECONDS)),
+        (object(), float(DEFAULT_REQUEST_TIMEOUT_SECONDS)),
+        (0, float(DEFAULT_REQUEST_TIMEOUT_SECONDS)),
+        (-5, float(DEFAULT_REQUEST_TIMEOUT_SECONDS)),
         (1.75, 1.75),
     ],
 )
@@ -1104,7 +1108,7 @@ async def test_get_uses_unknown_when_inspect_stack_raises(
     client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
-        # Replace client_base.inspect.stack to raise an IndexError
+        # Replace the queue helper's inspect.stack to raise an IndexError
         class _BadInspect:
             @staticmethod
             def stack() -> Any:
@@ -1115,7 +1119,7 @@ async def test_get_uses_unknown_when_inspect_stack_raises(
                 """
                 raise IndexError("no stack")
 
-        monkeypatch.setattr(aiopnsense_client_base, "inspect", _BadInspect)
+        monkeypatch.setattr(aiopnsense_client_queue, "inspect", _BadInspect)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
@@ -1231,7 +1235,7 @@ async def test_post_uses_unknown_when_inspect_stack_raises(
                 """
                 raise IndexError("no stack")
 
-        monkeypatch.setattr(aiopnsense_client_base, "inspect", _BadInspect)
+        monkeypatch.setattr(aiopnsense_client_queue, "inspect", _BadInspect)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q

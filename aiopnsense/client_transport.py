@@ -1,0 +1,298 @@
+"""Raw HTTP transport and response coercion helpers for OPNsenseClient."""
+
+from collections.abc import MutableMapping
+import json
+from typing import Any
+
+import aiohttp
+
+from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from .helpers import _LOGGER
+
+
+class ClientTransportMixin:
+    """Immediate request execution and safe response methods for OPNsenseClient."""
+
+    async def _do_get_from_stream(self, path: str, caller: str = "Unknown") -> dict[str, Any]:
+        """Execute a streaming GET request immediately.
+
+        Args:
+            path (str): API endpoint path to request.
+            caller (str): Caller name used for diagnostics and logging.
+
+        Returns:
+            dict[str, Any]: Decoded payload extracted from the streaming API response.
+        """
+        self._rest_api_query_count += 1
+        url: str = f"{self._url}{path}"
+        _LOGGER.debug("[get_from_stream] url: %s", url)
+        try:
+            async with self._session.get(
+                url,
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
+                ssl=self._verify_ssl,
+            ) as response:
+                _LOGGER.debug(
+                    "[get_from_stream] Response %s: %s",
+                    response.status,
+                    response.reason,
+                )
+
+                if response.ok:
+                    buffer = ""
+                    message_count = 0
+
+                    async for chunk in response.content.iter_chunked(1024):
+                        buffer += chunk.decode("utf-8")
+                        while "\n\n" in buffer:
+                            message, buffer = buffer.split("\n\n", 1)
+                            lines = message.splitlines()
+                            for line in lines:
+                                if line.startswith("data:"):
+                                    message_count += 1
+                                    if message_count == 2:
+                                        response_str: str = line[len("data:") :].strip()
+                                        response_json = json.loads(response_str)
+                                        return (
+                                            dict(response_json)
+                                            if isinstance(response_json, MutableMapping)
+                                            else {}
+                                        )
+                else:
+                    if response.status == 403:
+                        _LOGGER.error(
+                            "Permission Error in do_get_from_stream (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
+                            caller,
+                            url,
+                        )
+                    else:
+                        _LOGGER.error(
+                            "Error in do_get_from_stream (called by %s). Path: %s. Response %s: %s",
+                            caller,
+                            url,
+                            response.status,
+                            response.reason,
+                        )
+                    if self._throw_errors:
+                        raise aiohttp.ClientResponseError(
+                            request_info=response.request_info,
+                            history=response.history,
+                            status=response.status,
+                            message=f"HTTP Status Error: {response.status} {response.reason}",
+                            headers=response.headers,
+                        )
+        except (aiohttp.ClientError, TimeoutError) as e:
+            _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
+            if self._throw_errors:
+                raise
+
+        return {}
+
+    async def _do_get(
+        self,
+        path: str,
+        caller: str = "Unknown",
+        timeout_seconds: float | None = None,
+    ) -> MutableMapping[str, Any] | list | None:
+        """Execute a GET request immediately without queueing.
+
+        Args:
+            path (str): API endpoint path to request.
+            caller (str): Caller name used for diagnostics and logging.
+            timeout_seconds (float | None, optional): Request timeout in seconds for this call.
+
+        Returns:
+            MutableMapping[str, Any] | list | None: Decoded response payload returned by the GET request.
+        """
+        self._rest_api_query_count += 1
+        url: str = f"{self._url}{path}"
+        _LOGGER.debug("[get] url: %s", url)
+        timeout_total: float = self._normalize_timeout_seconds(timeout_seconds)
+        try:
+            async with self._session.get(
+                url,
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                timeout=aiohttp.ClientTimeout(total=timeout_total),
+                ssl=self._verify_ssl,
+            ) as response:
+                _LOGGER.debug("[get] Response %s: %s", response.status, response.reason)
+                if response.ok:
+                    return await response.json(content_type=None)
+                if response.status == 403:
+                    _LOGGER.error(
+                        "Permission Error in do_get (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
+                        caller,
+                        url,
+                    )
+                else:
+                    _LOGGER.error(
+                        "Error in do_get (called by %s). Path: %s. Response %s: %s",
+                        caller,
+                        url,
+                        response.status,
+                        response.reason,
+                    )
+                if self._throw_errors:
+                    raise aiohttp.ClientResponseError(
+                        request_info=response.request_info,
+                        history=response.history,
+                        status=response.status,
+                        message=f"HTTP Status Error: {response.status} {response.reason}",
+                        headers=response.headers,
+                    )
+        except (aiohttp.ClientError, TimeoutError) as e:
+            _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
+            if self._throw_errors:
+                raise
+
+        return None
+
+    def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
+        """Normalize per-call timeout values to a positive float in seconds.
+
+        Args:
+            timeout_seconds (float | None): Request timeout in seconds for this call.
+
+        Returns:
+            float: Normalized value ready for downstream processing.
+        """
+        if timeout_seconds is None:
+            return float(DEFAULT_REQUEST_TIMEOUT_SECONDS)
+        try:
+            timeout_total = float(timeout_seconds)
+        except TypeError, ValueError:
+            return float(DEFAULT_REQUEST_TIMEOUT_SECONDS)
+        if timeout_total <= 0:
+            return float(DEFAULT_REQUEST_TIMEOUT_SECONDS)
+        return timeout_total
+
+    async def _safe_dict_get(self, path: str) -> dict[str, Any]:
+        """Fetch data from the given path, ensuring the result is a dict.
+
+        Args:
+            path (str): API endpoint path to request.
+
+        Returns:
+            dict[str, Any]: Response payload coerced to a dictionary.
+        """
+        result = await self._get(path=path)
+        return dict(result) if isinstance(result, MutableMapping) else {}
+
+    async def _safe_dict_get_with_timeout(
+        self, path: str, timeout_seconds: float
+    ) -> dict[str, Any]:
+        """Fetch a GET payload with a custom timeout and coerce to a dictionary.
+
+        Args:
+            path (str): API endpoint path to request.
+            timeout_seconds (float): Request timeout in seconds for this call.
+
+        Returns:
+            dict[str, Any]: Response payload coerced to a dictionary.
+        """
+        result = await self._do_get(
+            path=path,
+            caller="_safe_dict_get_with_timeout",
+            timeout_seconds=timeout_seconds,
+        )
+        return dict(result) if isinstance(result, MutableMapping) else {}
+
+    async def _safe_list_get(self, path: str) -> list:
+        """Fetch data from the given path, ensuring the result is a list.
+
+        Args:
+            path (str): API endpoint path to request.
+
+        Returns:
+            list: Response payload coerced to a list.
+        """
+        result = await self._get(path=path)
+        return result if isinstance(result, list) else []
+
+    async def _do_post(
+        self, path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
+    ) -> MutableMapping[str, Any] | list | None:
+        """Execute a POST request immediately without queueing.
+
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None, optional): Request payload sent to the API endpoint.
+            caller (str): Caller name used for diagnostics and logging.
+
+        Returns:
+            MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request.
+        """
+        self._rest_api_query_count += 1
+        url: str = f"{self._url}{path}"
+        _LOGGER.debug("[post] url: %s", url)
+        try:
+            async with self._session.post(
+                url,
+                json=payload,
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
+                ssl=self._verify_ssl,
+            ) as response:
+                _LOGGER.debug("[post] Response %s: %s", response.status, response.reason)
+                if response.ok:
+                    response_json: dict[str, Any] | list = await response.json(content_type=None)
+                    return response_json
+                if response.status == 403:
+                    _LOGGER.error(
+                        "Permission Error in do_post (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
+                        caller,
+                        url,
+                    )
+                else:
+                    _LOGGER.error(
+                        "Error in do_post (called by %s). Path: %s. Response %s: %s",
+                        caller,
+                        url,
+                        response.status,
+                        response.reason,
+                    )
+                if self._throw_errors:
+                    raise aiohttp.ClientResponseError(
+                        request_info=response.request_info,
+                        history=response.history,
+                        status=response.status,
+                        message=f"HTTP Status Error: {response.status} {response.reason}",
+                        headers=response.headers,
+                    )
+        except (aiohttp.ClientError, TimeoutError) as e:
+            _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
+            if self._throw_errors:
+                raise
+
+        return None
+
+    async def _safe_dict_post(
+        self, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Fetch data from the given path, ensuring the result is a dict.
+
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None, optional): Request payload sent to the API endpoint.
+
+        Returns:
+            dict[str, Any]: Response payload coerced to a dictionary.
+        """
+        result = await self._post(path=path, payload=payload)
+        return dict(result) if isinstance(result, MutableMapping) else {}
+
+    async def _safe_list_post(
+        self, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> list:
+        """Fetch data from the given path, ensuring the result is a list.
+
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None, optional): Request payload sent to the API endpoint.
+
+        Returns:
+            list: Response payload coerced to a list.
+        """
+        result = await self._post(path=path, payload=payload)
+        return result if isinstance(result, list) else []
