@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from datetime import datetime
 import inspect
+import logging
 from pathlib import Path
 import sys
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sphinx.application import Sphinx  # type: ignore[import-not-found]
+    from sphinx.application import Sphinx
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "_ext"))
+
+_LOGGER = logging.getLogger(__name__)
 
 project: str = "aiopnsense"
 author: str = "Snuffy2"
@@ -83,11 +86,18 @@ def append_pep702_deprecation(
     ):
         return
 
-    if message := getattr(deprecated_obj, "__deprecated__", None):
-        # PEP 702 does not include a "deprecated since" version. If we add our
-        # own version metadata later, this can become a Sphinx versioned
-        # deprecation directive.
-        lines[:0] = ["", ".. admonition:: Deprecated", "", f"   {message}", ""]
+    if not (message := getattr(deprecated_obj, "__deprecated__", None)):
+        return
+
+    if not isinstance(message, str):
+        _LOGGER.warning("Ignoring non-string PEP 702 deprecation message for %s", deprecated_obj)
+        return
+
+    # PEP 702 does not include a "deprecated since" version. If we add our own
+    # version metadata later, this can become a Sphinx versioned deprecation
+    # directive.
+    deprecation_lines = [f"   {message_line}" for message_line in message.splitlines()]
+    lines[:0] = ["", ".. admonition:: Deprecated", "", *deprecation_lines, ""]
 
 
 def setup(app: Sphinx) -> dict[str, bool]:

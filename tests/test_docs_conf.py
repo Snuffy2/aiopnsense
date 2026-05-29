@@ -32,7 +32,7 @@ def test_append_pep702_deprecation_handles_deprecated_property() -> None:
         """Example class with a deprecated property."""
 
         @property
-        @deprecated("Use new_value instead.")
+        @deprecated("Use new_value instead.\nIt supports the replacement workflow.")
         def old_value(self) -> str:
             """Return the old value.
 
@@ -41,11 +41,12 @@ def test_append_pep702_deprecation_handles_deprecated_property() -> None:
             """
             return "old"
 
-    assert _append_deprecation(Example.old_value) == [
+    assert _append_deprecation(Example.old_value) == [  # type: ignore[deprecated]
         "",
         ".. admonition:: Deprecated",
         "",
         "   Use new_value instead.",
+        "   It supports the replacement workflow.",
         "",
         "Existing docs.",
     ]
