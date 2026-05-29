@@ -9,7 +9,7 @@ import sys
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sphinx.application import Sphinx
+    from sphinx.application import Sphinx  # type: ignore[import-not-found]
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -76,10 +76,14 @@ def append_pep702_deprecation(
     """
     del app, what, name, options
 
-    if not (inspect.isroutine(obj) or inspect.isclass(obj)):
+    deprecated_obj = obj.fget if isinstance(obj, property) else obj
+    if not (
+        deprecated_obj is not None
+        and (inspect.isroutine(deprecated_obj) or inspect.isclass(deprecated_obj))
+    ):
         return
 
-    if message := getattr(obj, "__deprecated__", None):
+    if message := getattr(deprecated_obj, "__deprecated__", None):
         # PEP 702 does not include a "deprecated since" version. If we add our
         # own version metadata later, this can become a Sphinx versioned
         # deprecation directive.
