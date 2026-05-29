@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping, MutableMapping
 from datetime import datetime, timedelta, timezone, tzinfo
-from typing import Any
+from typing import Any, NamedTuple
 import warnings
 
 import aiohttp
@@ -19,6 +19,16 @@ from .helpers import (
     timestamp_to_datetime,
     try_to_int,
 )
+
+
+class _CarpSettingsIndexes(NamedTuple):
+    """Lookup indexes used to match CARP status rows to VIP settings."""
+
+    by_full: dict[tuple[str, str, str], dict[str, Any]]
+    by_if_subnet: dict[tuple[str, str], list[dict[str, Any]]]
+    by_if_vhid: dict[tuple[str, str], list[dict[str, Any]]]
+    by_subnet: dict[str, list[dict[str, Any]]]
+    by_vhid: dict[str, list[dict[str, Any]]]
 
 
 class SystemMixin(AiopnsenseClientProtocol):
@@ -189,103 +199,84 @@ class SystemMixin(AiopnsenseClientProtocol):
     def _build_carp_settings_indexes(
         self,
         vip_settings: list[dict[str, Any]],
-    ) -> tuple[
-        dict[tuple[str, str, str], dict[str, Any]],
-        dict[tuple[str, str], list[dict[str, Any]]],
-        dict[tuple[str, str], list[dict[str, Any]]],
-        dict[str, list[dict[str, Any]]],
-        dict[str, list[dict[str, Any]]],
-    ]:
+    ) -> _CarpSettingsIndexes:
         """Build CARP setting indexes used by fallback matching.
 
         Args:
             vip_settings (list[dict[str, Any]]): Normalized CARP VIP settings rows.
 
         Returns:
-            tuple[dict[tuple[str, str, str], dict[str, Any]], dict[tuple[str, str], list[dict[str, Any]]], dict[tuple[str, str], list[dict[str, Any]]], dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]: Lookup dictionaries keyed by full identity and partial keys.
+            _CarpSettingsIndexes: Lookup dictionaries keyed by full identity and partial keys.
         """
-        settings_by_full: dict[tuple[str, str, str], dict[str, Any]] = {}
-        settings_by_if_subnet: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        settings_by_if_vhid: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        settings_by_subnet: dict[str, list[dict[str, Any]]] = {}
-        settings_by_vhid: dict[str, list[dict[str, Any]]] = {}
+        settings_indexes = _CarpSettingsIndexes(
+            by_full={},
+            by_if_subnet={},
+            by_if_vhid={},
+            by_subnet={},
+            by_vhid={},
+        )
         for setting in vip_settings:
             interface_key = normalize_lookup_token(setting.get("interface"))
             vhid_key = normalize_lookup_token(setting.get("vhid"))
             subnet_key = normalize_lookup_token(setting.get("subnet"))
-            settings_by_full[(interface_key, vhid_key, subnet_key)] = setting
+            settings_indexes.by_full[(interface_key, vhid_key, subnet_key)] = setting
             if interface_key and subnet_key:
-                settings_by_if_subnet.setdefault((interface_key, subnet_key), []).append(setting)
+                settings_indexes.by_if_subnet.setdefault((interface_key, subnet_key), []).append(
+                    setting
+                )
             if interface_key and vhid_key:
-                settings_by_if_vhid.setdefault((interface_key, vhid_key), []).append(setting)
+                settings_indexes.by_if_vhid.setdefault((interface_key, vhid_key), []).append(
+                    setting
+                )
             if subnet_key:
-                settings_by_subnet.setdefault(subnet_key, []).append(setting)
+                settings_indexes.by_subnet.setdefault(subnet_key, []).append(setting)
             if vhid_key:
-                settings_by_vhid.setdefault(vhid_key, []).append(setting)
-        return (
-            settings_by_full,
-            settings_by_if_subnet,
-            settings_by_if_vhid,
-            settings_by_subnet,
-            settings_by_vhid,
-        )
+                settings_indexes.by_vhid.setdefault(vhid_key, []).append(setting)
+        return settings_indexes
 
     def _find_carp_settings_match(
         self,
         status_vip: dict[str, Any],
-        settings_indexes: tuple[
-            dict[tuple[str, str, str], dict[str, Any]],
-            dict[tuple[str, str], list[dict[str, Any]]],
-            dict[tuple[str, str], list[dict[str, Any]]],
-            dict[str, list[dict[str, Any]]],
-            dict[str, list[dict[str, Any]]],
-        ],
+        settings_indexes: _CarpSettingsIndexes,
     ) -> dict[str, Any] | None:
         """Find the best settings row for one CARP status row.
 
         Args:
             status_vip (dict[str, Any]): Parsed CARP status row.
-            settings_indexes (tuple[dict[tuple[str, str, str], dict[str, Any]], dict[tuple[str, str], list[dict[str, Any]]], dict[tuple[str, str], list[dict[str, Any]]], dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]): Lookup dictionaries generated from CARP settings rows.
+            settings_indexes (_CarpSettingsIndexes): Lookup dictionaries generated from CARP settings rows.
 
         Returns:
             dict[str, Any] | None: Best matching settings row, or ``None`` when no unambiguous fallback exists.
         """
-        (
-            settings_by_full,
-            settings_by_if_subnet,
-            settings_by_if_vhid,
-            settings_by_subnet,
-            settings_by_vhid,
-        ) = settings_indexes
         interface_key = normalize_lookup_token(status_vip.get("interface"))
         vhid_key = normalize_lookup_token(status_vip.get("vhid"))
         subnet_key = normalize_lookup_token(status_vip.get("subnet"))
 
-        settings_match = settings_by_full.get((interface_key, vhid_key, subnet_key))
+        settings_match = settings_indexes.by_full.get((interface_key, vhid_key, subnet_key))
         if settings_match is None and interface_key and subnet_key:
             settings_match = self._select_carp_setting_candidate(
-                settings_by_if_subnet.get((interface_key, subnet_key), []),
+                settings_indexes.by_if_subnet.get((interface_key, subnet_key), []),
                 interface_key,
                 vhid_key,
                 subnet_key,
             )
         if settings_match is None and interface_key and vhid_key:
             settings_match = self._select_carp_setting_candidate(
-                settings_by_if_vhid.get((interface_key, vhid_key), []),
+                settings_indexes.by_if_vhid.get((interface_key, vhid_key), []),
                 interface_key,
                 vhid_key,
                 subnet_key,
             )
         if settings_match is None and subnet_key:
             settings_match = self._select_carp_setting_candidate(
-                settings_by_subnet.get(subnet_key, []),
+                settings_indexes.by_subnet.get(subnet_key, []),
                 interface_key,
                 vhid_key,
                 subnet_key,
             )
         if settings_match is None and vhid_key:
             settings_match = self._select_carp_setting_candidate(
-                settings_by_vhid.get(vhid_key, []),
+                settings_indexes.by_vhid.get(vhid_key, []),
                 interface_key,
                 vhid_key,
                 subnet_key,
