@@ -241,7 +241,10 @@ def _patch_asyncio_create_task(
 ) -> None:
     """Prevent background worker tasks from running in tests."""
 
-    if request.node.fspath and request.node.fspath.basename == "test_client_base.py":
+    if request.node.fspath and request.node.fspath.basename in {
+        "test_client_base.py",
+        "test_client_queue.py",
+    }:
         return
 
     original_create_task = asyncio.create_task
