@@ -570,6 +570,114 @@ async def test_is_endpoint_available_does_not_cache_non_404_http_errors(
 
 
 @pytest.mark.asyncio
+async def test_is_endpoint_available_raises_non_404_http_errors_when_throw_enabled(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify throw-mode endpoint probing re-raises non-404 HTTP failures.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts throw-mode HTTP exception behavior.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._throw_errors = True
+    calls = 0
+
+    def _get(*args: Any, **kwargs: Any) -> Any:
+        """Get.
+
+        Args:
+            *args (Any): Positional arguments forwarded to the wrapped callable.
+            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Decoded response payload returned by the GET request.
+        """
+        nonlocal calls
+        calls += 1
+        return FakeResponse(
+            status=401,
+            reason="Unauthorized",
+            ok=False,
+            include_request_info=True,
+        )
+
+    session.get = _get
+    try:
+        path = "/api/test/endpoint"
+        with pytest.raises(aiohttp.ClientResponseError) as err:
+            await client.is_endpoint_available(path)
+        assert err.value.status == 401
+        assert calls == 1
+        assert path not in client._endpoint_checked_at
+        assert path not in client._endpoint_availability
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_exception"),
+    [
+        (401, OPNsenseInvalidAuth),
+        (403, OPNsensePrivilegeMissing),
+        (500, OPNsenseConnectionError),
+    ],
+)
+@pytest.mark.asyncio
+async def test_validate_maps_endpoint_probe_http_errors_to_public_exceptions(
+    status: int,
+    expected_exception: type[Exception],
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify ``validate`` maps preliminary endpoint-probe HTTP failures.
+
+    Args:
+        status (int): HTTP response status returned by the endpoint probe.
+        expected_exception (type[Exception]): Public exception expected from ``validate``.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts validation-time endpoint probe error mapping.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._throw_errors = False
+    calls = 0
+
+    def _get(*args: Any, **kwargs: Any) -> Any:
+        """Get.
+
+        Args:
+            *args (Any): Positional arguments forwarded to the wrapped callable.
+            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Decoded response payload returned by the GET request.
+        """
+        nonlocal calls
+        calls += 1
+        return FakeResponse(
+            status=status,
+            reason="ERR",
+            ok=False,
+            include_request_info=True,
+        )
+
+    session.get = _get
+    try:
+        path = "/api/core/firmware/status"
+        with pytest.raises(expected_exception):
+            await client.validate()
+        assert calls == 1
+        assert client._throw_errors is False
+        assert path not in client._endpoint_checked_at
+        assert path not in client._endpoint_availability
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_opnsenseclient_async_close(make_client: MakeClientFactory) -> None:
     """Verify ``async_close`` cancels worker tasks and queue monitor resources.
 
