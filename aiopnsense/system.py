@@ -562,6 +562,17 @@ class SystemMixin(AiopnsenseClientProtocol):
         return
 
     @_log_errors
+    async def toggle_carp_maintenance_mode(self) -> bool:
+        """Toggle persistent CARP maintenance mode.
+
+        Returns:
+            bool: True when the operation succeeds; otherwise, False.
+        """
+        response = await self._safe_dict_post("/api/diagnostics/interface/_carp_status/maintenance")
+        _LOGGER.debug("[toggle_carp_maintenance_mode] response: %s", response)
+        return str(response.get("status", "")).lower() == "ok"
+
+    @_log_errors
     async def send_wol(self, interface: str, mac: str) -> bool:
         """Send a wake on lan packet to the specified MAC address.
 
