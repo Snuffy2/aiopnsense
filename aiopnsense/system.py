@@ -568,7 +568,12 @@ class SystemMixin(AiopnsenseClientProtocol):
         Returns:
             bool: True when the operation succeeds; otherwise, False.
         """
-        response = await self._safe_dict_post("/api/diagnostics/interface/_carp_status/maintenance")
+        carp_status_endpoint = (
+            "/api/diagnostics/interface/_carp_status"
+            if self._use_snake_case
+            else "/api/diagnostics/interface/CarpStatus"
+        )
+        response = await self._safe_dict_post(f"{carp_status_endpoint}/maintenance")
         _LOGGER.debug("[toggle_carp_maintenance_mode] response: %s", response)
         return str(response.get("status", "")).lower() == "ok"
 
