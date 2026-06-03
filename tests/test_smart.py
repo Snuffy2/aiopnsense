@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import make_mock_session_client
+from tests.conftest import FakeResponse, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -23,7 +23,7 @@ async def test_get_smart_normalizes_device_names(make_client: ClientType) -> Non
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._is_smart_plugin_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"devices": ["nvme0", "ada0"]})
 
         smart_devices = await client.get_smart(details=False)
@@ -46,7 +46,7 @@ async def test_get_smart_details_preserves_mapping_rows(make_client: ClientType)
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client._is_smart_plugin_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(
             return_value={
                 "devices": [
@@ -70,7 +70,7 @@ async def test_get_smart_details_preserves_mapping_rows(make_client: ClientType)
 
 @pytest.mark.asyncio
 async def test_get_smart_fails_closed_when_endpoint_is_unavailable(make_client: ClientType) -> None:
-    """SMART list queries should fail closed when the plugin returns no usable data.
+    """SMART list queries should fail closed when the SMART plugin is unavailable.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -80,10 +80,11 @@ async def test_get_smart_fails_closed_when_endpoint_is_unavailable(make_client: 
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._is_smart_plugin_available = AsyncMock(return_value=False)
         client._safe_dict_post = AsyncMock(return_value={})
 
         assert await client.get_smart(details=False) == []
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list")
+        client._safe_dict_post.assert_not_awaited()
     finally:
         await client.async_close()
 
@@ -100,7 +101,9 @@ async def test_get_smart_does_not_probe_post_only_endpoint(make_client: ClientTy
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_endpoint_available = AsyncMock(side_effect=AssertionError("probe should not run"))
+        client.is_endpoint_available = AsyncMock(
+            side_effect=AssertionError("GET probe should not run")
+        )
         client._safe_dict_post = AsyncMock(return_value={"devices": ["nvme0"]})
 
         assert await client.get_smart(details=False) == [{"device": "nvme0"}]
@@ -120,6 +123,7 @@ async def test_get_smart_info_returns_json_output(make_client: ClientType) -> No
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._is_smart_plugin_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(
             return_value={"output": {"smart_status": "PASSED", "temperature": 35}}
         )
@@ -147,6 +151,7 @@ async def test_get_smart_info_wraps_non_mapping_output(make_client: ClientType) 
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._is_smart_plugin_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"output": ["line1", "line2"]})
 
         smart_info = await client.get_smart_info("nvme0", info_type="H")
@@ -172,9 +177,38 @@ async def test_get_smart_info_does_not_probe_post_only_endpoint(make_client: Cli
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_endpoint_available = AsyncMock(side_effect=AssertionError("probe should not run"))
+        client.is_endpoint_available = AsyncMock(
+            side_effect=AssertionError("GET probe should not run")
+        )
         client._safe_dict_post = AsyncMock(return_value={"output": {"smart_status": "PASSED"}})
 
         assert await client.get_smart_info("nvme0") == {"smart_status": "PASSED"}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_smart_plugin_availability_caches_missing_plugin(make_client: ClientType) -> None:
+    """SMART plugin availability should cache a 404 POST probe result.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates quiet missing-plugin caching for SMART polling.
+    """
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _post(*_args: object, **_kwargs: object) -> FakeResponse:
+        nonlocal calls
+        calls += 1
+        return FakeResponse(status=404, reason="Not Found", ok=False)
+
+    session.post = _post
+    try:
+        assert await client._is_smart_plugin_available() is False
+        assert await client._is_smart_plugin_available() is False
+        assert calls == 1
     finally:
         await client.async_close()
