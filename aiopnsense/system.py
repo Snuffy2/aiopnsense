@@ -302,7 +302,7 @@ class SystemMixin(AiopnsenseClientProtocol):
         """
         if datetime_str is None:
             system_time_endpoint = "/api/diagnostics/system/system_time"
-            if not await self.is_endpoint_available(system_time_endpoint):
+            if not await self.is_get_endpoint_available(system_time_endpoint):
                 _LOGGER.debug("System time endpoint unavailable for timezone resolution")
                 return self._get_local_timezone()
             try:
@@ -353,7 +353,7 @@ class SystemMixin(AiopnsenseClientProtocol):
                 available.
         """
         endpoint = "/api/interfaces/overview/export"
-        if not await self.is_endpoint_available(endpoint):
+        if not await self.is_get_endpoint_available(endpoint):
             _LOGGER.debug("Interface overview endpoint unavailable for device id resolution")
             return None
         instances = await self._safe_list_get(endpoint)
@@ -392,7 +392,7 @@ class SystemMixin(AiopnsenseClientProtocol):
             snake_case_path="/api/diagnostics/system/system_information",
             camel_case_path="/api/diagnostics/system/systemInformation",
         )
-        if not await self.is_endpoint_available(system_information_endpoint):
+        if not await self.is_get_endpoint_available(system_information_endpoint):
             _LOGGER.debug("System information endpoint unavailable")
             return system_info
         response = await self._safe_dict_get(system_information_endpoint)
@@ -421,13 +421,13 @@ class SystemMixin(AiopnsenseClientProtocol):
             merged/normalized CARP VIP rows derived from status + settings endpoints.
         """
         vip_status_endpoint = "/api/diagnostics/interface/get_vip_status"
-        if not await self.is_endpoint_available(vip_status_endpoint):
+        if not await self.is_get_endpoint_available(vip_status_endpoint):
             _LOGGER.debug("CARP VIP status endpoint unavailable")
             return {}, []
         vip_settings_endpoint = "/api/interfaces/vip_settings/get"
         vip_status_raw = await self._safe_dict_get(vip_status_endpoint)
         vip_settings_raw: dict[str, Any] = {"rows": []}
-        if not await self.is_endpoint_available(vip_settings_endpoint):
+        if not await self.is_get_endpoint_available(vip_settings_endpoint):
             _LOGGER.debug("CARP VIP settings endpoint unavailable; using status-only VIP data")
         else:
             fetched_vip_settings = await self._safe_dict_get(vip_settings_endpoint)
@@ -592,7 +592,7 @@ class SystemMixin(AiopnsenseClientProtocol):
                 available.
         """
         notices_endpoint = "/api/core/system/status"
-        if not await self.is_endpoint_available(notices_endpoint):
+        if not await self.is_get_endpoint_available(notices_endpoint):
             _LOGGER.debug("System status endpoint unavailable for notices")
             return {
                 "pending_notices_present": False,
@@ -639,7 +639,7 @@ class SystemMixin(AiopnsenseClientProtocol):
         success = True
         if id.lower() == "all":
             notices_endpoint = "/api/core/system/status"
-            if not await self.is_endpoint_available(notices_endpoint):
+            if not await self.is_get_endpoint_available(notices_endpoint):
                 _LOGGER.debug("System status endpoint unavailable for closing notices")
                 return False
             notices = await self._safe_dict_get(notices_endpoint)
@@ -685,7 +685,7 @@ class SystemMixin(AiopnsenseClientProtocol):
                 purpose, in-use flag, and validity timestamps.
         """
         cert_endpoint = "/api/trust/cert/search"
-        if not await self.is_endpoint_available(cert_endpoint):
+        if not await self.is_get_endpoint_available(cert_endpoint):
             _LOGGER.debug("Certificate search endpoint unavailable")
             return {}
 

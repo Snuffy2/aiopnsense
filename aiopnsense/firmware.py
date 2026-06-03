@@ -20,7 +20,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
     async def _store_host_firmware_version(self) -> None:
         """Cache the installed OPNsense firmware version or product series."""
         status_endpoint = "/api/core/firmware/status"
-        if not await self.is_endpoint_available(status_endpoint):
+        if not await self.is_get_endpoint_available(status_endpoint):
             _LOGGER.debug("Firmware status endpoint unavailable")
             self._firmware_version = None
             return
@@ -64,7 +64,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 the firmware status endpoint is unavailable.
         """
         status_endpoint = "/api/core/firmware/status"
-        if not await self.is_endpoint_available(status_endpoint):
+        if not await self.is_get_endpoint_available(status_endpoint):
             _LOGGER.debug("Firmware status endpoint unavailable")
             return {}
 
@@ -163,7 +163,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 mapping when the upgrade-status endpoint is unavailable.
         """
         status_endpoint = "/api/core/firmware/upgradestatus"
-        if not await self.is_endpoint_available(status_endpoint):
+        if not await self.is_get_endpoint_available(status_endpoint):
             _LOGGER.debug("Firmware upgrade status endpoint unavailable")
             return {}
         return await self._safe_dict_get(status_endpoint)

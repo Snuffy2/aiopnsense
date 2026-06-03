@@ -33,7 +33,7 @@ class _TestClientSSLError(aiohttp.ClientSSLError):
 
 
 @pytest.mark.asyncio
-async def test_is_endpoint_available_caches_success(make_client: MakeClientFactory) -> None:
+async def test_is_get_endpoint_available_caches_success(make_client: MakeClientFactory) -> None:
     """Verify endpoint availability results are cached after a successful probe.
 
     Args:
@@ -61,15 +61,15 @@ async def test_is_endpoint_available_caches_success(make_client: MakeClientFacto
 
     session.get = _get
     try:
-        assert await client.is_endpoint_available("/api/test/endpoint") is True
-        assert await client.is_endpoint_available("/api/test/endpoint") is True
+        assert await client.is_get_endpoint_available("/api/test/endpoint") is True
+        assert await client.is_get_endpoint_available("/api/test/endpoint") is True
         assert calls == 1
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_is_endpoint_available_cache_false_by_ttl_and_force_refresh(
+async def test_is_get_endpoint_available_cache_false_by_ttl_and_force_refresh(
     make_client: MakeClientFactory,
 ) -> None:
     """Verify negative endpoint results are cached until TTL expiry or force refresh.
@@ -102,25 +102,25 @@ async def test_is_endpoint_available_cache_false_by_ttl_and_force_refresh(
     session.get = _get
     try:
         path = "/api/test/endpoint"
-        assert await client.is_endpoint_available(path) is False
-        assert await client.is_endpoint_available(path) is False
+        assert await client.is_get_endpoint_available(path) is False
+        assert await client.is_get_endpoint_available(path) is False
         assert calls == 1
         assert path in client._endpoint_checked_at
         client._endpoint_checked_at[path] = datetime.now().astimezone() - timedelta(
             seconds=client._endpoint_cache_ttl_seconds + 1
         )
-        assert await client.is_endpoint_available(path) is True
+        assert await client.is_get_endpoint_available(path) is True
         assert calls == 2
-        assert await client.is_endpoint_available(path) is True
+        assert await client.is_get_endpoint_available(path) is True
         assert calls == 2
-        assert await client.is_endpoint_available(path, force_refresh=True) is True
+        assert await client.is_get_endpoint_available(path, force_refresh=True) is True
         assert calls == 3
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_is_endpoint_available_handles_timeout(make_client: MakeClientFactory) -> None:
+async def test_is_get_endpoint_available_handles_timeout(make_client: MakeClientFactory) -> None:
     """Verify endpoint probing returns ``False`` and retries after timeouts.
 
     Args:
@@ -148,15 +148,15 @@ async def test_is_endpoint_available_handles_timeout(make_client: MakeClientFact
 
     session.get = _get
     try:
-        assert await client.is_endpoint_available("/api/test/endpoint") is False
-        assert await client.is_endpoint_available("/api/test/endpoint") is False
+        assert await client.is_get_endpoint_available("/api/test/endpoint") is False
+        assert await client.is_get_endpoint_available("/api/test/endpoint") is False
         assert calls == 2
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_is_endpoint_available_raises_transport_error_when_throw_enabled(
+async def test_is_get_endpoint_available_raises_transport_error_when_throw_enabled(
     make_client: MakeClientFactory,
 ) -> None:
     """Verify endpoint probing re-raises transport errors in throw mode.
@@ -198,7 +198,7 @@ async def test_is_endpoint_available_raises_transport_error_when_throw_enabled(
     try:
         path = "/api/test/endpoint"
         with pytest.raises(_TestClientSSLError):
-            await client.is_endpoint_available(path)
+            await client.is_get_endpoint_available(path)
         assert calls == 1
         assert path not in client._endpoint_checked_at
         assert path not in client._endpoint_availability
@@ -256,7 +256,7 @@ async def test_validate_maps_endpoint_probe_ssl_to_opnsense_ssl_error(
 
 
 @pytest.mark.asyncio
-async def test_is_endpoint_available_does_not_cache_non_404_http_errors(
+async def test_is_get_endpoint_available_does_not_cache_non_404_http_errors(
     make_client: MakeClientFactory,
 ) -> None:
     """Verify non-404 HTTP failures are not cached for endpoint availability.
@@ -287,8 +287,8 @@ async def test_is_endpoint_available_does_not_cache_non_404_http_errors(
     session.get = _get
     try:
         path = "/api/test/endpoint"
-        assert await client.is_endpoint_available(path) is False
-        assert await client.is_endpoint_available(path) is False
+        assert await client.is_get_endpoint_available(path) is False
+        assert await client.is_get_endpoint_available(path) is False
         assert calls == 2
         assert path not in client._endpoint_checked_at
         assert path not in client._endpoint_availability
@@ -297,7 +297,7 @@ async def test_is_endpoint_available_does_not_cache_non_404_http_errors(
 
 
 @pytest.mark.asyncio
-async def test_is_endpoint_available_raises_non_404_http_errors_when_throw_enabled(
+async def test_is_get_endpoint_available_raises_non_404_http_errors_when_throw_enabled(
     make_client: MakeClientFactory,
 ) -> None:
     """Verify throw-mode endpoint probing re-raises non-404 HTTP failures.
@@ -335,11 +335,75 @@ async def test_is_endpoint_available_raises_non_404_http_errors_when_throw_enabl
     try:
         path = "/api/test/endpoint"
         with pytest.raises(aiohttp.ClientResponseError) as err:
-            await client.is_endpoint_available(path)
+            await client.is_get_endpoint_available(path)
         assert err.value.status == 401
         assert calls == 1
         assert path not in client._endpoint_checked_at
         assert path not in client._endpoint_availability
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_is_post_endpoint_available_caches_success(make_client: MakeClientFactory) -> None:
+    """Verify POST endpoint availability results are cached after success.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts positive POST endpoint cache behavior.
+    """
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _post(*args: Any, **kwargs: Any) -> Any:
+        """Post."""
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        return FakeResponse(status=200, ok=True)
+
+    session.post = _post
+    try:
+        assert await client.is_post_endpoint_available("/api/test/endpoint") is True
+        assert await client.is_post_endpoint_available("/api/test/endpoint") is True
+        assert calls == 1
+        assert "post:/api/test/endpoint" in client._endpoint_checked_at
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_is_post_endpoint_available_caches_404_missing_plugin(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify POST endpoint availability caches 404 results using a method-aware key.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts quiet retry avoidance for missing POST endpoints.
+    """
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _post(*args: Any, **kwargs: Any) -> Any:
+        """Post."""
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        return FakeResponse(status=404, reason="ERR", ok=False)
+
+    session.post = _post
+    try:
+        path = "/api/test/endpoint"
+        assert await client.is_post_endpoint_available(path) is False
+        assert await client.is_post_endpoint_available(path) is False
+        assert calls == 1
+        assert f"post:{path}" in client._endpoint_checked_at
+        assert path not in client._endpoint_checked_at
     finally:
         await client.async_close()
 

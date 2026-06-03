@@ -65,7 +65,7 @@ async def test_generate_vouchers_server_selection_errors_and_success(
     try:
         client._use_snake_case = True
         if safe_get_ret is not None:
-            client.is_endpoint_available = AsyncMock(return_value=True)
+            client.is_get_endpoint_available = AsyncMock(return_value=True)
             client._safe_list_get = AsyncMock(return_value=safe_get_ret)
             assert expect_exc is not None
             with pytest.raises(expect_exc):
@@ -73,7 +73,7 @@ async def test_generate_vouchers_server_selection_errors_and_success(
             return
 
         # safe_post case: expect success and optional extra fields
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_list_post = AsyncMock(return_value=safe_post_ret)
         got = await client.generate_vouchers(data)
         assert isinstance(got, list)
@@ -100,11 +100,11 @@ async def test_generate_vouchers_returns_empty_when_version_switched_endpoints_u
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=False)
+        client.is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_list_get = AsyncMock()
         client._safe_list_post = AsyncMock()
         assert await client.generate_vouchers({}) == []
-        client.is_endpoint_available.assert_awaited_once_with(
+        client.is_get_endpoint_available.assert_awaited_once_with(
             "/api/captiveportal/voucher/list_providers"
         )
         client._safe_list_get.assert_not_awaited()
@@ -126,7 +126,7 @@ async def test_generate_vouchers_auto_selects_single_provider(make_client: Clien
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_list_get = AsyncMock(return_value=["srv one"])
         client._safe_list_post = AsyncMock(
             return_value=[{"username": "u", "validity": 60, "expirytime": 253402300799}]
@@ -161,12 +161,12 @@ async def test_generate_vouchers_returns_empty_when_generation_endpoint_unavaila
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client.is_get_endpoint_available = AsyncMock(side_effect=[True, False])
         client._safe_list_get = AsyncMock(return_value=["srv one"])
         client._safe_list_post = AsyncMock()
 
         assert await client.generate_vouchers({}) == []
-        assert client.is_endpoint_available.await_args_list == [
+        assert client.is_get_endpoint_available.await_args_list == [
             call("/api/captiveportal/voucher/list_providers"),
             call("/api/captiveportal/voucher/generate_vouchers"),
         ]
@@ -212,7 +212,7 @@ async def test_voucher_switched_endpoints_follow_selected_case(
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_list_get = AsyncMock(return_value=["srv"])
         client._safe_list_post = AsyncMock(return_value=[])
 

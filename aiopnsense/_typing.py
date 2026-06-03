@@ -164,3 +164,29 @@ class AiopnsenseClientProtocol(Protocol):
             bool: True if a specific api endpoint appears available; otherwise, False.
         """
         ...
+
+    @abstractmethod
+    async def is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
+        """Return whether a specific GET-probed API endpoint appears available.
+
+        Args:
+            path (str): API endpoint path to request.
+            force_refresh (bool): Whether to bypass cached endpoint availability.
+
+        Returns:
+            bool: True if the GET probe succeeds; otherwise, False.
+        """
+        ...
+
+    @abstractmethod
+    async def is_post_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
+        """Return whether a specific POST-probed API endpoint appears available.
+
+        Args:
+            path (str): API endpoint path to request.
+            force_refresh (bool): Whether to bypass cached endpoint availability.
+
+        Returns:
+            bool: True if the POST probe succeeds; otherwise, False.
+        """
+        ...
