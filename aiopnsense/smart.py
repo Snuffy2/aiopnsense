@@ -4,7 +4,7 @@ from collections.abc import MutableMapping
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors
+from .helpers import _log_errors
 
 
 class SmartMixin(AiopnsenseClientProtocol):
@@ -54,10 +54,6 @@ class SmartMixin(AiopnsenseClientProtocol):
                 is available.
         """
         smart_endpoint = "/api/smart/service/list/1" if details else "/api/smart/service/list"
-        if not await self.is_endpoint_available(smart_endpoint):
-            _LOGGER.debug("SMART list endpoint unavailable")
-            return []
-
         smart_info = await self._safe_dict_post(smart_endpoint)
         return self._normalize_smart_devices(
             smart_info.get("devices", []),
@@ -77,10 +73,6 @@ class SmartMixin(AiopnsenseClientProtocol):
                 are wrapped under ``output`` to preserve a stable mapping API.
         """
         smart_info_endpoint = "/api/smart/service/info"
-        if not await self.is_endpoint_available(smart_info_endpoint):
-            _LOGGER.debug("SMART info endpoint unavailable")
-            return {}
-
         response = await self._safe_dict_post(
             smart_info_endpoint,
             {"device": device, "type": info_type, "json": True},
