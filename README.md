@@ -23,6 +23,7 @@ The client currently includes helpers for:
 - DHCP lease and ARP table access
 - firewall rules, NAT rules, alias toggling, and state killing
 - service status lookup and service start/stop/restart operations
+- SMART device listing and per-device SMART detail queries
 - Unbound blocklist management
 - OpenVPN and WireGuard status plus VPN instance toggling
 - vnStat metrics, captive portal vouchers, and speed test data
