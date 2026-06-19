@@ -48,7 +48,7 @@ class VouchersMixin(AiopnsenseClientProtocol):
                     "More than one voucher server. Must specify voucher server name"
                 )
             server = servers[0]
-        if not await self.is_get_endpoint_available(generate_vouchers_endpoint):
+        if not await self.is_post_endpoint_available(generate_vouchers_endpoint):
             _LOGGER.debug("Voucher generation endpoint unavailable")
             return []
         server_slug = quote(str(server), safe="")
