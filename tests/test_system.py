@@ -250,6 +250,22 @@ async def test_carp_summary_and_reboot_and_wol(make_client: ClientType) -> None:
         assert await client.system_reboot() is True
         result = await client.system_halt()
         assert result is None
+        client._use_snake_case = True
+        assert await client.toggle_carp_maintenance_mode() is True
+        client._safe_dict_post.assert_awaited_with(
+            "/api/diagnostics/interface/_carp_status/maintenance"
+        )
+        client._use_snake_case = False
+        assert await client.toggle_carp_maintenance_mode() is True
+        client._safe_dict_post.assert_awaited_with(
+            "/api/diagnostics/interface/CarpStatus/maintenance"
+        )
+        client._use_snake_case = None
+        client.get_host_firmware_version = AsyncMock(return_value=None)
+        assert await client.toggle_carp_maintenance_mode() is True
+        client._safe_dict_post.assert_awaited_with(
+            "/api/diagnostics/interface/_carp_status/maintenance"
+        )
 
         client._safe_dict_post = AsyncMock(return_value={"status": "ok"})
         result = await client.send_wol("em0", "aa:bb:cc")
