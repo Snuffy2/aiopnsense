@@ -69,7 +69,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, Any]: Rule mapping keyed by UUID.
         """
-        if not await self.is_endpoint_available(endpoint):
+        if not await self.is_get_endpoint_available(endpoint):
             _LOGGER.debug("%s endpoint not available", debug_label)
             return {}
 
@@ -289,7 +289,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             snake_case_path="/api/firewall/alias/search_item",
             camel_case_path="/api/firewall/alias/searchItem",
         )
-        if not await self.is_endpoint_available(alias_search_endpoint):
+        if not await self.is_get_endpoint_available(alias_search_endpoint):
             _LOGGER.debug("Firewall alias search endpoint unavailable")
             return False
 

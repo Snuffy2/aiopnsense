@@ -46,7 +46,7 @@ class ServicesMixin(AiopnsenseClientProtocol):
                 probing fails and ``return_none_when_unavailable`` is ``True``.
         """
         endpoint = "/api/core/service/search"
-        if not await self.is_endpoint_available(endpoint):
+        if not await self.is_get_endpoint_available(endpoint):
             _LOGGER.debug("Service search endpoint unavailable")
             if return_none_when_unavailable:
                 return None

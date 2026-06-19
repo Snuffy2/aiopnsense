@@ -25,7 +25,7 @@ async def test_telemetry_system_parsing_and_filesystems(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         # time_info with bad datetime and uptime matching regex
         time_info = {
             "datetime": "not-a-date",
@@ -80,14 +80,14 @@ async def test_telemetry_cpu_variants(make_client: Callable[..., Any]) -> None:
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         # empty cpu type -> returns {}
         client._safe_list_get = AsyncMock(return_value=[])
         cpu_empty = await client._get_telemetry_cpu()
         assert cpu_empty == {}
 
         # available cpu type but unavailable stream endpoint -> fail closed
-        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client.is_get_endpoint_available = AsyncMock(side_effect=[True, False])
         client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
         client._get_from_stream = AsyncMock()
         cpu_stream_unavailable = await client._get_telemetry_cpu()
@@ -95,7 +95,7 @@ async def test_telemetry_cpu_variants(make_client: Callable[..., Any]) -> None:
         client._get_from_stream.assert_not_awaited()
 
         # valid cpu type and stream
-        client.is_endpoint_available = AsyncMock(side_effect=[True, True])
+        client.is_get_endpoint_available = AsyncMock(side_effect=[True, True])
         client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
         client._get_from_stream = AsyncMock(
             return_value={
@@ -127,7 +127,7 @@ async def test_telemetry_mbuf_pfstate_and_temps(make_client: Callable[..., Any])
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         # mbuf and pfstate basic numeric parsing
         client._safe_dict_get = AsyncMock(
             side_effect=[
@@ -163,7 +163,7 @@ async def test_get_interfaces_status_variants(make_client: Callable[..., Any]) -
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         # prepare list with various status and mac strings
         iface_list = [
             {
@@ -209,7 +209,7 @@ async def test_telemetry_memory_swap_branches(make_client: Callable[..., Any]) -
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         # prepare memory info with swap list present
         mem = {"memory": {"total": "8000", "used": "2000"}}
         swap = {"swap": [{"total": "1000", "used": "200"}]}
@@ -284,7 +284,7 @@ async def test_get_interfaces_empty_and_invalid_rows(make_client: Callable[..., 
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_list_get = AsyncMock(return_value=[])
         assert await client.get_interfaces() == {}
 
@@ -323,7 +323,7 @@ async def test_telemetry_memory_returns_without_swap_details(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             side_effect=[
                 {"memory": {"total": "4000", "used": "1000"}},
@@ -352,7 +352,7 @@ async def test_telemetry_system_branches_with_boottime_and_uptime_variants(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
 
         client._safe_dict_get = AsyncMock(
@@ -397,7 +397,7 @@ async def test_telemetry_system_invalid_uptime_without_boottime(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
         client._safe_dict_get = AsyncMock(
             return_value={
@@ -425,7 +425,7 @@ async def test_get_gateways_skips_rows_without_name(make_client: Callable[..., A
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={
                 "items": [
@@ -456,7 +456,7 @@ async def test_telemetry_temps_empty_returns_empty_mapping(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_list_get = AsyncMock(return_value=[])
         assert await client._get_telemetry_temps() == {}
     finally:
@@ -478,7 +478,7 @@ async def test_version_switched_telemetry_endpoints_return_empty_data(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=False)
+        client.is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         client._safe_list_get = AsyncMock()
 
@@ -512,7 +512,7 @@ async def test_telemetry_memory_returns_base_payload_when_swap_endpoint_missing(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(side_effect=[True, False])
+        client.is_get_endpoint_available = AsyncMock(side_effect=[True, False])
         client._safe_dict_get = AsyncMock(
             return_value={
                 "memory": {
@@ -590,7 +590,7 @@ async def test_telemetry_switched_endpoints_follow_selected_case(
     try:
         client._use_snake_case = use_snake_case
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-        client.is_endpoint_available = AsyncMock(
+        client.is_get_endpoint_available = AsyncMock(
             side_effect=[True, False, True, True, True, True, True]
         )
         client._get_from_stream = AsyncMock(return_value={})
@@ -634,7 +634,7 @@ async def test_version_switched_telemetry_public_endpoints_fail_closed(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_endpoint_available = AsyncMock(return_value=False)
+        client.is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         client._safe_list_get = AsyncMock()
 
@@ -663,7 +663,7 @@ async def test_telemetry_system_aware_datetime_boottime_and_load_fallback(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
         client._safe_dict_get = AsyncMock(
             return_value={

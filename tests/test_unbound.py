@@ -49,7 +49,7 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client) -> None:
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={
                 "rows": [
@@ -67,7 +67,9 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client) -> None:
             "dnsbl1": {"uuid": "dnsbl1", "enabled": "1"},
             "dnsbl2": {"uuid": "dnsbl2", "enabled": "0"},
         }
-        client.is_endpoint_available.assert_awaited_once_with("/api/unbound/settings/search_dnsbl")
+        client.is_get_endpoint_available.assert_awaited_once_with(
+            "/api/unbound/settings/search_dnsbl"
+        )
         client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/search_dnsbl")
     finally:
         await client.async_close()
@@ -82,7 +84,7 @@ async def test_get_unbound_blocklist_handles_empty_or_invalid_responses(
     client = make_client()
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value=api_response)
 
         result = await client.get_unbound_blocklist()
@@ -107,13 +109,15 @@ async def test_get_unbound_blocklist_returns_empty_when_endpoint_unavailable(
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client.is_endpoint_available = AsyncMock(return_value=False)
+        client.is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
 
         result = await client.get_unbound_blocklist()
 
         assert result == {}
-        client.is_endpoint_available.assert_awaited_once_with("/api/unbound/settings/search_dnsbl")
+        client.is_get_endpoint_available.assert_awaited_once_with(
+            "/api/unbound/settings/search_dnsbl"
+        )
         client._safe_dict_get.assert_not_awaited()
     finally:
         await client.async_close()
@@ -134,7 +138,7 @@ async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
-        client.is_endpoint_available = AsyncMock()
+        client.is_get_endpoint_available = AsyncMock()
         client._safe_dict_get = AsyncMock(
             return_value={
                 "unbound": {
@@ -182,7 +186,7 @@ async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
                 "wildcards": "wild-a",
             }
         }
-        client.is_endpoint_available.assert_not_awaited()
+        client.is_get_endpoint_available.assert_not_awaited()
         client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/get")
     finally:
         await client.async_close()
@@ -297,7 +301,7 @@ async def test_get_unbound_blocklist_falls_back_to_legacy_endpoint_on_invalid_fi
         payload = deepcopy(legacy_dnsbl_payload)
         payload["unbound"]["dnsbl"]["enabled"] = "1"
         payload["unbound"]["dnsbl"]["type"] = {"ads": {"selected": 1}}
-        client.is_endpoint_available = AsyncMock()
+        client.is_get_endpoint_available = AsyncMock()
         client._safe_dict_get = AsyncMock(return_value=payload)
 
         result = await client.get_unbound_blocklist()
@@ -315,7 +319,7 @@ async def test_get_unbound_blocklist_falls_back_to_legacy_endpoint_on_invalid_fi
                 "wildcards": "",
             }
         }
-        client.is_endpoint_available.assert_not_awaited()
+        client.is_get_endpoint_available.assert_not_awaited()
         client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/get")
     finally:
         await client.async_close()

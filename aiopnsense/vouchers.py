@@ -1,6 +1,7 @@
 """Captive portal voucher methods for OPNsenseClient."""
 
 from collections.abc import MutableMapping
+import aiohttp
 from typing import Any
 from urllib.parse import quote
 
@@ -37,7 +38,7 @@ class VouchersMixin(AiopnsenseClientProtocol):
         if data.get("voucher_server", None):
             server = data.get("voucher_server")
         else:
-            if not await self.is_endpoint_available(list_providers_endpoint):
+            if not await self.is_get_endpoint_available(list_providers_endpoint):
                 _LOGGER.debug("Voucher provider endpoint unavailable")
                 return []
             servers = await self._safe_list_get(list_providers_endpoint)
@@ -48,18 +49,24 @@ class VouchersMixin(AiopnsenseClientProtocol):
                     "More than one voucher server. Must specify voucher server name"
                 )
             server = servers[0]
-        if not await self.is_endpoint_available(generate_vouchers_endpoint):
-            _LOGGER.debug("Voucher generation endpoint unavailable")
-            return []
         server_slug = quote(str(server), safe="")
         payload: dict[str, Any] = dict(data).copy()
         payload.pop("voucher_server", None)
         generate_vouchers_url = f"{generate_vouchers_endpoint}/{server_slug}/"
         _LOGGER.debug("[generate_vouchers] url: %s, payload: %s", generate_vouchers_url, payload)
-        vouchers = await self._safe_list_post(
-            generate_vouchers_url,
-            payload=payload,
-        )
+        try:
+            vouchers = await self._safe_list_post(
+                generate_vouchers_url,
+                payload=payload,
+            )
+        except aiohttp.ClientResponseError as err:
+            if err.status == 404:
+                _LOGGER.debug(
+                    "Voucher generation endpoint unavailable: %s",
+                    generate_vouchers_url,
+                )
+                return []
+            raise
         ordered_keys: list[str] = [
             "username",
             "password",

@@ -183,7 +183,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             return {"legacy": await self._get_unbound_blocklist_legacy()}
 
         dnsbl_endpoint = "/api/unbound/settings/search_dnsbl"
-        if not await self.is_endpoint_available(dnsbl_endpoint):
+        if not await self.is_get_endpoint_available(dnsbl_endpoint):
             _LOGGER.debug("Unbound DNSBL endpoint unavailable")
             return {}
 

@@ -4,6 +4,7 @@ from abc import abstractmethod
 from collections.abc import MutableMapping
 from datetime import tzinfo
 from typing import Any, Protocol
+from warnings import deprecated
 
 
 class AiopnsenseClientProtocol(Protocol):
@@ -153,6 +154,7 @@ class AiopnsenseClientProtocol(Protocol):
         ...
 
     @abstractmethod
+    @deprecated("Use is_get_endpoint_available() instead.")
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
         """Return whether a specific API endpoint appears available.
 
@@ -162,5 +164,35 @@ class AiopnsenseClientProtocol(Protocol):
 
         Returns:
             bool: True if a specific api endpoint appears available; otherwise, False.
+        """
+        ...
+
+    @abstractmethod
+    async def is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
+        """Return whether a specific GET-probed API endpoint appears available.
+
+        Args:
+            path (str): API endpoint path to request.
+            force_refresh (bool): Whether to bypass cached endpoint availability.
+
+        Returns:
+            bool: True if the GET probe succeeds; otherwise, False.
+        """
+        ...
+
+    @abstractmethod
+    async def is_post_endpoint_available(
+        self, path: str, force_refresh: bool = False
+    ) -> bool | None:
+        """Return whether a specific POST-probed API endpoint appears available.
+
+        Args:
+            path (str): API endpoint path to request.
+            force_refresh (bool): Whether to bypass cached endpoint availability.
+
+        Returns:
+            bool | None: True if the POST probe succeeds, False if it runs and
+                appears unavailable, or None when the probe is skipped because
+                the path is invalid or the endpoint could mutate state.
         """
         ...

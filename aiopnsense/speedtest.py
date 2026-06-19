@@ -38,12 +38,12 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
         show_recent_endpoint = "/api/speedtest/service/showrecent"
         show_stat_endpoint = "/api/speedtest/service/showstat"
 
-        if not await self.is_endpoint_available(show_recent_endpoint):
+        if not await self.is_get_endpoint_available(show_recent_endpoint):
             _LOGGER.debug("Speedtest not installed")
             return {"available": False}
 
         show_recent = await self._safe_dict_get(show_recent_endpoint)
-        if await self.is_endpoint_available(show_stat_endpoint):
+        if await self.is_get_endpoint_available(show_stat_endpoint):
             show_stat = await self._safe_dict_get(show_stat_endpoint)
         else:
             _LOGGER.debug("Speedtest statistics endpoint unavailable")
@@ -122,7 +122,7 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 endpoint, or an empty mapping when the plugin endpoint is
                 unavailable or returns a malformed payload.
         """
-        if not await self.is_endpoint_available("/api/speedtest/service/showrecent"):
+        if not await self.is_get_endpoint_available("/api/speedtest/service/showrecent"):
             _LOGGER.debug("Speedtest not installed")
             return {}
 

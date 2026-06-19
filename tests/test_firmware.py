@@ -17,22 +17,26 @@ async def test_get_host_firmware_version_and_fallback(
     """Firmware version lookup should prefer semver and fall back to product series."""
     client, session = make_mock_session_client(make_client)
 
-    client.is_endpoint_available = AsyncMock(return_value=True)
+    client.is_get_endpoint_available = AsyncMock(return_value=True)
     client._safe_dict_get = AsyncMock(return_value={"product": {"product_version": "25.8.0"}})
     firmware = await client.get_host_firmware_version()
     assert firmware == "25.8.0"
-    client.is_endpoint_available.assert_awaited_once_with("/api/core/firmware/status")
+    client.is_get_endpoint_available.assert_awaited_once_with("/api/core/firmware/status")
     await client.async_close()
 
     fallback_client = make_client(session=session)
-    fallback_client.is_endpoint_available = AsyncMock(return_value=True)
-    fallback_client._safe_dict_get = AsyncMock(
-        return_value={"product": {"product_version": "weird", "product_series": "seriesX"}}
-    )
-    fallback = await fallback_client.get_host_firmware_version()
-    assert fallback == "seriesX"
-    fallback_client.is_endpoint_available.assert_awaited_once_with("/api/core/firmware/status")
-    await fallback_client.async_close()
+    try:
+        fallback_client.is_get_endpoint_available = AsyncMock(return_value=True)
+        fallback_client._safe_dict_get = AsyncMock(
+            return_value={"product": {"product_version": "weird", "product_series": "seriesX"}}
+        )
+        fallback = await fallback_client.get_host_firmware_version()
+        assert fallback == "seriesX"
+        fallback_client.is_get_endpoint_available.assert_awaited_once_with(
+            "/api/core/firmware/status"
+        )
+    finally:
+        await fallback_client.async_close()
 
 
 @pytest.mark.asyncio
@@ -42,7 +46,7 @@ async def test_get_firmware_update_info_triggers_check_when_status_is_incomplete
     """Missing firmware status details should trigger a background firmware check."""
     client = make_client()
     try:
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         status = {
             "product": {"product_version": "1.0", "product_latest": "2.0", "product_check": {}}
         }
@@ -64,7 +68,7 @@ async def test_get_firmware_update_info_triggers_check_when_last_check_is_stale(
     """A stale `last_check` should trigger a firmware refresh."""
     client, _ = make_mock_session_client(make_client)
     try:
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         status = {
             "product": {
                 "product_version": "1.0.0",
@@ -91,7 +95,7 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
     """A complete, recent firmware status should not trigger a refresh."""
     client = make_client()
     try:
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         status = {
             "product": {
                 "product_version": "26.1.1",
@@ -156,7 +160,7 @@ async def test_upgrade_status_and_changelog(make_client: Callable[..., Any]) -> 
     """Upgrade status and changelog helpers should proxy the expected endpoints."""
     client = make_client()
     try:
-        client.is_endpoint_available = AsyncMock(return_value=True)
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"status": "running"})
         client._safe_dict_post = AsyncMock(return_value={"changelog": "..."})
 
@@ -185,7 +189,7 @@ async def test_firmware_helpers_return_defaults_when_endpoints_unavailable(
     """
     client = make_client()
     try:
-        client.is_endpoint_available = AsyncMock(return_value=False)
+        client.is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
 
         await client._store_host_firmware_version()

@@ -61,7 +61,7 @@ class VnstatMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, Any]: Parsed payload or fallback empty mapping when endpoint is unavailable.
         """
-        if not await self.is_endpoint_available(endpoint):
+        if not await self.is_get_endpoint_available(endpoint):
             _LOGGER.debug("vnStat %s endpoint unavailable", expected_period)
             return {"period": expected_period, "interfaces": {}}
 
@@ -105,7 +105,7 @@ class VnstatMixin(AiopnsenseClientProtocol):
                 convenience byte counters for today, this month, yesterday,
                 last month, and the last complete hour.
         """
-        if not await self.is_endpoint_available("/api/vnstat/service/hourly"):
+        if not await self.is_get_endpoint_available("/api/vnstat/service/hourly"):
             _LOGGER.debug("vnStat not installed")
             return {"interfaces": {}, "interface_count": 0}
 

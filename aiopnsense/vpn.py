@@ -67,7 +67,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             snake_case_path="/api/openvpn/service/search_sessions",
             camel_case_path="/api/openvpn/service/searchSessions",
         )
-        if await self.is_endpoint_available(sessions_endpoint):
+        if await self.is_get_endpoint_available(sessions_endpoint):
             sessions_info = await self._safe_dict_get(sessions_endpoint)
         else:
             _LOGGER.debug("OpenVPN sessions endpoint unavailable")
@@ -77,21 +77,21 @@ class VPNMixin(AiopnsenseClientProtocol):
             snake_case_path="/api/openvpn/service/search_routes",
             camel_case_path="/api/openvpn/service/searchRoutes",
         )
-        if await self.is_endpoint_available(routes_endpoint):
+        if await self.is_get_endpoint_available(routes_endpoint):
             routes_info = await self._safe_dict_get(routes_endpoint)
         else:
             _LOGGER.debug("OpenVPN routes endpoint unavailable")
             routes_info = {}
 
         providers_endpoint = "/api/openvpn/export/providers"
-        if await self.is_endpoint_available(providers_endpoint):
+        if await self.is_get_endpoint_available(providers_endpoint):
             providers_info = await self._safe_dict_get(providers_endpoint)
         else:
             _LOGGER.debug("OpenVPN providers endpoint unavailable")
             providers_info = {}
 
         instances_endpoint = "/api/openvpn/instances/search"
-        if await self.is_endpoint_available(instances_endpoint):
+        if await self.is_get_endpoint_available(instances_endpoint):
             instances_info = await self._safe_dict_get(instances_endpoint)
         else:
             _LOGGER.debug("OpenVPN instances endpoint unavailable")
@@ -263,7 +263,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             server.setdefault("total_bytes_recv", 0)
             server["connected_clients"] = len(server.get("clients", []))
             details_endpoint = f"/api/openvpn/instances/get/{uuid}"
-            if await self.is_endpoint_available(details_endpoint):
+            if await self.is_get_endpoint_available(details_endpoint):
                 details_info = await self._safe_dict_get(details_endpoint)
             else:
                 _LOGGER.debug("OpenVPN instance details endpoint unavailable for uuid: %s", uuid)
@@ -296,7 +296,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         }
         data: dict[str, dict[str, Any]] = {}
         for key, path in data_sources.items():
-            if await self.is_endpoint_available(path):
+            if await self.is_get_endpoint_available(path):
                 data[key] = await self._safe_dict_get(path)
             else:
                 _LOGGER.debug("WireGuard endpoint unavailable: %s", path)
