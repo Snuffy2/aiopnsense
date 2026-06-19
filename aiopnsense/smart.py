@@ -6,6 +6,11 @@ from typing import Any
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors
 
+SMART_PROPERTY_ALIASES: dict[str, tuple[str, ...]] = {
+    "status": ("smart_status", "status"),
+    "temperature": ("temperature", "temp"),
+}
+
 
 class SmartMixin(AiopnsenseClientProtocol):
     """SMART plugin methods for OPNsenseClient."""
@@ -38,11 +43,17 @@ class SmartMixin(AiopnsenseClientProtocol):
             device_name = normalized_device.get("device") or normalized_device.get("dev")
             if isinstance(device_name, str) and device_name:
                 normalized_device["device"] = device_name
+                for normalized_key, aliases in SMART_PROPERTY_ALIASES.items():
+                    if normalized_key not in normalized_device:
+                        for alias in aliases:
+                            if alias in normalized_device:
+                                normalized_device[normalized_key] = normalized_device[alias]
+                                break
                 smart_devices.append(normalized_device)
         return smart_devices
 
     @_log_errors
-    async def get_smart(self, details: bool = True) -> list[dict[str, Any]]:
+    async def get_smart(self, *, details: bool = True) -> list[dict[str, Any]]:
         """Return SMART device data from the OPNsense SMART plugin.
 
         Args:
@@ -54,7 +65,8 @@ class SmartMixin(AiopnsenseClientProtocol):
                 is available.
         """
         smart_endpoint = "/api/smart/service/list/1" if details else "/api/smart/service/list"
-        if not await self.is_post_endpoint_available(smart_endpoint):
+        smart_availability_endpoint = "/api/smart/service/list"
+        if not await self.is_post_endpoint_available(smart_availability_endpoint):
             _LOGGER.debug("SMART plugin unavailable")
             return []
         smart_info = await self._safe_dict_post(smart_endpoint)

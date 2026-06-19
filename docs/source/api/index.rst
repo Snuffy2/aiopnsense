@@ -14,6 +14,7 @@ reference easier to navigate, the methods are grouped below by functional area.
    dhcp
    firewall
    services
+   smart
    unbound
    vpn
    vnstat
