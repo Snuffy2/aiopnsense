@@ -23,6 +23,7 @@ from .firewall import FirewallMixin
 from .firmware import FirmwareMixin
 from .helpers import _LOGGER
 from .services import ServicesMixin
+from .smart import SmartMixin
 from .speedtest import SpeedtestMixin
 from .system import SystemMixin
 from .telemetry import TelemetryMixin
@@ -38,6 +39,7 @@ class OPNsenseClient(
     FirewallMixin,
     DHCPMixin,
     ServicesMixin,
+    SmartMixin,
     SpeedtestMixin,
     SystemMixin,
     UnboundMixin,
