@@ -315,7 +315,7 @@ class ClientEndpointMixin:
 
     @deprecated("Use is_get_endpoint_available() instead.")
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
-        """Backward-compatible alias for ``is_get_endpoint_available``.
+        """Return whether a specific GET-probed API endpoint appears available.
 
         Args:
             path (str): API endpoint path to request.
@@ -324,4 +324,4 @@ class ClientEndpointMixin:
         Returns:
             bool: ``True`` when the GET probe succeeds; otherwise, ``False``.
         """
-        return await self.is_get_endpoint_available(path, force_refresh=force_refresh)
+        return await self._is_endpoint_available(path, method="get", force_refresh=force_refresh)

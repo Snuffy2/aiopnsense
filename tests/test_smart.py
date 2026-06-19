@@ -29,6 +29,7 @@ async def test_get_smart_normalizes_device_names(make_client: ClientType) -> Non
         smart_devices = await client.get_smart(details=False)
 
         assert smart_devices == [{"device": "nvme0"}, {"device": "ada0"}]
+        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list")
     finally:
         await client.async_close()
@@ -63,6 +64,7 @@ async def test_get_smart_details_preserves_mapping_rows(make_client: ClientType)
             {"dev": "nvme0", "status": "PASSED", "device": "nvme0"},
             {"device": "ada0", "status": "FAILED"},
         ]
+        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list/1")
         client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
@@ -84,6 +86,7 @@ async def test_get_smart_fails_closed_when_endpoint_is_unavailable(make_client: 
         client._safe_dict_post = AsyncMock(return_value={})
 
         assert await client.get_smart(details=False) == []
+        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_not_awaited()
     finally:
         await client.async_close()
@@ -101,7 +104,7 @@ async def test_get_smart_does_not_probe_post_only_endpoint(make_client: ClientTy
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_endpoint_available = AsyncMock(
+        client.is_get_endpoint_available = AsyncMock(
             side_effect=AssertionError("GET probe should not run")
         )
         client._safe_dict_post = AsyncMock(return_value={"devices": ["nvme0"]})
@@ -131,6 +134,7 @@ async def test_get_smart_info_returns_json_output(make_client: ClientType) -> No
         smart_info = await client.get_smart_info("nvme0")
 
         assert smart_info == {"smart_status": "PASSED", "temperature": 35}
+        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
         client._safe_dict_post.assert_awaited_once_with(
             "/api/smart/service/info",
             {"device": "nvme0", "type": "a", "json": True},
@@ -157,6 +161,7 @@ async def test_get_smart_info_wraps_non_mapping_output(make_client: ClientType) 
         smart_info = await client.get_smart_info("nvme0", info_type="H")
 
         assert smart_info == {"output": ["line1", "line2"]}
+        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
         client._safe_dict_post.assert_awaited_once_with(
             "/api/smart/service/info",
             {"device": "nvme0", "type": "H", "json": True},
@@ -177,12 +182,60 @@ async def test_get_smart_info_does_not_probe_post_only_endpoint(make_client: Cli
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_endpoint_available = AsyncMock(
+        client.is_get_endpoint_available = AsyncMock(
             side_effect=AssertionError("GET probe should not run")
         )
         client._safe_dict_post = AsyncMock(return_value={"output": {"smart_status": "PASSED"}})
 
         assert await client.get_smart_info("nvme0") == {"smart_status": "PASSED"}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_smart_details_fails_closed_when_detail_endpoint_unavailable(
+    make_client: ClientType,
+) -> None:
+    """Detailed SMART list queries should probe the concrete detail endpoint.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates fail-closed behavior for the detailed SMART list.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_post_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_post = AsyncMock(return_value={})
+
+        assert await client.get_smart(details=True) == []
+        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list/1")
+        client._safe_dict_post.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_smart_info_fails_closed_when_info_endpoint_unavailable(
+    make_client: ClientType,
+) -> None:
+    """SMART info queries should probe the concrete info endpoint.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates fail-closed behavior for SMART info queries.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_post_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_post = AsyncMock(return_value={})
+
+        assert await client.get_smart_info("nvme0") == {}
+        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
+        client._safe_dict_post.assert_not_awaited()
     finally:
         await client.async_close()
 

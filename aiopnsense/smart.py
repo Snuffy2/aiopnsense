@@ -53,10 +53,10 @@ class SmartMixin(AiopnsenseClientProtocol):
                 that always include a ``device`` key when a usable device name
                 is available.
         """
-        if not await self.is_post_endpoint_available("/api/smart/service/list"):
+        smart_endpoint = "/api/smart/service/list/1" if details else "/api/smart/service/list"
+        if not await self.is_post_endpoint_available(smart_endpoint):
             _LOGGER.debug("SMART plugin unavailable")
             return []
-        smart_endpoint = "/api/smart/service/list/1" if details else "/api/smart/service/list"
         smart_info = await self._safe_dict_post(smart_endpoint)
         return self._normalize_smart_devices(
             smart_info.get("devices", []),
@@ -75,10 +75,10 @@ class SmartMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Decoded SMART detail payload. Non-mapping outputs
                 are wrapped under ``output`` to preserve a stable mapping API.
         """
-        if not await self.is_post_endpoint_available("/api/smart/service/list"):
+        smart_info_endpoint = "/api/smart/service/info"
+        if not await self.is_post_endpoint_available(smart_info_endpoint):
             _LOGGER.debug("SMART plugin unavailable")
             return {}
-        smart_info_endpoint = "/api/smart/service/info"
         response = await self._safe_dict_post(
             smart_info_endpoint,
             {"device": device, "type": info_type, "json": True},

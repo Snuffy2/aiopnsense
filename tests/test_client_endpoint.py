@@ -356,8 +356,25 @@ async def test_is_endpoint_available_is_deprecated_get_alias(
     Returns:
         None: This test asserts PEP 702 metadata, runtime warnings, and alias behavior.
     """
-    client, _ = make_mock_session_client(make_client)
-    client.is_get_endpoint_available = AsyncMock(return_value=True)
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _get(*args: object, **kwargs: object) -> FakeResponse:
+        """Return a fake GET response.
+
+        Args:
+            *args (object): Positional arguments forwarded to the stub.
+            **kwargs (object): Keyword arguments forwarded to the stub.
+
+        Returns:
+            FakeResponse: Synthetic HTTP response used by the test.
+        """
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        return FakeResponse(status=200, ok=True)
+
+    session.get = _get
     try:
         legacy_alias = getattr(client, "is_endpoint_available")
         assert "is_get_endpoint_available" in getattr(legacy_alias, "__deprecated__")
@@ -366,10 +383,7 @@ async def test_is_endpoint_available_is_deprecated_get_alias(
                 "/api/test/endpoint",
                 force_refresh=True,
             )
-        client.is_get_endpoint_available.assert_awaited_once_with(
-            "/api/test/endpoint",
-            force_refresh=True,
-        )
+        assert calls == 1
     finally:
         await client.async_close()
 
