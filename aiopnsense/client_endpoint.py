@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
+from warnings import deprecated
 
 import aiohttp
 import awesomeversion
@@ -216,6 +217,7 @@ class ClientEndpointMixin:
         """
         return await self._is_endpoint_available(path, method="post", force_refresh=force_refresh)
 
+    @deprecated("Use is_get_endpoint_available() instead.")
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
         """Backward-compatible alias for ``is_get_endpoint_available``.
 

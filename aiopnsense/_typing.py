@@ -4,6 +4,7 @@ from abc import abstractmethod
 from collections.abc import MutableMapping
 from datetime import tzinfo
 from typing import Any, Protocol
+from warnings import deprecated
 
 
 class AiopnsenseClientProtocol(Protocol):
@@ -153,6 +154,7 @@ class AiopnsenseClientProtocol(Protocol):
         ...
 
     @abstractmethod
+    @deprecated("Use is_get_endpoint_available() instead.")
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
         """Return whether a specific API endpoint appears available.
 

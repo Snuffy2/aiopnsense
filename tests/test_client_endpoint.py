@@ -345,6 +345,36 @@ async def test_is_get_endpoint_available_raises_non_404_http_errors_when_throw_e
 
 
 @pytest.mark.asyncio
+async def test_is_endpoint_available_is_deprecated_get_alias(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify the legacy endpoint availability alias is marked deprecated.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts PEP 702 metadata, runtime warnings, and alias behavior.
+    """
+    client, _ = make_mock_session_client(make_client)
+    client.is_get_endpoint_available = AsyncMock(return_value=True)
+    try:
+        legacy_alias = getattr(client, "is_endpoint_available")
+        assert "is_get_endpoint_available" in getattr(legacy_alias, "__deprecated__")
+        with pytest.warns(DeprecationWarning, match="is_get_endpoint_available"):
+            assert await legacy_alias(
+                "/api/test/endpoint",
+                force_refresh=True,
+            )
+        client.is_get_endpoint_available.assert_awaited_once_with(
+            "/api/test/endpoint",
+            force_refresh=True,
+        )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_is_post_endpoint_available_caches_success(make_client: MakeClientFactory) -> None:
     """Verify POST endpoint availability results are cached after success.
 
