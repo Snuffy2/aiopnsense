@@ -386,6 +386,7 @@ async def test_is_post_endpoint_available_caches_success(make_client: MakeClient
     """
     client, session = make_mock_session_client(make_client)
     calls = 0
+    client._post_endpoint_probe_allowlist = frozenset({"/api/test/endpoint"})
 
     def _post(*args: Any, **kwargs: Any) -> Any:
         """Post."""
@@ -418,6 +419,7 @@ async def test_is_post_endpoint_available_caches_404_missing_plugin(
     """
     client, session = make_mock_session_client(make_client)
     calls = 0
+    client._post_endpoint_probe_allowlist = frozenset({"/api/test/endpoint"})
 
     def _post(*args: Any, **kwargs: Any) -> Any:
         """Post."""
@@ -434,6 +436,38 @@ async def test_is_post_endpoint_available_caches_404_missing_plugin(
         assert calls == 1
         assert f"post:{path}" in client._endpoint_checked_at
         assert path not in client._endpoint_checked_at
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_is_post_endpoint_available_rejects_unsafe_path_without_http_request(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify unsafe POST availability probes are blocked before calling HTTP.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates closed behavior for unsafe POST paths.
+    """
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _post(*_args: Any, **_kwargs: Any) -> FakeResponse:
+        """Post."""
+        nonlocal calls
+        calls += 1
+        return FakeResponse(status=200, ok=True)
+
+    session.post = _post
+    try:
+        path = "/api/core/system/reboot"
+        assert await client.is_post_endpoint_available(path) is False
+        assert calls == 0
+        assert path not in client._endpoint_availability
+        assert f"post:{path}" not in client._endpoint_checked_at
     finally:
         await client.async_close()
 

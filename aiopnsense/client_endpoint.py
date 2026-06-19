@@ -19,6 +19,7 @@ class ClientEndpointMixin:
         _endpoint_availability: dict[str, bool]
         _endpoint_cache_ttl_seconds: int
         _endpoint_checked_at: dict[str, datetime]
+        _post_endpoint_probe_allowlist: frozenset[str] | set[str]
         _password: str
         _rest_api_query_count: int
         _session: aiohttp.ClientSession
@@ -27,6 +28,24 @@ class ClientEndpointMixin:
         _use_snake_case: bool | None
         _username: str
         _verify_ssl: bool
+
+    _POST_ENDPOINT_PROBE_ALLOWLIST: frozenset[str] = frozenset()
+
+    def _is_post_endpoint_probe_allowed(self, path: str) -> bool:
+        """Return whether a POST path is allowed to be preflight-probed.
+
+        Args:
+            path (str): Candidate API endpoint path.
+
+        Returns:
+            bool: ``True`` if the endpoint is explicitly safe for POST probing.
+        """
+        allowlist = getattr(
+            self,
+            "_post_endpoint_probe_allowlist",
+            self._POST_ENDPOINT_PROBE_ALLOWLIST,
+        )
+        return path in allowlist
 
     async def set_use_snake_case(self) -> None:
         """Set the endpoint naming mode based on the detected firmware version.
@@ -215,6 +234,9 @@ class ClientEndpointMixin:
         Returns:
             bool: ``True`` when the POST probe succeeds; otherwise, ``False``.
         """
+        if not self._is_post_endpoint_probe_allowed(path):
+            _LOGGER.debug("POST endpoint availability probe blocked for unsafe path: %s", path)
+            return False
         return await self._is_endpoint_available(path, method="post", force_refresh=force_refresh)
 
     @deprecated("Use is_get_endpoint_available() instead.")
