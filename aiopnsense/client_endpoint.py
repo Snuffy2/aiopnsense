@@ -19,7 +19,8 @@ class ClientEndpointMixin:
         _endpoint_availability: dict[str, bool]
         _endpoint_cache_ttl_seconds: int
         _endpoint_checked_at: dict[str, datetime]
-        _post_endpoint_probe_allowlist: frozenset[str] | set[str]
+        _unsafe_post_endpoint_probe_paths: frozenset[str] | set[str]
+        _unsafe_post_endpoint_probe_prefixes: tuple[str, ...]
         _password: str
         _rest_api_query_count: int
         _session: aiohttp.ClientSession
@@ -29,23 +30,39 @@ class ClientEndpointMixin:
         _username: str
         _verify_ssl: bool
 
-    _POST_ENDPOINT_PROBE_ALLOWLIST: frozenset[str] = frozenset()
+    _UNSAFE_POST_ENDPOINT_PROBE_PATHS: frozenset[str] = frozenset(
+        {
+            "/api/core/system/halt",
+            "/api/core/system/reboot",
+            "/api/wol/wol/set",
+        }
+    )
+    _UNSAFE_POST_ENDPOINT_PROBE_PREFIXES: tuple[str, ...] = (
+        "/api/core/service/restart/",
+        "/api/core/service/start/",
+        "/api/core/service/stop/",
+    )
 
-    def _is_post_endpoint_probe_allowed(self, path: str) -> bool:
-        """Return whether a POST path is allowed to be preflight-probed.
+    def _is_post_endpoint_probe_blocked(self, path: str) -> bool:
+        """Return whether a POST path should not be availability-probed.
 
         Args:
             path (str): Candidate API endpoint path.
 
         Returns:
-            bool: ``True`` if the endpoint is explicitly safe for POST probing.
+            bool: ``True`` if probing the endpoint could trigger a known side effect.
         """
-        allowlist = getattr(
+        blocked_paths = getattr(
             self,
-            "_post_endpoint_probe_allowlist",
-            self._POST_ENDPOINT_PROBE_ALLOWLIST,
+            "_unsafe_post_endpoint_probe_paths",
+            self._UNSAFE_POST_ENDPOINT_PROBE_PATHS,
         )
-        return path in allowlist
+        blocked_prefixes = getattr(
+            self,
+            "_unsafe_post_endpoint_probe_prefixes",
+            self._UNSAFE_POST_ENDPOINT_PROBE_PREFIXES,
+        )
+        return path in blocked_paths or path.startswith(blocked_prefixes)
 
     async def set_use_snake_case(self) -> None:
         """Set the endpoint naming mode based on the detected firmware version.
@@ -234,7 +251,7 @@ class ClientEndpointMixin:
         Returns:
             bool: ``True`` when the POST probe succeeds; otherwise, ``False``.
         """
-        if not self._is_post_endpoint_probe_allowed(path):
+        if self._is_post_endpoint_probe_blocked(path):
             _LOGGER.debug("POST endpoint availability probe blocked for unsafe path: %s", path)
             return False
         return await self._is_endpoint_available(path, method="post", force_refresh=force_refresh)
