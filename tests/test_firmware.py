@@ -25,14 +25,18 @@ async def test_get_host_firmware_version_and_fallback(
     await client.async_close()
 
     fallback_client = make_client(session=session)
-    fallback_client.is_get_endpoint_available = AsyncMock(return_value=True)
-    fallback_client._safe_dict_get = AsyncMock(
-        return_value={"product": {"product_version": "weird", "product_series": "seriesX"}}
-    )
-    fallback = await fallback_client.get_host_firmware_version()
-    assert fallback == "seriesX"
-    fallback_client.is_get_endpoint_available.assert_awaited_once_with("/api/core/firmware/status")
-    await fallback_client.async_close()
+    try:
+        fallback_client.is_get_endpoint_available = AsyncMock(return_value=True)
+        fallback_client._safe_dict_get = AsyncMock(
+            return_value={"product": {"product_version": "weird", "product_series": "seriesX"}}
+        )
+        fallback = await fallback_client.get_host_firmware_version()
+        assert fallback == "seriesX"
+        fallback_client.is_get_endpoint_available.assert_awaited_once_with(
+            "/api/core/firmware/status"
+        )
+    finally:
+        await fallback_client.async_close()
 
 
 @pytest.mark.asyncio

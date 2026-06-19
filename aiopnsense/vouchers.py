@@ -1,6 +1,7 @@
 """Captive portal voucher methods for OPNsenseClient."""
 
 from collections.abc import MutableMapping
+import aiohttp
 from typing import Any
 from urllib.parse import quote
 
@@ -53,10 +54,19 @@ class VouchersMixin(AiopnsenseClientProtocol):
         payload.pop("voucher_server", None)
         generate_vouchers_url = f"{generate_vouchers_endpoint}/{server_slug}/"
         _LOGGER.debug("[generate_vouchers] url: %s, payload: %s", generate_vouchers_url, payload)
-        vouchers = await self._safe_list_post(
-            generate_vouchers_url,
-            payload=payload,
-        )
+        try:
+            vouchers = await self._safe_list_post(
+                generate_vouchers_url,
+                payload=payload,
+            )
+        except aiohttp.ClientResponseError as err:
+            if err.status == 404:
+                _LOGGER.debug(
+                    "Voucher generation endpoint unavailable: %s",
+                    generate_vouchers_url,
+                )
+                return []
+            raise
         ordered_keys: list[str] = [
             "username",
             "password",

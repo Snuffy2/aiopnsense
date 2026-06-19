@@ -387,8 +387,16 @@ async def test_is_post_endpoint_available_caches_success(make_client: MakeClient
     client, session = make_mock_session_client(make_client)
     calls = 0
 
-    def _post(*args: Any, **kwargs: Any) -> Any:
-        """Post."""
+    def _post(*args: object, **kwargs: object) -> FakeResponse:
+        """Return a fake POST response.
+
+        Args:
+            *args (object): Positional arguments forwarded to the stub.
+            **kwargs (object): Keyword arguments forwarded to the stub.
+
+        Returns:
+            FakeResponse: Synthetic HTTP response used by the test.
+        """
         del args, kwargs
         nonlocal calls
         calls += 1
@@ -419,8 +427,16 @@ async def test_is_post_endpoint_available_caches_404_missing_plugin(
     client, session = make_mock_session_client(make_client)
     calls = 0
 
-    def _post(*args: Any, **kwargs: Any) -> Any:
-        """Post."""
+    def _post(*args: object, **kwargs: object) -> FakeResponse:
+        """Return a fake POST response.
+
+        Args:
+            *args (object): Positional arguments forwarded to the stub.
+            **kwargs (object): Keyword arguments forwarded to the stub.
+
+        Returns:
+            FakeResponse: Synthetic HTTP response used by the test.
+        """
         del args, kwargs
         nonlocal calls
         calls += 1
@@ -439,40 +455,194 @@ async def test_is_post_endpoint_available_caches_404_missing_plugin(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", [None, 123, False, {}, [], ""])
+async def test_is_post_endpoint_available_returns_none_for_invalid_paths(
+    make_client: MakeClientFactory,
+    path: object,
+) -> None:
+    """Verify invalid POST probe paths do not raise and return ``None``.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        path (object): Non-string path candidate.
+
+    Returns:
+        None: This test asserts unknown availability behavior for malformed probes.
+    """
+    client, session = make_mock_session_client(make_client)
+
+    try:
+        assert await client.is_post_endpoint_available(path) is None
+        session.post.assert_not_called()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/core/system/reboot",
+        "/api/captiveportal/voucher/generate_vouchers/srv/",
+        "/api/captiveportal/voucher/generateVouchers/srv/",
+        "/api/core/firmware/check",
+        "/api/core/firmware/update",
+        "/api/core/firmware/upgrade",
         "/api/core/service/restart/unbound",
+        "/api/core/service/start/unbound",
+        "/api/core/service/stop/unbound",
+        "/api/core/system/dismiss_status",
+        "/api/core/system/dismissStatus",
+        "/api/core/system/halt",
+        "/api/core/system/reboot",
+        "/api/diagnostics/firewall/kill_states/",
+        "/api/firewall/alias/reconfigure",
+        "/api/firewall/alias/set",
+        "/api/firewall/alias/toggle_item/alias-uuid/1",
+        "/api/firewall/alias/toggleItem/alias-uuid/1",
+        "/api/firewall/d_nat/apply",
+        "/api/firewall/d_nat/toggle_rule/rule-uuid/0",
+        "/api/firewall/filter/apply",
+        "/api/firewall/filter/toggle_rule/rule-uuid/1",
+        "/api/firewall/npt/apply",
+        "/api/firewall/npt/toggle_rule/rule-uuid/1",
+        "/api/firewall/one_to_one/apply",
+        "/api/firewall/one_to_one/toggle_rule/rule-uuid/1",
+        "/api/firewall/source_nat/apply",
+        "/api/firewall/source_nat/toggle_rule/rule-uuid/1",
+        "/api/interfaces/overview/reload_interface/wan",
+        "/api/interfaces/overview/reloadInterface/wan",
+        "/api/openvpn/instances/toggle/vpn-uuid",
+        "/api/openvpn/service/reconfigure",
+        "/api/unbound/service/restart",
+        "/api/unbound/settings/set",
+        "/api/unbound/settings/toggle_dnsbl/dnsbl-uuid/1",
+        "/api/wireguard/client/toggle_client/wg-uuid",
+        "/api/wireguard/client/toggleClient/wg-uuid",
+        "/api/wireguard/server/toggle_server/wg-uuid",
+        "/api/wireguard/server/toggleServer/wg-uuid",
+        "/api/wireguard/service/reconfigure",
+        "/api/wol/wol/set",
     ],
 )
-async def test_is_post_endpoint_available_blocks_known_unsafe_path_without_http_request(
+async def test_is_post_endpoint_available_returns_none_for_unsafe_path_without_http_request(
     make_client: MakeClientFactory,
     path: str,
 ) -> None:
-    """Verify known unsafe POST availability probes are blocked before calling HTTP.
+    """Verify unsafe POST availability probes return ``None`` without calling HTTP.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test validates closed behavior for known unsafe POST paths.
+        None: This test validates unknown availability behavior for unsafe POST paths.
     """
     client, session = make_mock_session_client(make_client)
     calls = 0
 
-    def _post(*_args: Any, **_kwargs: Any) -> FakeResponse:
-        """Post."""
+    def _post(*_args: object, **_kwargs: object) -> FakeResponse:
+        """Return a fake POST response.
+
+        Args:
+            *_args (object): Positional arguments forwarded to the stub.
+            **_kwargs (object): Keyword arguments forwarded to the stub.
+
+        Returns:
+            FakeResponse: Synthetic HTTP response used by the test.
+        """
         nonlocal calls
         calls += 1
         return FakeResponse(status=200, ok=True)
 
     session.post = _post
     try:
-        assert await client.is_post_endpoint_available(path) is False
+        assert await client.is_post_endpoint_available(path) is None
         assert calls == 0
         assert path not in client._endpoint_availability
         assert f"post:{path}" not in client._endpoint_checked_at
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/firewall/filter/toggle_rule/rule-uuid/1",
+        "/api/firewall/alias/toggleItem/alias-uuid/1",
+        "/api/interfaces/overview/reloadInterface/wan",
+        "/api/captiveportal/voucher/generateVouchers/srv/",
+        "/api/unbound/settings/toggle_dnsbl/dnsbl-uuid/1",
+        "/api/wireguard/client/toggleClient/wg-uuid",
+    ],
+)
+def test_unsafe_post_endpoint_action_tokens_match_snake_and_camel_case(
+    make_client: MakeClientFactory,
+    path: str,
+) -> None:
+    """Verify mutating action tokens catch snake_case and camelCase path segments.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        path (str): Endpoint path with a mutating action token.
+
+    Returns:
+        None: This test asserts token-based unsafe matching catches dynamic endpoints.
+    """
+    client = make_client()
+    assert client._is_post_endpoint_probe_blocked(path) is True
+
+
+def test_unsafe_post_endpoint_action_tokens_do_not_match_non_action_words(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify action-token matching does not block non-mutating containing words.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts segments such as ``settings`` do not match the
+            mutating ``set`` token.
+    """
+    client = make_client()
+    assert client._is_post_endpoint_probe_blocked("/api/unbound/settings/search_dnsbl") is False
+
+
+@pytest.mark.asyncio
+async def test_is_post_endpoint_available_allows_read_only_post_path(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify read-only POST endpoints are still probed normally.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates the unsafe list does not block read-only POST endpoints.
+    """
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _post(*args: object, **kwargs: object) -> FakeResponse:
+        """Return a fake POST response.
+
+        Args:
+            *args (object): Positional arguments forwarded to the stub.
+            **kwargs (object): Keyword arguments forwarded to the stub.
+
+        Returns:
+            FakeResponse: Synthetic HTTP response used by the test.
+        """
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        return FakeResponse(status=200, ok=True)
+
+    session.post = _post
+    try:
+        path = "/api/core/firmware/changelog/26.1.1"
+        assert await client.is_post_endpoint_available(path) is True
+        assert calls == 1
+        assert f"post:{path}" in client._endpoint_checked_at
     finally:
         await client.async_close()
 

@@ -181,7 +181,9 @@ class AiopnsenseClientProtocol(Protocol):
         ...
 
     @abstractmethod
-    async def is_post_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
+    async def is_post_endpoint_available(
+        self, path: str, force_refresh: bool = False
+    ) -> bool | None:
         """Return whether a specific POST-probed API endpoint appears available.
 
         Args:
@@ -189,6 +191,8 @@ class AiopnsenseClientProtocol(Protocol):
             force_refresh (bool): Whether to bypass cached endpoint availability.
 
         Returns:
-            bool: True if the POST probe succeeds; otherwise, False.
+            bool | None: True if the POST probe succeeds, False if it runs and
+                appears unavailable, or None when the probe is skipped because
+                the path is invalid or the endpoint could mutate state.
         """
         ...

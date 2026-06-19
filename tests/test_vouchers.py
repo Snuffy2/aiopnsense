@@ -8,6 +8,7 @@ import pytest
 
 import aiopnsense as aiopnsense_module
 from aiopnsense import OPNsenseClient
+from tests.test_client_base import _client_response_error
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -181,6 +182,40 @@ async def test_generate_vouchers_posts_provider_qualified_url_without_post_prefl
             "/api/captiveportal/voucher/generate_vouchers/srv%20one/",
             payload={},
         )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_generate_vouchers_returns_empty_on_404_generate_endpoint_with_throw_errors(
+    make_client: ClientType,
+) -> None:
+    """Missing voucher-generation POST endpoints fail closed with ``[]`` under throw mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test verifies 404 errors at generation time are treated as empty results.
+    """
+    client, _ = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._throw_errors = True
+        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client.is_post_endpoint_available = AsyncMock()
+        client._safe_list_get = AsyncMock(return_value=[])
+        client._safe_list_post = AsyncMock(side_effect=_client_response_error(404))
+
+        got = await client.generate_vouchers({"voucher_server": "srv"})
+
+        assert got == []
+        client._safe_list_get.assert_not_awaited()
+        client._safe_list_post.assert_awaited_once_with(
+            "/api/captiveportal/voucher/generate_vouchers/srv/",
+            payload={},
+        )
+        client.is_post_endpoint_available.assert_not_awaited()
     finally:
         await client.async_close()
 

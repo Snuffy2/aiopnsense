@@ -21,6 +21,7 @@ class ClientEndpointMixin:
         _endpoint_checked_at: dict[str, datetime]
         _unsafe_post_endpoint_probe_paths: frozenset[str] | set[str]
         _unsafe_post_endpoint_probe_prefixes: tuple[str, ...]
+        _unsafe_post_endpoint_probe_segments: frozenset[str] | set[str]
         _password: str
         _rest_api_query_count: int
         _session: aiohttp.ClientSession
@@ -30,18 +31,49 @@ class ClientEndpointMixin:
         _username: str
         _verify_ssl: bool
 
-    _UNSAFE_POST_ENDPOINT_PROBE_PATHS: frozenset[str] = frozenset(
+    _UNSAFE_POST_ENDPOINT_PROBE_PATHS: frozenset[str] = frozenset()
+    _UNSAFE_POST_ENDPOINT_PROBE_PREFIXES: tuple[str, ...] = ()
+    _UNSAFE_POST_ENDPOINT_PROBE_SEGMENTS: frozenset[str] = frozenset(
         {
-            "/api/core/system/halt",
-            "/api/core/system/reboot",
-            "/api/wol/wol/set",
+            "apply",
+            "check",
+            "dismiss_status",
+            "generate_vouchers",
+            "halt",
+            "kill_states",
+            "reboot",
+            "reconfigure",
+            "reload_interface",
+            "restart",
+            "set",
+            "start",
+            "stop",
+            "toggle",
+            "update",
+            "upgrade",
         }
     )
-    _UNSAFE_POST_ENDPOINT_PROBE_PREFIXES: tuple[str, ...] = (
-        "/api/core/service/restart/",
-        "/api/core/service/start/",
-        "/api/core/service/stop/",
-    )
+
+    @staticmethod
+    def _normalize_endpoint_segment(segment: str) -> str:
+        """Return a snake_case-ish endpoint segment for token matching.
+
+        Args:
+            segment (str): Raw path segment from an API endpoint.
+
+        Returns:
+            str: Lowercase segment with camelCase boundaries converted to underscores.
+        """
+        normalized: list[str] = []
+        for index, char in enumerate(segment):
+            if (
+                char.isupper()
+                and index > 0
+                and (segment[index - 1].islower() or segment[index - 1].isdigit())
+            ):
+                normalized.append("_")
+            normalized.append(char.lower())
+        return "".join(normalized)
 
     def _is_post_endpoint_probe_blocked(self, path: str) -> bool:
         """Return whether a POST path should not be availability-probed.
@@ -62,7 +94,23 @@ class ClientEndpointMixin:
             "_unsafe_post_endpoint_probe_prefixes",
             self._UNSAFE_POST_ENDPOINT_PROBE_PREFIXES,
         )
-        return path in blocked_paths or path.startswith(blocked_prefixes)
+        if path in blocked_paths or path.startswith(blocked_prefixes):
+            return True
+
+        blocked_segments = getattr(
+            self,
+            "_unsafe_post_endpoint_probe_segments",
+            self._UNSAFE_POST_ENDPOINT_PROBE_SEGMENTS,
+        )
+        for segment in path.strip("/").split("/"):
+            normalized_segment = self._normalize_endpoint_segment(segment)
+            if any(
+                normalized_segment == blocked_segment
+                or normalized_segment.startswith(f"{blocked_segment}_")
+                for blocked_segment in blocked_segments
+            ):
+                return True
+        return False
 
     async def set_use_snake_case(self) -> None:
         """Set the endpoint naming mode based on the detected firmware version.
@@ -241,7 +289,11 @@ class ClientEndpointMixin:
         """
         return await self._is_endpoint_available(path, method="get", force_refresh=force_refresh)
 
-    async def is_post_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
+    async def is_post_endpoint_available(
+        self,
+        path: str,
+        force_refresh: bool = False,
+    ) -> bool | None:
         """Return whether a specific POST-probed API endpoint appears available.
 
         Args:
@@ -249,11 +301,16 @@ class ClientEndpointMixin:
             force_refresh (bool): Whether to bypass cached endpoint availability.
 
         Returns:
-            bool: ``True`` when the POST probe succeeds; otherwise, ``False``.
+            bool | None: ``True`` when the POST probe succeeds, ``False`` when
+                the probe runs and the endpoint appears unavailable, or ``None``
+                when the endpoint is not probed because the path is invalid or
+                probing it could mutate state.
         """
+        if not isinstance(path, str) or not path:
+            return None
         if self._is_post_endpoint_probe_blocked(path):
             _LOGGER.debug("POST endpoint availability probe blocked for unsafe path: %s", path)
-            return False
+            return None
         return await self._is_endpoint_available(path, method="post", force_refresh=force_refresh)
 
     @deprecated("Use is_get_endpoint_available() instead.")
