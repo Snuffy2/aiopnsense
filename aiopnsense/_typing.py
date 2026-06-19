@@ -10,8 +10,6 @@ from warnings import deprecated
 class AiopnsenseClientProtocol(Protocol):
     """Structural typing contract used by split aiopnsense mixins."""
 
-    _use_snake_case: bool | None
-
     @abstractmethod
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
         """Queue a GET request and return the decoded payload.
