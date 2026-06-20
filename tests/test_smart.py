@@ -269,12 +269,12 @@ async def test_get_smart_fails_closed_when_list_endpoint_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client.is_post_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_post = AsyncMock(return_value={})
 
         assert await client.get_smart() == []
         client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
+        client._safe_dict_post.assert_not_awaited()
     finally:
         await client.async_close()
 
