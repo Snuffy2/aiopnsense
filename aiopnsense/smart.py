@@ -84,6 +84,13 @@ class SmartMixin(AiopnsenseClientProtocol):
         Args:
             device (str): SMART device name, such as ``nvme0`` or ``ada0``.
             info_type (str): SMART info selector supported by the plugin.
+                Valid values are:
+                - ``i``: Device info
+                - ``H``: Health
+                - ``c``: SMART capabilities
+                - ``A``: Attributes
+                - ``a``: All (default)
+                - ``x``: Extended
 
         Returns:
             dict[str, Any]: Decoded SMART detail payload. Non-mapping outputs
