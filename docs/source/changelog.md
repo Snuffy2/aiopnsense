@@ -1,5 +1,26 @@
 # Changelog
 
+## [v1.0.11](https://github.com/Snuffy2/aiopnsense/tree/v1.0.11) (2026-06-19)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.10...v1.0.11)
+
+**New Features**
+
+- Add SMART device API support [\#51](https://github.com/Snuffy2/aiopnsense/pull/51) ([Snuffy2](https://github.com/Snuffy2))
+- Add CARP maintenance mode toggle [\#47](https://github.com/Snuffy2/aiopnsense/pull/47) ([Snuffy2](https://github.com/Snuffy2))
+
+**Documentation**
+
+- Add Documentation link to pyproject [\#44](https://github.com/Snuffy2/aiopnsense/pull/44) ([Snuffy2](https://github.com/Snuffy2))
+
+**Code Quality**
+
+- Refactor method-aware endpoint availability [\#48](https://github.com/Snuffy2/aiopnsense/pull/48) ([Snuffy2](https://github.com/Snuffy2))
+
+**Maintenance**
+
+- prek autoupdate [\#45](https://github.com/Snuffy2/aiopnsense/pull/45) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.0.10](https://github.com/Snuffy2/aiopnsense/tree/v1.0.10) (2026-05-29)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.9...v1.0.10)
