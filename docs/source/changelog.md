@@ -1,6 +1,18 @@
 # Changelog
 
-## [v1.0.11](https://github.com/Snuffy2/aiopnsense/tree/v1.0.11) (2026-06-19)
+## [v1.0.12](https://github.com/Snuffy2/aiopnsense/tree/v1.0.12) (2026-06-20)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.11...v1.0.12)
+
+**Bug Fixes**
+
+- Filter invalid SMART devices [\#52](https://github.com/Snuffy2/aiopnsense/pull/52) ([Snuffy2](https://github.com/Snuffy2))
+
+**Code Quality**
+
+- Move OPNsense endpoints to module constants [\#53](https://github.com/Snuffy2/aiopnsense/pull/53) ([Snuffy2](https://github.com/Snuffy2))
+
+## [v1.0.11](https://github.com/Snuffy2/aiopnsense/tree/v1.0.11) (2026-06-20)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.10...v1.0.11)
 
