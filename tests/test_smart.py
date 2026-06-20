@@ -12,38 +12,14 @@ ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
-async def test_get_smart_normalizes_device_names(make_client: ClientType) -> None:
-    """SMART list queries should normalize bare device names into mappings.
+async def test_get_smart_returns_device_rows(make_client: ClientType) -> None:
+    """SMART list queries should return detailed device rows unchanged.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test validates normalization of SMART device name rows.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client.is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(return_value={"devices": ["nvme0", "ada0"]})
-
-        smart_devices = await client.get_smart(details=False)
-
-        assert smart_devices == [{"device": "nvme0"}, {"device": "ada0"}]
-        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list")
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_smart_details_preserves_mapping_rows(make_client: ClientType) -> None:
-    """Detailed SMART list queries should preserve mapping rows and infer devices.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates detailed SMART row normalization.
+        None: This test validates SMART list payload handling.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -51,18 +27,17 @@ async def test_get_smart_details_preserves_mapping_rows(make_client: ClientType)
         client._safe_dict_post = AsyncMock(
             return_value={
                 "devices": [
-                    {"dev": "nvme0", "status": "PASSED"},
-                    {"device": "ada0", "status": "FAILED"},
-                    "ignored",
+                    {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
+                    {"ident": "ada0", "device": "ada0", "status": "FAILED"},
                 ]
             }
         )
 
-        smart_devices = await client.get_smart(details=True)
+        smart_devices = await client.get_smart()
 
         assert smart_devices == [
-            {"dev": "nvme0", "status": "PASSED", "device": "nvme0"},
-            {"device": "ada0", "status": "FAILED"},
+            {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
+            {"ident": "ada0", "device": "ada0", "status": "FAILED"},
         ]
         client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
@@ -71,14 +46,14 @@ async def test_get_smart_details_preserves_mapping_rows(make_client: ClientType)
 
 
 @pytest.mark.asyncio
-async def test_get_smart_details_normalizes_property_aliases(make_client: ClientType) -> None:
-    """Detailed SMART list queries should expose stable property names.
+async def test_get_smart_skips_devices_with_blank_ident(make_client: ClientType) -> None:
+    """SMART list queries should skip device rows without an identifier.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test validates alias normalization for SMART row fields.
+        None: This test validates filtering of blank SMART identifiers.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -86,40 +61,81 @@ async def test_get_smart_details_normalizes_property_aliases(make_client: Client
         client._safe_dict_post = AsyncMock(
             return_value={
                 "devices": [
-                    {
-                        "device": "nvme0",
-                        "smart_status": "PASSED",
-                        "temp": 35,
-                    },
-                    {
-                        "device": "ada0",
-                        "smart_status": "FAILED",
-                        "status": "OVERRIDE",
-                        "temp": 42,
-                        "temperature": 40,
-                    },
+                    {"ident": "", "device": "nvme0", "status": "PASSED"},
+                    {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
                 ]
             }
         )
 
-        smart_devices = await client.get_smart(details=True)
+        smart_devices = await client.get_smart()
 
-        assert smart_devices == [
-            {
-                "device": "nvme0",
-                "smart_status": "PASSED",
-                "status": "PASSED",
-                "temp": 35,
-                "temperature": 35,
-            },
-            {
-                "device": "ada0",
-                "smart_status": "FAILED",
-                "status": "OVERRIDE",
-                "temp": 42,
-                "temperature": 40,
-            },
-        ]
+        assert smart_devices == [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]
+        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
+        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_smart_logs_and_skips_non_mapping_rows(
+    make_client: ClientType,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """SMART list queries should log and skip non-mapping device rows.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Pytest log capture fixture.
+
+    Returns:
+        None: This test validates debug logging for skipped non-mapping rows.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_post = AsyncMock(
+            return_value={
+                "devices": [
+                    "unexpected-string-row",
+                    {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
+                ]
+            }
+        )
+
+        with caplog.at_level("DEBUG"):
+            smart_devices = await client.get_smart()
+
+        assert smart_devices == [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]
+        assert (
+            "Discarding SMART device row because item is not a mapping: 'unexpected-string-row'"
+            in caplog.text
+        )
+        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
+        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_smart_returns_empty_list_for_non_list_payload(make_client: ClientType) -> None:
+    """SMART list queries should fail closed when the payload shape is wrong.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates fail-closed SMART list payload handling.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_post = AsyncMock(return_value={"devices": "ignored"})
+
+        smart_devices = await client.get_smart()
+
+        assert smart_devices == []
+        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
+        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
 
@@ -129,7 +145,6 @@ async def test_get_smart_details_normalizes_property_aliases(make_client: Client
     ("operation", "endpoint", "expected"),
     [
         ("list", "/api/smart/service/list", []),
-        ("detail", "/api/smart/service/list", []),
         ("info", "/api/smart/service/info", {}),
     ],
 )
@@ -156,9 +171,7 @@ async def test_smart_fails_closed_when_endpoint_is_unavailable(
         client._safe_dict_post = AsyncMock(return_value={})
 
         if operation == "list":
-            got = await client.get_smart(details=False)
-        elif operation == "detail":
-            got = await client.get_smart(details=True)
+            got = await client.get_smart()
         else:
             got = await client.get_smart_info("nvme0")
 
@@ -185,11 +198,15 @@ async def test_get_smart_does_not_probe_post_only_endpoint(make_client: ClientTy
             side_effect=AssertionError("GET probe should not run")
         )
         client.is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(return_value={"devices": ["nvme0"]})
+        client._safe_dict_post = AsyncMock(
+            return_value={"devices": [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]}
+        )
 
-        assert await client.get_smart(details=False) == [{"device": "nvme0"}]
+        assert await client.get_smart() == [
+            {"ident": "nvme0", "device": "nvme0", "status": "PASSED"}
+        ]
         client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list")
+        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
 
@@ -279,25 +296,25 @@ async def test_get_smart_info_does_not_probe_post_only_endpoint(make_client: Cli
 
 
 @pytest.mark.asyncio
-async def test_get_smart_details_fails_closed_when_detail_endpoint_unavailable(
+async def test_get_smart_fails_closed_when_list_endpoint_unavailable(
     make_client: ClientType,
 ) -> None:
-    """Detailed SMART list queries should use the cheap list preflight.
+    """SMART list queries should use the cheap list preflight.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test validates fail-closed behavior for the detailed SMART list.
+        None: This test validates fail-closed behavior for the SMART list.
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client.is_post_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_post = AsyncMock(return_value={})
 
-        assert await client.get_smart(details=True) == []
+        assert await client.get_smart() == []
         client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
+        client._safe_dict_post.assert_not_awaited()
     finally:
         await client.async_close()
 

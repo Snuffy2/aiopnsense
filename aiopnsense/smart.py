@@ -6,10 +6,6 @@ from typing import Any
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors
 
-SMART_PROPERTY_ALIASES: dict[str, tuple[str, ...]] = {
-    "status": ("smart_status", "status"),
-    "temperature": ("temperature", "temp"),
-}
 SMART_SERVICE_LIST_ENDPOINT = "/api/smart/service/list"
 SMART_SERVICE_DETAIL_ENDPOINT = f"{SMART_SERVICE_LIST_ENDPOINT}/1"
 SMART_SERVICE_INFO_ENDPOINT = "/api/smart/service/info"
@@ -18,64 +14,38 @@ SMART_SERVICE_INFO_ENDPOINT = "/api/smart/service/info"
 class SmartMixin(AiopnsenseClientProtocol):
     """SMART plugin methods for OPNsenseClient."""
 
-    @staticmethod
-    def _normalize_smart_devices(
-        devices: object,
-        *,
-        allow_string_rows: bool,
-    ) -> list[dict[str, Any]]:
-        """Normalize SMART device rows into dictionaries with a device key.
-
-        Args:
-            devices (object): Raw SMART device payload returned by OPNsense.
-            allow_string_rows (bool): Whether plain device-name strings should
-                be converted into SMART device mappings.
-
-        Returns:
-            list[dict[str, Any]]: Normalized SMART device rows.
-        """
-        smart_devices: list[dict[str, Any]] = []
-        for device in devices if isinstance(devices, list) else []:
-            if allow_string_rows and isinstance(device, str) and device:
-                smart_devices.append({"device": device})
-                continue
-            if not isinstance(device, MutableMapping):
-                continue
-
-            normalized_device = dict(device)
-            device_name = normalized_device.get("device") or normalized_device.get("dev")
-            if isinstance(device_name, str) and device_name:
-                normalized_device["device"] = device_name
-                for normalized_key, aliases in SMART_PROPERTY_ALIASES.items():
-                    if normalized_key not in normalized_device:
-                        for alias in aliases:
-                            if alias in normalized_device:
-                                normalized_device[normalized_key] = normalized_device[alias]
-                                break
-                smart_devices.append(normalized_device)
-        return smart_devices
-
     @_log_errors
-    async def get_smart(self, *, details: bool = True) -> list[dict[str, Any]]:
+    async def get_smart(self) -> list[dict[str, Any]]:
         """Return SMART device data from the OPNsense SMART plugin.
 
-        Args:
-            details (bool): Whether to request the detailed SMART device list.
-
         Returns:
-            list[dict[str, Any]]: SMART device rows normalized to dictionaries
-                that always include a ``device`` key when a usable device name
-                is available.
+            list[dict[str, Any]]: SMART device rows returned by the detailed API.
         """
-        smart_endpoint = SMART_SERVICE_DETAIL_ENDPOINT if details else SMART_SERVICE_LIST_ENDPOINT
         if not await self.is_post_endpoint_available(SMART_SERVICE_LIST_ENDPOINT):
             _LOGGER.debug("SMART plugin unavailable")
             return []
-        smart_info = await self._safe_dict_post(smart_endpoint)
-        return self._normalize_smart_devices(
-            smart_info.get("devices", []),
-            allow_string_rows=not details,
-        )
+        smart_info = await self._safe_dict_post(SMART_SERVICE_DETAIL_ENDPOINT)
+        devices = smart_info.get("devices", [])
+        if not isinstance(devices, list):
+            _LOGGER.debug(
+                "Discarding SMART devices payload because devices is not a list: %r", devices
+            )
+            return []
+        smart_devices: list[dict[str, Any]] = []
+        for device in devices:
+            if not isinstance(device, MutableMapping):
+                _LOGGER.debug(
+                    "Discarding SMART device row because item is not a mapping: %r", device
+                )
+                continue
+            ident = device.get("ident", "")
+            if not isinstance(ident, str) or not ident.strip():
+                _LOGGER.debug(
+                    "Discarding SMART device row because ident is missing or invalid: %r", device
+                )
+                continue
+            smart_devices.append(dict(device))
+        return smart_devices
 
     @_log_errors
     async def get_smart_info(self, device: str, info_type: str = "a") -> dict[str, Any]:
@@ -84,6 +54,13 @@ class SmartMixin(AiopnsenseClientProtocol):
         Args:
             device (str): SMART device name, such as ``nvme0`` or ``ada0``.
             info_type (str): SMART info selector supported by the plugin.
+                Valid values are:
+                - ``i``: Device info
+                - ``H``: Health
+                - ``c``: SMART capabilities
+                - ``A``: Attributes
+                - ``a``: All (default)
+                - ``x``: Extended
 
         Returns:
             dict[str, Any]: Decoded SMART detail payload. Non-mapping outputs
