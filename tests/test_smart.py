@@ -27,8 +27,8 @@ async def test_get_smart_returns_device_rows(make_client: ClientType) -> None:
         client._safe_dict_post = AsyncMock(
             return_value={
                 "devices": [
-                    {"device": "nvme0", "status": "PASSED"},
-                    {"device": "ada0", "status": "FAILED"},
+                    {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
+                    {"ident": "ada0", "device": "ada0", "status": "FAILED"},
                 ]
             }
         )
@@ -36,9 +36,40 @@ async def test_get_smart_returns_device_rows(make_client: ClientType) -> None:
         smart_devices = await client.get_smart()
 
         assert smart_devices == [
-            {"device": "nvme0", "status": "PASSED"},
-            {"device": "ada0", "status": "FAILED"},
+            {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
+            {"ident": "ada0", "device": "ada0", "status": "FAILED"},
         ]
+        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
+        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_smart_skips_devices_with_blank_ident(make_client: ClientType) -> None:
+    """SMART list queries should skip device rows without an identifier.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates filtering of blank SMART identifiers.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_post = AsyncMock(
+            return_value={
+                "devices": [
+                    {"ident": "", "device": "nvme0", "status": "PASSED"},
+                    {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
+                ]
+            }
+        )
+
+        smart_devices = await client.get_smart()
+
+        assert smart_devices == [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]
         client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
@@ -128,10 +159,12 @@ async def test_get_smart_does_not_probe_post_only_endpoint(make_client: ClientTy
         )
         client.is_post_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(
-            return_value={"devices": [{"device": "nvme0", "status": "PASSED"}]}
+            return_value={"devices": [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]}
         )
 
-        assert await client.get_smart() == [{"device": "nvme0", "status": "PASSED"}]
+        assert await client.get_smart() == [
+            {"ident": "nvme0", "device": "nvme0", "status": "PASSED"}
+        ]
         client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
