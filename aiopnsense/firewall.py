@@ -6,6 +6,23 @@ from typing import Any
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors, api_value_matches
 
+FIREWALL_FILTER_RULES_SEARCH_ENDPOINT = "/api/firewall/filter/search_rule"
+FIREWALL_DNAT_RULES_SEARCH_ENDPOINT = "/api/firewall/d_nat/search_rule"
+FIREWALL_ONE_TO_ONE_RULES_SEARCH_ENDPOINT = "/api/firewall/one_to_one/search_rule"
+FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT = "/api/firewall/source_nat/search_rule"
+FIREWALL_NPT_RULES_SEARCH_ENDPOINT = "/api/firewall/npt/search_rule"
+FIREWALL_FILTER_TOGGLE_RULE_ENDPOINT_PREFIX = "/api/firewall/filter/toggle_rule/"
+FIREWALL_FILTER_APPLY_ENDPOINT = "/api/firewall/filter/apply"
+FIREWALL_NAT_TOGGLE_RULE_ENDPOINT_PREFIX = "/api/firewall/"
+FIREWALL_NAT_APPLY_ENDPOINT_SUFFIX = "/apply"
+FIREWALL_KILL_STATES_ENDPOINT = "/api/diagnostics/firewall/kill_states/"
+FIREWALL_ALIAS_SEARCH_ENDPOINT = "/api/firewall/alias/search_item"
+FIREWALL_ALIAS_SEARCH_CAMELCASE_ENDPOINT = "/api/firewall/alias/searchItem"
+FIREWALL_ALIAS_TOGGLE_ENDPOINT_PREFIX = "/api/firewall/alias/toggle_item/"
+FIREWALL_ALIAS_TOGGLE_CAMELCASE_ENDPOINT_PREFIX = "/api/firewall/alias/toggleItem/"
+FIREWALL_ALIAS_SET_ENDPOINT = "/api/firewall/alias/set"
+FIREWALL_ALIAS_RECONFIGURE_ENDPOINT = "/api/firewall/alias/reconfigure"
+
 
 class FirewallMixin(AiopnsenseClientProtocol):
     """Firewall methods for OPNsenseClient."""
@@ -106,7 +123,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 malformed rows and lockout rules.
         """
         return await self._get_uuid_indexed_rules(
-            endpoint="/api/firewall/filter/search_rule",
+            endpoint=FIREWALL_FILTER_RULES_SEARCH_ENDPOINT,
             debug_label="get_firewall_rules",
         )
 
@@ -120,7 +137,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 values converted into an ``enabled`` flag.
         """
         return await self._get_uuid_indexed_rules(
-            endpoint="/api/firewall/d_nat/search_rule",
+            endpoint=FIREWALL_DNAT_RULES_SEARCH_ENDPOINT,
             debug_label="get_nat_destination_rules",
             normalizer=self._normalize_nat_destination_rule,
         )
@@ -136,7 +153,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 and description fields when present).
         """
         return await self._get_uuid_indexed_rules(
-            endpoint="/api/firewall/one_to_one/search_rule",
+            endpoint=FIREWALL_ONE_TO_ONE_RULES_SEARCH_ENDPOINT,
             debug_label="get_nat_one_to_one_rules",
         )
 
@@ -149,7 +166,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 malformed rows and lockout rules.
         """
         return await self._get_uuid_indexed_rules(
-            endpoint="/api/firewall/source_nat/search_rule",
+            endpoint=FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT,
             debug_label="get_nat_source_rules",
         )
 
@@ -162,7 +179,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 rows and lockout rules.
         """
         return await self._get_uuid_indexed_rules(
-            endpoint="/api/firewall/npt/search_rule",
+            endpoint=FIREWALL_NPT_RULES_SEARCH_ENDPOINT,
             debug_label="get_nat_npt_rules",
         )
 
@@ -179,7 +196,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             bool: True when the toggle operation completes successfully; otherwise, False.
         """
         payload: dict[str, Any] = {}
-        url = f"/api/firewall/filter/toggle_rule/{uuid}"
+        url = f"{FIREWALL_FILTER_TOGGLE_RULE_ENDPOINT_PREFIX}{uuid}"
         if toggle_on_off == "on":
             url = f"{url}/1"
         elif toggle_on_off == "off":
@@ -198,7 +215,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         if response.get("result") == "failed":
             return False
 
-        apply_resp = await self._safe_dict_post("/api/firewall/filter/apply")
+        apply_resp = await self._safe_dict_post(FIREWALL_FILTER_APPLY_ENDPOINT)
         if apply_resp.get("status", "").strip() != "OK":
             return False
 
@@ -221,7 +238,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             bool: True when the toggle operation completes successfully; otherwise, False.
         """
         payload: dict[str, Any] = {}
-        url = f"/api/firewall/{nat_rule_type}/toggle_rule/{uuid}"
+        url = f"{FIREWALL_NAT_TOGGLE_RULE_ENDPOINT_PREFIX}{nat_rule_type}/toggle_rule/{uuid}"
         # d_nat uses opposite logic for on/off
         if nat_rule_type == "d_nat" and toggle_on_off is not None:
             if toggle_on_off == "on":
@@ -246,7 +263,9 @@ class FirewallMixin(AiopnsenseClientProtocol):
         if response.get("result") == "failed":
             return False
 
-        apply_resp = await self._safe_dict_post(f"/api/firewall/{nat_rule_type}/apply")
+        apply_resp = await self._safe_dict_post(
+            f"{FIREWALL_NAT_TOGGLE_RULE_ENDPOINT_PREFIX}{nat_rule_type}{FIREWALL_NAT_APPLY_ENDPOINT_SUFFIX}"
+        )
         if apply_resp.get("status", "").strip() != "OK":
             return False
 
@@ -264,7 +283,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         """
         payload: dict[str, Any] = {"filter": ip_addr}
         response = await self._safe_dict_post(
-            "/api/diagnostics/firewall/kill_states/",
+            FIREWALL_KILL_STATES_ENDPOINT,
             payload=payload,
         )
         _LOGGER.debug("[kill_states] ip_addr: %s, response: %s", ip_addr, response)
@@ -286,8 +305,8 @@ class FirewallMixin(AiopnsenseClientProtocol):
             bool: True when the toggle operation completes successfully; otherwise, False.
         """
         alias_search_endpoint = await self._get_endpoint_path(
-            snake_case_path="/api/firewall/alias/search_item",
-            camel_case_path="/api/firewall/alias/searchItem",
+            snake_case_path=FIREWALL_ALIAS_SEARCH_ENDPOINT,
+            camel_case_path=FIREWALL_ALIAS_SEARCH_CAMELCASE_ENDPOINT,
         )
         if not await self.is_get_endpoint_available(alias_search_endpoint):
             _LOGGER.debug("Firewall alias search endpoint unavailable")
@@ -308,8 +327,8 @@ class FirewallMixin(AiopnsenseClientProtocol):
             return False
         payload: dict[str, Any] = {}
         url: str = await self._get_endpoint_path(
-            snake_case_path=f"/api/firewall/alias/toggle_item/{uuid}",
-            camel_case_path=f"/api/firewall/alias/toggleItem/{uuid}",
+            snake_case_path=f"{FIREWALL_ALIAS_TOGGLE_ENDPOINT_PREFIX}{uuid}",
+            camel_case_path=f"{FIREWALL_ALIAS_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}",
         )
         if toggle_on_off == "on":
             url = f"{url}/1"
@@ -330,11 +349,11 @@ class FirewallMixin(AiopnsenseClientProtocol):
         if response.get("result") == "failed":
             return False
 
-        set_resp = await self._safe_dict_post("/api/firewall/alias/set")
+        set_resp = await self._safe_dict_post(FIREWALL_ALIAS_SET_ENDPOINT)
         if set_resp.get("result") != "saved":
             return False
 
-        reconfigure_resp = await self._safe_dict_post("/api/firewall/alias/reconfigure")
+        reconfigure_resp = await self._safe_dict_post(FIREWALL_ALIAS_RECONFIGURE_ENDPOINT)
         if reconfigure_resp.get("status") != "ok":
             return False
 

@@ -20,6 +20,10 @@ from typing import Any
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors, try_to_float, try_to_int
 
+SPEEDTEST_SHOW_RECENT_ENDPOINT = "/api/speedtest/service/showrecent"
+SPEEDTEST_SHOW_STAT_ENDPOINT = "/api/speedtest/service/showstat"
+SPEEDTEST_RUN_ENDPOINT = "/api/speedtest/service/run"
+
 
 class SpeedtestMixin(AiopnsenseClientProtocol):
     """Speedtest methods for OPNsenseClient."""
@@ -35,16 +39,13 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 include min, max, sample count, and period bounds. Returns
                 ``{"available": False}`` when the plugin endpoint is missing.
         """
-        show_recent_endpoint = "/api/speedtest/service/showrecent"
-        show_stat_endpoint = "/api/speedtest/service/showstat"
-
-        if not await self.is_get_endpoint_available(show_recent_endpoint):
+        if not await self.is_get_endpoint_available(SPEEDTEST_SHOW_RECENT_ENDPOINT):
             _LOGGER.debug("Speedtest not installed")
             return {"available": False}
 
-        show_recent = await self._safe_dict_get(show_recent_endpoint)
-        if await self.is_get_endpoint_available(show_stat_endpoint):
-            show_stat = await self._safe_dict_get(show_stat_endpoint)
+        show_recent = await self._safe_dict_get(SPEEDTEST_SHOW_RECENT_ENDPOINT)
+        if await self.is_get_endpoint_available(SPEEDTEST_SHOW_STAT_ENDPOINT):
+            show_stat = await self._safe_dict_get(SPEEDTEST_SHOW_STAT_ENDPOINT)
         else:
             _LOGGER.debug("Speedtest statistics endpoint unavailable")
             show_stat = {}
@@ -122,12 +123,12 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 endpoint, or an empty mapping when the plugin endpoint is
                 unavailable or returns a malformed payload.
         """
-        if not await self.is_get_endpoint_available("/api/speedtest/service/showrecent"):
+        if not await self.is_get_endpoint_available(SPEEDTEST_SHOW_RECENT_ENDPOINT):
             _LOGGER.debug("Speedtest not installed")
             return {}
 
         response = await self._safe_dict_get_with_timeout(
-            "/api/speedtest/service/run",
+            SPEEDTEST_RUN_ENDPOINT,
             timeout_seconds=180,
         )
         if not isinstance(response, MutableMapping):

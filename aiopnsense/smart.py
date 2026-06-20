@@ -10,6 +10,9 @@ SMART_PROPERTY_ALIASES: dict[str, tuple[str, ...]] = {
     "status": ("smart_status", "status"),
     "temperature": ("temperature", "temp"),
 }
+SMART_SERVICE_LIST_ENDPOINT = "/api/smart/service/list"
+SMART_SERVICE_DETAIL_ENDPOINT = f"{SMART_SERVICE_LIST_ENDPOINT}/1"
+SMART_SERVICE_INFO_ENDPOINT = "/api/smart/service/info"
 
 
 class SmartMixin(AiopnsenseClientProtocol):
@@ -64,9 +67,8 @@ class SmartMixin(AiopnsenseClientProtocol):
                 that always include a ``device`` key when a usable device name
                 is available.
         """
-        smart_endpoint = "/api/smart/service/list/1" if details else "/api/smart/service/list"
-        smart_availability_endpoint = "/api/smart/service/list"
-        if not await self.is_post_endpoint_available(smart_availability_endpoint):
+        smart_endpoint = SMART_SERVICE_DETAIL_ENDPOINT if details else SMART_SERVICE_LIST_ENDPOINT
+        if not await self.is_post_endpoint_available(SMART_SERVICE_LIST_ENDPOINT):
             _LOGGER.debug("SMART plugin unavailable")
             return []
         smart_info = await self._safe_dict_post(smart_endpoint)
@@ -87,12 +89,11 @@ class SmartMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Decoded SMART detail payload. Non-mapping outputs
                 are wrapped under ``output`` to preserve a stable mapping API.
         """
-        smart_info_endpoint = "/api/smart/service/info"
-        if not await self.is_post_endpoint_available(smart_info_endpoint):
+        if not await self.is_post_endpoint_available(SMART_SERVICE_INFO_ENDPOINT):
             _LOGGER.debug("SMART plugin unavailable")
             return {}
         response = await self._safe_dict_post(
-            smart_info_endpoint,
+            SMART_SERVICE_INFO_ENDPOINT,
             {"device": device, "type": info_type, "json": True},
         )
         output = response.get("output", {})

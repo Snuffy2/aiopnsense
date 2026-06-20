@@ -46,6 +46,10 @@ _RATE_FACTORS = {
     "TBIT/S": 1000**4,
     "PBIT/S": 1000**5,
 }
+VNSTAT_SERVICE_ENDPOINT_PREFIX = "/api/vnstat/service/"
+VNSTAT_HOURLY_ENDPOINT = f"{VNSTAT_SERVICE_ENDPOINT_PREFIX}hourly"
+VNSTAT_DAILY_ENDPOINT = f"{VNSTAT_SERVICE_ENDPOINT_PREFIX}daily"
+VNSTAT_MONTHLY_ENDPOINT = f"{VNSTAT_SERVICE_ENDPOINT_PREFIX}monthly"
 
 
 class VnstatMixin(AiopnsenseClientProtocol):
@@ -88,7 +92,7 @@ class VnstatMixin(AiopnsenseClientProtocol):
         if requested_period not in _VSTAT_PERIODS:
             return {}
 
-        endpoint = f"/api/vnstat/service/{requested_period}"
+        endpoint = f"{VNSTAT_SERVICE_ENDPOINT_PREFIX}{requested_period}"
         payload = await self._fetch_vnstat_for(endpoint, requested_period)
         if not payload.get("interfaces"):
             return {}
@@ -105,17 +109,17 @@ class VnstatMixin(AiopnsenseClientProtocol):
                 convenience byte counters for today, this month, yesterday,
                 last month, and the last complete hour.
         """
-        if not await self.is_get_endpoint_available("/api/vnstat/service/hourly"):
+        if not await self.is_get_endpoint_available(VNSTAT_HOURLY_ENDPOINT):
             _LOGGER.debug("vnStat not installed")
             return {"interfaces": {}, "interface_count": 0}
 
         opnsense_tz = await self._get_opnsense_timezone()
         hourly = self._parse_vnstat_payload(
-            await self._safe_dict_get("/api/vnstat/service/hourly"),
+            await self._safe_dict_get(VNSTAT_HOURLY_ENDPOINT),
             expected_period="hourly",
         )
-        daily = await self._fetch_vnstat_for("/api/vnstat/service/daily", "daily")
-        monthly = await self._fetch_vnstat_for("/api/vnstat/service/monthly", "monthly")
+        daily = await self._fetch_vnstat_for(VNSTAT_DAILY_ENDPOINT, "daily")
+        monthly = await self._fetch_vnstat_for(VNSTAT_MONTHLY_ENDPOINT, "monthly")
         interface_names = self._collect_vnstat_interfaces(hourly, daily, monthly)
         interface_data: dict[str, Any] = {}
 
