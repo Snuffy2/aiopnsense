@@ -67,11 +67,12 @@ class SmartMixin(AiopnsenseClientProtocol):
                 that always include a ``device`` key when a usable device name
                 is available.
         """
-        smart_endpoint = SMART_SERVICE_DETAIL_ENDPOINT if details else SMART_SERVICE_LIST_ENDPOINT
         if not await self.is_post_endpoint_available(SMART_SERVICE_LIST_ENDPOINT):
             _LOGGER.debug("SMART plugin unavailable")
             return []
-        smart_info = await self._safe_dict_post(smart_endpoint)
+        smart_info = await self._safe_dict_post(
+            SMART_SERVICE_DETAIL_ENDPOINT if details else SMART_SERVICE_LIST_ENDPOINT
+        )
         return self._normalize_smart_devices(
             smart_info.get("devices", []),
             allow_string_rows=not details,
