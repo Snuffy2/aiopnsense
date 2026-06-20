@@ -9,6 +9,11 @@ from ._typing import AiopnsenseClientProtocol
 from .exceptions import OPNsenseVoucherServerError
 from .helpers import _LOGGER, human_friendly_duration, timestamp_to_datetime, try_to_int
 
+VOUCHER_LIST_PROVIDERS_ENDPOINT = "/api/captiveportal/voucher/list_providers"
+VOUCHER_LIST_PROVIDERS_CAMELCASE_ENDPOINT = "/api/captiveportal/voucher/listProviders"
+VOUCHER_GENERATE_VOUCHERS_ENDPOINT = "/api/captiveportal/voucher/generate_vouchers"
+VOUCHER_GENERATE_VOUCHERS_CAMELCASE_ENDPOINT = "/api/captiveportal/voucher/generateVouchers"
+
 
 class VouchersMixin(AiopnsenseClientProtocol):
     """Captive portal voucher methods for OPNsenseClient."""
@@ -28,12 +33,12 @@ class VouchersMixin(AiopnsenseClientProtocol):
                 ``validity_str`` when those values are available.
         """
         list_providers_endpoint = await self._get_endpoint_path(
-            snake_case_path="/api/captiveportal/voucher/list_providers",
-            camel_case_path="/api/captiveportal/voucher/listProviders",
+            snake_case_path=VOUCHER_LIST_PROVIDERS_ENDPOINT,
+            camel_case_path=VOUCHER_LIST_PROVIDERS_CAMELCASE_ENDPOINT,
         )
         generate_vouchers_endpoint = await self._get_endpoint_path(
-            snake_case_path="/api/captiveportal/voucher/generate_vouchers",
-            camel_case_path="/api/captiveportal/voucher/generateVouchers",
+            snake_case_path=VOUCHER_GENERATE_VOUCHERS_ENDPOINT,
+            camel_case_path=VOUCHER_GENERATE_VOUCHERS_CAMELCASE_ENDPOINT,
         )
         if data.get("voucher_server", None):
             server = data.get("voucher_server")

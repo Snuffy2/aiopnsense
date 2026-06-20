@@ -7,6 +7,9 @@ from urllib.parse import quote
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors, api_value_matches
 
+CORE_SERVICE_SEARCH_ENDPOINT = "/api/core/service/search"
+CORE_SERVICE_ENDPOINT_PREFIX = "/api/core/service/"
+
 
 class ServicesMixin(AiopnsenseClientProtocol):
     """Service management methods for OPNsenseClient."""
@@ -45,14 +48,13 @@ class ServicesMixin(AiopnsenseClientProtocol):
             list[dict[str, Any]] | None: Normalized service payload, or ``None`` when endpoint
                 probing fails and ``return_none_when_unavailable`` is ``True``.
         """
-        endpoint = "/api/core/service/search"
-        if not await self.is_get_endpoint_available(endpoint):
+        if not await self.is_get_endpoint_available(CORE_SERVICE_SEARCH_ENDPOINT):
             _LOGGER.debug("Service search endpoint unavailable")
             if return_none_when_unavailable:
                 return None
             return []
 
-        response = await self._safe_dict_get(endpoint)
+        response = await self._safe_dict_get(CORE_SERVICE_SEARCH_ENDPOINT)
         return self._normalize_services_rows(response.get("rows") or [])
 
     @_log_errors
@@ -115,7 +117,7 @@ class ServicesMixin(AiopnsenseClientProtocol):
         if not service:
             return False
         encoded_service = quote(service, safe="")
-        api_addr: str = f"/api/core/service/{action}/{encoded_service}"
+        api_addr: str = f"{CORE_SERVICE_ENDPOINT_PREFIX}{action}/{encoded_service}"
         response = await self._safe_dict_post(api_addr)
         _LOGGER.debug("[%s_service] service: %s, response: %s", action, service, response)
         return response.get("result", "failed") == "ok"

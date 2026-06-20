@@ -11,6 +11,12 @@ from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
 from .helpers import _LOGGER, _log_errors, dict_get
 
+FIRMWARE_STATUS_ENDPOINT = "/api/core/firmware/status"
+FIRMWARE_CHECK_ENDPOINT = "/api/core/firmware/check"
+FIRMWARE_UPGRADE_STATUS_ENDPOINT = "/api/core/firmware/upgradestatus"
+FIRMWARE_ACTION_ENDPOINT_PREFIX = "/api/core/firmware/"
+FIRMWARE_CHANGELOG_ENDPOINT_PREFIX = "/api/core/firmware/changelog/"
+
 
 class FirmwareMixin(AiopnsenseClientProtocol):
     """Firmware methods for OPNsenseClient."""
@@ -19,13 +25,12 @@ class FirmwareMixin(AiopnsenseClientProtocol):
 
     async def _store_host_firmware_version(self) -> None:
         """Cache the installed OPNsense firmware version or product series."""
-        status_endpoint = "/api/core/firmware/status"
-        if not await self.is_get_endpoint_available(status_endpoint):
+        if not await self.is_get_endpoint_available(FIRMWARE_STATUS_ENDPOINT):
             _LOGGER.debug("Firmware status endpoint unavailable")
             self._firmware_version = None
             return
 
-        firmware_info = await self._safe_dict_get(status_endpoint)
+        firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
         firmware: str | None = dict_get(firmware_info, "product.product_version")
         if not firmware or not awesomeversion.AwesomeVersion(firmware).valid:
             old = firmware
@@ -63,12 +68,11 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 update metadata when available. Returns an empty mapping when
                 the firmware status endpoint is unavailable.
         """
-        status_endpoint = "/api/core/firmware/status"
-        if not await self.is_get_endpoint_available(status_endpoint):
+        if not await self.is_get_endpoint_available(FIRMWARE_STATUS_ENDPOINT):
             _LOGGER.debug("Firmware status endpoint unavailable")
             return {}
 
-        status = await self._safe_dict_get(status_endpoint)
+        status = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
 
         # if error or too old trigger check (only if check is not already in progress)
         # {'status_msg': 'Firmware status check was aborted internally. Please try again.', 'status': 'error'}
@@ -129,7 +133,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         if error_status or last_check_expired or missing_data or update_needs_info:
             _LOGGER.info("Triggering firmware check")
             self._firmware_version = None
-            await self._post("/api/core/firmware/check")
+            await self._post(FIRMWARE_CHECK_ENDPOINT)
 
         return status
 
@@ -151,7 +155,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         # upgrade = major updates to a new opnsense version
         if type in ("update", "upgrade"):
             self._firmware_version = None
-            return await self._safe_dict_post(f"/api/core/firmware/{type}")
+            return await self._safe_dict_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}")
         return None
 
     @_log_errors
@@ -162,11 +166,10 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any]: Upgrade status payload, or an empty
                 mapping when the upgrade-status endpoint is unavailable.
         """
-        status_endpoint = "/api/core/firmware/upgradestatus"
-        if not await self.is_get_endpoint_available(status_endpoint):
+        if not await self.is_get_endpoint_available(FIRMWARE_UPGRADE_STATUS_ENDPOINT):
             _LOGGER.debug("Firmware upgrade status endpoint unavailable")
             return {}
-        return await self._safe_dict_get(status_endpoint)
+        return await self._safe_dict_get(FIRMWARE_UPGRADE_STATUS_ENDPOINT)
 
     @_log_errors
     async def firmware_changelog(self, version: str) -> MutableMapping[str, Any]:
@@ -179,4 +182,4 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any]: Changelog response for the requested
                 firmware version.
         """
-        return await self._safe_dict_post(f"/api/core/firmware/changelog/{version}")
+        return await self._safe_dict_post(f"{FIRMWARE_CHANGELOG_ENDPOINT_PREFIX}{version}")

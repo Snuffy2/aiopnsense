@@ -10,6 +10,13 @@ from ._typing import AiopnsenseClientProtocol
 from .const import LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
 from .helpers import _LOGGER, _log_errors, api_value_matches
 
+UNBOUND_SETTINGS_GET_ENDPOINT = "/api/unbound/settings/get"
+UNBOUND_SETTINGS_SET_ENDPOINT = "/api/unbound/settings/set"
+UNBOUND_SERVICE_DNSBL_ENDPOINT = "/api/unbound/service/dnsbl"
+UNBOUND_SERVICE_RESTART_ENDPOINT = "/api/unbound/service/restart"
+UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT = "/api/unbound/settings/search_dnsbl"
+UNBOUND_SETTINGS_TOGGLE_DNSBL_ENDPOINT_PREFIX = "/api/unbound/settings/toggle_dnsbl/"
+
 
 class UnboundMixin(AiopnsenseClientProtocol):
     """Unbound DNS blocklist methods for OPNsenseClient."""
@@ -53,7 +60,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Normalized legacy DNSBL settings returned by older
             OPNsense firmware.
         """
-        response = await self._safe_dict_get("/api/unbound/settings/get")
+        response = await self._safe_dict_get(UNBOUND_SETTINGS_GET_ENDPOINT)
         unbound_settings = response.get("unbound", {})
         if not isinstance(unbound_settings, MutableMapping):
             return {}
@@ -95,7 +102,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
         payload["unbound"]["dnsbl"]["enabled"] = "1" if set_state else "0"
 
         try:
-            response = await self._post("/api/unbound/settings/set", payload=payload)
+            response = await self._post(UNBOUND_SETTINGS_SET_ENDPOINT, payload=payload)
         except (TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
             _LOGGER.error(
                 "Error saving legacy unbound blocklist state %s. %s: %s",
@@ -114,7 +121,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             return False
 
         try:
-            dnsbl_resp = await self._get("/api/unbound/service/dnsbl")
+            dnsbl_resp = await self._get(UNBOUND_SERVICE_DNSBL_ENDPOINT)
         except (TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
             _LOGGER.error(
                 "Error applying legacy unbound blocklist state %s. %s: %s",
@@ -141,7 +148,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             return False
 
         try:
-            restart_resp = await self._post("/api/unbound/service/restart")
+            restart_resp = await self._post(UNBOUND_SERVICE_RESTART_ENDPOINT)
         except (TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
             _LOGGER.error(
                 "Error restarting legacy unbound blocklist state %s. %s: %s",
@@ -182,12 +189,11 @@ class UnboundMixin(AiopnsenseClientProtocol):
             )
             return {"legacy": await self._get_unbound_blocklist_legacy()}
 
-        dnsbl_endpoint = "/api/unbound/settings/search_dnsbl"
-        if not await self.is_get_endpoint_available(dnsbl_endpoint):
+        if not await self.is_get_endpoint_available(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT):
             _LOGGER.debug("Unbound DNSBL endpoint unavailable")
             return {}
 
-        dnsbl_raw = await self._safe_dict_get(dnsbl_endpoint)
+        dnsbl_raw = await self._safe_dict_get(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT)
         if not isinstance(dnsbl_raw, MutableMapping):
             return {}
         dnsbl_rows = dnsbl_raw.get("rows", [])
@@ -216,12 +222,14 @@ class UnboundMixin(AiopnsenseClientProtocol):
         if not uuid:
             _LOGGER.error("Blocklist uuid must be provided for Unbound Extended Blocklists")
             return False
-        endpoint = f"/api/unbound/settings/toggle_dnsbl/{uuid}/{'1' if set_state else '0'}"
+        endpoint = (
+            f"{UNBOUND_SETTINGS_TOGGLE_DNSBL_ENDPOINT_PREFIX}{uuid}/{'1' if set_state else '0'}"
+        )
         response = await self._safe_dict_post(endpoint)
         result = response.get("result")
         if (set_state and result == "Enabled") or (not set_state and result == "Disabled"):
             try:
-                dnsbl_resp = await self._get("/api/unbound/service/dnsbl")
+                dnsbl_resp = await self._get(UNBOUND_SERVICE_DNSBL_ENDPOINT)
                 _LOGGER.debug(
                     "[_toggle_unbound_blocklist] uuid: %s, set_state: %s, response: %s, dnsbl_resp: %s",
                     uuid,

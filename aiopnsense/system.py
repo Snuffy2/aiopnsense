@@ -20,6 +20,25 @@ from .helpers import (
     try_to_int,
 )
 
+SYSTEM_TIME_ENDPOINT = "/api/diagnostics/system/system_time"
+INTERFACE_OVERVIEW_EXPORT_ENDPOINT = "/api/interfaces/overview/export"
+SYSTEM_INFORMATION_SNAKE_ENDPOINT = "/api/diagnostics/system/system_information"
+SYSTEM_INFORMATION_CAMELCASE_ENDPOINT = "/api/diagnostics/system/systemInformation"
+CARP_VIP_STATUS_ENDPOINT = "/api/diagnostics/interface/get_vip_status"
+VIP_SETTINGS_ENDPOINT = "/api/interfaces/vip_settings/get"
+CORE_SYSTEM_REBOOT_ENDPOINT = "/api/core/system/reboot"
+CORE_SYSTEM_HALT_ENDPOINT = "/api/core/system/halt"
+CARP_STATUS_SNAKE_ENDPOINT = "/api/diagnostics/interface/_carp_status"
+CARP_STATUS_CAMELCASE_ENDPOINT = "/api/diagnostics/interface/CarpStatus"
+CARP_MAINTENANCE_ENDPOINT_SUFFIX = "/maintenance"
+WOL_SET_ENDPOINT = "/api/wol/wol/set"
+CORE_SYSTEM_STATUS_ENDPOINT = "/api/core/system/status"
+CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT = "/api/core/system/dismiss_status"
+CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT = "/api/core/system/dismissStatus"
+INTERFACE_OVERVIEW_RELOAD_SNAKE_PREFIX = "/api/interfaces/overview/reload_interface/"
+INTERFACE_OVERVIEW_RELOAD_CAMELCASE_PREFIX = "/api/interfaces/overview/reloadInterface/"
+CERT_SEARCH_ENDPOINT = "/api/trust/cert/search"
+
 
 class _CarpSettingsIndexes(NamedTuple):
     """Lookup indexes used to match CARP status rows to VIP settings."""
@@ -301,12 +320,11 @@ class SystemMixin(AiopnsenseClientProtocol):
             tzinfo: Resolved timezone object for OPNsense system data.
         """
         if datetime_str is None:
-            system_time_endpoint = "/api/diagnostics/system/system_time"
-            if not await self.is_get_endpoint_available(system_time_endpoint):
+            if not await self.is_get_endpoint_available(SYSTEM_TIME_ENDPOINT):
                 _LOGGER.debug("System time endpoint unavailable for timezone resolution")
                 return self._get_local_timezone()
             try:
-                datetime_raw = (await self._safe_dict_get(system_time_endpoint)).get("datetime")
+                datetime_raw = (await self._safe_dict_get(SYSTEM_TIME_ENDPOINT)).get("datetime")
             except (aiohttp.ClientError, TimeoutError) as err:
                 _LOGGER.debug(
                     "Failed to fetch OPNsense system time for timezone resolution: %s: %s",
@@ -352,11 +370,10 @@ class SystemMixin(AiopnsenseClientProtocol):
                 identifier, or ``None`` when no physical MAC addresses are
                 available.
         """
-        endpoint = "/api/interfaces/overview/export"
-        if not await self.is_get_endpoint_available(endpoint):
+        if not await self.is_get_endpoint_available(INTERFACE_OVERVIEW_EXPORT_ENDPOINT):
             _LOGGER.debug("Interface overview endpoint unavailable for device id resolution")
             return None
-        instances = await self._safe_list_get(endpoint)
+        instances = await self._safe_list_get(INTERFACE_OVERVIEW_EXPORT_ENDPOINT)
         mac_addresses: set[str] = set()
         for item in instances:
             if not isinstance(item, MutableMapping):
@@ -389,8 +406,8 @@ class SystemMixin(AiopnsenseClientProtocol):
         """
         system_info: dict[str, Any] = {}
         system_information_endpoint = await self._get_endpoint_path(
-            snake_case_path="/api/diagnostics/system/system_information",
-            camel_case_path="/api/diagnostics/system/systemInformation",
+            snake_case_path=SYSTEM_INFORMATION_SNAKE_ENDPOINT,
+            camel_case_path=SYSTEM_INFORMATION_CAMELCASE_ENDPOINT,
         )
         if not await self.is_get_endpoint_available(system_information_endpoint):
             _LOGGER.debug("System information endpoint unavailable")
@@ -420,17 +437,15 @@ class SystemMixin(AiopnsenseClientProtocol):
             tuple[dict[str, Any], list[dict[str, Any]]]: Raw VIP status response and
             merged/normalized CARP VIP rows derived from status + settings endpoints.
         """
-        vip_status_endpoint = "/api/diagnostics/interface/get_vip_status"
-        if not await self.is_get_endpoint_available(vip_status_endpoint):
+        if not await self.is_get_endpoint_available(CARP_VIP_STATUS_ENDPOINT):
             _LOGGER.debug("CARP VIP status endpoint unavailable")
             return {}, []
-        vip_settings_endpoint = "/api/interfaces/vip_settings/get"
-        vip_status_raw = await self._safe_dict_get(vip_status_endpoint)
+        vip_status_raw = await self._safe_dict_get(CARP_VIP_STATUS_ENDPOINT)
         vip_settings_raw: dict[str, Any] = {"rows": []}
-        if not await self.is_get_endpoint_available(vip_settings_endpoint):
+        if not await self.is_get_endpoint_available(VIP_SETTINGS_ENDPOINT):
             _LOGGER.debug("CARP VIP settings endpoint unavailable; using status-only VIP data")
         else:
-            fetched_vip_settings = await self._safe_dict_get(vip_settings_endpoint)
+            fetched_vip_settings = await self._safe_dict_get(VIP_SETTINGS_ENDPOINT)
             if isinstance(fetched_vip_settings, MutableMapping):
                 vip_settings_raw = dict(fetched_vip_settings)
 
@@ -546,7 +561,7 @@ class SystemMixin(AiopnsenseClientProtocol):
         Returns:
             bool: True when the operation succeeds; otherwise, False.
         """
-        response = await self._safe_dict_post("/api/core/system/reboot")
+        response = await self._safe_dict_post(CORE_SYSTEM_REBOOT_ENDPOINT)
         _LOGGER.debug("[system_reboot] response: %s", response)
         if response.get("status", "") == "ok":
             return True
@@ -555,7 +570,7 @@ class SystemMixin(AiopnsenseClientProtocol):
     @_log_errors
     async def system_halt(self) -> None:
         """Shutdown OPNsense."""
-        response = await self._safe_dict_post("/api/core/system/halt")
+        response = await self._safe_dict_post(CORE_SYSTEM_HALT_ENDPOINT)
         _LOGGER.debug("[system_halt] response: %s", response)
         if response.get("status", "") == "ok":
             return
@@ -569,10 +584,12 @@ class SystemMixin(AiopnsenseClientProtocol):
             bool: True when the operation succeeds; otherwise, False.
         """
         carp_status_endpoint = await self._get_endpoint_path(
-            "/api/diagnostics/interface/_carp_status",
-            "/api/diagnostics/interface/CarpStatus",
+            CARP_STATUS_SNAKE_ENDPOINT,
+            CARP_STATUS_CAMELCASE_ENDPOINT,
         )
-        response = await self._safe_dict_post(f"{carp_status_endpoint}/maintenance")
+        response = await self._safe_dict_post(
+            f"{carp_status_endpoint}{CARP_MAINTENANCE_ENDPOINT_SUFFIX}"
+        )
         _LOGGER.debug("[toggle_carp_maintenance_mode] response: %s", response)
         return str(response.get("status", "")).lower() == "ok"
 
@@ -590,7 +607,7 @@ class SystemMixin(AiopnsenseClientProtocol):
         """
         payload: dict[str, Any] = {"wake": {"interface": interface, "mac": mac}}
         _LOGGER.debug("[send_wol] payload: %s", payload)
-        response = await self._safe_dict_post("/api/wol/wol/set", payload)
+        response = await self._safe_dict_post(WOL_SET_ENDPOINT, payload)
         _LOGGER.debug("[send_wol] response: %s", response)
         if response.get("status", "") == "ok":
             return True
@@ -606,15 +623,14 @@ class SystemMixin(AiopnsenseClientProtocol):
                 subject ``id``, and parsed ``created_at`` timestamp when
                 available.
         """
-        notices_endpoint = "/api/core/system/status"
-        if not await self.is_get_endpoint_available(notices_endpoint):
+        if not await self.is_get_endpoint_available(CORE_SYSTEM_STATUS_ENDPOINT):
             _LOGGER.debug("System status endpoint unavailable for notices")
             return {
                 "pending_notices_present": False,
                 "pending_notices": [],
             }
 
-        notices_info = await self._safe_dict_get(notices_endpoint)
+        notices_info = await self._safe_dict_get(CORE_SYSTEM_STATUS_ENDPOINT)
         pending_notices_present = False
         pending_notices: list = []
         for key, notice in notices_info.items():
@@ -646,18 +662,17 @@ class SystemMixin(AiopnsenseClientProtocol):
             bool: True when the operation succeeds; otherwise, False.
         """
         dismiss_endpoint = await self._get_endpoint_path(
-            snake_case_path="/api/core/system/dismiss_status",
-            camel_case_path="/api/core/system/dismissStatus",
+            snake_case_path=CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
+            camel_case_path=CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
         )
 
         # id = "all" to close all notices
         success = True
         if id.lower() == "all":
-            notices_endpoint = "/api/core/system/status"
-            if not await self.is_get_endpoint_available(notices_endpoint):
+            if not await self.is_get_endpoint_available(CORE_SYSTEM_STATUS_ENDPOINT):
                 _LOGGER.debug("System status endpoint unavailable for closing notices")
                 return False
-            notices = await self._safe_dict_get(notices_endpoint)
+            notices = await self._safe_dict_get(CORE_SYSTEM_STATUS_ENDPOINT)
             for key, notice in notices.items():
                 if not isinstance(notice, MutableMapping):
                     continue
@@ -684,8 +699,8 @@ class SystemMixin(AiopnsenseClientProtocol):
             bool: True when the operation succeeds; otherwise, False.
         """
         reload_endpoint = await self._get_endpoint_path(
-            snake_case_path=f"/api/interfaces/overview/reload_interface/{if_name}",
-            camel_case_path=f"/api/interfaces/overview/reloadInterface/{if_name}",
+            snake_case_path=f"{INTERFACE_OVERVIEW_RELOAD_SNAKE_PREFIX}{if_name}",
+            camel_case_path=f"{INTERFACE_OVERVIEW_RELOAD_CAMELCASE_PREFIX}{if_name}",
         )
         reload = await self._safe_dict_post(reload_endpoint)
         return reload.get("message", "").startswith("OK")
@@ -699,12 +714,11 @@ class SystemMixin(AiopnsenseClientProtocol):
                 certificate contains its UUID, issuer reference, RFC 3280
                 purpose, in-use flag, and validity timestamps.
         """
-        cert_endpoint = "/api/trust/cert/search"
-        if not await self.is_get_endpoint_available(cert_endpoint):
+        if not await self.is_get_endpoint_available(CERT_SEARCH_ENDPOINT):
             _LOGGER.debug("Certificate search endpoint unavailable")
             return {}
 
-        certs_raw = await self._safe_dict_get(cert_endpoint)
+        certs_raw = await self._safe_dict_get(CERT_SEARCH_ENDPOINT)
         cert_rows = certs_raw.get("rows")
         if not isinstance(cert_rows, list):
             return {}

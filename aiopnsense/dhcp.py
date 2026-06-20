@@ -15,6 +15,19 @@ from .helpers import (
     try_to_int,
 )
 
+ARP_TABLE_ENDPOINT = "/api/diagnostics/interface/search_arp"
+KEA_DHCPV4_GET_ENDPOINT = "/api/kea/dhcpv4/get"
+KEA_LEASES4_SEARCH_ENDPOINT = "/api/kea/leases4/search"
+KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT = "/api/kea/dhcpv4/search_reservation"
+KEA_DHCPV4_SEARCH_RESERVATION_CAMELCASE_ENDPOINT = "/api/kea/dhcpv4/searchReservation"
+DNSMASQ_LEASES_SEARCH_ENDPOINT = "/api/dnsmasq/leases/search"
+ISC_DHCPV4_SERVICE_STATUS_ENDPOINT = "/api/dhcpv4/service/status"
+ISC_DHCPV4_LEASES_SEARCH_ENDPOINT = "/api/dhcpv4/leases/search_lease"
+ISC_DHCPV4_LEASES_SEARCH_CAMELCASE_ENDPOINT = "/api/dhcpv4/leases/searchLease"
+ISC_DHCPV6_SERVICE_STATUS_ENDPOINT = "/api/dhcpv6/service/status"
+ISC_DHCPV6_LEASES_SEARCH_ENDPOINT = "/api/dhcpv6/leases/search_lease"
+ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT = "/api/dhcpv6/leases/searchLease"
+
 
 class DHCPMixin(AiopnsenseClientProtocol):
     """DHCP methods for OPNsenseClient."""
@@ -67,12 +80,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
         """
         # [{'hostname': '?', 'ip-address': '<ip>', 'mac-address': '<mac>', 'interface': 'em0', 'expires': 1199, 'type': 'ethernet'}, ...]
         resolve_flag = "yes" if resolve_hostnames else "no"
-        arp_endpoint = "/api/diagnostics/interface/search_arp"
-        if not await self.is_get_endpoint_available(arp_endpoint):
+        if not await self.is_get_endpoint_available(ARP_TABLE_ENDPOINT):
             _LOGGER.debug("ARP endpoint unavailable")
             return []
 
-        arp_endpoint_resolve = f"{arp_endpoint}?resolve={resolve_flag}"
+        arp_endpoint_resolve = f"{ARP_TABLE_ENDPOINT}?resolve={resolve_flag}"
         arp_table_info = await self._safe_dict_get(arp_endpoint_resolve)
         arp_table: list = arp_table_info.get("rows", [])
         return arp_table
@@ -138,12 +150,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Mapping of Kea interface identifiers to display
                 names when Kea DHCPv4 is enabled; otherwise an empty mapping.
         """
-        endpoint = "/api/kea/dhcpv4/get"
-        if not await self.is_get_endpoint_available(endpoint):
+        if not await self.is_get_endpoint_available(KEA_DHCPV4_GET_ENDPOINT):
             _LOGGER.debug("Kea DHCP interface endpoint unavailable")
             return {}
 
-        response = await self._safe_dict_get(endpoint)
+        response = await self._safe_dict_get(KEA_DHCPV4_GET_ENDPOINT)
         lease_interfaces: dict[str, Any] = {}
         general = dict_get(response, "dhcpv4.general", {})
         if not isinstance(general, MutableMapping):
@@ -173,15 +184,15 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 addresses are omitted; lease ``type`` is ``static``,
                 ``dynamic``, or ``unknown`` depending on reservation data.
         """
-        if not await self.is_get_endpoint_available("/api/kea/leases4/search"):
+        if not await self.is_get_endpoint_available(KEA_LEASES4_SEARCH_ENDPOINT):
             _LOGGER.debug("Kea DHCP not installed")
             return []
-        response = await self._safe_dict_get("/api/kea/leases4/search")
+        response = await self._safe_dict_get(KEA_LEASES4_SEARCH_ENDPOINT)
         if not isinstance(response.get("rows", None), list):
             return []
         reservation_endpoint = await self._get_endpoint_path(
-            snake_case_path="/api/kea/dhcpv4/search_reservation",
-            camel_case_path="/api/kea/dhcpv4/searchReservation",
+            snake_case_path=KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT,
+            camel_case_path=KEA_DHCPV4_SEARCH_RESERVATION_CAMELCASE_ENDPOINT,
         )
         res_info: list[Any] | None
         if not await self.is_get_endpoint_available(reservation_endpoint):
@@ -292,10 +303,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 to the latest expiration, expired rows are omitted, and lease
                 ``type`` is derived from dnsmasq reservation metadata.
         """
-        if not await self.is_get_endpoint_available("/api/dnsmasq/leases/search"):
+        if not await self.is_get_endpoint_available(DNSMASQ_LEASES_SEARCH_ENDPOINT):
             _LOGGER.debug("Dnsmasq DHCP not installed")
             return []
-        response = await self._safe_dict_get("/api/dnsmasq/leases/search")
+        response = await self._safe_dict_get(DNSMASQ_LEASES_SEARCH_ENDPOINT)
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
             return []
@@ -349,12 +360,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
             list: Normalized ISC DHCPv4 lease entries. Non-active, expired,
                 malformed, and MAC-less rows are omitted.
         """
-        if not await self.is_get_endpoint_available("/api/dhcpv4/service/status"):
+        if not await self.is_get_endpoint_available(ISC_DHCPV4_SERVICE_STATUS_ENDPOINT):
             _LOGGER.debug("ISC DHCP not installed")
             return []
         lease_endpoint = await self._get_endpoint_path(
-            snake_case_path="/api/dhcpv4/leases/search_lease",
-            camel_case_path="/api/dhcpv4/leases/searchLease",
+            snake_case_path=ISC_DHCPV4_LEASES_SEARCH_ENDPOINT,
+            camel_case_path=ISC_DHCPV4_LEASES_SEARCH_CAMELCASE_ENDPOINT,
         )
         if not await self.is_get_endpoint_available(lease_endpoint):
             _LOGGER.debug("ISC DHCPv4 lease endpoint unavailable")
@@ -411,12 +422,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
             list: Normalized ISC DHCPv6 lease entries. Non-active, expired,
                 malformed, and MAC-less rows are omitted.
         """
-        if not await self.is_get_endpoint_available("/api/dhcpv6/service/status"):
+        if not await self.is_get_endpoint_available(ISC_DHCPV6_SERVICE_STATUS_ENDPOINT):
             _LOGGER.debug("ISC DHCP not installed")
             return []
         lease_endpoint = await self._get_endpoint_path(
-            snake_case_path="/api/dhcpv6/leases/search_lease",
-            camel_case_path="/api/dhcpv6/leases/searchLease",
+            snake_case_path=ISC_DHCPV6_LEASES_SEARCH_ENDPOINT,
+            camel_case_path=ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT,
         )
         if not await self.is_get_endpoint_available(lease_endpoint):
             _LOGGER.debug("ISC DHCPv6 lease endpoint unavailable")
