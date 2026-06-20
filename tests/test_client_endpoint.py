@@ -376,11 +376,8 @@ async def test_is_endpoint_available_is_deprecated_get_alias(
 
     session.get = _get
     try:
-        legacy_alias = getattr(client, "is_endpoint_available")
-        assert "Endpoint availability probing is internal" in getattr(
-            legacy_alias,
-            "__deprecated__",
-        )
+        legacy_alias = client.is_endpoint_available  # type: ignore[deprecated]
+        assert "Endpoint availability probing is internal" in legacy_alias.__deprecated__  # type: ignore[attr-defined]
         with pytest.warns(DeprecationWarning, match="Endpoint availability probing is internal"):
             assert await legacy_alias(
                 "/api/test/endpoint",
@@ -737,9 +734,9 @@ async def test_set_use_snake_case_is_deprecated_wrapper(make_client: MakeClientF
     client = make_client()
     try:
         client._set_use_snake_case = AsyncMock()
-        wrapper = getattr(client, "set_use_snake_case")
+        wrapper = client.set_use_snake_case  # type: ignore[deprecated]
 
-        assert "Endpoint style selection is internal" in getattr(wrapper, "__deprecated__")
+        assert "Endpoint style selection is internal" in wrapper.__deprecated__  # type: ignore[attr-defined]
         with pytest.warns(DeprecationWarning, match="Endpoint style selection is internal"):
             await wrapper()
 
