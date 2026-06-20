@@ -189,7 +189,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             )
             return {"legacy": await self._get_unbound_blocklist_legacy()}
 
-        if not await self.is_get_endpoint_available(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT):
+        if not await self._is_get_endpoint_available(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT):
             _LOGGER.debug("Unbound DNSBL endpoint unavailable")
             return {}
 

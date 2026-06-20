@@ -21,7 +21,7 @@ class SmartMixin(AiopnsenseClientProtocol):
         Returns:
             list[dict[str, Any]]: SMART device rows returned by the detailed API.
         """
-        if not await self.is_post_endpoint_available(SMART_SERVICE_LIST_ENDPOINT):
+        if not await self._is_post_endpoint_available(SMART_SERVICE_LIST_ENDPOINT):
             _LOGGER.debug("SMART plugin unavailable")
             return []
         smart_info = await self._safe_dict_post(SMART_SERVICE_DETAIL_ENDPOINT)
@@ -66,7 +66,7 @@ class SmartMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Decoded SMART detail payload. Non-mapping outputs
                 are wrapped under ``output`` to preserve a stable mapping API.
         """
-        if not await self.is_post_endpoint_available(SMART_SERVICE_INFO_ENDPOINT):
+        if not await self._is_post_endpoint_available(SMART_SERVICE_INFO_ENDPOINT):
             _LOGGER.debug("SMART plugin unavailable")
             return {}
         response = await self._safe_dict_post(

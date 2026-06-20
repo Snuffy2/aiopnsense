@@ -23,7 +23,7 @@ async def test_get_smart_returns_device_rows(make_client: ClientType) -> None:
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client._is_post_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(
             return_value={
                 "devices": [
@@ -39,7 +39,7 @@ async def test_get_smart_returns_device_rows(make_client: ClientType) -> None:
             {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
             {"ident": "ada0", "device": "ada0", "status": "FAILED"},
         ]
-        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
+        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
@@ -57,7 +57,7 @@ async def test_get_smart_skips_devices_with_blank_ident(make_client: ClientType)
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client._is_post_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(
             return_value={
                 "devices": [
@@ -70,7 +70,7 @@ async def test_get_smart_skips_devices_with_blank_ident(make_client: ClientType)
         smart_devices = await client.get_smart()
 
         assert smart_devices == [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]
-        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
+        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
@@ -92,7 +92,7 @@ async def test_get_smart_logs_and_skips_non_mapping_rows(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client._is_post_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(
             return_value={
                 "devices": [
@@ -110,7 +110,7 @@ async def test_get_smart_logs_and_skips_non_mapping_rows(
             "Discarding SMART device row because item is not a mapping: 'unexpected-string-row'"
             in caplog.text
         )
-        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
+        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
@@ -128,13 +128,13 @@ async def test_get_smart_returns_empty_list_for_non_list_payload(make_client: Cl
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client._is_post_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"devices": "ignored"})
 
         smart_devices = await client.get_smart()
 
         assert smart_devices == []
-        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
+        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
@@ -167,7 +167,7 @@ async def test_smart_fails_closed_when_endpoint_is_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_post_endpoint_available = AsyncMock(return_value=False)
+        client._is_post_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_post = AsyncMock(return_value={})
 
         if operation == "list":
@@ -176,7 +176,7 @@ async def test_smart_fails_closed_when_endpoint_is_unavailable(
             got = await client.get_smart_info("nvme0")
 
         assert got == expected
-        client.is_post_endpoint_available.assert_awaited_once_with(endpoint)
+        client._is_post_endpoint_available.assert_awaited_once_with(endpoint)
         client._safe_dict_post.assert_not_awaited()
     finally:
         await client.async_close()
@@ -194,10 +194,10 @@ async def test_get_smart_does_not_probe_post_only_endpoint(make_client: ClientTy
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_get_endpoint_available = AsyncMock(
+        client._is_get_endpoint_available = AsyncMock(
             side_effect=AssertionError("GET probe should not run")
         )
-        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client._is_post_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(
             return_value={"devices": [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]}
         )
@@ -205,7 +205,7 @@ async def test_get_smart_does_not_probe_post_only_endpoint(make_client: ClientTy
         assert await client.get_smart() == [
             {"ident": "nvme0", "device": "nvme0", "status": "PASSED"}
         ]
-        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
+        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
@@ -223,7 +223,7 @@ async def test_get_smart_info_returns_json_output(make_client: ClientType) -> No
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client._is_post_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(
             return_value={"output": {"smart_status": "PASSED", "temperature": 35}}
         )
@@ -231,7 +231,7 @@ async def test_get_smart_info_returns_json_output(make_client: ClientType) -> No
         smart_info = await client.get_smart_info("nvme0")
 
         assert smart_info == {"smart_status": "PASSED", "temperature": 35}
-        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
+        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
         client._safe_dict_post.assert_awaited_once_with(
             "/api/smart/service/info",
             {"device": "nvme0", "type": "a", "json": True},
@@ -252,13 +252,13 @@ async def test_get_smart_info_wraps_non_mapping_output(make_client: ClientType) 
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client._is_post_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"output": ["line1", "line2"]})
 
         smart_info = await client.get_smart_info("nvme0", info_type="H")
 
         assert smart_info == {"output": ["line1", "line2"]}
-        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
+        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
         client._safe_dict_post.assert_awaited_once_with(
             "/api/smart/service/info",
             {"device": "nvme0", "type": "H", "json": True},
@@ -279,14 +279,14 @@ async def test_get_smart_info_does_not_probe_post_only_endpoint(make_client: Cli
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_get_endpoint_available = AsyncMock(
+        client._is_get_endpoint_available = AsyncMock(
             side_effect=AssertionError("GET probe should not run")
         )
-        client.is_post_endpoint_available = AsyncMock(return_value=True)
+        client._is_post_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"output": {"smart_status": "PASSED"}})
 
         assert await client.get_smart_info("nvme0") == {"smart_status": "PASSED"}
-        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
+        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
         client._safe_dict_post.assert_awaited_once_with(
             "/api/smart/service/info",
             {"device": "nvme0", "type": "a", "json": True},
@@ -309,11 +309,11 @@ async def test_get_smart_fails_closed_when_list_endpoint_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_post_endpoint_available = AsyncMock(return_value=False)
+        client._is_post_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_post = AsyncMock(return_value={})
 
         assert await client.get_smart() == []
-        client.is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
+        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_not_awaited()
     finally:
         await client.async_close()
@@ -350,8 +350,8 @@ async def test_smart_post_endpoint_availability_caches_missing_plugin(
 
     session.post = _post
     try:
-        assert await client.is_post_endpoint_available("/api/smart/service/list") is False
-        assert await client.is_post_endpoint_available("/api/smart/service/list") is False
+        assert await client._is_post_endpoint_available("/api/smart/service/list") is False
+        assert await client._is_post_endpoint_available("/api/smart/service/list") is False
         assert calls == 1
     finally:
         await client.async_close()

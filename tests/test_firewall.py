@@ -67,7 +67,7 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
     """Firewall search results should skip malformed rows and lockout entries."""
     client = make_client()
     try:
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={
                 "rows": [
@@ -83,7 +83,7 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
         result = await client._get_firewall_rules()
 
         assert result == {"rule-ok": {"uuid": "rule-ok", "enabled": "1", "descr": "Allow"}}
-        client.is_get_endpoint_available.assert_awaited_once_with(
+        client._is_get_endpoint_available.assert_awaited_once_with(
             "/api/firewall/filter/search_rule"
         )
         client._safe_dict_get.assert_awaited_once_with("/api/firewall/filter/search_rule")
@@ -129,13 +129,13 @@ async def test_nat_rule_helpers_parse_rows(
     """NAT rule helpers should return UUID-keyed mappings from REST search rows."""
     client = make_client()
     try:
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": rows})
 
         result = await getattr(client, method_name)()
 
         assert result == expected
-        client.is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
+        client._is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
         client._safe_dict_get.assert_awaited_once_with(api_endpoint)
     finally:
         await client.async_close()
@@ -158,13 +158,13 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
     """Rule helpers should short-circuit when the related endpoint is unavailable."""
     client = make_client()
     try:
-        client.is_get_endpoint_available = AsyncMock(return_value=False)
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
 
         result = await getattr(client, method_name)()
 
         assert result == expected
-        client.is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
+        client._is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
         client._safe_dict_get.assert_not_awaited()
     finally:
         await client.async_close()
@@ -287,26 +287,28 @@ async def test_toggle_alias_flows(make_client: ClientType) -> None:
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_get_endpoint_available = AsyncMock(return_value=False)
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         client._safe_dict_post = AsyncMock()
         assert await client.toggle_alias("alias1", "on") is False
-        client.is_get_endpoint_available.assert_awaited_once_with("/api/firewall/alias/search_item")
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            "/api/firewall/alias/search_item"
+        )
         client._safe_dict_get.assert_not_awaited()
         client._safe_dict_post.assert_not_awaited()
 
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
         assert await client.toggle_alias("missing", "on") is False
 
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={"rows": [{"name": "alias1", "uuid": "aid"}]}
         )
         client._safe_dict_post = AsyncMock(return_value={"result": "failed"})
         assert await client.toggle_alias("alias1", "on") is False
 
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={"rows": [{"name": "alias1", "uuid": "aid"}]}
         )
@@ -333,7 +335,7 @@ async def test_toggle_alias_returns_false_for_non_list_and_apply_failures(
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": "bad"})
         client._safe_dict_post = AsyncMock()
         assert await client.toggle_alias("alias1", "on") is False
@@ -394,7 +396,7 @@ async def test_firewall_switched_endpoints_follow_selected_case(
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={"rows": [{"name": "alias1", "uuid": "aid"}]}
         )
@@ -403,7 +405,7 @@ async def test_firewall_switched_endpoints_follow_selected_case(
         )
 
         assert await client.toggle_alias("alias1", "on") is True
-        client.is_get_endpoint_available.assert_awaited_once_with(expected_search)
+        client._is_get_endpoint_available.assert_awaited_once_with(expected_search)
         client._safe_dict_get.assert_awaited_once_with(expected_search)
         assert client._safe_dict_post.await_args_list[0].args[0] == expected_toggle
     finally:
@@ -442,7 +444,7 @@ async def test_toggle_alias_scenarios(
     """
     client, _session = toggle_alias_client
     try:
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": safe_get_rows})
 
         if not safe_get_rows:

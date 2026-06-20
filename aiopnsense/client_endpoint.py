@@ -112,7 +112,16 @@ class ClientEndpointMixin:
                 return True
         return False
 
+    @deprecated("Endpoint style selection is internal. Direct calls are no longer needed.")
     async def set_use_snake_case(self) -> None:
+        """Deprecated wrapper for endpoint naming mode detection.
+
+        Returns:
+            None: This method updates internal client state only.
+        """
+        await self._set_use_snake_case()
+
+    async def _set_use_snake_case(self) -> None:
         """Set the endpoint naming mode based on the detected firmware version.
 
         Returns:
@@ -163,9 +172,9 @@ class ClientEndpointMixin:
             str: Selected endpoint path for the active firmware family.
         """
         if self._use_snake_case is None:
-            await self.set_use_snake_case()
+            await self._set_use_snake_case()
         # _get_endpoint_path treats _use_snake_case as a three-state flag:
-        # None means set_use_snake_case has not determined the endpoint style yet,
+        # None means _set_use_snake_case has not determined the endpoint style yet,
         # True selects snake_case, and False selects camelCase. Use "is not False"
         # so an indeterminate or newer-firmware value stays on the snake_case path.
         return snake_case_path if self._use_snake_case is not False else camel_case_path
@@ -277,7 +286,7 @@ class ClientEndpointMixin:
                 raise
             return False
 
-    async def is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
+    async def _is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
         """Return whether a specific GET-probed API endpoint appears available.
 
         Args:
@@ -289,7 +298,7 @@ class ClientEndpointMixin:
         """
         return await self._is_endpoint_available(path, method="get", force_refresh=force_refresh)
 
-    async def is_post_endpoint_available(
+    async def _is_post_endpoint_available(
         self,
         path: str,
         force_refresh: bool = False,
@@ -313,9 +322,9 @@ class ClientEndpointMixin:
             return None
         return await self._is_endpoint_available(path, method="post", force_refresh=force_refresh)
 
-    @deprecated("Use is_get_endpoint_available() instead.")
+    @deprecated("Endpoint availability probing is internal. Direct calls are no longer needed.")
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
-        """Backward-compatible alias for ``is_get_endpoint_available``.
+        """Backward-compatible alias for GET endpoint availability probing.
 
         Args:
             path (str): API endpoint path to request.
@@ -324,4 +333,4 @@ class ClientEndpointMixin:
         Returns:
             bool: ``True`` when the GET probe succeeds; otherwise, ``False``.
         """
-        return await self.is_get_endpoint_available(path, force_refresh=force_refresh)
+        return await self._is_get_endpoint_available(path, force_refresh=force_refresh)

@@ -27,7 +27,7 @@ async def test_get_system_info(make_client: ClientType) -> None:
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"name": "foo"})
         info = await client.get_system_info()
         assert info["name"] == "foo"
@@ -105,7 +105,7 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client: ClientType)
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"datetime": "2026-03-07 12:00:00 EST"})
         parsed_tz = await client._get_opnsense_timezone()
         assert parsed_tz is not None
@@ -177,7 +177,7 @@ async def test_get_opnsense_timezone_supports_known_daylight_abbreviations(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"datetime": datetime_str})
         parsed_tz = await client._get_opnsense_timezone()
         assert parsed_tz is not None
@@ -289,7 +289,7 @@ async def test_reload_interface_and_certificates_and_gateways(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"message": "OK reload"})
         ok = await client.reload_interface("em0")
         assert ok is True
@@ -336,7 +336,7 @@ async def test_gateways_notices_and_close_notice_all(make_client: ClientType) ->
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={"items": [{"name": "gw1", "status_translated": "OK"}]}
         )
@@ -887,7 +887,7 @@ async def test_system_actions_and_notice_closing_failure_paths(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"status": "failed"})
         assert await client.system_reboot() is False
         assert await client.system_halt() is None
@@ -923,7 +923,7 @@ async def test_version_switched_system_endpoints_fail_closed(make_client: Client
     client, session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_get_endpoint_available = AsyncMock(return_value=False)
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         client._safe_list_get = AsyncMock()
 
@@ -1047,7 +1047,7 @@ async def test_system_switched_endpoints_follow_selected_case(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"name": "fw"})
         client._safe_dict_post = AsyncMock(side_effect=[{"status": "ok"}, {"message": "OK reload"}])
 
@@ -1095,12 +1095,12 @@ async def test_system_branches_for_carp_candidate_and_notice_paths(make_client: 
             is not None
         )
 
-        client.is_get_endpoint_available = AsyncMock(return_value=False)
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
         vip_status_raw, merged = await client._fetch_and_merge_carp_vips()
         assert vip_status_raw == {}
         assert merged == []
 
-        client.is_get_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
         client._safe_dict_get = AsyncMock(
             return_value={
                 "rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]
@@ -1110,7 +1110,7 @@ async def test_system_branches_for_carp_candidate_and_notice_paths(make_client: 
         assert isinstance(vip_status_raw, dict)
         assert len(merged) == 1
 
-        client.is_get_endpoint_available = AsyncMock(side_effect=[True, True])
+        client._is_get_endpoint_available = AsyncMock(side_effect=[True, True])
         client._safe_dict_get = AsyncMock(
             side_effect=[
                 {"rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]},
@@ -1120,7 +1120,7 @@ async def test_system_branches_for_carp_candidate_and_notice_paths(make_client: 
         _vip_status_raw, merged = await client._fetch_and_merge_carp_vips()
         assert len(merged) == 1
 
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={
                 "n1": {"statusCode": 2, "message": "resolved"},
