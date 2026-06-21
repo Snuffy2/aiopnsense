@@ -1,5 +1,17 @@
 # Changelog
 
+## [v1.0.14](https://github.com/Snuffy2/aiopnsense/tree/v1.0.14) (2026-06-21)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.13...v1.0.14)
+
+**Enhancements**
+
+- Raise missing device unique ID during validation [\#56](https://github.com/Snuffy2/aiopnsense/pull/56) ([Snuffy2](https://github.com/Snuffy2))
+
+**Bug Fixes**
+
+- Preserve deprecated set\_use\_snake\_case compatibility [\#55](https://github.com/Snuffy2/aiopnsense/pull/55) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.0.13](https://github.com/Snuffy2/aiopnsense/tree/v1.0.13) (2026-06-21)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.12...v1.0.13)
