@@ -1,7 +1,8 @@
 """Public OPNsense client class composed from domain mixins."""
 
+from collections.abc import Awaitable, Callable
 from types import TracebackType
-from typing import Self
+from typing import Self, TypeVar
 
 import aiohttp
 import awesomeversion
@@ -31,6 +32,8 @@ from .unbound import UnboundMixin
 from .vnstat import VnstatMixin
 from .vouchers import VouchersMixin
 from .vpn import VPNMixin
+
+_T = TypeVar("_T")
 
 
 class OPNsenseClient(
@@ -75,6 +78,41 @@ class OPNsenseClient(
         del exc_type, exc, traceback
         await self.async_close()
 
+    async def _run_validation_request(self, request: Callable[[], Awaitable[_T]]) -> _T:
+        """Run a validation request and map transport failures to public exceptions.
+
+        Args:
+            request (Callable[[], Awaitable[_T]]): Zero-argument async request
+                used during client validation.
+
+        Returns:
+            _T: Result returned by the validation request.
+
+        Raises:
+            OPNsenseInvalidURL: Raised when the configured URL is invalid.
+            OPNsenseSSLError: Raised when the TLS handshake fails.
+            OPNsenseTimeoutError: Raised when validation requests time out.
+            OPNsenseInvalidAuth: Raised when API authentication fails.
+            OPNsensePrivilegeMissing: Raised when the API user lacks privileges.
+            OPNsenseConnectionError: Raised when another client connection error occurs.
+        """
+        try:
+            return await request()
+        except (aiohttp.ClientConnectorDNSError, aiohttp.InvalidURL) as e:
+            raise OPNsenseInvalidURL from e
+        except aiohttp.ClientSSLError as e:
+            raise OPNsenseSSLError from e
+        except (TimeoutError, aiohttp.ServerTimeoutError) as e:
+            raise OPNsenseTimeoutError from e
+        except aiohttp.ClientResponseError as e:
+            if e.status == 401:
+                raise OPNsenseInvalidAuth from e
+            if e.status == 403:
+                raise OPNsensePrivilegeMissing from e
+            raise OPNsenseConnectionError from e
+        except aiohttp.ClientError as e:
+            raise OPNsenseConnectionError from e
+
     async def validate(self) -> None:
         """Validate connectivity, authentication, and minimum firmware support.
            Note that this will throw errors, regardless of what self._throw_errors is set to.
@@ -95,22 +133,7 @@ class OPNsenseClient(
         orig_throw_errors = self._throw_errors
         self._throw_errors = True
         try:
-            try:
-                fw_ver = await self.get_host_firmware_version()
-            except (aiohttp.ClientConnectorDNSError, aiohttp.InvalidURL) as e:
-                raise OPNsenseInvalidURL from e
-            except aiohttp.ClientSSLError as e:
-                raise OPNsenseSSLError from e
-            except (TimeoutError, aiohttp.ServerTimeoutError) as e:
-                raise OPNsenseTimeoutError from e
-            except aiohttp.ClientResponseError as e:
-                if e.status == 401:
-                    raise OPNsenseInvalidAuth from e
-                if e.status == 403:
-                    raise OPNsensePrivilegeMissing from e
-                raise OPNsenseConnectionError from e
-            except aiohttp.ClientError as e:
-                raise OPNsenseConnectionError from e
+            fw_ver = await self._run_validation_request(self.get_host_firmware_version)
 
             if fw_ver is None:
                 raise OPNsenseUnknownFirmware
@@ -140,6 +163,6 @@ class OPNsenseClient(
             ) as err:
                 raise OPNsenseUnknownFirmware from err
 
-            await self.get_device_unique_id()
+            await self._run_validation_request(self.get_device_unique_id)
         finally:
             self._throw_errors = orig_throw_errors

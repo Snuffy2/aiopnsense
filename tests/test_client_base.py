@@ -225,6 +225,66 @@ async def test_validate_raises_when_device_unique_id_missing(
         await client.async_close()
 
 
+@pytest.mark.parametrize(
+    ("side_effect", "expected_exception"),
+    [
+        (aiohttp.InvalidURL("http://bad"), OPNsenseInvalidURL),
+        (_TestClientSSLError(), OPNsenseSSLError),
+        (TimeoutError("timeout"), OPNsenseTimeoutError),
+        (aiohttp.ServerTimeoutError("server-timeout"), OPNsenseTimeoutError),
+        (_client_response_error(401), OPNsenseInvalidAuth),
+        (_client_response_error(403), OPNsensePrivilegeMissing),
+        (_client_response_error(500), OPNsenseConnectionError),
+        (aiohttp.ClientConnectionError("connection"), OPNsenseConnectionError),
+    ],
+)
+@pytest.mark.asyncio
+async def test_validate_maps_device_unique_id_failures_and_restores_throw_errors(
+    side_effect: BaseException,
+    expected_exception: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify device unique ID validation failures map to public exceptions.
+
+    Args:
+        side_effect (BaseException): Device unique ID lookup exception to inject.
+        expected_exception (type[Exception]): Public exception expected from ``validate``.
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts exception mapping and state restoration behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._throw_errors = False
+    try:
+        get_host_firmware_version = AsyncMock(return_value=OPNSENSE_LTD_FIRMWARE)
+        get_device_unique_id = AsyncMock(side_effect=side_effect)
+
+        monkeypatch.setattr(
+            client,
+            "get_host_firmware_version",
+            get_host_firmware_version,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            client,
+            "get_device_unique_id",
+            get_device_unique_id,
+            raising=False,
+        )
+
+        with pytest.raises(expected_exception):
+            await client.validate()
+
+        assert client._throw_errors is False
+        get_host_firmware_version.assert_awaited_once()
+        get_device_unique_id.assert_awaited_once()
+    finally:
+        await client.async_close()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("kwargs", "expect_warning", "expected_throw_errors"),
