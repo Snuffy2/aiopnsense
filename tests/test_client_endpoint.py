@@ -809,9 +809,10 @@ async def test_get_endpoint_path_lazily_initializes_snake_case_state(
             """
             client._use_snake_case = False
 
-        client._set_use_snake_case = AsyncMock(side_effect=fake_set_use_snake_case)
+        set_use_snake_case = AsyncMock(side_effect=fake_set_use_snake_case)
+        setattr(client, "set_use_snake_case", set_use_snake_case)
 
         assert await client._get_endpoint_path("/snake_case", "/camelCase") == "/camelCase"
-        client._set_use_snake_case.assert_awaited_once_with()
+        set_use_snake_case.assert_awaited_once_with()
     finally:
         await client.async_close()

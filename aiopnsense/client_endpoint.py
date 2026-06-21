@@ -1,6 +1,8 @@
 """Endpoint selection and availability helpers for OPNsenseClient."""
 
+import warnings
 from datetime import datetime
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
 from warnings import deprecated
 
@@ -172,7 +174,13 @@ class ClientEndpointMixin:
             str: Selected endpoint path for the active firmware family.
         """
         if self._use_snake_case is None:
-            await self._set_use_snake_case()
+            set_use_snake_case = cast(
+                Callable[[], Awaitable[None]],
+                getattr(self, "set_use_snake_case"),
+            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=DeprecationWarning)
+                await set_use_snake_case()
         # _get_endpoint_path treats _use_snake_case as a three-state flag:
         # None means _set_use_snake_case has not determined the endpoint style yet,
         # True selects snake_case, and False selects camelCase. Use "is not False"
