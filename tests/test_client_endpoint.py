@@ -721,6 +721,30 @@ async def test_validate_maps_endpoint_probe_http_errors_to_public_exceptions(
         await client.async_close()
 
 
+@pytest.mark.asyncio
+async def test_set_use_snake_case_is_deprecated_wrapper(make_client: MakeClientFactory) -> None:
+    """Verify the public endpoint-style setter remains as a deprecated wrapper.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts compatibility warning behavior.
+    """
+    client = make_client()
+    try:
+        client._set_use_snake_case = AsyncMock()
+        wrapper = client.set_use_snake_case  # type: ignore[deprecated]
+
+        assert "Endpoint style selection is internal" in wrapper.__deprecated__  # type: ignore[attr-defined]
+        with pytest.warns(DeprecationWarning, match="Endpoint style selection is internal"):
+            await wrapper()
+
+        client._set_use_snake_case.assert_awaited_once_with()
+    finally:
+        await client.async_close()
+
+
 @pytest.mark.parametrize(
     ("firmware_version", "expected_use_snake_case", "expected_path"),
     [
