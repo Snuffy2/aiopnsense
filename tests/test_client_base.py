@@ -20,6 +20,7 @@ from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseInvalidAuth,
     OPNsenseInvalidURL,
+    OPNsenseMissingDeviceUniqueID,
     OPNsensePrivilegeMissing,
     OPNsenseSSLError,
     OPNsenseTimeoutError,
@@ -67,6 +68,35 @@ def _client_response_error(status: int) -> aiohttp.ClientResponseError:
     )
 
 
+def _patch_validate_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    client: OPNsenseClient,
+    get_host_firmware_version: AsyncMock,
+    get_device_unique_id: AsyncMock,
+) -> None:
+    """Patch validation probes on a client.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        client (OPNsenseClient): Client instance under test.
+        get_host_firmware_version (AsyncMock): Firmware probe mock.
+        get_device_unique_id (AsyncMock): Device ID probe mock.
+
+    Returns:
+        None: This helper mutates the supplied client.
+    """
+    monkeypatch.setattr(
+        client,
+        "get_host_firmware_version",
+        get_host_firmware_version,
+    )
+    monkeypatch.setattr(
+        client,
+        "get_device_unique_id",
+        get_device_unique_id,
+    )
+
+
 @pytest.mark.parametrize(
     ("side_effect", "expected_exception"),
     [
@@ -111,7 +141,6 @@ async def test_validate_maps_failures_and_restores_throw_errors(
             client,
             "get_host_firmware_version",
             get_host_firmware_version,
-            raising=False,
         )
 
         with pytest.raises(expected_exception):
@@ -143,14 +172,15 @@ async def test_validate_handles_firmware_thresholds_and_restores_throw_errors(
         get_host_firmware_version = AsyncMock(
             side_effect=["24.7", OPNSENSE_MIN_FIRMWARE, OPNSENSE_LTD_FIRMWARE]
         )
+        get_device_unique_id = AsyncMock(return_value="aa_bb_cc")
+        _patch_validate_requests(
+            monkeypatch,
+            client,
+            get_host_firmware_version,
+            get_device_unique_id,
+        )
         logger_warning = MagicMock()
 
-        monkeypatch.setattr(
-            client,
-            "get_host_firmware_version",
-            get_host_firmware_version,
-            raising=False,
-        )
         monkeypatch.setattr(aiopnsense_client._LOGGER, "warning", logger_warning)
 
         with pytest.raises(OPNsenseBelowMinFirmware):
@@ -169,6 +199,96 @@ async def test_validate_handles_firmware_thresholds_and_restores_throw_errors(
         assert logger_warning.call_count == 1
         assert client._throw_errors is False
         assert get_host_firmware_version.await_count == 3
+        assert get_device_unique_id.await_count == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_validate_raises_when_device_unique_id_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify ``validate`` fails when no device unique ID can be resolved.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts missing device ID validation and state restoration.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._throw_errors = False
+    try:
+        get_host_firmware_version = AsyncMock(return_value=OPNSENSE_LTD_FIRMWARE)
+        get_device_unique_id = AsyncMock(side_effect=OPNsenseMissingDeviceUniqueID)
+        _patch_validate_requests(
+            monkeypatch,
+            client,
+            get_host_firmware_version,
+            get_device_unique_id,
+        )
+
+        with pytest.raises(OPNsenseMissingDeviceUniqueID):
+            await client.validate()
+
+        assert client._throw_errors is False
+        get_host_firmware_version.assert_awaited_once()
+        get_device_unique_id.assert_awaited_once()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "expected_exception"),
+    [
+        (aiohttp.InvalidURL("http://bad"), OPNsenseInvalidURL),
+        (_TestClientSSLError(), OPNsenseSSLError),
+        (TimeoutError("timeout"), OPNsenseTimeoutError),
+        (aiohttp.ServerTimeoutError("server-timeout"), OPNsenseTimeoutError),
+        (_client_response_error(401), OPNsenseInvalidAuth),
+        (_client_response_error(403), OPNsensePrivilegeMissing),
+        (_client_response_error(500), OPNsenseConnectionError),
+        (aiohttp.ClientConnectionError("connection"), OPNsenseConnectionError),
+    ],
+)
+@pytest.mark.asyncio
+async def test_validate_maps_device_unique_id_failures_and_restores_throw_errors(
+    side_effect: BaseException,
+    expected_exception: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify device unique ID validation failures map to public exceptions.
+
+    Args:
+        side_effect (BaseException): Device unique ID lookup exception to inject.
+        expected_exception (type[Exception]): Public exception expected from ``validate``.
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts exception mapping and state restoration behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._throw_errors = False
+    try:
+        get_host_firmware_version = AsyncMock(return_value=OPNSENSE_LTD_FIRMWARE)
+        get_device_unique_id = AsyncMock(side_effect=side_effect)
+        _patch_validate_requests(
+            monkeypatch,
+            client,
+            get_host_firmware_version,
+            get_device_unique_id,
+        )
+
+        with pytest.raises(expected_exception):
+            await client.validate()
+
+        assert client._throw_errors is False
+        get_host_firmware_version.assert_awaited_once()
+        get_device_unique_id.assert_awaited_once()
     finally:
         await client.async_close()
 

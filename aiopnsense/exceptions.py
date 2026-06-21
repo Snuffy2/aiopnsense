@@ -33,6 +33,10 @@ class OPNsenseBelowMinFirmware(OPNsenseError):
     """Raised when the detected firmware is below the supported minimum."""
 
 
+class OPNsenseMissingDeviceUniqueID(OPNsenseError):
+    """Raised when no device unique ID can be derived from OPNsense."""
+
+
 class OPNsenseVoucherServerError(OPNsenseError):
     """Error from Voucher Server."""
 

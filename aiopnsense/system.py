@@ -10,6 +10,7 @@ from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
+from .exceptions import OPNsenseMissingDeviceUniqueID
 from .helpers import (
     _LOGGER,
     _log_errors,
@@ -52,6 +53,20 @@ class _CarpSettingsIndexes(NamedTuple):
 
 class SystemMixin(AiopnsenseClientProtocol):
     """System methods for OPNsenseClient."""
+
+    def _handle_missing_device_unique_id(self) -> None:
+        """Raise when device unique ID resolution failed in throwing mode.
+
+        Returns:
+            None: This helper only raises when the client is configured to
+                propagate public errors.
+
+        Raises:
+            OPNsenseMissingDeviceUniqueID: No device unique ID could be
+                resolved and ``throw_errors`` is enabled.
+        """
+        if self._throw_errors:
+            raise OPNsenseMissingDeviceUniqueID
 
     def _parse_carp_vip_rows(self, rows: list[Any]) -> list[dict[str, Any]]:
         """Normalize CARP VIP rows from OPNsense responses.
@@ -367,11 +382,16 @@ class SystemMixin(AiopnsenseClientProtocol):
             str | None: MAC-address-based identifier with colons replaced by
                 underscores. Returns ``expected_id`` when it still matches a
                 physical interface, otherwise the first sorted physical MAC
-                identifier, or ``None`` when no physical MAC addresses are
-                available.
+                identifier. Returns ``None`` when no physical MAC addresses are
+                available and ``throw_errors`` is disabled.
+
+        Raises:
+            OPNsenseMissingDeviceUniqueID: No device unique ID could be
+                resolved and ``throw_errors`` is enabled.
         """
         if not await self._is_get_endpoint_available(INTERFACE_OVERVIEW_EXPORT_ENDPOINT):
             _LOGGER.debug("Interface overview endpoint unavailable for device id resolution")
+            self._handle_missing_device_unique_id()
             return None
         instances = await self._safe_list_get(INTERFACE_OVERVIEW_EXPORT_ENDPOINT)
         mac_addresses: set[str] = set()
@@ -384,6 +404,7 @@ class SystemMixin(AiopnsenseClientProtocol):
 
         if not mac_addresses:
             _LOGGER.debug("[get_device_unique_id] device_unique_id: None")
+            self._handle_missing_device_unique_id()
             return None
 
         if expected_id and expected_id in mac_addresses:
