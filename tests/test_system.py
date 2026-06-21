@@ -9,6 +9,7 @@ import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient
+from aiopnsense.exceptions import OPNsenseMissingDeviceUniqueID
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -89,6 +90,36 @@ async def test_get_device_unique_id_variants(
     try:
         client._safe_list_get = AsyncMock(return_value=instances)
         assert await client.get_device_unique_id(expected_id=expected_id) == expected
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "instances",
+    [
+        [{"is_physical": False}],
+        [],
+    ],
+)
+async def test_get_device_unique_id_raises_when_missing(
+    make_client: ClientType, instances: list[Any]
+) -> None:
+    """Verify missing device IDs raise a public aiopnsense exception.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        instances (list[Any]): Interface rows returned by the mocked API.
+
+    Returns:
+        None: This test validates missing unique-ID error handling.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.toggle_throwing_errors(True)
+        client._safe_list_get = AsyncMock(return_value=instances)
+        with pytest.raises(OPNsenseMissingDeviceUniqueID):
+            await client.get_device_unique_id()
     finally:
         await client.async_close()
 
