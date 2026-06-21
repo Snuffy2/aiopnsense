@@ -68,6 +68,37 @@ def _client_response_error(status: int) -> aiohttp.ClientResponseError:
     )
 
 
+def _patch_validate_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    client: OPNsenseClient,
+    get_host_firmware_version: AsyncMock,
+    get_device_unique_id: AsyncMock,
+) -> None:
+    """Patch validation probes on a client.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        client (OPNsenseClient): Client instance under test.
+        get_host_firmware_version (AsyncMock): Firmware probe mock.
+        get_device_unique_id (AsyncMock): Device ID probe mock.
+
+    Returns:
+        None: This helper mutates the supplied client.
+    """
+    monkeypatch.setattr(
+        client,
+        "get_host_firmware_version",
+        get_host_firmware_version,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        client,
+        "get_device_unique_id",
+        get_device_unique_id,
+        raising=False,
+    )
+
+
 @pytest.mark.parametrize(
     ("side_effect", "expected_exception"),
     [
@@ -145,20 +176,14 @@ async def test_validate_handles_firmware_thresholds_and_restores_throw_errors(
             side_effect=["24.7", OPNSENSE_MIN_FIRMWARE, OPNSENSE_LTD_FIRMWARE]
         )
         get_device_unique_id = AsyncMock(return_value="aa_bb_cc")
+        _patch_validate_requests(
+            monkeypatch,
+            client,
+            get_host_firmware_version,
+            get_device_unique_id,
+        )
         logger_warning = MagicMock()
 
-        monkeypatch.setattr(
-            client,
-            "get_host_firmware_version",
-            get_host_firmware_version,
-            raising=False,
-        )
-        monkeypatch.setattr(
-            client,
-            "get_device_unique_id",
-            get_device_unique_id,
-            raising=False,
-        )
         monkeypatch.setattr(aiopnsense_client._LOGGER, "warning", logger_warning)
 
         with pytest.raises(OPNsenseBelowMinFirmware):
@@ -201,18 +226,11 @@ async def test_validate_raises_when_device_unique_id_missing(
     try:
         get_host_firmware_version = AsyncMock(return_value=OPNSENSE_LTD_FIRMWARE)
         get_device_unique_id = AsyncMock(side_effect=OPNsenseMissingDeviceUniqueID)
-
-        monkeypatch.setattr(
+        _patch_validate_requests(
+            monkeypatch,
             client,
-            "get_host_firmware_version",
             get_host_firmware_version,
-            raising=False,
-        )
-        monkeypatch.setattr(
-            client,
-            "get_device_unique_id",
             get_device_unique_id,
-            raising=False,
         )
 
         with pytest.raises(OPNsenseMissingDeviceUniqueID):
@@ -261,18 +279,11 @@ async def test_validate_maps_device_unique_id_failures_and_restores_throw_errors
     try:
         get_host_firmware_version = AsyncMock(return_value=OPNSENSE_LTD_FIRMWARE)
         get_device_unique_id = AsyncMock(side_effect=side_effect)
-
-        monkeypatch.setattr(
+        _patch_validate_requests(
+            monkeypatch,
             client,
-            "get_host_firmware_version",
             get_host_firmware_version,
-            raising=False,
-        )
-        monkeypatch.setattr(
-            client,
-            "get_device_unique_id",
             get_device_unique_id,
-            raising=False,
         )
 
         with pytest.raises(expected_exception):
