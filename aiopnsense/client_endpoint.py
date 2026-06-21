@@ -115,22 +115,14 @@ class ClientEndpointMixin:
 
     @deprecated("Endpoint style selection is internal. Direct calls are no longer needed.")
     async def set_use_snake_case(self, initial: bool = False) -> None:
-        """Deprecated wrapper for endpoint naming mode detection.
-
-        Args:
-            initial (bool): Legacy compatibility flag retained for deprecated callers.
-
-        Returns:
-            None: This method updates internal client state only.
-        """
+        """Deprecated wrapper that preserves legacy ``initial`` compatibility."""
         await self._set_use_snake_case(initial=initial)
 
     async def _set_use_snake_case(self, initial: bool = False) -> None:
-        """Set the endpoint naming mode based on the detected firmware version.
+        """Set endpoint naming mode from the detected firmware version.
 
         Args:
-            initial (bool): Whether to preserve the legacy "raise on compare failure"
-                behavior used during initial setup.
+            initial (bool): Whether to preserve the legacy unknown-firmware raise behavior.
 
         Returns:
             None: This method updates internal client state only.
