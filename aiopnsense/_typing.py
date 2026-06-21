@@ -154,21 +154,8 @@ class AiopnsenseClientProtocol(Protocol):
         ...
 
     @abstractmethod
-    @deprecated("Use is_get_endpoint_available() instead.")
+    @deprecated("Endpoint availability probing is internal. Direct calls are no longer needed.")
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
-        """Return whether a specific API endpoint appears available.
-
-        Args:
-            path (str): API endpoint path to request.
-            force_refresh (bool): Whether to bypass cached endpoint availability.
-
-        Returns:
-            bool: True if a specific api endpoint appears available; otherwise, False.
-        """
-        ...
-
-    @abstractmethod
-    async def is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
         """Return whether a specific GET-probed API endpoint appears available.
 
         Args:
@@ -181,7 +168,20 @@ class AiopnsenseClientProtocol(Protocol):
         ...
 
     @abstractmethod
-    async def is_post_endpoint_available(
+    async def _is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
+        """Return whether a specific GET-probed API endpoint appears available.
+
+        Args:
+            path (str): API endpoint path to request.
+            force_refresh (bool): Whether to bypass cached endpoint availability.
+
+        Returns:
+            bool: True if the GET probe succeeds; otherwise, False.
+        """
+        ...
+
+    @abstractmethod
+    async def _is_post_endpoint_available(
         self, path: str, force_refresh: bool = False
     ) -> bool | None:
         """Return whether a specific POST-probed API endpoint appears available.

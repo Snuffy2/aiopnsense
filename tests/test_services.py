@@ -23,7 +23,7 @@ async def test_service_management_and_get_services(make_client: ClientType) -> N
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
             return_value={
                 "rows": [
@@ -107,7 +107,7 @@ async def test_service_unknown_state_fails_closed(make_client: ClientType) -> No
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_get_endpoint_available = AsyncMock(return_value=False)
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
         client.restart_service = AsyncMock(return_value=True)
 
         assert await client.get_services() == []
@@ -115,8 +115,8 @@ async def test_service_unknown_state_fails_closed(make_client: ClientType) -> No
         assert await client.get_service_is_running("svc1") is False
         assert await client.restart_service_if_running("svc1") is False
         client.restart_service.assert_not_awaited()
-        client.is_get_endpoint_available.assert_any_await("/api/core/service/search")
-        assert client.is_get_endpoint_available.await_count == 4
+        client._is_get_endpoint_available.assert_any_await("/api/core/service/search")
+        assert client._is_get_endpoint_available.await_count == 4
     finally:
         await client.async_close()
 
@@ -135,7 +135,7 @@ async def test_get_services_handles_non_list_rows_and_running_coercion(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": "bad-shape"})
         assert await client.get_services() == []
 

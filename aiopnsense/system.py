@@ -320,7 +320,7 @@ class SystemMixin(AiopnsenseClientProtocol):
             tzinfo: Resolved timezone object for OPNsense system data.
         """
         if datetime_str is None:
-            if not await self.is_get_endpoint_available(SYSTEM_TIME_ENDPOINT):
+            if not await self._is_get_endpoint_available(SYSTEM_TIME_ENDPOINT):
                 _LOGGER.debug("System time endpoint unavailable for timezone resolution")
                 return self._get_local_timezone()
             try:
@@ -370,7 +370,7 @@ class SystemMixin(AiopnsenseClientProtocol):
                 identifier, or ``None`` when no physical MAC addresses are
                 available.
         """
-        if not await self.is_get_endpoint_available(INTERFACE_OVERVIEW_EXPORT_ENDPOINT):
+        if not await self._is_get_endpoint_available(INTERFACE_OVERVIEW_EXPORT_ENDPOINT):
             _LOGGER.debug("Interface overview endpoint unavailable for device id resolution")
             return None
         instances = await self._safe_list_get(INTERFACE_OVERVIEW_EXPORT_ENDPOINT)
@@ -409,7 +409,7 @@ class SystemMixin(AiopnsenseClientProtocol):
             snake_case_path=SYSTEM_INFORMATION_SNAKE_ENDPOINT,
             camel_case_path=SYSTEM_INFORMATION_CAMELCASE_ENDPOINT,
         )
-        if not await self.is_get_endpoint_available(system_information_endpoint):
+        if not await self._is_get_endpoint_available(system_information_endpoint):
             _LOGGER.debug("System information endpoint unavailable")
             return system_info
         response = await self._safe_dict_get(system_information_endpoint)
@@ -437,12 +437,12 @@ class SystemMixin(AiopnsenseClientProtocol):
             tuple[dict[str, Any], list[dict[str, Any]]]: Raw VIP status response and
             merged/normalized CARP VIP rows derived from status + settings endpoints.
         """
-        if not await self.is_get_endpoint_available(CARP_VIP_STATUS_ENDPOINT):
+        if not await self._is_get_endpoint_available(CARP_VIP_STATUS_ENDPOINT):
             _LOGGER.debug("CARP VIP status endpoint unavailable")
             return {}, []
         vip_status_raw = await self._safe_dict_get(CARP_VIP_STATUS_ENDPOINT)
         vip_settings_raw: dict[str, Any] = {"rows": []}
-        if not await self.is_get_endpoint_available(VIP_SETTINGS_ENDPOINT):
+        if not await self._is_get_endpoint_available(VIP_SETTINGS_ENDPOINT):
             _LOGGER.debug("CARP VIP settings endpoint unavailable; using status-only VIP data")
         else:
             fetched_vip_settings = await self._safe_dict_get(VIP_SETTINGS_ENDPOINT)
@@ -623,7 +623,7 @@ class SystemMixin(AiopnsenseClientProtocol):
                 subject ``id``, and parsed ``created_at`` timestamp when
                 available.
         """
-        if not await self.is_get_endpoint_available(CORE_SYSTEM_STATUS_ENDPOINT):
+        if not await self._is_get_endpoint_available(CORE_SYSTEM_STATUS_ENDPOINT):
             _LOGGER.debug("System status endpoint unavailable for notices")
             return {
                 "pending_notices_present": False,
@@ -669,7 +669,7 @@ class SystemMixin(AiopnsenseClientProtocol):
         # id = "all" to close all notices
         success = True
         if id.lower() == "all":
-            if not await self.is_get_endpoint_available(CORE_SYSTEM_STATUS_ENDPOINT):
+            if not await self._is_get_endpoint_available(CORE_SYSTEM_STATUS_ENDPOINT):
                 _LOGGER.debug("System status endpoint unavailable for closing notices")
                 return False
             notices = await self._safe_dict_get(CORE_SYSTEM_STATUS_ENDPOINT)
@@ -714,7 +714,7 @@ class SystemMixin(AiopnsenseClientProtocol):
                 certificate contains its UUID, issuer reference, RFC 3280
                 purpose, in-use flag, and validity timestamps.
         """
-        if not await self.is_get_endpoint_available(CERT_SEARCH_ENDPOINT):
+        if not await self._is_get_endpoint_available(CERT_SEARCH_ENDPOINT):
             _LOGGER.debug("Certificate search endpoint unavailable")
             return {}
 

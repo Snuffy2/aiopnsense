@@ -61,8 +61,8 @@ async def test_is_get_endpoint_available_caches_success(make_client: MakeClientF
 
     session.get = _get
     try:
-        assert await client.is_get_endpoint_available("/api/test/endpoint") is True
-        assert await client.is_get_endpoint_available("/api/test/endpoint") is True
+        assert await client._is_get_endpoint_available("/api/test/endpoint") is True
+        assert await client._is_get_endpoint_available("/api/test/endpoint") is True
         assert calls == 1
     finally:
         await client.async_close()
@@ -102,18 +102,18 @@ async def test_is_get_endpoint_available_cache_false_by_ttl_and_force_refresh(
     session.get = _get
     try:
         path = "/api/test/endpoint"
-        assert await client.is_get_endpoint_available(path) is False
-        assert await client.is_get_endpoint_available(path) is False
+        assert await client._is_get_endpoint_available(path) is False
+        assert await client._is_get_endpoint_available(path) is False
         assert calls == 1
         assert path in client._endpoint_checked_at
         client._endpoint_checked_at[path] = datetime.now().astimezone() - timedelta(
             seconds=client._endpoint_cache_ttl_seconds + 1
         )
-        assert await client.is_get_endpoint_available(path) is True
+        assert await client._is_get_endpoint_available(path) is True
         assert calls == 2
-        assert await client.is_get_endpoint_available(path) is True
+        assert await client._is_get_endpoint_available(path) is True
         assert calls == 2
-        assert await client.is_get_endpoint_available(path, force_refresh=True) is True
+        assert await client._is_get_endpoint_available(path, force_refresh=True) is True
         assert calls == 3
     finally:
         await client.async_close()
@@ -148,8 +148,8 @@ async def test_is_get_endpoint_available_handles_timeout(make_client: MakeClient
 
     session.get = _get
     try:
-        assert await client.is_get_endpoint_available("/api/test/endpoint") is False
-        assert await client.is_get_endpoint_available("/api/test/endpoint") is False
+        assert await client._is_get_endpoint_available("/api/test/endpoint") is False
+        assert await client._is_get_endpoint_available("/api/test/endpoint") is False
         assert calls == 2
     finally:
         await client.async_close()
@@ -198,7 +198,7 @@ async def test_is_get_endpoint_available_raises_transport_error_when_throw_enabl
     try:
         path = "/api/test/endpoint"
         with pytest.raises(_TestClientSSLError):
-            await client.is_get_endpoint_available(path)
+            await client._is_get_endpoint_available(path)
         assert calls == 1
         assert path not in client._endpoint_checked_at
         assert path not in client._endpoint_availability
@@ -287,8 +287,8 @@ async def test_is_get_endpoint_available_does_not_cache_non_404_http_errors(
     session.get = _get
     try:
         path = "/api/test/endpoint"
-        assert await client.is_get_endpoint_available(path) is False
-        assert await client.is_get_endpoint_available(path) is False
+        assert await client._is_get_endpoint_available(path) is False
+        assert await client._is_get_endpoint_available(path) is False
         assert calls == 2
         assert path not in client._endpoint_checked_at
         assert path not in client._endpoint_availability
@@ -335,7 +335,7 @@ async def test_is_get_endpoint_available_raises_non_404_http_errors_when_throw_e
     try:
         path = "/api/test/endpoint"
         with pytest.raises(aiohttp.ClientResponseError) as err:
-            await client.is_get_endpoint_available(path)
+            await client._is_get_endpoint_available(path)
         assert err.value.status == 401
         assert calls == 1
         assert path not in client._endpoint_checked_at
@@ -376,9 +376,9 @@ async def test_is_endpoint_available_is_deprecated_get_alias(
 
     session.get = _get
     try:
-        legacy_alias = getattr(client, "is_endpoint_available")
-        assert "is_get_endpoint_available" in getattr(legacy_alias, "__deprecated__")
-        with pytest.warns(DeprecationWarning, match="is_get_endpoint_available"):
+        legacy_alias = client.is_endpoint_available  # type: ignore[deprecated]
+        assert "Endpoint availability probing is internal" in legacy_alias.__deprecated__  # type: ignore[attr-defined]
+        with pytest.warns(DeprecationWarning, match="Endpoint availability probing is internal"):
             assert await legacy_alias(
                 "/api/test/endpoint",
                 force_refresh=True,
@@ -418,8 +418,8 @@ async def test_is_post_endpoint_available_caches_success(make_client: MakeClient
 
     session.post = _post
     try:
-        assert await client.is_post_endpoint_available("/api/test/endpoint") is True
-        assert await client.is_post_endpoint_available("/api/test/endpoint") is True
+        assert await client._is_post_endpoint_available("/api/test/endpoint") is True
+        assert await client._is_post_endpoint_available("/api/test/endpoint") is True
         assert calls == 1
         assert "post:/api/test/endpoint" in client._endpoint_checked_at
     finally:
@@ -459,8 +459,8 @@ async def test_is_post_endpoint_available_caches_404_missing_plugin(
     session.post = _post
     try:
         path = "/api/test/endpoint"
-        assert await client.is_post_endpoint_available(path) is False
-        assert await client.is_post_endpoint_available(path) is False
+        assert await client._is_post_endpoint_available(path) is False
+        assert await client._is_post_endpoint_available(path) is False
         assert calls == 1
         assert f"post:{path}" in client._endpoint_checked_at
         assert path not in client._endpoint_checked_at
@@ -486,7 +486,7 @@ async def test_is_post_endpoint_available_returns_none_for_invalid_paths(
     client, session = make_mock_session_client(make_client)
 
     try:
-        assert await client.is_post_endpoint_available(path) is None
+        assert await client._is_post_endpoint_available(path) is None
         session.post.assert_not_called()
     finally:
         await client.async_close()
@@ -569,7 +569,7 @@ async def test_is_post_endpoint_available_returns_none_for_unsafe_path_without_h
 
     session.post = _post
     try:
-        assert await client.is_post_endpoint_available(path) is None
+        assert await client._is_post_endpoint_available(path) is None
         assert calls == 0
         assert path not in client._endpoint_availability
         assert f"post:{path}" not in client._endpoint_checked_at
@@ -654,7 +654,7 @@ async def test_is_post_endpoint_available_allows_read_only_post_path(
     session.post = _post
     try:
         path = "/api/core/firmware/changelog/26.1.1"
-        assert await client.is_post_endpoint_available(path) is True
+        assert await client._is_post_endpoint_available(path) is True
         assert calls == 1
         assert f"post:{path}" in client._endpoint_checked_at
     finally:
@@ -721,6 +721,30 @@ async def test_validate_maps_endpoint_probe_http_errors_to_public_exceptions(
         await client.async_close()
 
 
+@pytest.mark.asyncio
+async def test_set_use_snake_case_is_deprecated_wrapper(make_client: MakeClientFactory) -> None:
+    """Verify the public endpoint-style setter remains as a deprecated wrapper.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts compatibility warning behavior.
+    """
+    client = make_client()
+    try:
+        client._set_use_snake_case = AsyncMock()
+        wrapper = client.set_use_snake_case  # type: ignore[deprecated]
+
+        assert "Endpoint style selection is internal" in wrapper.__deprecated__  # type: ignore[attr-defined]
+        with pytest.warns(DeprecationWarning, match="Endpoint style selection is internal"):
+            await wrapper()
+
+        client._set_use_snake_case.assert_awaited_once_with()
+    finally:
+        await client.async_close()
+
+
 @pytest.mark.parametrize(
     ("firmware_version", "expected_use_snake_case", "expected_path"),
     [
@@ -753,7 +777,7 @@ async def test_set_use_snake_case_selects_expected_endpoint_style(
     try:
         client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
 
-        await client.set_use_snake_case()
+        await client._set_use_snake_case()
 
         assert client._use_snake_case is expected_use_snake_case
         client.get_host_firmware_version.assert_awaited_once_with()
@@ -785,9 +809,10 @@ async def test_get_endpoint_path_lazily_initializes_snake_case_state(
             """
             client._use_snake_case = False
 
-        client.set_use_snake_case = AsyncMock(side_effect=fake_set_use_snake_case)
+        set_use_snake_case = AsyncMock(side_effect=fake_set_use_snake_case)
+        client._set_use_snake_case = set_use_snake_case
 
         assert await client._get_endpoint_path("/snake_case", "/camelCase") == "/camelCase"
-        client.set_use_snake_case.assert_awaited_once_with()
+        set_use_snake_case.assert_awaited_once_with()
     finally:
         await client.async_close()

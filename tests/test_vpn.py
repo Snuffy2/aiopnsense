@@ -20,7 +20,7 @@ async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         # Prepare fake responses for safe_gets
         sessions_info = {
             "rows": [
@@ -176,7 +176,7 @@ async def test_toggle_vpn_instance_variants(
     """Parametrized toggle_vpn_instance covering OpenVPN and WireGuard variants."""
     client, _session = make_mock_session_client(make_client)
     client._use_snake_case = True
-    client.is_get_endpoint_available = AsyncMock(return_value=True)
+    client._is_get_endpoint_available = AsyncMock(return_value=True)
 
     if isinstance(post_resp, list):
         client._safe_dict_post = AsyncMock(side_effect=post_resp)
@@ -193,7 +193,7 @@ async def test_openvpn_more_detail_parsing(monkeypatch, make_client) -> None:
     """Exercise additional OpenVPN parsing branches (no sessions, missing fields)."""
     client, _session = make_mock_session_client(make_client)
     client._use_snake_case = True
-    client.is_get_endpoint_available = AsyncMock(return_value=True)
+    client._is_get_endpoint_available = AsyncMock(return_value=True)
 
     # prepare responses that exercise missing/partial fields
     sessions_info: dict[str, list[dict]] = {"rows": []}
@@ -236,7 +236,7 @@ async def test_openvpn_processing_and_fetch_details(make_client) -> None:
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
 
         # prepare fake responses for _safe_dict_get based on path
         def fake_safe_dict_get(path):
@@ -414,7 +414,7 @@ async def test_fetch_openvpn_server_details_missing_server_field(make_client) ->
     """When instance details lack 'server' key, no tunnel_addresses should be set."""
     client, _ = make_mock_session_client(make_client)
     try:
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         openvpn: dict[str, Any] = {"servers": {"srv1": {"uuid": "srv1"}}}
 
         async def fake_safe_dict_get(path):
@@ -455,7 +455,7 @@ async def test_fetch_openvpn_server_details_skips_unavailable_endpoint(
     """
     client, _ = make_mock_session_client(make_client)
     try:
-        client.is_get_endpoint_available = AsyncMock(return_value=False)
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         openvpn: dict[str, Any] = {"servers": {"srv1": {"uuid": "srv1"}}}
 
@@ -608,12 +608,12 @@ async def test_version_switched_vpn_endpoints_fail_closed(make_client: ClientTyp
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client.is_get_endpoint_available = AsyncMock(return_value=False)
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
 
         openvpn = await client.get_openvpn()
         assert openvpn == {"servers": {}, "clients": {}}
-        client.is_get_endpoint_available.assert_awaited()
+        client._is_get_endpoint_available.assert_awaited()
         client._safe_dict_get.assert_not_awaited()
     finally:
         await client.async_close()
@@ -659,7 +659,7 @@ async def test_vpn_switched_endpoints_follow_selected_case(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case
-        client.is_get_endpoint_available = AsyncMock(return_value=True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={})
         client._safe_dict_post = AsyncMock(side_effect=[{"changed": True}, {"result": "ok"}])
 

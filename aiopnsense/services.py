@@ -48,7 +48,7 @@ class ServicesMixin(AiopnsenseClientProtocol):
             list[dict[str, Any]] | None: Normalized service payload, or ``None`` when endpoint
                 probing fails and ``return_none_when_unavailable`` is ``True``.
         """
-        if not await self.is_get_endpoint_available(CORE_SERVICE_SEARCH_ENDPOINT):
+        if not await self._is_get_endpoint_available(CORE_SERVICE_SEARCH_ENDPOINT):
             _LOGGER.debug("Service search endpoint unavailable")
             if return_none_when_unavailable:
                 return None
