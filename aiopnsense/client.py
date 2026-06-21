@@ -89,6 +89,8 @@ class OPNsenseClient(
             OPNsenseConnectionError: Raised when another client connection error occurs.
             OPNsenseUnknownFirmware: Raised when firmware detection returns no version.
             OPNsenseBelowMinFirmware: Raised when the detected firmware is unsupported.
+            OPNsenseMissingDeviceUniqueID: Raised when no device unique ID can
+                be resolved from OPNsense.
         """
         orig_throw_errors = self._throw_errors
         self._throw_errors = True
@@ -137,5 +139,7 @@ class OPNsenseClient(
                 ValueError,
             ) as err:
                 raise OPNsenseUnknownFirmware from err
+
+            await self.get_device_unique_id()
         finally:
             self._throw_errors = orig_throw_errors
