@@ -112,15 +112,6 @@ class ClientEndpointMixin:
                 return True
         return False
 
-    @deprecated("Endpoint style selection is internal. Direct calls are no longer needed.")
-    async def set_use_snake_case(self) -> None:
-        """Deprecated wrapper for endpoint naming mode detection.
-
-        Returns:
-            None: This method updates internal client state only.
-        """
-        await self._set_use_snake_case()
-
     async def _set_use_snake_case(self) -> None:
         """Set the endpoint naming mode based on the detected firmware version.
 
