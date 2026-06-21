@@ -1,5 +1,13 @@
 # Changelog
 
+## [v1.0.13](https://github.com/Snuffy2/aiopnsense/tree/v1.0.13) (2026-06-21)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.12...v1.0.13)
+
+**Bug Fixes**
+
+- Privatize endpoint probe helpers [\#54](https://github.com/Snuffy2/aiopnsense/pull/54) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.0.12](https://github.com/Snuffy2/aiopnsense/tree/v1.0.12) (2026-06-20)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.11...v1.0.12)
