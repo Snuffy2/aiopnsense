@@ -135,13 +135,12 @@ class ClientEndpointMixin:
             AiopnsenseClientProtocol,
             self,
         ).get_host_firmware_version()
+        self._use_snake_case = True
         if firmware_version is None:
             _LOGGER.debug("Using snake_case endpoints because firmware version is unavailable")
-            self._use_snake_case = True
             if initial:
                 raise OPNsenseUnknownFirmware
             return
-        self._use_snake_case = True
         try:
             if awesomeversion.AwesomeVersion(firmware_version) < awesomeversion.AwesomeVersion(
                 LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
