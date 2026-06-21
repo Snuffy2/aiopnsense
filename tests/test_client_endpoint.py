@@ -12,6 +12,7 @@ from aiopnsense.exceptions import (
     OPNsenseInvalidAuth,
     OPNsensePrivilegeMissing,
     OPNsenseSSLError,
+    OPNsenseUnknownFirmware,
 )
 from tests.conftest import FakeResponse, MakeClientFactory, make_mock_session_client
 
@@ -740,7 +741,31 @@ async def test_set_use_snake_case_is_deprecated_wrapper(make_client: MakeClientF
         with pytest.warns(DeprecationWarning, match="Endpoint style selection is internal"):
             await wrapper()
 
-        client._set_use_snake_case.assert_awaited_once_with()
+        client._set_use_snake_case.assert_awaited_once_with(initial=False)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_set_use_snake_case_deprecated_wrapper_accepts_initial_keyword(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify the deprecated wrapper still accepts the legacy ``initial`` keyword.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts backward-compatible keyword handling.
+    """
+    client = make_client()
+    try:
+        client._set_use_snake_case = AsyncMock()
+
+        with pytest.warns(DeprecationWarning, match="Endpoint style selection is internal"):
+            await client.set_use_snake_case(initial=True)  # type: ignore[call-arg, deprecated]
+
+        client._set_use_snake_case.assert_awaited_once_with(initial=True)
     finally:
         await client.async_close()
 
@@ -782,6 +807,31 @@ async def test_set_use_snake_case_selects_expected_endpoint_style(
         assert client._use_snake_case is expected_use_snake_case
         client.get_host_firmware_version.assert_awaited_once_with()
         assert await client._get_endpoint_path("/snake_case", "/camelCase") == expected_path
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_set_use_snake_case_initial_raises_unknown_firmware(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify legacy initial setup still raises for invalid firmware versions.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts the preserved compatibility path.
+    """
+    client = make_client()
+    try:
+        client.get_host_firmware_version = AsyncMock(return_value="invalid-version")
+
+        with pytest.raises(OPNsenseUnknownFirmware):
+            await client._set_use_snake_case(initial=True)
+
+        client.get_host_firmware_version.assert_awaited_once_with()
+        assert client._use_snake_case is True
     finally:
         await client.async_close()
 

@@ -9,6 +9,7 @@ import awesomeversion
 
 from ._typing import AiopnsenseClientProtocol
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS, LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
+from .exceptions import OPNsenseUnknownFirmware
 from .helpers import _LOGGER
 
 
@@ -113,19 +114,30 @@ class ClientEndpointMixin:
         return False
 
     @deprecated("Endpoint style selection is internal. Direct calls are no longer needed.")
-    async def set_use_snake_case(self) -> None:
+    async def set_use_snake_case(self, initial: bool = False) -> None:
         """Deprecated wrapper for endpoint naming mode detection.
+
+        Args:
+            initial (bool): Legacy compatibility flag retained for deprecated callers.
 
         Returns:
             None: This method updates internal client state only.
         """
-        await self._set_use_snake_case()
+        await self._set_use_snake_case(initial=initial)
 
-    async def _set_use_snake_case(self) -> None:
+    async def _set_use_snake_case(self, initial: bool = False) -> None:
         """Set the endpoint naming mode based on the detected firmware version.
+
+        Args:
+            initial (bool): Whether to preserve the legacy "raise on compare failure"
+                behavior used during initial setup.
 
         Returns:
             None: This method updates internal client state only.
+
+        Raises:
+            OPNsenseUnknownFirmware: Raised when ``initial`` is ``True`` and the firmware
+                version cannot be compared reliably.
         """
         firmware_version = await cast(
             AiopnsenseClientProtocol,
@@ -160,6 +172,8 @@ class ClientEndpointMixin:
                 type(err).__name__,
                 err,
             )
+            if initial:
+                raise OPNsenseUnknownFirmware from err
 
     async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str:
         """Return the firmware-appropriate endpoint path.
