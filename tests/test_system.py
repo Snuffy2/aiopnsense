@@ -117,6 +117,7 @@ async def test_get_device_unique_id_raises_when_missing(
     client, _session = make_mock_session_client(make_client)
     try:
         client.toggle_throwing_errors(True)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_list_get = AsyncMock(return_value=instances)
         with pytest.raises(OPNsenseMissingDeviceUniqueID):
             await client.get_device_unique_id()

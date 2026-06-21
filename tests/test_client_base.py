@@ -89,13 +89,11 @@ def _patch_validate_requests(
         client,
         "get_host_firmware_version",
         get_host_firmware_version,
-        raising=False,
     )
     monkeypatch.setattr(
         client,
         "get_device_unique_id",
         get_device_unique_id,
-        raising=False,
     )
 
 
@@ -143,7 +141,6 @@ async def test_validate_maps_failures_and_restores_throw_errors(
             client,
             "get_host_firmware_version",
             get_host_firmware_version,
-            raising=False,
         )
 
         with pytest.raises(expected_exception):
