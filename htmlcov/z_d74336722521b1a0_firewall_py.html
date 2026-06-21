@@ -67,7 +67,7 @@
             <a id="nextFileLink" class="nav" href="z_d74336722521b1a0_firmware_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.14.1">coverage.py v7.14.1</a>,
-            created at 2026-06-20 16:08 +0000
+            created at 2026-06-21 00:51 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -170,7 +170,7 @@
     <p class="pln"><span class="n"><a id="t86" href="#t86">86</a></span><span class="t"><span class="str">        Returns:</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t87" href="#t87">87</a></span><span class="t"><span class="str">            dict[str, Any]: Rule mapping keyed by UUID.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t88" href="#t88">88</a></span><span class="t"><span class="str">        """</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t89" href="#t89">89</a></span><span class="t">        <span class="key">if</span> <span class="key">not</span> <span class="key">await</span> <span class="nam">self</span><span class="op">.</span><span class="nam">is_get_endpoint_available</span><span class="op">(</span><span class="nam">endpoint</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t89" href="#t89">89</a></span><span class="t">        <span class="key">if</span> <span class="key">not</span> <span class="key">await</span> <span class="nam">self</span><span class="op">.</span><span class="nam">_is_get_endpoint_available</span><span class="op">(</span><span class="nam">endpoint</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t90" href="#t90">90</a></span><span class="t">            <span class="nam">_LOGGER</span><span class="op">.</span><span class="nam">debug</span><span class="op">(</span><span class="str">"%s endpoint not available"</span><span class="op">,</span> <span class="nam">debug_label</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t91" href="#t91">91</a></span><span class="t">            <span class="key">return</span> <span class="op">{</span><span class="op">}</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t92" href="#t92">92</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
@@ -392,7 +392,7 @@
     <p class="run run2"><span class="n"><a id="t308" href="#t308">308</a></span><span class="t">            <span class="nam">snake_case_path</span><span class="op">=</span><span class="nam">FIREWALL_ALIAS_SEARCH_ENDPOINT</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t309" href="#t309">309</a></span><span class="t">            <span class="nam">camel_case_path</span><span class="op">=</span><span class="nam">FIREWALL_ALIAS_SEARCH_CAMELCASE_ENDPOINT</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t310" href="#t310">310</a></span><span class="t">        <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t311" href="#t311">311</a></span><span class="t">        <span class="key">if</span> <span class="key">not</span> <span class="key">await</span> <span class="nam">self</span><span class="op">.</span><span class="nam">is_get_endpoint_available</span><span class="op">(</span><span class="nam">alias_search_endpoint</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t311" href="#t311">311</a></span><span class="t">        <span class="key">if</span> <span class="key">not</span> <span class="key">await</span> <span class="nam">self</span><span class="op">.</span><span class="nam">_is_get_endpoint_available</span><span class="op">(</span><span class="nam">alias_search_endpoint</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t312" href="#t312">312</a></span><span class="t">            <span class="nam">_LOGGER</span><span class="op">.</span><span class="nam">debug</span><span class="op">(</span><span class="str">"Firewall alias search endpoint unavailable"</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t313" href="#t313">313</a></span><span class="t">            <span class="key">return</span> <span class="key">False</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t314" href="#t314">314</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
@@ -451,7 +451,7 @@
             <a class="nav" href="z_d74336722521b1a0_firmware_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.14.1">coverage.py v7.14.1</a>,
-            created at 2026-06-20 16:08 +0000
+            created at 2026-06-21 00:51 +0000
         </p>
     </div>
 </footer>
