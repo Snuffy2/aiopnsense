@@ -818,6 +818,24 @@ async def test_set_use_snake_case_initial_raises_unknown_firmware(
 
 
 @pytest.mark.asyncio
+async def test_set_use_snake_case_initial_raises_unknown_firmware_when_version_missing(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify missing firmware version still raises unknown-firmware in legacy init mode."""
+
+    client = make_client()
+    try:
+        client.get_host_firmware_version = AsyncMock(return_value=None)
+
+        with pytest.raises(OPNsenseUnknownFirmware):
+            await client._set_use_snake_case(initial=True)
+
+        client.get_host_firmware_version.assert_awaited_once_with()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_endpoint_path_lazily_initializes_snake_case_state(
     make_client: MakeClientFactory,
 ) -> None:
