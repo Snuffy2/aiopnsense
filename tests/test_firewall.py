@@ -64,7 +64,7 @@ async def test_get_firewall_aggregates_rest_payload(make_client) -> None:
 
 @pytest.mark.asyncio
 async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
-    """Firewall search results should skip malformed rows and lockout entries."""
+    """Firewall search results should skip malformed, lockout, and automatic rows."""
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -76,13 +76,25 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
                     {"enabled": "1"},
                     {"uuid": "lockout-1", "enabled": "1"},
                     {"uuid": "rule-ok", "enabled": "1", "descr": "Allow"},
+                    {
+                        "uuid": "automatic-rule",
+                        "enabled": "1",
+                        "descr": "Plugin generated",
+                        "is_automatic": True,
+                    },
                 ]
             }
         )
 
         result = await client._get_firewall_rules()
 
-        assert result == {"rule-ok": {"uuid": "rule-ok", "enabled": "1", "descr": "Allow"}}
+        assert result == {
+            "rule-ok": {
+                "uuid": "rule-ok",
+                "enabled": "1",
+                "descr": "Allow",
+            },
+        }
         client._is_get_endpoint_available.assert_awaited_once_with(
             "/api/firewall/filter/search_rule"
         )

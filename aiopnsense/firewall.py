@@ -31,6 +31,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
     def _index_rule_rows(
         rows: list,
         normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        include_rule: Callable[[dict[str, Any]], bool] | None = None,
     ) -> dict[str, Any]:
         """Return UUID-keyed rule rows after filtering malformed and lockout rows.
 
@@ -38,6 +39,8 @@ class FirewallMixin(AiopnsenseClientProtocol):
             rows (list): Raw rule rows returned by an OPNsense search endpoint.
             normalizer (Callable[[dict[str, Any]], dict[str, Any]] | None, optional):
                 Optional row normalizer applied after common filtering.
+            include_rule (Callable[[dict[str, Any]], bool] | None, optional):
+                Optional row predicate applied after normalization.
 
         Returns:
             dict[str, Any]: Rule mapping keyed by UUID.
@@ -52,8 +55,22 @@ class FirewallMixin(AiopnsenseClientProtocol):
             new_rule = dict(rule)
             if normalizer is not None:
                 new_rule = normalizer(new_rule)
+            if include_rule is not None and not include_rule(new_rule):
+                continue
             rules_dict[str(new_rule["uuid"])] = new_rule
         return rules_dict
+
+    @staticmethod
+    def _is_user_firewall_rule(rule: dict[str, Any]) -> bool:
+        """Return whether a firewall filter rule should be exposed.
+
+        Args:
+            rule (dict[str, Any]): Normalized firewall filter rule row returned by OPNsense.
+
+        Returns:
+            bool: ``True`` when the rule is not automatically generated.
+        """
+        return rule.get("is_automatic") is not True
 
     @staticmethod
     def _normalize_nat_destination_rule(rule: dict[str, Any]) -> dict[str, Any]:
@@ -74,6 +91,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         endpoint: str,
         debug_label: str,
         normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        include_rule: Callable[[dict[str, Any]], bool] | None = None,
     ) -> dict[str, Any]:
         """Fetch rule rows from one endpoint and return them keyed by UUID.
 
@@ -82,6 +100,8 @@ class FirewallMixin(AiopnsenseClientProtocol):
             debug_label (str): Label used in endpoint-unavailable and result-size logs.
             normalizer (Callable[[dict[str, Any]], dict[str, Any]] | None, optional):
                 Optional row normalizer applied after common filtering.
+            include_rule (Callable[[dict[str, Any]], bool] | None, optional):
+                Optional row predicate applied after normalization.
 
         Returns:
             dict[str, Any]: Rule mapping keyed by UUID.
@@ -92,7 +112,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         response = await self._safe_dict_get(endpoint)
         rules: list = response.get("rows", [])
-        rules_dict = self._index_rule_rows(rules, normalizer=normalizer)
+        rules_dict = self._index_rule_rows(rules, normalizer=normalizer, include_rule=include_rule)
         _LOGGER.debug("[%s] rules_dict length: %s", debug_label, len(rules_dict))
         return rules_dict
 
@@ -102,7 +122,8 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Mapping with top-level ``rules`` for firewall
-                filter rules and ``nat`` groups for destination NAT,
+                filter rules, excluding lockout and automatically generated
+                firewall rules, and ``nat`` groups for destination NAT,
                 one-to-one NAT, source NAT, and NPT rules. Rule groups are
                 keyed by rule UUID.
         """
@@ -120,11 +141,13 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Firewall filter rules keyed by UUID, excluding
-                malformed rows and lockout rules.
+                malformed rows, lockout rules, and automatically generated
+                rules.
         """
         return await self._get_uuid_indexed_rules(
             endpoint=FIREWALL_FILTER_RULES_SEARCH_ENDPOINT,
             debug_label="get_firewall_rules",
+            include_rule=self._is_user_firewall_rule,
         )
 
     @_log_errors
