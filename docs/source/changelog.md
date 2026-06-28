@@ -1,5 +1,13 @@
 # Changelog
 
+## [v1.0.15](https://github.com/Snuffy2/aiopnsense/tree/v1.0.15) (2026-06-28)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.14...v1.0.15)
+
+**Bug Fixes**
+
+- Exclude automatic firewall rules [\#59](https://github.com/Snuffy2/aiopnsense/pull/59) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.0.14](https://github.com/Snuffy2/aiopnsense/tree/v1.0.14) (2026-06-21)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.13...v1.0.14)
