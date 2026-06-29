@@ -370,6 +370,10 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
             "time": 1710000008,
             "interfaces": {"wan": {"bytes received": 10000, "bytes transmitted": 12000}},
         }
+        yield {
+            "time": 1710000010,
+            "interfaces": {"wan": {"bytes received": 14000, "bytes transmitted": 18000}},
+        }
 
     client = make_client()
     try:
@@ -379,7 +383,7 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
-        assert len(samples) == 3
+        assert len(samples) == 4
         assert samples[0]["time"] is None
         assert samples[0]["interfaces"]["wan"]["interval"] == 1.0
 
@@ -388,9 +392,13 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
         assert samples[1]["time"] == 1710000004.0
         assert samples[1]["interfaces"]["wan"]["interval"] == 1.0
 
-        # Backward timestamp after fallback should also keep fallback interval.
+        # Backward timestamp after fallback should use fallback interval.
         assert samples[2]["time"] == 1710000008.0
-        assert samples[2]["interfaces"]["wan"]["interval"] == 2.0
+        assert samples[2]["interfaces"]["wan"]["interval"] == 1.0
+
+        # After reset, normal monotonic timestamps again compute deltas.
+        assert samples[3]["time"] == 1710000010.0
+        assert samples[3]["interfaces"]["wan"]["interval"] == 2.0
     finally:
         await client.async_close()
 

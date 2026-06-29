@@ -164,20 +164,23 @@ class TrafficMixin(AiopnsenseClientProtocol):
 
         event_count = 0
         previous_time: float | None = None
+        skip_previous_reseed = False
         stream_events = self._stream_json_events(endpoint)
         try:
             async for event in stream_events:
                 event_count += 1
                 event_time = try_to_float(event.get("time"))
                 sample_interval = float(interval)
-                if (
-                    previous_time is not None
-                    and event_time is not None
-                    and event_time > previous_time
-                ):
+                if previous_time is None:
+                    if skip_previous_reseed:
+                        skip_previous_reseed = False
+                    elif event_time is not None:
+                        previous_time = event_time
+                elif event_time is None or event_time <= previous_time:
+                    previous_time = None
+                    skip_previous_reseed = True
+                else:
                     sample_interval = event_time - previous_time
-
-                if event_time is not None and (previous_time is None or event_time > previous_time):
                     previous_time = event_time
 
                 if event_count == 1:
