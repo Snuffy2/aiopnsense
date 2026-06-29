@@ -1,7 +1,7 @@
 """Raw HTTP transport and response coercion helpers for OPNsenseClient."""
 
 import codecs
-from collections.abc import AsyncIterator, MutableMapping
+from collections.abc import AsyncGenerator, MutableMapping
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -116,7 +116,7 @@ class ClientTransportMixin:
         path: str,
         *,
         yield_reset_events: bool = False,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Yield decoded JSON objects from a server-sent event stream.
 
         Args:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -228,6 +227,35 @@ def test_normalize_traffic_payload_falls_back_identity_fields() -> None:
     assert normalized["interfaces"]["wan"]["name"] == "WAN"
     assert normalized["interfaces"]["lan"]["interface"] == "lan"
     assert normalized["interfaces"]["lan"]["name"] == "lan"
+
+
+def test_normalize_traffic_payload_strips_identity_whitespace() -> None:
+    """Identity fields should strip padding before preserving their values."""
+    payload = {
+        "time": 1710000004,
+        "interfaces": {
+            "wan": {
+                "interface": "  wan  ",
+                "name": "  WAN  ",
+                "bytes received": 10,
+                "bytes transmitted": 20,
+            },
+            "lan": {
+                "interface": None,
+                "name": None,
+                "description": "  LAN  ",
+                "bytes received": 5,
+                "bytes transmitted": 10,
+            },
+        },
+    }
+
+    normalized = normalize_traffic_payload(payload, interval=1.0)
+
+    assert normalized["interfaces"]["wan"]["interface"] == "wan"
+    assert normalized["interfaces"]["wan"]["name"] == "WAN"
+    assert normalized["interfaces"]["lan"]["interface"] == "lan"
+    assert normalized["interfaces"]["lan"]["name"] == "LAN"
 
 
 @pytest.mark.asyncio

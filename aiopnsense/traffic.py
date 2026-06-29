@@ -33,12 +33,12 @@ def _coalesce_identity(
     if isinstance(value, str):
         candidate = value.strip()
         if candidate:
-            return value
+            return candidate
 
     if isinstance(description, str):
         candidate = description.strip()
         if candidate:
-            return description
+            return candidate
 
     return fallback
 
@@ -206,7 +206,4 @@ class TrafficMixin(AiopnsenseClientProtocol):
                     continue
                 yield normalize_traffic_payload(event, interval=sample_interval)
         finally:
-            if stream_events is not None:
-                aclose = getattr(stream_events, "aclose", None)
-                if callable(aclose):
-                    await aclose()
+            await stream_events.aclose()
