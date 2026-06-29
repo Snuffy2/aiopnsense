@@ -1,7 +1,7 @@
 """Tests for client request queueing and worker lifecycle behavior."""
 
 import asyncio
-from collections.abc import MutableMapping
+from collections.abc import AsyncIterator, Callable, MutableMapping
 import contextlib
 from typing import Any
 from unittest.mock import AsyncMock
@@ -602,3 +602,28 @@ async def test_client_base_workers_start_lazily_on_first_queued_request(
         assert len(client._workers) == client._max_workers
     finally:
         await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_does_not_enqueue_request(
+    make_client: Callable[..., Any],
+) -> None:
+    """Live traffic stream should bypass the queued request worker."""
+
+    async def fake_stream(_path: str) -> AsyncIterator[dict[str, Any]]:
+        """Fake traffic stream events."""
+        yield {"time": 1, "interfaces": {"wan": {"rx_bytes": 0}}}
+        yield {"time": 2, "interfaces": {"wan": {"rx_bytes": 100}}}
+
+    client = make_client()
+    client._is_get_endpoint_available = AsyncMock(return_value=True)
+    client._queue_request = AsyncMock(side_effect=AssertionError("stream should not be queued"))
+    client._stream_json_events = fake_stream
+
+    samples: list[dict[str, Any]] = []
+    async for sample in client.stream_interface_traffic(poll_interval=1):
+        samples.append(sample)
+        break
+
+    assert samples[0]["interfaces"]["wan"]["rx_bytes_per_second"] == 100.0
+    client._queue_request.assert_not_called()
