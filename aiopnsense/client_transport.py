@@ -164,7 +164,10 @@ class ClientTransportMixin:
                             "Dropping incomplete UTF-8 chunk in _stream_json_events: %s",
                             err,
                         )
-                        break
+                        decoder = codecs.getincrementaldecoder("utf-8")()
+                        buffer = ""
+                        pending_cr = False
+                        continue
                     if pending_cr:
                         chunk_text = f"\r{chunk_text}"
                         pending_cr = False

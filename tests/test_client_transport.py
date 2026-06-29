@@ -495,6 +495,33 @@ async def test_stream_json_events_skips_malformed_json(
 
 
 @pytest.mark.asyncio
+async def test_stream_json_events_recovers_after_invalid_utf8_chunk(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: Callable[..., FakeResponse],
+) -> None:
+    """Invalid UTF-8 chunks should be dropped while later events are still emitted."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b'data: {"time": 1}\n\n',
+            b"\xff\xfe\xfd",
+            b'data: {"time": 2}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        events: list[dict[str, Any]] = []
+        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
+            events.append(event)
+            if len(events) == 2:
+                break
+
+        assert events == [{"time": 1}, {"time": 2}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_stream_json_events_reassembles_split_multiline_json_event(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
