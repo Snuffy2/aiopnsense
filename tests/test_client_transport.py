@@ -4,6 +4,7 @@ from collections.abc import MutableMapping
 from typing import Any, Callable
 from unittest.mock import AsyncMock, MagicMock
 from types import TracebackType
+import json
 
 import aiohttp
 import pytest
@@ -514,6 +515,58 @@ async def test_stream_json_events_reassembles_split_multiline_json_event(
             events.append(event)
             break
         assert events == [{"time": 10, "interfaces": {"wan": {"rx_bytes": 11}}}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_reassembles_split_multibyte_utf8_event(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Split UTF-8 multibyte sequences across chunks should decode without error."""
+    event_json = json.dumps(
+        {
+            "time": 11,
+            "interfaces": {
+                "wan": {
+                    "interface": "wlan-é",
+                    "name": None,
+                    "description": "Café",
+                    "bytes received": 120,
+                    "bytes transmitted": 240,
+                }
+            },
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    event_payload = f"data: {event_json.decode('utf-8')}\n\n".encode("utf-8")
+    accent_index = event_payload.index("é".encode("utf-8")) + 1
+    chunks = [
+        b'data: {"time": 9, "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}}}\n\n',
+        event_payload[:accent_index],
+        event_payload[accent_index:],
+    ]
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(chunks)
+    client = make_client(session=session)
+    try:
+        events: list[dict[str, Any]] = []
+        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
+            events.append(event)
+            if len(events) == 2:
+                break
+
+        assert len(events) == 2
+        assert events[1]["interfaces"] == {
+            "wan": {
+                "interface": "wlan-é",
+                "name": None,
+                "description": "Café",
+                "bytes received": 120,
+                "bytes transmitted": 240,
+            }
+        }
     finally:
         await client.async_close()
 

@@ -5,11 +5,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from aiopnsense import OPNsenseClient
+from tests.conftest import FakeStreamResponseFactory
 from aiopnsense.traffic import (
     DIAGNOSTICS_TRAFFIC_ENDPOINT,
     DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX,
@@ -241,6 +242,36 @@ async def test_stream_interface_traffic_yields_normalized_samples(
                 },
             }
         ]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_real_stream_path_keeps_non_ascii_name(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Stream traffic should parse non-ASCII interface identity from real SSE decoding."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b'data: {"time": 1, "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}}}\n\n',
+            b'data: {"time": 2, "interfaces": {"wlan-\xc3\x9f": {"name": null, "description": "Tr\xc3\xa1ffic", "bytes received": 1200, "bytes transmitted": 2400}}}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        assert isinstance(client, OPNsenseClient)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+
+        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
+
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
+        )
+        assert list(samples[0]["interfaces"].keys()) == ["wlan-ß"]
+        assert samples[0]["interfaces"]["wlan-ß"]["name"] == "Tráffic"
+        assert samples[0]["interfaces"]["wlan-ß"]["interface"] == "wlan-ß"
     finally:
         await client.async_close()
 

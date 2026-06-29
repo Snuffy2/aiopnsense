@@ -1,5 +1,6 @@
 """Raw HTTP transport and response coercion helpers for OPNsenseClient."""
 
+import codecs
 from collections.abc import AsyncIterator, MutableMapping
 import json
 from typing import TYPE_CHECKING, Any
@@ -152,10 +153,11 @@ class ClientTransportMixin:
                         )
                     return
 
+                decoder = codecs.getincrementaldecoder("utf-8")()
                 buffer = ""
                 pending_cr = False
                 async for chunk in response.content.iter_chunked(1024):
-                    chunk_text = chunk.decode("utf-8")
+                    chunk_text = decoder.decode(chunk)
                     if pending_cr:
                         chunk_text = f"\r{chunk_text}"
                         pending_cr = False
@@ -184,6 +186,15 @@ class ClientTransportMixin:
                             continue
                         if isinstance(response_json, MutableMapping):
                             yield dict(response_json)
+                tail_text = decoder.decode(b"", final=True)
+                if pending_cr:
+                    tail_text = f"\r{tail_text}"
+                if tail_text:
+                    if tail_text.endswith("\r"):
+                        tail_text = tail_text[:-1]
+                        pending_cr = True
+                    if tail_text:
+                        buffer += tail_text.replace("\r\n", "\n").replace("\r", "\n")
                 if pending_cr:
                     buffer += "\n"
         except (aiohttp.ClientError, TimeoutError) as err:
