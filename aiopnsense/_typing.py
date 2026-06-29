@@ -1,7 +1,7 @@
 """Typing protocol contracts for aiopnsense mixins."""
 
 from abc import abstractmethod
-from collections.abc import MutableMapping
+from collections.abc import AsyncIterator, MutableMapping
 from datetime import tzinfo
 from typing import Any, Protocol
 from warnings import deprecated
@@ -49,6 +49,11 @@ class AiopnsenseClientProtocol(Protocol):
         Returns:
             dict[str, Any]: Decoded payload extracted from the streaming API response.
         """
+        ...
+
+    @abstractmethod
+    def _stream_json_events(self, path: str) -> AsyncIterator[dict[str, Any]]:
+        """Yield decoded JSON objects from a server-sent event stream."""
         ...
 
     @abstractmethod

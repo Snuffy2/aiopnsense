@@ -1,6 +1,6 @@
 """Raw HTTP transport and response coercion helpers for OPNsenseClient."""
 
-from collections.abc import MutableMapping
+from collections.abc import AsyncIterator, MutableMapping
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -107,6 +107,73 @@ class ClientTransportMixin:
                 raise
 
         return {}
+
+    async def _stream_json_events(self, path: str) -> AsyncIterator[dict[str, Any]]:
+        """Yield decoded JSON objects from a server-sent event stream.
+
+        Args:
+            path (str): API endpoint path to request.
+
+        Yields:
+            dict[str, Any]: Decoded JSON object from each valid ``data:`` event.
+        """
+        self._rest_api_query_count += 1
+        url: str = f"{self._url}{path}"
+        _LOGGER.debug("[stream_json_events] url: %s", url)
+        try:
+            async with self._session.get(
+                url,
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                timeout=aiohttp.ClientTimeout(
+                    total=None, sock_connect=DEFAULT_REQUEST_TIMEOUT_SECONDS
+                ),
+                ssl=self._verify_ssl,
+            ) as response:
+                if not response.ok:
+                    if response.status == 403:
+                        _LOGGER.error(
+                            "Permission Error in stream_json_events. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
+                            url,
+                        )
+                    else:
+                        _LOGGER.error(
+                            "Error in stream_json_events. Path: %s. Response %s: %s",
+                            url,
+                            response.status,
+                            response.reason,
+                        )
+                    if self._throw_errors:
+                        raise aiohttp.ClientResponseError(
+                            request_info=response.request_info,
+                            history=response.history,
+                            status=response.status,
+                            message=f"HTTP Status Error: {response.status} {response.reason}",
+                            headers=response.headers,
+                        )
+                    return
+
+                buffer = ""
+                async for chunk in response.content.iter_chunked(1024):
+                    buffer += chunk.decode("utf-8")
+                    while "\n\n" in buffer:
+                        message, buffer = buffer.split("\n\n", 1)
+                        for line in message.splitlines():
+                            if not line.startswith("data:"):
+                                continue
+                            response_str = line[len("data:") :].strip()
+                            try:
+                                response_json = json.loads(response_str)
+                            except json.JSONDecodeError:
+                                _LOGGER.debug(
+                                    "Skipping malformed stream JSON event: %s", response_str
+                                )
+                                continue
+                            if isinstance(response_json, MutableMapping):
+                                yield dict(response_json)
+        except (aiohttp.ClientError, TimeoutError) as err:
+            _LOGGER.error("Client error in stream_json_events. %s: %s", type(err).__name__, err)
+            if self._throw_errors:
+                raise
 
     async def _do_get(
         self,

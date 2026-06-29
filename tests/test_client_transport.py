@@ -1,8 +1,8 @@
 """Tests for client transport helpers and HTTP response handling."""
 
 from collections.abc import MutableMapping
-from typing import Any
-from unittest.mock import AsyncMock
+from typing import Any, Callable
+from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
@@ -435,5 +435,81 @@ async def test_do_get_post_and_stream_permission_errors(
         assert await client._do_get("/x", caller="t") is None
         assert await client._do_post("/x", payload={}, caller="t") is None
         assert await client._do_get_from_stream("/x", caller="t") == {}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_yields_each_valid_data_message(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: Callable[..., FakeResponse],
+) -> None:
+    """Direct stream iterator should yield every JSON SSE data message."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        chunks=[
+            b'data: {"time": 1, "interfaces": {}}\n\n',
+            b'data: {"time": 2, "interfaces": {"wan": {"rx_bytes": 10}}}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        events: list[dict[str, Any]] = []
+        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
+            events.append(event)
+            if len(events) == 2:
+                break
+        assert events == [
+            {"time": 1, "interfaces": {}},
+            {"time": 2, "interfaces": {"wan": {"rx_bytes": 10}}},
+        ]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_skips_malformed_json(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: Callable[..., FakeResponse],
+) -> None:
+    """Malformed data messages should be skipped while the stream continues."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        chunks=[
+            b"data: not-json\n\n",
+            b'data: {"time": 3, "interfaces": {}}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        events: list[dict[str, Any]] = []
+        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
+            events.append(event)
+            break
+
+        assert events == [{"time": 3, "interfaces": {}}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_raises_when_throw_errors_enabled(
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., FakeResponse],
+) -> None:
+    """Direct stream iterator should honor throw_errors for non-OK responses."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_response_factory(
+        status=403,
+        reason="Forbidden",
+        ok=False,
+        chunks=[],
+        include_request_info=True,
+    )
+    client = make_client(session=session, throw_errors=True)
+    try:
+        with pytest.raises(aiohttp.ClientResponseError):
+            async for _event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
+                pass
     finally:
         await client.async_close()
