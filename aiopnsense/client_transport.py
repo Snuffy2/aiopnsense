@@ -153,9 +153,18 @@ class ClientTransportMixin:
                     return
 
                 buffer = ""
+                pending_cr = False
                 async for chunk in response.content.iter_chunked(1024):
-                    buffer += chunk.decode("utf-8")
-                    buffer = buffer.replace("\r\n", "\n").replace("\r", "\n")
+                    chunk_text = chunk.decode("utf-8")
+                    if pending_cr:
+                        chunk_text = f"\r{chunk_text}"
+                        pending_cr = False
+
+                    if chunk_text.endswith("\r"):
+                        chunk_text = chunk_text[:-1]
+                        pending_cr = True
+
+                    buffer += chunk_text.replace("\r\n", "\n").replace("\r", "\n")
                     while "\n\n" in buffer:
                         message, buffer = buffer.split("\n\n", 1)
                         data_lines: list[str] = []
@@ -175,6 +184,8 @@ class ClientTransportMixin:
                             continue
                         if isinstance(response_json, MutableMapping):
                             yield dict(response_json)
+                if pending_cr:
+                    buffer += "\n"
         except (aiohttp.ClientError, TimeoutError) as err:
             _LOGGER.error("Client error in stream_json_events. %s: %s", type(err).__name__, err)
             if self._throw_errors:

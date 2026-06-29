@@ -519,6 +519,32 @@ async def test_stream_json_events_reassembles_split_multiline_json_event(
 
 
 @pytest.mark.asyncio
+async def test_stream_json_events_reassembles_split_crlf_boundary_multiline_json_event(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Split CRLF frame separators across chunks should still reassemble a valid event."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b'data: {"time": 11,\r',
+            b'\ndata: "interfaces": {"wan": {"rx_bytes": 12}}\r',
+            b"data: }\r",
+            b"\n\r\n",
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        events: list[dict[str, Any]] = []
+        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
+            events.append(event)
+            break
+        assert events == [{"time": 11, "interfaces": {"wan": {"rx_bytes": 12}}}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_stream_json_events_skips_non_mapping_json_events(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
