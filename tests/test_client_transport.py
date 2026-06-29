@@ -3,6 +3,7 @@
 from collections.abc import MutableMapping
 from typing import Any, Callable
 from unittest.mock import AsyncMock, MagicMock
+from types import TracebackType
 
 import aiohttp
 import pytest
@@ -488,6 +489,107 @@ async def test_stream_json_events_skips_malformed_json(
             break
 
         assert events == [{"time": 3, "interfaces": {}}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_reassembles_split_multiline_json_event(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Split and multiline SSE data lines should reassemble into one JSON object."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b'data: {"time": 10,\r\n',
+            b'data: "interfaces": {"wan": {"rx_bytes": 11}}\r\n',
+            b"data: }\r\n\r\n",
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        events: list[dict[str, Any]] = []
+        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
+            events.append(event)
+            break
+        assert events == [{"time": 10, "interfaces": {"wan": {"rx_bytes": 11}}}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_skips_non_mapping_json_events(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Non-mapping JSON SSE events should be skipped and later mapping events yielded."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b"data: [1, 2, 3]\n\n",
+            b"data: 1\n\n",
+            b'data: {"time": 9, "interfaces": {}}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        events: list[dict[str, Any]] = []
+        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
+            events.append(event)
+            if len(events) == 1:
+                break
+        assert events == [{"time": 9, "interfaces": {}}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_close_on_iterator_break(
+    make_client: Callable[..., Any],
+) -> None:
+    """Canceling iteration early should still close the response context."""
+
+    class _TrackedResponse(FakeResponse):
+        """Fake response that tracks async context manager exit."""
+
+        def __init__(self, **kwargs: Any) -> None:
+            self.exited = False
+            self.closed = False
+            super().__init__(**kwargs)
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            self.exited = True
+            self.closed = True
+            return await super().__aexit__(exc_type, exc, tb)
+
+    response = _TrackedResponse(
+        status=200,
+        reason="OK",
+        ok=True,
+        stream_chunks=[
+            b'data: {"time": 5}\n\n',
+            b'data: {"time": 6}\n\n',
+        ],
+        include_request_info=True,
+    )
+    session = MagicMock()
+    session.get = lambda *a, **k: response
+
+    client = make_client(session=session)
+    try:
+        stream_iterator = client._stream_json_events(
+            "/api/diagnostics/traffic/stream/1"
+        ).__aiter__()
+        await stream_iterator.__anext__()
+        await stream_iterator.aclose()
+        assert response.exited is True
+        assert response.closed is True
     finally:
         await client.async_close()
 

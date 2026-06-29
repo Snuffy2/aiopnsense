@@ -155,21 +155,26 @@ class ClientTransportMixin:
                 buffer = ""
                 async for chunk in response.content.iter_chunked(1024):
                     buffer += chunk.decode("utf-8")
+                    buffer = buffer.replace("\r\n", "\n").replace("\r", "\n")
                     while "\n\n" in buffer:
                         message, buffer = buffer.split("\n\n", 1)
+                        data_lines: list[str] = []
                         for line in message.splitlines():
                             if not line.startswith("data:"):
                                 continue
-                            response_str = line[len("data:") :].strip()
-                            try:
-                                response_json = json.loads(response_str)
-                            except json.JSONDecodeError:
-                                _LOGGER.debug(
-                                    "Skipping malformed stream JSON event: %s", response_str
-                                )
-                                continue
-                            if isinstance(response_json, MutableMapping):
-                                yield dict(response_json)
+                            data_lines.append(line[len("data:") :].strip())
+
+                        if not data_lines:
+                            continue
+
+                        response_str = "\n".join(data_lines)
+                        try:
+                            response_json = json.loads(response_str)
+                        except json.JSONDecodeError:
+                            _LOGGER.debug("Skipping malformed stream JSON event: %s", response_str)
+                            continue
+                        if isinstance(response_json, MutableMapping):
+                            yield dict(response_json)
         except (aiohttp.ClientError, TimeoutError) as err:
             _LOGGER.error("Client error in stream_json_events. %s: %s", type(err).__name__, err)
             if self._throw_errors:
