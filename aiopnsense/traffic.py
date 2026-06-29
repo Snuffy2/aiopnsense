@@ -22,6 +22,26 @@ _INTERFACE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+def _coalesce_identity(
+    value: Any,
+    *,
+    fallback: str,
+    description: Any = None,
+) -> str:
+    """Return a usable interface identity value with safe fallbacks."""
+    if isinstance(value, str):
+        candidate = value.strip()
+        if candidate:
+            return value
+
+    if isinstance(description, str):
+        candidate = description.strip()
+        if candidate:
+            return description
+
+    return fallback
+
+
 def _first_int(row: Mapping[str, Any], aliases: tuple[str, ...]) -> int | None:
     """Return the first parseable integer from a row for the supplied aliases."""
     for alias in aliases:
@@ -66,8 +86,12 @@ def normalize_traffic_payload(
         if not isinstance(interface_name, str) or not isinstance(row, Mapping):
             continue
         normalized_row: dict[str, Any] = {
-            "interface": str(row.get("interface", interface_name)),
-            "name": str(row.get("name", row.get("description", interface_name))),
+            "interface": _coalesce_identity(row.get("interface"), fallback=interface_name),
+            "name": _coalesce_identity(
+                row.get("name"),
+                fallback=interface_name,
+                description=row.get("description"),
+            ),
         }
         for normalized_name, aliases in _INTERFACE_FIELD_ALIASES.items():
             value = _first_int(row, aliases)

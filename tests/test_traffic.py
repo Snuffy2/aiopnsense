@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 
+from collections.abc import Callable
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
+
+from aiopnsense import OPNsenseClient
 from aiopnsense.traffic import (
+    DIAGNOSTICS_TRAFFIC_ENDPOINT,
     normalize_traffic_payload,
 )
 
@@ -90,3 +98,89 @@ def test_normalize_traffic_payload_skips_invalid_rows() -> None:
     assert list(normalized["interfaces"]) == ["valid"]
     assert normalized["interfaces"]["valid"]["rx_bytes"] == 100
     assert normalized["interfaces"]["valid"]["tx_bytes"] == 200
+
+
+@pytest.mark.asyncio
+async def test_get_interface_traffic_probes_and_normalizes(
+    make_client: Callable[..., Any],
+) -> None:
+    """`OPNsenseClient.get_interface_traffic()` should probe, fetch, and normalize."""
+    client = make_client()
+    try:
+        assert isinstance(client, OPNsenseClient)
+        assert hasattr(client, "get_interface_traffic")
+
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "time": 1710000001,
+                "interfaces": {
+                    "wan": {
+                        "name": "WAN",
+                        "bytes received": 120,
+                        "bytes transmitted": 240,
+                    }
+                },
+            }
+        )
+
+        traffic = await client.get_interface_traffic()
+        assert traffic["time"] == 1710000001.0
+        assert traffic["interfaces"]["wan"]["interface"] == "wan"
+        assert traffic["interfaces"]["wan"]["name"] == "WAN"
+        assert traffic["interfaces"]["wan"]["rx_bytes"] == 120
+        assert traffic["interfaces"]["wan"]["tx_bits_per_second"] == 1920.0
+        client._is_get_endpoint_available.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
+        client._safe_dict_get.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_interface_traffic_handles_unavailable_endpoint(
+    make_client: Callable[..., Any],
+) -> None:
+    """Unavailable traffic endpoint should return an empty sample and avoid GET calls."""
+    client = make_client()
+    try:
+        assert isinstance(client, OPNsenseClient)
+
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_get = AsyncMock()
+
+        traffic = await client.get_interface_traffic()
+        assert traffic == {"time": None, "interfaces": {}}
+        client._is_get_endpoint_available.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
+        client._safe_dict_get.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+def test_normalize_traffic_payload_falls_back_identity_fields() -> None:
+    """Null interface identity values should fall back to key fields and description."""
+    payload = {
+        "time": 1710000004,
+        "interfaces": {
+            "wan": {
+                "interface": None,
+                "name": None,
+                "description": "WAN",
+                "bytes received": 10,
+                "bytes transmitted": 20,
+            },
+            "lan": {
+                "interface": "",
+                "name": "",
+                "description": "",
+                "bytes received": 5,
+                "bytes transmitted": 10,
+            },
+        },
+    }
+
+    normalized = normalize_traffic_payload(payload, interval=1.0)
+
+    assert normalized["interfaces"]["wan"]["interface"] == "wan"
+    assert normalized["interfaces"]["wan"]["name"] == "WAN"
+    assert normalized["interfaces"]["lan"]["interface"] == "lan"
+    assert normalized["interfaces"]["lan"]["name"] == "lan"
