@@ -28,6 +28,7 @@ from .smart import SmartMixin
 from .speedtest import SpeedtestMixin
 from .system import SystemMixin
 from .telemetry import TelemetryMixin
+from .traffic import TrafficMixin
 from .unbound import UnboundMixin
 from .vnstat import VnstatMixin
 from .vouchers import VouchersMixin
@@ -48,6 +49,7 @@ class OPNsenseClient(
     UnboundMixin,
     VouchersMixin,
     TelemetryMixin,
+    TrafficMixin,
     VnstatMixin,
     VPNMixin,
 ):
