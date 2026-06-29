@@ -471,6 +471,36 @@ async def test_stream_json_events_yields_each_valid_data_message(
 
 
 @pytest.mark.asyncio
+async def test_stream_json_events_sets_connect_and_read_timeouts(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: Callable[..., FakeResponse],
+) -> None:
+    """Direct stream iterator should not wait forever for silent connections."""
+    captured_timeout: aiohttp.ClientTimeout | None = None
+
+    def fake_get(*_args: Any, **kwargs: Any) -> FakeResponse:
+        nonlocal captured_timeout
+        captured_timeout = kwargs["timeout"]
+        return fake_stream_response_factory(chunks=[b'data: {"time": 1, "interfaces": {}}\n\n'])
+
+    session = MagicMock()
+    session.get = fake_get
+    client = make_client(session=session)
+    try:
+        events = [
+            event async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1")
+        ]
+
+        assert events == [{"time": 1, "interfaces": {}}]
+        assert captured_timeout is not None
+        assert captured_timeout.total is None
+        assert captured_timeout.sock_connect == DEFAULT_REQUEST_TIMEOUT_SECONDS
+        assert captured_timeout.sock_read == DEFAULT_REQUEST_TIMEOUT_SECONDS
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_stream_json_events_skips_malformed_json(
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],

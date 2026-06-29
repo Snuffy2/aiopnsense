@@ -188,16 +188,16 @@ class TrafficMixin(AiopnsenseClientProtocol):
                 event_count += 1
                 event_time = try_to_float(event.get("time"))
                 sample_interval = float(interval)
+                if event_time is None or (
+                    previous_time is not None and event_time <= previous_time
+                ):
+                    previous_time = None
+                    skip_previous_reseed = True
+                    continue
                 if previous_time is None:
                     if skip_previous_reseed:
                         skip_previous_reseed = False
-                        if event_time is not None:
-                            previous_time = event_time
-                    elif event_time is not None:
-                        previous_time = event_time
-                elif event_time is None or event_time <= previous_time:
-                    previous_time = None
-                    skip_previous_reseed = True
+                    previous_time = event_time
                 else:
                     sample_interval = event_time - previous_time
                     previous_time = event_time

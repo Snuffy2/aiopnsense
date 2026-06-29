@@ -135,7 +135,9 @@ class ClientTransportMixin:
                 url,
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(
-                    total=None, sock_connect=DEFAULT_REQUEST_TIMEOUT_SECONDS
+                    total=None,
+                    sock_connect=DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                    sock_read=DEFAULT_REQUEST_TIMEOUT_SECONDS,
                 ),
                 ssl=self._verify_ssl,
             ) as response:
