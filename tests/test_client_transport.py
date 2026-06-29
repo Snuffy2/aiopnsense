@@ -572,6 +572,38 @@ async def test_stream_json_events_reassembles_split_multibyte_utf8_event(
 
 
 @pytest.mark.asyncio
+async def test_stream_json_events_ignores_trailing_incomplete_utf8_chunk(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Trailing incomplete UTF-8 bytes should not raise and should drop only partial event."""
+    incomplete_event_json = json.dumps(
+        {"time": 12, "interfaces": {"wan": {"description": "Café"}}},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    incomplete_payload = f"data: {incomplete_event_json.decode('utf-8')}\n\n".encode("utf-8")
+    leading_byte_index = incomplete_payload.index("é".encode("utf-8"))
+    leading_byte_index += 1
+
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b'data: {"time": 11}\n\n',
+            incomplete_payload[:leading_byte_index],
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        events: list[dict[str, Any]] = []
+        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
+            events.append(event)
+
+        assert events == [{"time": 11}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_stream_json_events_reassembles_split_crlf_boundary_multiline_json_event(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,

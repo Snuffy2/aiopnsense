@@ -157,7 +157,14 @@ class ClientTransportMixin:
                 buffer = ""
                 pending_cr = False
                 async for chunk in response.content.iter_chunked(1024):
-                    chunk_text = decoder.decode(chunk)
+                    try:
+                        chunk_text = decoder.decode(chunk)
+                    except UnicodeDecodeError as err:
+                        _LOGGER.debug(
+                            "Dropping incomplete UTF-8 chunk in _stream_json_events: %s",
+                            err,
+                        )
+                        break
                     if pending_cr:
                         chunk_text = f"\r{chunk_text}"
                         pending_cr = False
@@ -186,7 +193,14 @@ class ClientTransportMixin:
                             continue
                         if isinstance(response_json, MutableMapping):
                             yield dict(response_json)
-                tail_text = decoder.decode(b"", final=True)
+                try:
+                    tail_text = decoder.decode(b"", final=True)
+                except UnicodeDecodeError as err:
+                    _LOGGER.debug(
+                        "Dropping incomplete UTF-8 trailing bytes in _stream_json_events: %s",
+                        err,
+                    )
+                    tail_text = ""
                 if pending_cr:
                     tail_text = f"\r{tail_text}"
                 if tail_text:
