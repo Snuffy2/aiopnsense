@@ -10,6 +10,8 @@ import aiohttp
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .helpers import _LOGGER
 
+_STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
+
 
 class ClientTransportMixin:
     """Immediate request execution and safe response methods for OPNsenseClient."""
@@ -109,11 +111,18 @@ class ClientTransportMixin:
 
         return {}
 
-    async def _stream_json_events(self, path: str) -> AsyncIterator[dict[str, Any]]:
+    async def _stream_json_events(
+        self,
+        path: str,
+        *,
+        yield_reset_events: bool = False,
+    ) -> AsyncIterator[dict[str, Any]]:
         """Yield decoded JSON objects from a server-sent event stream.
 
         Args:
             path (str): API endpoint path to request.
+            yield_reset_events (bool): Yield internal reset events when UTF-8
+                decoding fails. Default is disabled for backwards compatibility.
 
         Yields:
             dict[str, Any]: Decoded JSON object from each valid ``data:`` event.
@@ -164,6 +173,8 @@ class ClientTransportMixin:
                             "Dropping incomplete UTF-8 chunk in _stream_json_events: %s",
                             err,
                         )
+                        if yield_reset_events:
+                            yield {_STREAM_JSON_EVENT_RESET_KEY: True}
                         decoder = codecs.getincrementaldecoder("utf-8")()
                         buffer = ""
                         pending_cr = False

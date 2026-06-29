@@ -199,7 +199,7 @@ async def test_stream_interface_traffic_yields_normalized_samples(
 ) -> None:
     """Stream method should normalize each valid stream event."""
 
-    async def fake_stream(_path: str) -> AsyncIterator[dict[str, Any]]:
+    async def fake_stream(_path: str, **_: Any) -> AsyncIterator[dict[str, Any]]:
         yield {
             "time": 1710000005,
             "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}},
@@ -284,7 +284,7 @@ async def test_stream_interface_traffic_closes_inner_iterator(
 
     events_closed = False
 
-    async def fake_stream(_path: str) -> AsyncIterator[dict[str, Any]]:
+    async def fake_stream(_path: str, **_: Any) -> AsyncIterator[dict[str, Any]]:
         try:
             yield {
                 "time": 1710000005,
@@ -321,7 +321,7 @@ async def test_stream_interface_traffic_clamps_poll_interval(
 ) -> None:
     """poll_interval below 1 should clamp to 1 for endpoint probing and interval."""
 
-    async def fake_stream(_path: str) -> AsyncIterator[dict[str, Any]]:
+    async def fake_stream(_path: str, **_: Any) -> AsyncIterator[dict[str, Any]]:
         yield {
             "time": 1710000005,
             "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 1000}},
@@ -353,7 +353,7 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
 ) -> None:
     """Bad or backward timestamps should fall back to polling interval and keep state clean."""
 
-    async def fake_stream(_path: str) -> AsyncIterator[dict[str, Any]]:
+    async def fake_stream(_path: str, **_: Any) -> AsyncIterator[dict[str, Any]]:
         yield {
             "time": 1710000006,
             "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 1000}},
@@ -399,6 +399,38 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
         # After reset, normal monotonic timestamps again compute deltas.
         assert samples[3]["time"] == 1710000010.0
         assert samples[3]["interfaces"]["wan"]["interval"] == 2.0
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_resets_interval_after_stream_json_reset(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """A dropped invalid UTF-8 frame should force fallback interval on next sample."""
+
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b'data: {"time": 1710000005, "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}}}\n\n',
+            b'data: {"time": 1710000006, "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 2000}}}\n\n',
+            b"\xff\xfe\xfd",
+            b'data: {"time": 1710000008, "interfaces": {"wan": {"bytes received": 3000, "bytes transmitted": 5000}}}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        assert isinstance(client, OPNsenseClient)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+
+        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
+
+        assert len(samples) == 2
+        assert samples[0]["time"] == 1710000006
+        assert samples[0]["interfaces"]["wan"]["interval"] == 1.0
+        assert samples[1]["time"] == 1710000008
+        assert samples[1]["interfaces"]["wan"]["interval"] == 1.0
     finally:
         await client.async_close()
 

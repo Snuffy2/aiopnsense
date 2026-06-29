@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
+from .client_transport import _STREAM_JSON_EVENT_RESET_KEY
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors, try_to_float, try_to_int
 
@@ -165,9 +166,14 @@ class TrafficMixin(AiopnsenseClientProtocol):
         event_count = 0
         previous_time: float | None = None
         skip_previous_reseed = False
-        stream_events = self._stream_json_events(endpoint)
+        stream_events = self._stream_json_events(endpoint, yield_reset_events=True)
         try:
             async for event in stream_events:
+                if event.get(_STREAM_JSON_EVENT_RESET_KEY) is True:
+                    previous_time = None
+                    skip_previous_reseed = False
+                    continue
+
                 event_count += 1
                 event_time = try_to_float(event.get("time"))
                 sample_interval = float(interval)

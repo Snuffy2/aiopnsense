@@ -9,6 +9,7 @@ import json
 import aiohttp
 import pytest
 
+from aiopnsense.client_transport import _STREAM_JSON_EVENT_RESET_KEY
 from aiopnsense.const import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
 )
@@ -517,6 +518,40 @@ async def test_stream_json_events_recovers_after_invalid_utf8_chunk(
                 break
 
         assert events == [{"time": 1}, {"time": 2}]
+        assert all(_STREAM_JSON_EVENT_RESET_KEY not in event for event in events)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_yields_reset_marker_when_requested(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: Callable[..., FakeResponse],
+) -> None:
+    """Opt-in decode reset signaling should emit a private stream reset marker."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b'data: {"time": 1}\n\n',
+            b"\xff\xfe\xfd",
+            b'data: {"time": 2}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        events: list[dict[str, Any]] = []
+        async for event in client._stream_json_events(
+            "/api/diagnostics/traffic/stream/1", yield_reset_events=True
+        ):
+            events.append(event)
+            if len(events) == 3:
+                break
+
+        assert events == [
+            {"time": 1},
+            {_STREAM_JSON_EVENT_RESET_KEY: True},
+            {"time": 2},
+        ]
     finally:
         await client.async_close()
 
