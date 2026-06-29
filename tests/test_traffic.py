@@ -163,6 +163,43 @@ async def test_get_interface_traffic_handles_unavailable_endpoint(
         await client.async_close()
 
 
+@pytest.mark.asyncio
+async def test_get_interface_traffic_returns_empty_sample_on_probe_timeout(
+    make_client: Callable[..., Any],
+) -> None:
+    """Probe timeout should return an empty sample when throw_errors is disabled."""
+    client = make_client()
+    try:
+        assert isinstance(client, OPNsenseClient)
+
+        client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
+        client._safe_dict_get = AsyncMock()
+
+        traffic = await client.get_interface_traffic()
+        assert traffic == {"time": None, "interfaces": {}}
+        client._is_get_endpoint_available.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
+        client._safe_dict_get.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_interface_traffic_raises_when_throw_errors_is_enabled(
+    make_client: Callable[..., Any],
+) -> None:
+    """Probe timeout should propagate when throw_errors is enabled."""
+    client = make_client(throw_errors=True)
+    try:
+        assert isinstance(client, OPNsenseClient)
+
+        client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
+
+        with pytest.raises(TimeoutError):
+            await client.get_interface_traffic()
+    finally:
+        await client.async_close()
+
+
 def test_normalize_traffic_payload_falls_back_identity_fields() -> None:
     """Null interface identity values should fall back to key fields and description."""
     payload = {
@@ -351,11 +388,11 @@ async def test_stream_interface_traffic_clamps_poll_interval(
 async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_backward_timestamps(
     make_client: Callable[..., Any],
 ) -> None:
-    """Bad or backward timestamps should fall back to polling interval and keep state clean."""
+    """Bad timestamp should reseed and then recover interval with following valid timestamp."""
 
     async def fake_stream(_path: str, **_: Any) -> AsyncIterator[dict[str, Any]]:
         yield {
-            "time": 1710000006,
+            "time": 1710000005,
             "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 1000}},
         }
         yield {
@@ -363,16 +400,12 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
             "interfaces": {"wan": {"bytes received": 3000, "bytes transmitted": 5000}},
         }
         yield {
-            "time": 1710000004,
+            "time": 1710000008,
             "interfaces": {"wan": {"bytes received": 6000, "bytes transmitted": 9000}},
         }
         yield {
-            "time": 1710000008,
-            "interfaces": {"wan": {"bytes received": 10000, "bytes transmitted": 12000}},
-        }
-        yield {
             "time": 1710000010,
-            "interfaces": {"wan": {"bytes received": 14000, "bytes transmitted": 18000}},
+            "interfaces": {"wan": {"bytes received": 10000, "bytes transmitted": 12000}},
         }
 
     client = make_client()
@@ -383,22 +416,18 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
-        assert len(samples) == 4
+        assert len(samples) == 3
         assert samples[0]["time"] is None
         assert samples[0]["interfaces"]["wan"]["interval"] == 1.0
 
         # Skipped first event used to initialize stream state.
         # A bad timestamp should use fallback interval.
-        assert samples[1]["time"] == 1710000004.0
+        assert samples[1]["time"] == 1710000008.0
         assert samples[1]["interfaces"]["wan"]["interval"] == 1.0
 
-        # Backward timestamp after fallback should use fallback interval.
-        assert samples[2]["time"] == 1710000008.0
-        assert samples[2]["interfaces"]["wan"]["interval"] == 1.0
-
         # After reset, normal monotonic timestamps again compute deltas.
-        assert samples[3]["time"] == 1710000010.0
-        assert samples[3]["interfaces"]["wan"]["interval"] == 2.0
+        assert samples[2]["time"] == 1710000010.0
+        assert samples[2]["interfaces"]["wan"]["interval"] == 2.0
     finally:
         await client.async_close()
 

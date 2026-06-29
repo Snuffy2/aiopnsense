@@ -7,7 +7,7 @@ from typing import Any
 
 from .client_transport import _STREAM_JSON_EVENT_RESET_KEY
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, try_to_float, try_to_int
+from .helpers import _LOGGER, try_to_float, try_to_int
 
 DIAGNOSTICS_TRAFFIC_ENDPOINT = "/api/diagnostics/traffic"
 DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX = "/api/diagnostics/traffic/stream"
@@ -127,7 +127,6 @@ def normalize_traffic_payload(
 class TrafficMixin(AiopnsenseClientProtocol):
     """Diagnostics traffic methods for OPNsenseClient."""
 
-    @_log_errors
     async def get_interface_traffic(self) -> dict[str, Any]:
         """Return a normalized diagnostics traffic snapshot.
 
@@ -136,11 +135,23 @@ class TrafficMixin(AiopnsenseClientProtocol):
                 empty traffic sample when endpoint probing or response parsing
                 fails.
         """
-        if not await self._is_get_endpoint_available(DIAGNOSTICS_TRAFFIC_ENDPOINT):
-            _LOGGER.debug("Diagnostics traffic endpoint unavailable")
-            return {"time": None, "interfaces": {}}
-        payload = await self._safe_dict_get(DIAGNOSTICS_TRAFFIC_ENDPOINT)
-        return normalize_traffic_payload(payload, interval=1.0)
+        empty_sample: dict[str, Any] = {"time": None, "interfaces": {}}
+
+        try:
+            if not await self._is_get_endpoint_available(DIAGNOSTICS_TRAFFIC_ENDPOINT):
+                _LOGGER.debug("Diagnostics traffic endpoint unavailable")
+                return empty_sample
+            payload = await self._safe_dict_get(DIAGNOSTICS_TRAFFIC_ENDPOINT)
+            return normalize_traffic_payload(payload, interval=1.0)
+        except (TimeoutError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
+            if self._throw_errors:
+                raise
+            _LOGGER.debug(
+                "Falling back to empty interface traffic sample due %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            return empty_sample
 
     async def stream_interface_traffic(
         self,
@@ -180,6 +191,8 @@ class TrafficMixin(AiopnsenseClientProtocol):
                 if previous_time is None:
                     if skip_previous_reseed:
                         skip_previous_reseed = False
+                        if event_time is not None:
+                            previous_time = event_time
                     elif event_time is not None:
                         previous_time = event_time
                 elif event_time is None or event_time <= previous_time:
