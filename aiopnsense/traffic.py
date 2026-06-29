@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
@@ -140,3 +140,38 @@ class TrafficMixin(AiopnsenseClientProtocol):
             return {"time": None, "interfaces": {}}
         payload = await self._safe_dict_get(DIAGNOSTICS_TRAFFIC_ENDPOINT)
         return normalize_traffic_payload(payload, interval=1.0)
+
+    async def stream_interface_traffic(
+        self,
+        poll_interval: int = 1,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield normalized diagnostics traffic stream samples.
+
+        Args:
+            poll_interval: OPNsense stream sample interval in seconds. Values
+                less than 1 are clamped to 1.
+
+        Yields:
+            Normalized traffic samples. The first stream event is discarded because
+            OPNsense stream endpoints commonly emit an initialization sample
+            before interval deltas stabilize.
+        """
+        interval = max(poll_interval, 1)
+        endpoint = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/{interval}"
+        if not await self._is_get_endpoint_available(endpoint):
+            _LOGGER.debug("Diagnostics traffic stream endpoint unavailable")
+            return
+
+        event_count = 0
+        previous_time: float | None = None
+        async for event in self._stream_json_events(endpoint):
+            event_count += 1
+            event_time = try_to_float(event.get("time"))
+            sample_interval = float(interval)
+            if previous_time is not None and event_time is not None and event_time > previous_time:
+                sample_interval = event_time - previous_time
+            previous_time = event_time
+
+            if event_count == 1:
+                continue
+            yield normalize_traffic_payload(event, interval=sample_interval)

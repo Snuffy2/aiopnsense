@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 
-from collections.abc import Callable
-from typing import Any
+from collections.abc import AsyncIterator, Callable
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -190,3 +190,76 @@ def test_normalize_traffic_payload_falls_back_identity_fields() -> None:
     assert normalized["interfaces"]["wan"]["name"] == "WAN"
     assert normalized["interfaces"]["lan"]["interface"] == "lan"
     assert normalized["interfaces"]["lan"]["name"] == "lan"
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_yields_normalized_samples(
+    make_client: Callable[..., Any],
+) -> None:
+    """Stream method should normalize each valid stream event."""
+
+    async def fake_stream(_path: str) -> AsyncIterator[dict[str, Any]]:
+        yield {
+            "time": 1710000005,
+            "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}},
+        }
+        yield {
+            "time": 1710000006,
+            "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 2000}},
+        }
+
+    client = make_client()
+    try:
+        assert isinstance(client, OPNsenseClient)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._stream_json_events = cast(Any, fake_stream)
+
+        samples: list[dict[str, Any]] = []
+        async for sample in client.stream_interface_traffic(poll_interval=1):
+            samples.append(sample)
+            if len(samples) == 1:
+                break
+
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
+        )
+        assert samples == [
+            {
+                "time": 1710000006.0,
+                "interfaces": {
+                    "wan": {
+                        "interface": "wan",
+                        "name": "wan",
+                        "rx_bytes": 1000,
+                        "tx_bytes": 2000,
+                        "interval": 1.0,
+                        "rx_bytes_per_second": 1000.0,
+                        "tx_bytes_per_second": 2000.0,
+                        "rx_bits_per_second": 8000.0,
+                        "tx_bits_per_second": 16000.0,
+                    }
+                },
+            }
+        ]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_returns_when_endpoint_unavailable(
+    make_client: Callable[..., Any],
+) -> None:
+    """Stream method should end without yielding when the endpoint is unavailable."""
+    client = make_client()
+    try:
+        assert isinstance(client, OPNsenseClient)
+
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
+        client._stream_json_events = AsyncMock()
+
+        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
+
+        assert samples == []
+        client._stream_json_events.assert_not_called()
+    finally:
+        await client.async_close()
