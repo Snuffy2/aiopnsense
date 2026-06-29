@@ -12,8 +12,14 @@ import pytest
 from aiopnsense import OPNsenseClient
 from aiopnsense.traffic import (
     DIAGNOSTICS_TRAFFIC_ENDPOINT,
+    DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX,
     normalize_traffic_payload,
 )
+
+
+def test_diagnostics_traffic_stream_endpoint_prefix() -> None:
+    """Stream endpoint prefix constant is present and points to the expected path."""
+    assert DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX == "/api/diagnostics/traffic/stream"
 
 
 def test_normalize_traffic_payload_from_interfaces_mapping() -> None:
