@@ -246,6 +246,125 @@ async def test_stream_interface_traffic_yields_normalized_samples(
 
 
 @pytest.mark.asyncio
+async def test_stream_interface_traffic_closes_inner_iterator(
+    make_client: Callable[..., Any],
+) -> None:
+    """Stream should close its inner SSE iterator when consumer exits early."""
+
+    events_closed = False
+
+    async def fake_stream(_path: str) -> AsyncIterator[dict[str, Any]]:
+        try:
+            yield {
+                "time": 1710000005,
+                "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}},
+            }
+            yield {
+                "time": 1710000006,
+                "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 2000}},
+            }
+        finally:
+            nonlocal events_closed
+            events_closed = True
+
+    client = make_client()
+    try:
+        assert isinstance(client, OPNsenseClient)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._stream_json_events = cast(Any, fake_stream)
+
+        samples = client.stream_interface_traffic(poll_interval=1)
+        first = await samples.__anext__()
+        assert first["interfaces"]["wan"]["interval"] == 1.0
+
+        await cast(Any, samples).aclose()
+
+        assert events_closed
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_clamps_poll_interval(
+    make_client: Callable[..., Any],
+) -> None:
+    """poll_interval below 1 should clamp to 1 for endpoint probing and interval."""
+
+    async def fake_stream(_path: str) -> AsyncIterator[dict[str, Any]]:
+        yield {
+            "time": 1710000005,
+            "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 1000}},
+        }
+        yield {
+            "time": 1710000006,
+            "interfaces": {"wan": {"bytes received": 2000, "bytes transmitted": 3000}},
+        }
+
+    client = make_client()
+    try:
+        assert isinstance(client, OPNsenseClient)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._stream_json_events = cast(Any, fake_stream)
+
+        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=0)]
+
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
+        )
+        assert samples[0]["interfaces"]["wan"]["interval"] == 1.0
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_backward_timestamps(
+    make_client: Callable[..., Any],
+) -> None:
+    """Bad or backward timestamps should fall back to polling interval and keep state clean."""
+
+    async def fake_stream(_path: str) -> AsyncIterator[dict[str, Any]]:
+        yield {
+            "time": 1710000006,
+            "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 1000}},
+        }
+        yield {
+            "time": "bad",
+            "interfaces": {"wan": {"bytes received": 3000, "bytes transmitted": 5000}},
+        }
+        yield {
+            "time": 1710000004,
+            "interfaces": {"wan": {"bytes received": 6000, "bytes transmitted": 9000}},
+        }
+        yield {
+            "time": 1710000008,
+            "interfaces": {"wan": {"bytes received": 10000, "bytes transmitted": 12000}},
+        }
+
+    client = make_client()
+    try:
+        assert isinstance(client, OPNsenseClient)
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._stream_json_events = cast(Any, fake_stream)
+
+        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
+
+        assert len(samples) == 3
+        assert samples[0]["time"] is None
+        assert samples[0]["interfaces"]["wan"]["interval"] == 1.0
+
+        # Skipped first event used to initialize stream state.
+        # A bad timestamp should use fallback interval.
+        assert samples[1]["time"] == 1710000004.0
+        assert samples[1]["interfaces"]["wan"]["interval"] == 1.0
+
+        # Backward timestamp after fallback should also keep fallback interval.
+        assert samples[2]["time"] == 1710000008.0
+        assert samples[2]["interfaces"]["wan"]["interval"] == 2.0
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_stream_interface_traffic_returns_when_endpoint_unavailable(
     make_client: Callable[..., Any],
 ) -> None:

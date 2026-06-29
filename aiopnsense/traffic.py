@@ -164,14 +164,27 @@ class TrafficMixin(AiopnsenseClientProtocol):
 
         event_count = 0
         previous_time: float | None = None
-        async for event in self._stream_json_events(endpoint):
-            event_count += 1
-            event_time = try_to_float(event.get("time"))
-            sample_interval = float(interval)
-            if previous_time is not None and event_time is not None and event_time > previous_time:
-                sample_interval = event_time - previous_time
-            previous_time = event_time
+        stream_events = self._stream_json_events(endpoint)
+        try:
+            async for event in stream_events:
+                event_count += 1
+                event_time = try_to_float(event.get("time"))
+                sample_interval = float(interval)
+                if (
+                    previous_time is not None
+                    and event_time is not None
+                    and event_time > previous_time
+                ):
+                    sample_interval = event_time - previous_time
 
-            if event_count == 1:
-                continue
-            yield normalize_traffic_payload(event, interval=sample_interval)
+                if event_time is not None and (previous_time is None or event_time > previous_time):
+                    previous_time = event_time
+
+                if event_count == 1:
+                    continue
+                yield normalize_traffic_payload(event, interval=sample_interval)
+        finally:
+            if stream_events is not None:
+                aclose = getattr(stream_events, "aclose", None)
+                if callable(aclose):
+                    await aclose()
