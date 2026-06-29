@@ -32,6 +32,33 @@ Read system state and telemetry
 
    asyncio.run(main())
 
+Read diagnostics traffic
+------------------------
+
+.. code-block:: python
+
+   import asyncio
+   import aiohttp
+   from aiopnsense import OPNsenseClient
+
+   async def main() -> None:
+       async with aiohttp.ClientSession() as session:
+           async with OPNsenseClient(
+               url="https://opnsense.example.com",
+               username="YOUR_API_KEY",
+               password="YOUR_API_SECRET",
+               session=session,
+           ) as client:
+               traffic = await client.get_interface_traffic()
+               print(f"WAN bytes received: {traffic['interfaces']['wan']['rx_bytes']}")
+
+               async for sample in client.stream_interface_traffic(poll_interval=1):
+                   wan = sample["interfaces"]["wan"]
+                   print(f"WAN receive rate: {wan['rx_bits_per_second']} bit/s")
+                   break
+
+   asyncio.run(main())
+
 Check firmware or control a service
 -----------------------------------
 

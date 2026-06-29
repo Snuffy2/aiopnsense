@@ -11,6 +11,7 @@ reference easier to navigate, the methods are grouped below by functional area.
    firmware
    system
    telemetry
+   traffic
    dhcp
    firewall
    services
