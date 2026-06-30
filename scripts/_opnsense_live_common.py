@@ -91,9 +91,16 @@ def load_env_file(path: Path = DEFAULT_ENV_FILE) -> dict[str, str]:
     """
     if not path.exists():
         raise LiveConfigError(f"Env file not found: {path}")
+    if not path.is_file():
+        raise LiveConfigError(f"Env file is not a file: {path}")
 
     values: dict[str, str] = {}
-    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    try:
+        raw_lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise LiveConfigError(f"Unable to read env file: {path}") from exc
+
+    for line_number, raw_line in enumerate(raw_lines, 1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue

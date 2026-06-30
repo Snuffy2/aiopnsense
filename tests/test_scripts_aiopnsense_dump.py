@@ -170,6 +170,22 @@ def test_choose_endpoint_from_menu_rejects_invalid_number(
         module.choose_endpoint_from_menu(["system_info", "services", "smart"])
 
 
+@pytest.mark.parametrize("prompt_error", [EOFError, KeyboardInterrupt])
+def test_choose_endpoint_from_menu_rejects_prompt_cancellation(
+    prompt_error: type[BaseException], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prompt cancellation exits through the same controlled invalid-selection path."""
+    module = load_dump_module()
+
+    def raise_prompt_error(_prompt: str = "") -> None:
+        raise prompt_error
+
+    monkeypatch.setattr("builtins.input", raise_prompt_error)
+
+    with pytest.raises(SystemExit, match="Invalid endpoint selection"):
+        module.choose_endpoint_from_menu(["system_info", "services", "smart"])
+
+
 @pytest.mark.asyncio
 async def test_run_endpoint_calls_public_method() -> None:
     """Non-stream endpoints call their mapped public no-arg method."""
@@ -441,6 +457,33 @@ async def test_async_main_closes_client_when_run_endpoint_fails(
 
 
 @pytest.mark.asyncio
+async def test_async_main_preserves_run_endpoint_error_when_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``async_close`` failures do not mask the primary endpoint error."""
+    module = load_dump_module()
+    config = object()
+    session = FakeClientSession()
+    client = FakeClient()
+    client.async_close = AsyncMock(side_effect=RuntimeError("close failed"))
+
+    monkeypatch.setattr(module, "load_live_config", MagicMock(return_value=config))
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda: session)
+    monkeypatch.setattr(module, "create_client", lambda _config, _session: client)
+    monkeypatch.setattr(module, "run_endpoint", AsyncMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(module, "write_output", MagicMock())
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await module.async_main(["--endpoint", "system_info"])
+
+    client.validate.assert_awaited_once()
+    client.async_close.assert_awaited_once()
+    module.write_output.assert_not_called()
+    session.enter.assert_awaited_once()
+    session.exit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_async_main_closes_client_when_validate_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -545,14 +588,22 @@ def test_main_turns_timeout_error_into_system_exit(
     assert "TimeoutError: request timed out" in str(excinfo.value)
 
 
-def test_reexec_with_repo_venv_uses_local_python(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reexec_with_repo_venv_uses_local_python(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Bootstrap re-exec uses the repo venv when launched outside it."""
     module = load_dump_module()
     calls: list[tuple[str, list[str]]] = []
-    repo_venv = Path(module.__file__).resolve().parents[1] / ".venv"
+    script_path = tmp_path / "scripts" / "aiopnsense_dump.py"
+    script_path.parent.mkdir()
+    script_path.write_text("", encoding="utf-8")
+    repo_venv = tmp_path / ".venv"
     expected_python = repo_venv / "bin" / "python"
+    expected_python.parent.mkdir(parents=True)
+    expected_python.write_text("", encoding="utf-8")
 
     monkeypatch.delenv("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED", raising=False)
+    monkeypatch.setattr(module, "__file__", str(script_path))
     monkeypatch.setattr(module.sys, "prefix", "/usr/local")
     monkeypatch.setattr(module.sys, "argv", ["aiopnsense_dump.py", "--help"])
     monkeypatch.setattr(module.os, "execv", lambda path, args: calls.append((path, args)))
@@ -563,7 +614,7 @@ def test_reexec_with_repo_venv_uses_local_python(monkeypatch: pytest.MonkeyPatch
     assert calls == [
         (
             str(expected_python),
-            [str(expected_python), module.__file__, "--help"],
+            [str(expected_python), str(script_path), "--help"],
         )
     ]
 

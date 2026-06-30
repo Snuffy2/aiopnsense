@@ -617,14 +617,22 @@ def test_entrypoint_exits_with_help_status_zero() -> None:
     assert excinfo.value.code == 0
 
 
-def test_reexec_with_repo_venv_uses_local_python(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reexec_with_repo_venv_uses_local_python(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Bootstrap re-exec uses the repo venv when launched outside it."""
     module = load_api_call_module()
     calls: list[tuple[str, list[str]]] = []
-    repo_venv = Path(module.__file__).resolve().parents[1] / ".venv"
+    script_path = tmp_path / "scripts" / "opnsense_api_call.py"
+    script_path.parent.mkdir()
+    script_path.write_text("", encoding="utf-8")
+    repo_venv = tmp_path / ".venv"
     expected_python = repo_venv / "bin" / "python"
+    expected_python.parent.mkdir(parents=True)
+    expected_python.write_text("", encoding="utf-8")
 
     monkeypatch.delenv("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED", raising=False)
+    monkeypatch.setattr(module, "__file__", str(script_path))
     monkeypatch.setattr(module.sys, "prefix", "/usr/local")
     monkeypatch.setattr(module.sys, "argv", ["opnsense_api_call.py", "--help"])
     monkeypatch.setattr(module.os, "execv", lambda path, args: calls.append((path, args)))
@@ -635,7 +643,7 @@ def test_reexec_with_repo_venv_uses_local_python(monkeypatch: pytest.MonkeyPatch
     assert calls == [
         (
             str(expected_python),
-            [str(expected_python), module.__file__, "--help"],
+            [str(expected_python), str(script_path), "--help"],
         )
     ]
 
@@ -698,3 +706,19 @@ def test_main_converts_timeout_error_to_system_exit(
         module.main()
 
     assert "TimeoutError" in str(excinfo.value)
+
+
+def test_main_converts_os_error_to_system_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """main() converts I/O errors into concise SystemExit messages."""
+    module = load_api_call_module()
+
+    async def raise_os_error() -> None:
+        raise OSError("output is unavailable")
+
+    monkeypatch.setattr(module, "async_main", raise_os_error)
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert "OSError" in str(excinfo.value)

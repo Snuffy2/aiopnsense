@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
+import logging
 import os
 import sys
 import time
@@ -28,7 +29,8 @@ def _reexec_with_repo_venv() -> None:
     os.execv(str(venv_python), [str(venv_python), __file__, *sys.argv[1:]])
 
 
-_reexec_with_repo_venv()
+if __name__ == "__main__":
+    _reexec_with_repo_venv()
 
 import aiohttp  # noqa: E402
 from aiopnsense.exceptions import OPNsenseError  # noqa: E402
@@ -39,6 +41,8 @@ LiveConfigError = _common.LiveConfigError
 create_client = _common.create_client
 load_live_config = _common.load_live_config
 write_output = _common.write_output
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -149,10 +153,10 @@ def choose_endpoint_from_menu(endpoint_names: list[str]) -> str:
         endpoint_spec = ENDPOINTS[endpoint_name]
         warning_suffix = f" [{endpoint_spec.warning}]" if endpoint_spec.warning else ""
         print(f"{index}. {endpoint_name} -> {endpoint_spec.method_name}{warning_suffix}")
-    selection = input("Select endpoint by number: ").strip()
     try:
+        selection = input("Select endpoint by number: ").strip()
         index = int(selection)
-    except ValueError as err:
+    except (ValueError, EOFError, KeyboardInterrupt) as err:
         raise SystemExit("Invalid endpoint selection") from err
     if index < 1 or index > len(endpoint_names):
         raise SystemExit("Invalid endpoint selection")
@@ -229,12 +233,21 @@ async def async_main(argv: list[str] | None = None) -> int:
     config = load_live_config(args.env_file)
     async with aiohttp.ClientSession() as session:
         client = create_client(config, session)
+        primary_error: BaseException | None = None
         try:
             await client.validate()
             result = await run_endpoint(client, endpoint, args.stream_seconds)
             write_output(result, args.output)
+        except (OPNsenseError, aiohttp.ClientError, TimeoutError, RuntimeError, OSError) as err:
+            primary_error = err
+            raise
         finally:
-            await client.async_close()
+            try:
+                await client.async_close()
+            except (OPNsenseError, aiohttp.ClientError, TimeoutError, RuntimeError) as err:
+                if primary_error is None:
+                    raise
+                _LOGGER.debug("Failed to close OPNsense client after primary failure", exc_info=err)
     return 0
 
 

@@ -70,6 +70,18 @@ def test_load_env_file_rejects_malformed_line(tmp_path: Path) -> None:
         common.load_env_file(env_file)
 
 
+def test_load_env_file_rejects_non_file_path(tmp_path: Path) -> None:
+    """Passing a directory raises a configuration error with clear path context."""
+    common = load_common_module()
+    env_dir = tmp_path / "not-a-file"
+    env_dir.mkdir()
+
+    with pytest.raises(common.LiveConfigError, match=f"not a file: {env_dir}") as excinfo:
+        common.load_env_file(env_dir)
+
+    assert str(env_dir) in str(excinfo.value)
+
+
 def test_load_env_file_rejects_malformed_line_without_leaking_secret(tmp_path: Path) -> None:
     """Malformed env lines should not leak secret text in error messages."""
     common = load_common_module()

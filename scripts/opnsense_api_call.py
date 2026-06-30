@@ -27,7 +27,8 @@ def _reexec_with_repo_venv() -> None:
     os.execv(str(venv_python), [str(venv_python), __file__, *sys.argv[1:]])
 
 
-_reexec_with_repo_venv()
+if __name__ == "__main__":
+    _reexec_with_repo_venv()
 
 import aiohttp  # noqa: E402
 
@@ -182,7 +183,7 @@ async def call_api(
         try:
             payload_json = await response.json(content_type=None)
             payload_text = None
-        except aiohttp.ContentTypeError, ValueError:
+        except ValueError:
             payload_json = None
             payload_text = await response.text()
         return {
@@ -221,9 +222,9 @@ def main() -> int:
     try:
         return asyncio.run(async_main())
     except LiveConfigError as err:
-        raise SystemExit(str(err))
-    except (aiohttp.ClientError, TimeoutError) as err:
-        raise SystemExit(f"{type(err).__name__}: {err}")
+        raise SystemExit(str(err)) from None
+    except (aiohttp.ClientError, TimeoutError, OSError) as err:
+        raise SystemExit(f"{type(err).__name__}: {err}") from None
 
 
 if __name__ == "__main__":
