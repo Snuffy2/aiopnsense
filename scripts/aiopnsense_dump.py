@@ -294,7 +294,13 @@ def main() -> int:
     """CLI entrypoint."""
     try:
         return asyncio.run(async_main())
-    except (LiveConfigError, OPNsenseError, aiohttp.ClientError, TimeoutError) as err:
+    except (
+        LiveConfigError,
+        OPNsenseError,
+        aiohttp.ClientError,
+        TimeoutError,
+        OSError,
+    ) as err:
         raise SystemExit(f"{type(err).__name__}: {err}") from err
 
 

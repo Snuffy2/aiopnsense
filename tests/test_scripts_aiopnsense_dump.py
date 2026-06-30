@@ -620,6 +620,23 @@ def test_main_turns_timeout_error_into_system_exit(
     assert "TimeoutError: request timed out" in str(excinfo.value)
 
 
+def test_main_converts_os_error_to_system_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``main`` converts I/O write failures into concise ``SystemExit``."""
+    module = load_dump_module()
+
+    async def raise_os_error() -> None:
+        raise OSError("output is unavailable")
+
+    monkeypatch.setattr(module, "async_main", raise_os_error)
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert "OSError: output is unavailable" in str(excinfo.value)
+
+
 def test_reexec_with_repo_venv_uses_local_python(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
