@@ -139,15 +139,15 @@ def normalize_traffic_payload(
 
         if include_per_second_rates:
             normalized_row["interval"] = sample_interval
-            if isinstance(rx_bytes, int) and rx_bytes >= 0:
+            if isinstance(rx_bytes, int):
                 normalized_row["rx_bytes_per_second"] = rx_bytes / sample_interval
                 normalized_row["rx_bits_per_second"] = rx_bytes * 8 / sample_interval
-            if isinstance(tx_bytes, int) and tx_bytes >= 0:
+            if isinstance(tx_bytes, int):
                 normalized_row["tx_bytes_per_second"] = tx_bytes / sample_interval
                 normalized_row["tx_bits_per_second"] = tx_bytes * 8 / sample_interval
-            if isinstance(rx_packets, int) and rx_packets >= 0:
+            if isinstance(rx_packets, int):
                 normalized_row["rx_packets_per_second"] = rx_packets / sample_interval
-            if isinstance(tx_packets, int) and tx_packets >= 0:
+            if isinstance(tx_packets, int):
                 normalized_row["tx_packets_per_second"] = tx_packets / sample_interval
         normalized["interfaces"][interface_name] = normalized_row
 
@@ -216,7 +216,6 @@ class TrafficMixin(AiopnsenseClientProtocol):
 
         event_count = 0
         previous_time: float | None = None
-        skip_previous_reseed = False
         stream_read_timeout = max(interval, DEFAULT_REQUEST_TIMEOUT_SECONDS)
         stream_events = self._stream_json_events(
             endpoint,
@@ -227,7 +226,6 @@ class TrafficMixin(AiopnsenseClientProtocol):
             async for event in stream_events:
                 if event.get(_STREAM_JSON_EVENT_RESET_KEY) is True:
                     previous_time = None
-                    skip_previous_reseed = False
                     continue
 
                 event_count += 1
@@ -237,11 +235,8 @@ class TrafficMixin(AiopnsenseClientProtocol):
                     previous_time is not None and event_time <= previous_time
                 ):
                     previous_time = None
-                    skip_previous_reseed = True
                     continue
                 if previous_time is None:
-                    if skip_previous_reseed:
-                        skip_previous_reseed = False
                     previous_time = event_time
                 else:
                     sample_interval = event_time - previous_time
