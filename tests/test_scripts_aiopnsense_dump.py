@@ -603,6 +603,23 @@ def test_main_turns_aiohttp_client_error_into_system_exit(
     assert "ClientConnectionError: connection failed" in str(excinfo.value)
 
 
+def test_main_turns_runtime_error_into_system_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``main`` converts runtime failures into concise ``SystemExit``."""
+    module = load_dump_module()
+
+    async def raise_runtime_error() -> None:
+        raise RuntimeError("runtime validation failed")
+
+    monkeypatch.setattr(module, "async_main", raise_runtime_error)
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert "RuntimeError: runtime validation failed" in str(excinfo.value)
+
+
 def test_main_turns_timeout_error_into_system_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

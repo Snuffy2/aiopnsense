@@ -300,6 +300,7 @@ def main() -> int:
         aiohttp.ClientError,
         TimeoutError,
         OSError,
+        RuntimeError,
     ) as err:
         raise SystemExit(f"{type(err).__name__}: {err}") from err
 
