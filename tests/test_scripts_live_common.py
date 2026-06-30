@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import dataclasses
 import json
 from pathlib import Path
 import sys
@@ -23,6 +24,14 @@ def load_common_module() -> ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_default_env_file_points_to_scripts_env() -> None:
+    """DEFAULT_ENV_FILE resolves to aiopnsense.env under scripts."""
+    common = load_common_module()
+
+    assert common.DEFAULT_ENV_FILE.name == "aiopnsense.env"
+    assert common.DEFAULT_ENV_FILE.parent.name == "scripts"
 
 
 def test_load_env_file_parses_simple_shell_style_values(tmp_path: Path) -> None:
@@ -195,6 +204,20 @@ def test_load_config_empty_canonical_verify_ssl_is_invalid(tmp_path: Path) -> No
 
     with pytest.raises(common.LiveConfigError, match="AIOPNSENSE_VERIFY_SSL"):
         common.load_live_config(env_file)
+
+
+def test_live_config_is_frozen() -> None:
+    """LiveConfig is immutable and rejects attribute reassignment."""
+    common = load_common_module()
+    config = common.LiveConfig(
+        url="https://firewall.example.test",
+        api_key="key",
+        api_secret="secret",
+        verify_ssl=True,
+    )
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        config.url = "https://changed.example.test"
 
 
 def test_create_client_uses_live_config(monkeypatch: pytest.MonkeyPatch) -> None:
