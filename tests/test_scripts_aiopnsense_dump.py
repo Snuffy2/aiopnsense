@@ -499,6 +499,40 @@ def test_main_turns_opnsense_error_into_system_exit(
     assert "OPNsenseError: connection failed" in str(excinfo.value)
 
 
+def test_main_turns_aiohttp_client_error_into_system_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``main`` converts aiohttp live failures into concise ``SystemExit``."""
+    module = load_dump_module()
+
+    async def raise_client_error() -> None:
+        raise module.aiohttp.ClientConnectionError("connection failed")
+
+    monkeypatch.setattr(module, "async_main", raise_client_error)
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert "ClientConnectionError: connection failed" in str(excinfo.value)
+
+
+def test_main_turns_timeout_error_into_system_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``main`` converts timeout failures into concise ``SystemExit``."""
+    module = load_dump_module()
+
+    async def raise_timeout_error() -> None:
+        raise TimeoutError("request timed out")
+
+    monkeypatch.setattr(module, "async_main", raise_timeout_error)
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert "TimeoutError: request timed out" in str(excinfo.value)
+
+
 def test_reexec_with_repo_venv_uses_local_python(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bootstrap re-exec uses the repo venv when launched outside it."""
     module = load_dump_module()

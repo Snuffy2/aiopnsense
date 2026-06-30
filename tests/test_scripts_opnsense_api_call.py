@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from types import ModuleType
 from typing import Any
+from unittest.mock import MagicMock
 import aiohttp
 
 import pytest
@@ -614,6 +615,46 @@ def test_entrypoint_exits_with_help_status_zero() -> None:
         sys.argv = original_argv
 
     assert excinfo.value.code == 0
+
+
+def test_reexec_with_repo_venv_uses_local_python(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bootstrap re-exec uses the repo venv when launched outside it."""
+    module = load_api_call_module()
+    calls: list[tuple[str, list[str]]] = []
+    repo_venv = Path(module.__file__).resolve().parents[1] / ".venv"
+    expected_python = repo_venv / "bin" / "python"
+
+    monkeypatch.delenv("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED", raising=False)
+    monkeypatch.setattr(module.sys, "prefix", "/usr/local")
+    monkeypatch.setattr(module.sys, "argv", ["opnsense_api_call.py", "--help"])
+    monkeypatch.setattr(module.os, "execv", lambda path, args: calls.append((path, args)))
+
+    module._reexec_with_repo_venv()
+
+    assert module.os.environ["AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED"] == "1"
+    assert calls == [
+        (
+            str(expected_python),
+            [str(expected_python), module.__file__, "--help"],
+        )
+    ]
+
+
+def test_reexec_with_repo_venv_skips_when_already_in_venv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bootstrap does nothing when the repo venv is already active."""
+    module = load_api_call_module()
+    repo_venv = Path(module.__file__).resolve().parents[1] / ".venv"
+    execv = MagicMock()
+
+    monkeypatch.delenv("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED", raising=False)
+    monkeypatch.setattr(module.sys, "prefix", str(repo_venv))
+    monkeypatch.setattr(module.os, "execv", execv)
+
+    module._reexec_with_repo_venv()
+
+    execv.assert_not_called()
 
 
 def test_main_converts_client_error_to_system_exit(
