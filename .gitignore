@@ -10,3 +10,4 @@ docs/_build/
 docs/source/_build/
 docs/source/_generated/
 .gem/
+scripts/aiopnsense.env
