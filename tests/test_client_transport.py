@@ -473,6 +473,77 @@ async def test_stream_json_events_yields_each_valid_data_message(
 
 
 @pytest.mark.asyncio
+async def test_stream_json_events_returns_empty_sequence_for_non_ok_response_when_not_throwing(
+    make_client: Callable[..., Any],
+) -> None:
+    """Non-OK stream responses should yield no events when errors are disabled."""
+    session = MagicMock()
+    session.get = lambda *a, **k: FakeResponse(
+        stream_chunks=[b'data: {"time": 1}\n\n'],
+        status=500,
+        reason="Internal Server Error",
+        ok=False,
+    )
+    client = make_client(session=session)
+    try:
+        client._throw_errors = False
+        events = [
+            event async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1")
+        ]
+
+        assert events == []
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_skips_non_data_lines_before_valid_data_message(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Comment and event metadata lines should be ignored until a data line arrives."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b': keep-alive\nevent: update\nid: 7\ndata: {"time": 6, "interfaces": {}}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        events = [
+            event async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1")
+        ]
+
+        assert events == [{"time": 6, "interfaces": {}}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_skips_comment_only_frame_before_later_data_message(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Frames without any data lines should be skipped without suppressing later events."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b": keep-alive\nevent: ping\n\n",
+            b'data: {"time": 7, "interfaces": {}}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        events = [
+            event async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1")
+        ]
+
+        assert events == [{"time": 7, "interfaces": {}}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_stream_json_events_sets_connect_and_read_timeouts(
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],
@@ -693,6 +764,49 @@ async def test_stream_json_events_ignores_trailing_incomplete_utf8_chunk(
             events.append(event)
 
         assert events == [{"time": 11}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_appends_final_decoder_tail_text_at_eof(
+    make_client: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EOF tail text from the incremental decoder should complete the final JSON event."""
+
+    class _FakeIncrementalDecoder:
+        """Minimal decoder stub that defers completion until EOF."""
+
+        def decode(self, data: bytes, final: bool = False) -> str:
+            """Return the partial frame on chunk decode and the tail on EOF."""
+            if final:
+                return "}\n\n"
+            return 'data: {"time": 23'
+
+    def fake_getincrementaldecoder(_encoding: str) -> Callable[[], _FakeIncrementalDecoder]:
+        """Return the fake incremental decoder factory used by this test."""
+        return _FakeIncrementalDecoder
+
+    monkeypatch.setattr(
+        aiopnsense.client_transport.codecs, "getincrementaldecoder", fake_getincrementaldecoder
+    )
+
+    session = MagicMock()
+    session.get = lambda *a, **k: FakeResponse(
+        status=200,
+        reason="OK",
+        ok=True,
+        stream_chunks=[b"ignored chunk payload"],
+        include_request_info=True,
+    )
+    client = make_client(session=session)
+    try:
+        events = [
+            event async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1")
+        ]
+
+        assert events == [{"time": 23}]
     finally:
         await client.async_close()
 
