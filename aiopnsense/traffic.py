@@ -9,7 +9,7 @@ from .client_transport import _STREAM_JSON_EVENT_RESET_KEY
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, try_to_float, try_to_int
 
-DIAGNOSTICS_TRAFFIC_ENDPOINT = "/api/diagnostics/traffic"
+DIAGNOSTICS_TRAFFIC_ENDPOINT = "/api/diagnostics/traffic/interface"
 DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX = "/api/diagnostics/traffic/stream"
 
 _INTERFACE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -24,12 +24,21 @@ _INTERFACE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 
 
 def _coalesce_identity(
-    value: Any,
+    value: object | None,
     *,
     fallback: str,
-    description: Any = None,
+    description: object | None = None,
 ) -> str:
-    """Return a usable interface identity value with safe fallbacks."""
+    """Return a usable interface identity value with safe fallbacks.
+
+    Args:
+        value (object | None): Primary identity value candidate.
+        fallback (str): Fallback identity to return when all candidates are empty.
+        description (object | None): Secondary identity candidate from description.
+
+    Returns:
+        str: Normalized interface identity.
+    """
     if isinstance(value, str):
         candidate = value.strip()
         if candidate:
@@ -44,7 +53,15 @@ def _coalesce_identity(
 
 
 def _first_int(row: Mapping[str, Any], aliases: tuple[str, ...]) -> int | None:
-    """Return the first parseable integer from a row for the supplied aliases."""
+    """Return the first parseable integer from a row for the supplied aliases.
+
+    Args:
+        row (Mapping[str, Any]): Mapping that may contain alias keys.
+        aliases (tuple[str, ...]): Candidate keys to inspect in order.
+
+    Returns:
+        int | None: First parseable integer value or ``None``.
+    """
     for alias in aliases:
         value = try_to_int(row.get(alias))
         if value is not None:
@@ -52,8 +69,15 @@ def _first_int(row: Mapping[str, Any], aliases: tuple[str, ...]) -> int | None:
     return None
 
 
-def _source_interfaces(payload: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Return the interface mapping from supported OPNsense traffic payload shapes."""
+def _source_interfaces(payload: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
+    """Return the interface mapping from supported OPNsense traffic payload shapes.
+
+    Args:
+        payload (Mapping[str, Any]): Raw OPNsense payload.
+
+    Returns:
+        Mapping[str, Mapping[str, Any]]: Normalized interface-name keyed mapping.
+    """
     interfaces = payload.get("interfaces")
     if isinstance(interfaces, Mapping):
         return interfaces
@@ -66,12 +90,14 @@ def normalize_traffic_payload(
     payload: Mapping[str, Any],
     *,
     interval: float,
+    include_per_second_rates: bool = True,
 ) -> dict[str, Any]:
     """Normalize OPNsense diagnostics traffic payloads.
 
     Args:
         payload: Raw traffic payload from ``/api/diagnostics/traffic`` or a stream event.
         interval: Seconds represented by the traffic counters in the payload.
+        include_per_second_rates: Derive per-second rates when true.
 
     Returns:
         dict[str, Any]: Normalized traffic sample with an ``interfaces`` mapping keyed by interface name.
@@ -108,17 +134,18 @@ def normalize_traffic_payload(
         ):
             continue
 
-        normalized_row["interval"] = sample_interval
-        if isinstance(rx_bytes, int):
-            normalized_row["rx_bytes_per_second"] = rx_bytes / sample_interval
-            normalized_row["rx_bits_per_second"] = rx_bytes * 8 / sample_interval
-        if isinstance(tx_bytes, int):
-            normalized_row["tx_bytes_per_second"] = tx_bytes / sample_interval
-            normalized_row["tx_bits_per_second"] = tx_bytes * 8 / sample_interval
-        if isinstance(rx_packets, int):
-            normalized_row["rx_packets_per_second"] = rx_packets / sample_interval
-        if isinstance(tx_packets, int):
-            normalized_row["tx_packets_per_second"] = tx_packets / sample_interval
+        if include_per_second_rates:
+            normalized_row["interval"] = sample_interval
+            if isinstance(rx_bytes, int):
+                normalized_row["rx_bytes_per_second"] = rx_bytes / sample_interval
+                normalized_row["rx_bits_per_second"] = rx_bytes * 8 / sample_interval
+            if isinstance(tx_bytes, int):
+                normalized_row["tx_bytes_per_second"] = tx_bytes / sample_interval
+                normalized_row["tx_bits_per_second"] = tx_bytes * 8 / sample_interval
+            if isinstance(rx_packets, int):
+                normalized_row["rx_packets_per_second"] = rx_packets / sample_interval
+            if isinstance(tx_packets, int):
+                normalized_row["tx_packets_per_second"] = tx_packets / sample_interval
         normalized["interfaces"][interface_name] = normalized_row
 
     return normalized
@@ -142,12 +169,12 @@ class TrafficMixin(AiopnsenseClientProtocol):
                 _LOGGER.debug("Diagnostics traffic endpoint unavailable")
                 return empty_sample
             payload = await self._safe_dict_get(DIAGNOSTICS_TRAFFIC_ENDPOINT)
-            return normalize_traffic_payload(payload, interval=1.0)
+            return normalize_traffic_payload(payload, interval=1.0, include_per_second_rates=False)
         except (TimeoutError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
             if self._throw_errors:
                 raise
             _LOGGER.debug(
-                "Falling back to empty interface traffic sample due %s: %s",
+                "Falling back to empty interface traffic sample due to %s: %s",
                 type(exc).__name__,
                 exc,
             )
@@ -170,8 +197,18 @@ class TrafficMixin(AiopnsenseClientProtocol):
         """
         interval = max(poll_interval, 1)
         endpoint = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/{interval}"
-        if not await self._is_get_endpoint_available(endpoint):
-            _LOGGER.debug("Diagnostics traffic stream endpoint unavailable")
+        try:
+            if not await self._is_get_endpoint_available(endpoint):
+                _LOGGER.debug("Diagnostics traffic stream endpoint unavailable")
+                return
+        except (TimeoutError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
+            if self._throw_errors:
+                raise
+            _LOGGER.debug(
+                "Falling back to empty interface traffic stream due to %s: %s",
+                type(exc).__name__,
+                exc,
+            )
             return
 
         event_count = 0

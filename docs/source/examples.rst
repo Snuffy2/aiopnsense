@@ -50,11 +50,12 @@ Read diagnostics traffic
                session=session,
            ) as client:
                traffic = await client.get_interface_traffic()
-               print(f"WAN bytes received: {traffic['interfaces']['wan']['rx_bytes']}")
+               wan = (traffic.get("interfaces") or {}).get("wan", {})
+               print(f"WAN bytes received: {wan.get('rx_bytes', 0)}")
 
                async for sample in client.stream_interface_traffic(poll_interval=1):
-                   wan = sample["interfaces"]["wan"]
-                   print(f"WAN receive rate: {wan['rx_bits_per_second']} bit/s")
+                   sample_wan = (sample.get("interfaces") or {}).get("wan", {})
+                   print(f"WAN receive rate: {sample_wan.get('rx_bits_per_second', 0)} bit/s")
                    break
 
    asyncio.run(main())

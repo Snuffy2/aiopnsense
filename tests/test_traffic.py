@@ -22,6 +22,11 @@ def test_diagnostics_traffic_stream_endpoint_prefix() -> None:
     assert DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX == "/api/diagnostics/traffic/stream"
 
 
+def test_diagnostics_traffic_endpoint_points_to_interface() -> None:
+    """Snapshot endpoint constant should target interface-scoped diagnostics traffic."""
+    assert DIAGNOSTICS_TRAFFIC_ENDPOINT == "/api/diagnostics/traffic/interface"
+
+
 def test_normalize_traffic_payload_from_interfaces_mapping() -> None:
     """Traffic payloads with an interfaces mapping should normalize aliases and rates."""
     payload = {
@@ -135,11 +140,32 @@ async def test_get_interface_traffic_probes_and_normalizes(
         assert traffic["interfaces"]["wan"]["interface"] == "wan"
         assert traffic["interfaces"]["wan"]["name"] == "WAN"
         assert traffic["interfaces"]["wan"]["rx_bytes"] == 120
-        assert traffic["interfaces"]["wan"]["tx_bits_per_second"] == 1920.0
+        assert "tx_bits_per_second" not in traffic["interfaces"]["wan"]
         client._is_get_endpoint_available.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
         client._safe_dict_get.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
     finally:
         await client.async_close()
+
+
+def test_normalize_traffic_payload_without_rates_for_snapshots() -> None:
+    """Snapshot normalization should omit per-second rates while preserving counters."""
+    payload = {
+        "time": 1710000006,
+        "interfaces": {
+            "wan": {
+                "bytes received": "1200",
+                "bytes transmitted": "3400",
+            }
+        },
+    }
+
+    normalized = normalize_traffic_payload(payload, interval=1.0, include_per_second_rates=False)
+
+    assert normalized["interfaces"]["wan"]["rx_bytes"] == 1200
+    assert normalized["interfaces"]["wan"]["tx_bytes"] == 3400
+    assert "rx_bytes_per_second" not in normalized["interfaces"]["wan"]
+    assert "tx_bytes_per_second" not in normalized["interfaces"]["wan"]
+    assert "interval" not in normalized["interfaces"]["wan"]
 
 
 @pytest.mark.asyncio
@@ -516,5 +542,42 @@ async def test_stream_interface_traffic_returns_when_endpoint_unavailable(
 
         assert samples == []
         client._stream_json_events.assert_not_called()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_returns_empty_iteration_on_probe_timeout(
+    make_client: Callable[..., Any],
+) -> None:
+    """Probe timeout should return an empty stream when throw_errors is disabled."""
+    client = make_client()
+    try:
+        assert isinstance(client, OPNsenseClient)
+
+        client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
+        client._stream_json_events = AsyncMock()
+
+        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
+
+        assert samples == []
+        client._stream_json_events.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_raises_when_probe_timeout_and_throw_errors_enabled(
+    make_client: Callable[..., Any],
+) -> None:
+    """Probe timeout should propagate when throw_errors is enabled."""
+    client = make_client(throw_errors=True)
+    try:
+        assert isinstance(client, OPNsenseClient)
+
+        client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
+
+        with pytest.raises(TimeoutError):
+            [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
     finally:
         await client.async_close()

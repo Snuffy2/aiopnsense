@@ -167,6 +167,46 @@ class ClientTransportMixin:
                 decoder = codecs.getincrementaldecoder("utf-8")()
                 buffer = ""
                 pending_cr = False
+
+                def _drain_buffer(
+                    source_buffer: str,
+                ) -> tuple[str, list[dict[str, Any]]]:
+                    """Drain complete JSON SSE events from a text buffer.
+
+                    Args:
+                        source_buffer (str): Buffered stream text to parse.
+
+                    Returns:
+                        tuple[str, list[dict[str, Any]]]: Remaining unparsed buffer
+                            text and decoded JSON events.
+                    """
+                    events: list[dict[str, Any]] = []
+                    drain_buffer = source_buffer
+                    while "\n\n" in drain_buffer:
+                        message, drain_buffer = drain_buffer.split("\n\n", 1)
+                        data_lines: list[str] = []
+                        for line in message.splitlines():
+                            if not line.startswith("data:"):
+                                continue
+                            value = line[len("data:") :]
+                            if value.startswith(" "):
+                                value = value[1:]
+                            data_lines.append(value)
+
+                        if not data_lines:
+                            continue
+
+                        response_str = "\n".join(data_lines)
+                        try:
+                            response_json = json.loads(response_str)
+                        except json.JSONDecodeError:
+                            _LOGGER.debug("Skipping malformed stream JSON event: %s", response_str)
+                            continue
+                        if isinstance(response_json, MutableMapping):
+                            events.append(dict(response_json))
+
+                    return drain_buffer, events
+
                 async for chunk in response.content.iter_chunked(1024):
                     try:
                         chunk_text = decoder.decode(chunk)
@@ -190,25 +230,9 @@ class ClientTransportMixin:
                         pending_cr = True
 
                     buffer += chunk_text.replace("\r\n", "\n").replace("\r", "\n")
-                    while "\n\n" in buffer:
-                        message, buffer = buffer.split("\n\n", 1)
-                        data_lines: list[str] = []
-                        for line in message.splitlines():
-                            if not line.startswith("data:"):
-                                continue
-                            data_lines.append(line[len("data:") :].strip())
-
-                        if not data_lines:
-                            continue
-
-                        response_str = "\n".join(data_lines)
-                        try:
-                            response_json = json.loads(response_str)
-                        except json.JSONDecodeError:
-                            _LOGGER.debug("Skipping malformed stream JSON event: %s", response_str)
-                            continue
-                        if isinstance(response_json, MutableMapping):
-                            yield dict(response_json)
+                    buffer, events = _drain_buffer(buffer)
+                    for event in events:
+                        yield event
                 try:
                     tail_text = decoder.decode(b"", final=True)
                 except UnicodeDecodeError as err:
@@ -227,6 +251,10 @@ class ClientTransportMixin:
                         buffer += tail_text.replace("\r\n", "\n").replace("\r", "\n")
                 if pending_cr:
                     buffer += "\n"
+
+                buffer, events = _drain_buffer(buffer)
+                for event in events:
+                    yield event
         except (aiohttp.ClientError, TimeoutError) as err:
             _LOGGER.error("Client error in stream_json_events. %s: %s", type(err).__name__, err)
             if self._throw_errors:

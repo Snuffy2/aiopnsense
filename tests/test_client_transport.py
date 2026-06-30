@@ -1,13 +1,15 @@
 """Tests for client transport helpers and HTTP response handling."""
 
+import json
 from collections.abc import MutableMapping
+from types import TracebackType
 from typing import Any, Callable
 from unittest.mock import AsyncMock, MagicMock
-from types import TracebackType
-import json
 
 import aiohttp
 import pytest
+
+import aiopnsense.client_transport
 
 from aiopnsense.client_transport import _STREAM_JSON_EVENT_RESET_KEY
 from aiopnsense.const import (
@@ -717,6 +719,60 @@ async def test_stream_json_events_reassembles_split_crlf_boundary_multiline_json
             events.append(event)
             break
         assert events == [{"time": 11, "interfaces": {"wan": {"rx_bytes": 12}}}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_yields_eof_complete_event(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Stream parser should emit a complete SSE event when only EOF terminates it."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [b'data: {"time": 21, "interfaces": {"wan": {"rx_bytes": 1}}}\n\r']
+    )
+    client = make_client(session=session)
+    try:
+        events: list[dict[str, Any]] = []
+        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
+            events.append(event)
+
+        assert events == [{"time": 21, "interfaces": {"wan": {"rx_bytes": 1}}}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_preserves_leading_sse_space_after_data_prefix(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: Callable[..., FakeResponse],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parser should preserve only one leading space after `data:` when present."""
+    captured_payloads: list[str] = []
+    original_loads = aiopnsense.client_transport.json.loads
+
+    def fake_loads(response_str: str) -> dict[str, Any]:
+        captured_payloads.append(response_str)
+        return original_loads(response_str)
+
+    monkeypatch.setattr("aiopnsense.client_transport.json.loads", fake_loads)
+
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [b'data:   {"time": 22, "name": "  leading"}\n\n']
+    )
+    client = make_client(session=session)
+    try:
+        events = [
+            event async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1")
+        ]
+
+        assert len(events) == 1
+        assert events[0] == {"time": 22, "name": "  leading"}
+        assert captured_payloads == ['  {"time": 22, "name": "  leading"}']
     finally:
         await client.async_close()
 
