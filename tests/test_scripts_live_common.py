@@ -80,6 +80,18 @@ def test_get_env_value_uses_fallback_key() -> None:
     assert common.get_env_value(env, "API_KEY") == "fallback-key"
 
 
+def test_get_env_value_prefers_canonical_key_even_when_blank() -> None:
+    """Canonical key presence wins even when blank."""
+    common = load_common_module()
+    env = {
+        "AIOPNSENSE_URL": "",
+        "OPNSENSE_URL": "https://fallback.example.test",
+    }
+
+    with pytest.raises(common.LiveConfigError, match="AIOPNSENSE_URL"):
+        common.get_env_value(env, "URL")
+
+
 @pytest.mark.parametrize(
     ("raw_value", "expected"),
     [
@@ -162,6 +174,27 @@ def test_load_config_defaults_verify_ssl_true(tmp_path: Path) -> None:
     config = common.load_live_config(env_file)
 
     assert config.verify_ssl is True
+
+
+def test_load_config_empty_canonical_verify_ssl_is_invalid(tmp_path: Path) -> None:
+    """Empty canonical verify flag must be rejected, not defaulted or treated as fallback."""
+    common = load_common_module()
+    env_file = tmp_path / "aiopnsense.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "AIOPNSENSE_URL=https://firewall.example.test",
+                "AIOPNSENSE_API_KEY=key",
+                "AIOPNSENSE_API_SECRET=secret",
+                "AIOPNSENSE_VERIFY_SSL=",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(common.LiveConfigError, match="AIOPNSENSE_VERIFY_SSL"):
+        common.load_live_config(env_file)
 
 
 def test_create_client_uses_live_config(monkeypatch: pytest.MonkeyPatch) -> None:

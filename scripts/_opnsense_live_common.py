@@ -122,12 +122,19 @@ def get_env_value(values: Mapping[str, str], suffix: str, *, required: bool = Tr
     """
     canonical_key = f"AIOPNSENSE_{suffix}"
     fallback_key = f"OPNSENSE_{suffix}"
-    value = values.get(canonical_key) or values.get(fallback_key)
-    if value is not None and value != "":
-        return value
-    if required:
+    if canonical_key in values:
+        canonical_value = values[canonical_key]
+        if required and not canonical_value.strip():
+            raise LiveConfigError(f"Missing required env value: {canonical_key}")
+        return canonical_value
+    fallback_value = values.get(fallback_key)
+    if fallback_value is None:
+        if required:
+            raise LiveConfigError(f"Missing required env value: {canonical_key}")
+        return None
+    if required and not fallback_value.strip():
         raise LiveConfigError(f"Missing required env value: {canonical_key}")
-    return None
+    return fallback_value
 
 
 def parse_bool(value: str, name: str) -> bool:
@@ -161,7 +168,9 @@ def load_live_config(path: Path = DEFAULT_ENV_FILE) -> LiveConfig:
         LiveConfig with URL, credentials, and TLS verification setting.
     """
     values = load_env_file(path)
-    verify_ssl_raw = get_env_value(values, "VERIFY_SSL", required=False) or "true"
+    verify_ssl_raw = get_env_value(values, "VERIFY_SSL", required=False)
+    if verify_ssl_raw is None:
+        verify_ssl_raw = "true"
     return LiveConfig(
         url=str(get_env_value(values, "URL")),
         api_key=str(get_env_value(values, "API_KEY")),
