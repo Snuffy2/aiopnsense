@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient
@@ -109,6 +110,35 @@ def test_normalize_traffic_payload_skips_invalid_rows() -> None:
     assert list(normalized["interfaces"]) == ["valid"]
     assert normalized["interfaces"]["valid"]["rx_bytes"] == 100
     assert normalized["interfaces"]["valid"]["tx_bytes"] == 200
+
+
+def test_normalize_traffic_payload_skips_negative_byte_packet_rates() -> None:
+    """Streaming payloads with negative byte/packet deltas should not publish rates."""
+    payload = {
+        "time": 1710000007,
+        "interfaces": {
+            "wan": {
+                "bytes received": -100,
+                "bytes transmitted": 200,
+                "packets received": -10,
+                "packets transmitted": 30,
+            },
+        },
+    }
+
+    normalized = normalize_traffic_payload(payload, interval=2.0)
+    row = normalized["interfaces"]["wan"]
+
+    assert row["tx_bytes"] == 200
+    assert row["tx_packets"] == 30
+    assert "rx_bytes" not in row
+    assert "rx_packets" not in row
+    assert "rx_bytes_per_second" not in row
+    assert "rx_bits_per_second" not in row
+    assert "rx_packets_per_second" not in row
+    assert row["tx_bytes_per_second"] == 100.0
+    assert row["tx_bits_per_second"] == 800.0
+    assert row["tx_packets_per_second"] == 15.0
 
 
 @pytest.mark.asyncio
@@ -490,6 +520,66 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
 
         assert samples[2]["time"] == 1710000012.0
         assert samples[2]["interfaces"]["wan"]["interval"] == 1.0
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_passes_read_timeout_from_clamped_poll_interval(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Stream poll interval should influence stream read timeout for delayed SSE frames."""
+    captured_timeout: aiohttp.ClientTimeout | None = None
+
+    def fake_get(*_args: Any, **kwargs: Any) -> Any:
+        nonlocal captured_timeout
+        captured_timeout = kwargs["timeout"]
+        return fake_stream_response_factory(
+            [
+                b'data: {"time": 1710000010, "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}}}\n\n',
+                b'data: {"time": 1710000011, "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 2000}}}\n\n',
+            ]
+        )
+
+    session = MagicMock()
+    session.get = fake_get
+    client = make_client(session=session)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+
+        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=120)]
+
+        assert len(samples) == 1
+        assert captured_timeout is not None
+        assert captured_timeout.sock_read == 120
+        assert samples[0]["interfaces"]["wan"]["interface"] == "wan"
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_reseeds_interval_after_malformed_json_event(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Malformed JSON frame should reseed timing so next delta uses poll_interval."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b'data: {"time": 1710000010, "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 2000}}}\n\n',
+            b"data: not-json\n\n",
+            b'data: {"time": 1710000013, "interfaces": {"wan": {"bytes received": 2000, "bytes transmitted": 3000}}}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+
+        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=10)]
+
+        assert len(samples) == 1
+        assert samples[0]["interfaces"]["wan"]["interval"] == 10.0
     finally:
         await client.async_close()
 

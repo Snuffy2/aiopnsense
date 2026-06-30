@@ -116,6 +116,7 @@ class ClientTransportMixin:
         path: str,
         *,
         yield_reset_events: bool = False,
+        sock_read_timeout_seconds: float | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Yield decoded JSON objects from a server-sent event stream.
 
@@ -123,6 +124,8 @@ class ClientTransportMixin:
             path (str): API endpoint path to request.
             yield_reset_events (bool): Yield internal reset events when UTF-8
                 decoding fails. Default is disabled for backwards compatibility.
+            sock_read_timeout_seconds (float | None): Optional per-read timeout
+                for streamed responses.
 
         Yields:
             dict[str, Any]: Decoded JSON object from each valid ``data:`` event.
@@ -137,7 +140,7 @@ class ClientTransportMixin:
                 timeout=aiohttp.ClientTimeout(
                     total=None,
                     sock_connect=DEFAULT_REQUEST_TIMEOUT_SECONDS,
-                    sock_read=DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                    sock_read=self._normalize_timeout_seconds(sock_read_timeout_seconds),
                 ),
                 ssl=self._verify_ssl,
             ) as response:
@@ -201,6 +204,8 @@ class ClientTransportMixin:
                             response_json = json.loads(response_str)
                         except json.JSONDecodeError:
                             _LOGGER.debug("Skipping malformed stream JSON event: %s", response_str)
+                            if yield_reset_events:
+                                events.append({_STREAM_JSON_EVENT_RESET_KEY: True})
                             continue
                         if isinstance(response_json, MutableMapping):
                             events.append(dict(response_json))

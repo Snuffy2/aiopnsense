@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from .client_transport import _STREAM_JSON_EVENT_RESET_KEY
+from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, try_to_float, try_to_int
 
@@ -122,6 +123,8 @@ def normalize_traffic_payload(
         }
         for normalized_name, aliases in _INTERFACE_FIELD_ALIASES.items():
             value = _first_int(row, aliases)
+            if include_per_second_rates and value is not None and value < 0:
+                continue
             if value is not None:
                 normalized_row[normalized_name] = value
 
@@ -136,15 +139,15 @@ def normalize_traffic_payload(
 
         if include_per_second_rates:
             normalized_row["interval"] = sample_interval
-            if isinstance(rx_bytes, int):
+            if isinstance(rx_bytes, int) and rx_bytes >= 0:
                 normalized_row["rx_bytes_per_second"] = rx_bytes / sample_interval
                 normalized_row["rx_bits_per_second"] = rx_bytes * 8 / sample_interval
-            if isinstance(tx_bytes, int):
+            if isinstance(tx_bytes, int) and tx_bytes >= 0:
                 normalized_row["tx_bytes_per_second"] = tx_bytes / sample_interval
                 normalized_row["tx_bits_per_second"] = tx_bytes * 8 / sample_interval
-            if isinstance(rx_packets, int):
+            if isinstance(rx_packets, int) and rx_packets >= 0:
                 normalized_row["rx_packets_per_second"] = rx_packets / sample_interval
-            if isinstance(tx_packets, int):
+            if isinstance(tx_packets, int) and tx_packets >= 0:
                 normalized_row["tx_packets_per_second"] = tx_packets / sample_interval
         normalized["interfaces"][interface_name] = normalized_row
 
@@ -214,7 +217,12 @@ class TrafficMixin(AiopnsenseClientProtocol):
         event_count = 0
         previous_time: float | None = None
         skip_previous_reseed = False
-        stream_events = self._stream_json_events(endpoint, yield_reset_events=True)
+        stream_read_timeout = max(interval, DEFAULT_REQUEST_TIMEOUT_SECONDS)
+        stream_events = self._stream_json_events(
+            endpoint,
+            yield_reset_events=True,
+            sock_read_timeout_seconds=stream_read_timeout,
+        )
         try:
             async for event in stream_events:
                 if event.get(_STREAM_JSON_EVENT_RESET_KEY) is True:

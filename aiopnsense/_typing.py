@@ -53,7 +53,11 @@ class AiopnsenseClientProtocol(Protocol):
 
     @abstractmethod
     def _stream_json_events(
-        self, path: str, *, yield_reset_events: bool = False
+        self,
+        path: str,
+        *,
+        yield_reset_events: bool = False,
+        sock_read_timeout_seconds: float | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Yield decoded JSON objects from a server-sent event stream."""
         ...

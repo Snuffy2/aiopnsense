@@ -574,6 +574,37 @@ async def test_stream_json_events_sets_connect_and_read_timeouts(
 
 
 @pytest.mark.asyncio
+async def test_stream_json_events_allows_read_timeout_override(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: Callable[..., FakeResponse],
+) -> None:
+    """Stream caller should be able to override the socket read timeout."""
+    captured_timeout: aiohttp.ClientTimeout | None = None
+
+    def fake_get(*_args: Any, **kwargs: Any) -> FakeResponse:
+        nonlocal captured_timeout
+        captured_timeout = kwargs["timeout"]
+        return fake_stream_response_factory(chunks=[b'data: {"time": 1, "interfaces": {}}\n\n'])
+
+    session = MagicMock()
+    session.get = fake_get
+    client = make_client(session=session)
+    try:
+        events = [
+            event
+            async for event in client._stream_json_events(
+                "/api/diagnostics/traffic/stream/1", sock_read_timeout_seconds=120
+            )
+        ]
+
+        assert events == [{"time": 1, "interfaces": {}}]
+        assert captured_timeout is not None
+        assert captured_timeout.sock_read == 120
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_stream_json_events_skips_malformed_json(
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],
@@ -594,6 +625,34 @@ async def test_stream_json_events_skips_malformed_json(
             break
 
         assert events == [{"time": 3, "interfaces": {}}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_json_events_yields_reset_marker_for_malformed_json_when_requested(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: Callable[..., FakeResponse],
+) -> None:
+    """Malformed JSON payloads can request an internal reseed marker."""
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        chunks=[
+            b"data: not-json\n\n",
+            b'data: {"time": 3, "interfaces": {}}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        events: list[dict[str, Any]] = []
+        async for event in client._stream_json_events(
+            "/api/diagnostics/traffic/stream/1", yield_reset_events=True
+        ):
+            events.append(event)
+            if len(events) == 2:
+                break
+
+        assert events == [{_STREAM_JSON_EVENT_RESET_KEY: True}, {"time": 3, "interfaces": {}}]
     finally:
         await client.async_close()
 
