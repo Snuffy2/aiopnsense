@@ -322,3 +322,46 @@ async def test_async_main_closes_client_when_run_endpoint_fails(
     client.validate.assert_awaited_once()
     client.async_close.assert_awaited_once()
     module.write_output.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_main_closes_client_when_validate_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``async_close`` is still awaited when ``validate`` raises."""
+    module = load_dump_module()
+    config = object()
+    session = object()
+    client = FakeClient()
+    client.validate = AsyncMock(side_effect=RuntimeError("validation failed"))
+
+    monkeypatch.setattr(module, "load_live_config", MagicMock(return_value=config))
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda: session)
+    monkeypatch.setattr(module, "create_client", lambda _config, _session: client)
+    monkeypatch.setattr(module, "run_endpoint", AsyncMock())
+    monkeypatch.setattr(module, "write_output", MagicMock())
+
+    with pytest.raises(RuntimeError, match="validation failed"):
+        await module.async_main(["--endpoint", "system_info"])
+
+    client.validate.assert_awaited_once()
+    client.async_close.assert_awaited_once()
+    module.run_endpoint.assert_not_awaited()
+    module.write_output.assert_not_called()
+
+
+def test_main_turns_live_config_error_into_system_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``main`` converts ``LiveConfigError`` from async_main into ``SystemExit``."""
+    module = load_dump_module()
+
+    async def raise_config_error() -> None:
+        raise module.LiveConfigError("bad config")
+
+    monkeypatch.setattr(module, "async_main", raise_config_error)
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert "bad config" in str(excinfo.value)
