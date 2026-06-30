@@ -82,6 +82,20 @@ def test_load_env_file_rejects_malformed_line_without_leaking_secret(tmp_path: P
     assert "abc123TOPSECRET" not in str(excinfo.value)
 
 
+def test_load_env_file_rejects_invalid_key_characters_without_leaking_secret(
+    tmp_path: Path,
+) -> None:
+    """Malformed env keys are rejected without exposing secret values."""
+    common = load_common_module()
+    env_file = tmp_path / "aiopnsense.env"
+    env_file.write_text("AIOPNSENSE_API_SECRET abc=123TOPSECRET\n", encoding="utf-8")
+
+    with pytest.raises(common.LiveConfigError, match="Malformed env file line 1") as excinfo:
+        common.load_env_file(env_file)
+
+    assert "123TOPSECRET" not in str(excinfo.value)
+
+
 def test_get_env_value_prefers_canonical_key() -> None:
     """Canonical AIOPNSENSE variables win over OPNSENSE fallback variables."""
     common = load_common_module()

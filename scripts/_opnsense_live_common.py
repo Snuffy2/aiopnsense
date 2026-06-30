@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ DEFAULT_ENV_FILE = SCRIPT_DIR / "aiopnsense.env"
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
+_ENV_KEY_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class LiveConfigError(ValueError):
@@ -99,7 +101,7 @@ def load_env_file(path: Path = DEFAULT_ENV_FILE) -> dict[str, str]:
             raise LiveConfigError(f"Malformed env file line {line_number}")
         key, raw_value = line.split("=", 1)
         key = key.strip()
-        if not key:
+        if not key or _ENV_KEY_PATTERN.fullmatch(key) is None:
             raise LiveConfigError(f"Malformed env file line {line_number}")
         value = _unquote(_strip_inline_comment(raw_value))
         values[key] = value
