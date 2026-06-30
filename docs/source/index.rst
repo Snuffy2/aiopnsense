@@ -13,6 +13,7 @@ aiopnsense
    authentication
    api/index
    examples
+   scripts
    changelog
    external
    development

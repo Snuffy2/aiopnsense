@@ -79,15 +79,8 @@ ENDPOINTS: dict[str, EndpointSpec] = {
 }
 
 
-def parse_args(args: list[str] | None = None) -> argparse.Namespace:
-    """Parse command-line arguments for the dump script.
-
-    Args:
-        args: Optional argument override for testability.
-
-    Returns:
-        Parsed arguments.
-    """
+def build_parser() -> argparse.ArgumentParser:
+    """Build CLI argument parser for the aiopnsense endpoint dumper."""
     parser = argparse.ArgumentParser(description="Dump live OPNsense endpoint JSON payloads.")
     parser.add_argument(
         "--env-file",
@@ -116,6 +109,19 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         default=30.0,
         help="Streaming duration in seconds for interface traffic stream.",
     )
+    return parser
+
+
+def parse_args(args: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments for the dump script.
+
+    Args:
+        args: Optional argument override for testability.
+
+    Returns:
+        Parsed arguments.
+    """
+    parser = build_parser()
     return parser.parse_args(args=args)
 
 

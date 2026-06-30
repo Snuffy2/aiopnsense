@@ -30,6 +30,13 @@ def _append_deprecation(obj: object) -> list[str]:
     return lines
 
 
+def test_sphinx_argparse_cli_extension_is_enabled() -> None:
+    """Read the Docs config enables generated argparse CLI documentation."""
+    namespace: dict[str, Any] = runpy.run_path(str(CONF_PATH))
+
+    assert "sphinx_argparse_cli" in namespace["extensions"]
+
+
 def _deprecated_property() -> object:
     """Return a deprecated property with a multiline message."""
 

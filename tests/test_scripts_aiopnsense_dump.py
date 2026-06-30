@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 from types import ModuleType
+import argparse
 import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -116,6 +117,17 @@ def test_endpoint_registry_contains_expected_read_only_entries() -> None:
     }
 
     assert endpoint_map == expected_entries
+
+
+def test_build_parser_returns_argparse_parser_for_docs() -> None:
+    """The dump script exposes a zero-argument parser factory for Sphinx docs."""
+    module = load_dump_module()
+
+    parser = module.build_parser()
+
+    assert isinstance(parser, argparse.ArgumentParser)
+    parsed = parser.parse_args(["--endpoint", "system_info"])
+    assert parsed.endpoint == "system_info"
 
 
 def test_choose_endpoint_from_menu_prints_method_and_warning(
