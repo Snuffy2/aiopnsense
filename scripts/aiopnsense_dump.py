@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
-import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +38,7 @@ ENDPOINTS: dict[str, EndpointSpec] = {
     "firewall": EndpointSpec("get_firewall"),
     "firmware_update_info": EndpointSpec(
         "get_firmware_update_info",
-        warning="This endpoint performs a firmware check and may take a short time.",
+        warning="May trigger a firmware check if OPNsense cached firmware status is stale.",
     ),
     "gateways": EndpointSpec("get_gateways"),
     "host_firmware_version": EndpointSpec("get_host_firmware_version"),
@@ -121,7 +120,9 @@ def choose_endpoint_from_menu(endpoint_names: list[str]) -> str:
         SystemExit: Raised for non-integer or out-of-range selections.
     """
     for index, endpoint_name in enumerate(endpoint_names, 1):
-        print(f"{index}. {endpoint_name}")
+        endpoint_spec = ENDPOINTS[endpoint_name]
+        warning_suffix = f" [{endpoint_spec.warning}]" if endpoint_spec.warning else ""
+        print(f"{index}. {endpoint_name} -> {endpoint_spec.method_name}{warning_suffix}")
     selection = input("Select endpoint by number: ").strip()
     try:
         index = int(selection)
@@ -164,7 +165,7 @@ async def async_main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
     if args.list:
-        print(json.dumps(list_endpoints(), indent=2, sort_keys=True))
+        write_output(list_endpoints(), args.output)
         return
 
     endpoint = args.endpoint
