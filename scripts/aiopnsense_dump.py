@@ -6,12 +6,31 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
+import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import aiohttp
+
+def _reexec_with_repo_venv() -> None:
+    """Re-run the script with the repo virtualenv when launched directly."""
+    if os.environ.get("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED") == "1":
+        return
+
+    venv_dir = Path(__file__).resolve().parents[1] / ".venv"
+    venv_python = venv_dir / "bin" / "python"
+    if not venv_python.exists() or Path(sys.prefix).resolve() == venv_dir.resolve():
+        return
+
+    os.environ["AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED"] = "1"
+    os.execv(str(venv_python), [str(venv_python), __file__, *sys.argv[1:]])
+
+
+_reexec_with_repo_venv()
+
+import aiohttp  # noqa: E402
 
 _common = importlib.import_module("_opnsense_live_common")
 DEFAULT_ENV_FILE = _common.DEFAULT_ENV_FILE
