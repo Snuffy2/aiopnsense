@@ -117,7 +117,7 @@ class ClientTransportMixin:
         *,
         yield_reset_events: bool = False,
         sock_read_timeout_seconds: float | None = None,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         """Yield decoded JSON objects from a server-sent event stream.
 
         Args:
@@ -207,8 +207,16 @@ class ClientTransportMixin:
                             if yield_reset_events:
                                 events.append({_STREAM_JSON_EVENT_RESET_KEY: True})
                             continue
-                        if isinstance(response_json, MutableMapping):
-                            events.append(dict(response_json))
+                        if not isinstance(response_json, MutableMapping):
+                            _LOGGER.debug(
+                                "Skipping non-mapping stream JSON event: %s (%s)",
+                                response_str,
+                                type(response_json).__name__,
+                            )
+                            if yield_reset_events:
+                                events.append({_STREAM_JSON_EVENT_RESET_KEY: True})
+                            continue
+                        events.append(dict(response_json))
 
                     return drain_buffer, events
 

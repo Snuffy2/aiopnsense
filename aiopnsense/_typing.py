@@ -58,8 +58,21 @@ class AiopnsenseClientProtocol(Protocol):
         *,
         yield_reset_events: bool = False,
         sock_read_timeout_seconds: float | None = None,
-    ) -> AsyncGenerator[dict[str, Any], None]:
-        """Yield decoded JSON objects from a server-sent event stream."""
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """Yield decoded JSON objects from a server-sent event stream.
+
+        Args:
+            path: SSE endpoint path to request.
+            yield_reset_events: Whether to emit internal reset marker events when
+                stream parsing fails.
+            sock_read_timeout_seconds: Optional socket read timeout for each
+                streamed response read.
+
+        Yields:
+            dict[str, Any]: Parsed event payloads, with optional reset marker events
+                where ``{"__aiopnsense_internal_stream_json_reset__": True}`` when
+                ``yield_reset_events`` is enabled.
+        """
         ...
 
     @abstractmethod

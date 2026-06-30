@@ -585,6 +585,34 @@ async def test_stream_interface_traffic_reseeds_interval_after_malformed_json_ev
 
 
 @pytest.mark.asyncio
+async def test_stream_interface_traffic_reseeds_interval_after_non_mapping_json_event(
+    make_client: Callable[..., Any],
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Non-mapping JSON frames should reseed timing like malformed JSON."""
+
+    session = MagicMock()
+    session.get = lambda *a, **k: fake_stream_response_factory(
+        [
+            b'data: {"time": 1710000010, "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 2000}}}\n\n',
+            b"data: [1, 2, 3]\n\n",
+            b'data: {"time": 1710000013, "interfaces": {"wan": {"bytes received": 2000, "bytes transmitted": 3000}}}\n\n',
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+
+        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=10)]
+
+        assert len(samples) == 1
+        assert samples[0]["time"] == 1710000013
+        assert samples[0]["interfaces"]["wan"]["interval"] == 10.0
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_stream_interface_traffic_resets_interval_after_stream_json_reset(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
@@ -651,7 +679,7 @@ async def test_stream_interface_traffic_returns_empty_iteration_on_probe_timeout
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
         assert samples == []
-        client._stream_json_events.assert_not_awaited()
+        client._stream_json_events.assert_not_called()
     finally:
         await client.async_close()
 
