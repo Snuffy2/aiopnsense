@@ -14,7 +14,12 @@ from typing import Any, Protocol
 
 
 def _reexec_with_repo_venv() -> None:
-    """Re-run the script with the repo virtualenv when launched directly."""
+    """Re-run the script with the repo virtualenv when launched directly.
+
+    Returns:
+        None. The current process is replaced when the repository virtualenv is
+        available and has not already bootstrapped the script.
+    """
     if os.environ.get("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED") == "1":
         return
 
@@ -53,7 +58,11 @@ class LiveConfigProtocol(Protocol):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build CLI argument parser for the raw API caller."""
+    """Build CLI argument parser for the raw API caller.
+
+    Returns:
+        A configured ``ArgumentParser`` for the script CLI.
+    """
     parser = argparse.ArgumentParser(description="Call a raw OPNsense API endpoint.")
     parser.add_argument(
         "--env-file",
@@ -140,7 +149,18 @@ def normalize_endpoint(endpoint: str) -> str:
 
 
 def _load_json_object(payload_text: str, source: str) -> dict[str, Any]:
-    """Load and validate a JSON object from a raw string."""
+    """Load and validate a JSON object from a raw string.
+
+    Args:
+        payload_text: Raw JSON text to parse.
+        source: Human-readable payload source used in validation messages.
+
+    Returns:
+        Parsed JSON object.
+
+    Raises:
+        ValueError: If the payload is invalid JSON or does not decode to an object.
+    """
     try:
         value = json.loads(payload_text)
     except json.JSONDecodeError as err:
@@ -233,7 +253,14 @@ async def call_api(
 
 
 async def async_main(argv: list[str] | None = None) -> int:
-    """Run the CLI flow and return shell status code."""
+    """Run the CLI flow and return shell status code.
+
+    Args:
+        argv: Optional argument list for testability.
+
+    Returns:
+        Process exit status code.
+    """
     parser = build_parser()
     args = parse_args(argv)
     try:
@@ -252,7 +279,14 @@ async def async_main(argv: list[str] | None = None) -> int:
 
 
 def main() -> int:
-    """Run CLI entrypoint and map config errors into CLI exits."""
+    """Run CLI entrypoint and map config errors into CLI exits.
+
+    Returns:
+        Process exit status code.
+
+    Raises:
+        SystemExit: Raised when configuration, HTTP, timeout, or OS errors occur.
+    """
     try:
         return asyncio.run(async_main())
     except LiveConfigError as err:

@@ -173,7 +173,11 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
 
 
 def list_endpoints() -> list[dict[str, Any]]:
-    """Return sorted endpoint metadata entries."""
+    """Return sorted endpoint metadata entries.
+
+    Returns:
+        Endpoint metadata dictionaries sorted by endpoint name.
+    """
     return [
         {"endpoint": endpoint_name, "method": spec.method_name, "warning": spec.warning}
         for endpoint_name, spec in sorted(ENDPOINTS.items())
