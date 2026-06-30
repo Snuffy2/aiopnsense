@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from types import ModuleType
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -140,6 +141,62 @@ def test_load_config_builds_config_from_fallback_names(tmp_path: Path) -> None:
     assert config.api_key == "key"
     assert config.api_secret == "secret"
     assert config.verify_ssl is False
+
+
+def test_load_config_defaults_verify_ssl_true(tmp_path: Path) -> None:
+    """Missing VERIFY_SSL defaults to True."""
+    common = load_common_module()
+    env_file = tmp_path / "aiopnsense.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "AIOPNSENSE_URL=https://firewall.example.test",
+                "AIOPNSENSE_API_KEY=key",
+                "AIOPNSENSE_API_SECRET=secret",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = common.load_live_config(env_file)
+
+    assert config.verify_ssl is True
+
+
+def test_create_client_uses_live_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """create_client passes all required constructor arguments to OPNsenseClient."""
+    common = load_common_module()
+
+    class FakeOPNsenseClient:
+        """Capture constructor arguments for verification."""
+
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+    fake_client = FakeOPNsenseClient()
+    fake_constructor = MagicMock(return_value=fake_client)
+
+    monkeypatch.setattr(common, "OPNsenseClient", fake_constructor)
+    config = common.LiveConfig(
+        url="https://firewall.example.test",
+        api_key="my-key",
+        api_secret="my-secret",
+        verify_ssl=False,
+    )
+    fake_session = object()
+
+    result = common.create_client(config, fake_session)
+
+    fake_constructor.assert_called_once_with(
+        url="https://firewall.example.test",
+        username="my-key",
+        password="my-secret",
+        session=fake_session,
+        opts={"verify_ssl": False},
+        throw_errors=True,
+    )
+    assert result is fake_client
 
 
 def test_format_json_sorts_keys_and_indents() -> None:
