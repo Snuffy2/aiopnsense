@@ -189,8 +189,8 @@ async def test_run_endpoint_includes_warning_for_refreshing_method() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_endpoint_collects_stream_for_fixed_duration() -> None:
-    """Streaming endpoint collects samples until the provided deadline passes."""
+async def test_run_endpoint_collects_available_stream_samples_quickly() -> None:
+    """Streaming endpoint collects all immediately-available samples quickly."""
     module = load_dump_module()
     stream_samples = (
         {"sample": 1},
@@ -229,21 +229,24 @@ async def test_run_endpoint_returns_empty_when_stream_seconds_is_zero() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_endpoint_collects_empty_stream_on_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A stalled stream honors timeout and returns no samples."""
+async def test_run_endpoint_collects_empty_stream_with_short_timeout() -> None:
+    """A stalled iterator respects timeout and closes cleanly."""
     module = load_dump_module()
     client = FakeClient(stream_samples=())
 
     class StalledStream:
-        """Never yields and records when it is closed."""
+        """Slow iterator that supports explicit close."""
 
         def __init__(self) -> None:
             self.closed = False
+            self.opened = False
+
+        def __aiter__(self) -> "StalledStream":
+            return self
 
         async def __anext__(self) -> dict[str, Any]:
-            raise TimeoutError
+            await module.asyncio.sleep(1.0)
+            raise StopAsyncIteration
 
         async def aclose(self) -> None:
             self.closed = True
@@ -253,24 +256,23 @@ async def test_run_endpoint_collects_empty_stream_on_timeout(
     def fake_stream(poll_interval: int = 1) -> StalledStream:
         del poll_interval
         client.stream_interface_traffic_calls += 1
+        stream.opened = True
         return stream
 
-    async def fake_wait_for(awaitable: Any, timeout: float) -> Any:
-        del timeout
-        try:
-            await awaitable
-        except Exception:
-            pass
-        raise TimeoutError
-
-    monkeypatch.setattr(module.asyncio, "wait_for", fake_wait_for)
+    original_stream = client.stream_interface_traffic
+    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(client, "stream_interface_traffic", fake_stream)
 
-    result = await module.run_endpoint(client, "interface_traffic_stream", stream_seconds=5.0)
+    start = module.time.monotonic()
+    result = await module.run_endpoint(client, "interface_traffic_stream", stream_seconds=0.1)
+    elapsed = module.time.monotonic() - start
 
     assert client.stream_interface_traffic_calls == 1
+    assert stream.opened
     assert stream.closed
+    assert elapsed < 0.5
     assert result["data"] == []
+    monkeypatch.setattr(client, "stream_interface_traffic", original_stream)
 
 
 @pytest.mark.asyncio
