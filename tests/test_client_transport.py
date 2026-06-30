@@ -346,7 +346,6 @@ async def test_do_get_from_stream_error_initial_raises(
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_do_get_and_do_post_success_paths(make_client: MakeClientFactory) -> None:
     """Verify ``_do_get`` and ``_do_post`` return parsed JSON for successful responses.
 
