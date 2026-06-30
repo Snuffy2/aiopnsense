@@ -60,6 +60,18 @@ def test_load_env_file_parses_simple_shell_style_values(tmp_path: Path) -> None:
     }
 
 
+def test_strip_inline_comment_preserves_hashes_inside_values() -> None:
+    """Hash characters are comments only when value-starting or whitespace-delimited."""
+    common = load_common_module()
+
+    assert common._strip_inline_comment("abc#123") == "abc#123"
+    assert common._strip_inline_comment("'abc#123'") == "'abc#123'"
+    assert common._strip_inline_comment('"abc#123"') == '"abc#123"'
+    assert common._strip_inline_comment("# full-line comment") == ""
+    assert common._strip_inline_comment("abc # comment") == "abc"
+    assert common._strip_inline_comment("abc\t# comment") == "abc"
+
+
 def test_load_env_file_rejects_malformed_line(tmp_path: Path) -> None:
     """Malformed env file lines raise a clear configuration error."""
     common = load_common_module()

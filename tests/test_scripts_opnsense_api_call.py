@@ -166,6 +166,13 @@ def test_load_payload_from_file(tmp_path: Path) -> None:
     assert module.load_payload(None, payload_file) == {"from": "file"}
 
 
+def test_load_payload_without_payload_uses_no_payload_marker() -> None:
+    """Absent payload input preserves omitted-body semantics."""
+    module = load_api_call_module()
+
+    assert module.load_payload(None, None) is module._NO_PAYLOAD
+
+
 def test_load_payload_rejects_both_sources() -> None:
     """Rejecting both inline and file payload sources avoids ambiguous payload input."""
     module = load_api_call_module()
@@ -262,6 +269,56 @@ async def test_call_api_post_sends_payload() -> None:
     assert kwargs["auth"].password == "secret"
     assert kwargs["timeout"] == aiohttp.ClientTimeout(total=60)
     assert kwargs["ssl"] is True
+
+
+@pytest.mark.asyncio
+async def test_call_api_post_without_payload_omits_json_body() -> None:
+    """POST calls without payload do not synthesize an empty JSON object."""
+    module = load_api_call_module()
+    config = module.LiveConfig(
+        url="https://firewall.example.test/",
+        api_key="key",
+        api_secret="secret",
+        verify_ssl=True,
+    )
+    session = FakeSession()
+
+    await module.call_api(
+        session,
+        config,
+        "/api/v1/configure",
+        "post",
+        module._NO_PAYLOAD,
+    )
+
+    assert len(session.post_calls) == 1
+    _, kwargs = session.post_calls[0]
+    assert "json" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_call_api_post_sends_empty_object_payload() -> None:
+    """POST calls preserve explicit empty JSON object payloads."""
+    module = load_api_call_module()
+    config = module.LiveConfig(
+        url="https://firewall.example.test/",
+        api_key="key",
+        api_secret="secret",
+        verify_ssl=True,
+    )
+    session = FakeSession()
+
+    await module.call_api(
+        session,
+        config,
+        "/api/v1/configure",
+        "post",
+        {},
+    )
+
+    assert len(session.post_calls) == 1
+    _, kwargs = session.post_calls[0]
+    assert kwargs["json"] == {}
 
 
 @pytest.mark.asyncio
@@ -619,6 +676,54 @@ async def test_async_main_writes_output_and_closes_session(
     ]
     assert write_calls == [({"ok": True}, output_path)]
     assert output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_async_main_without_payload_passes_no_payload_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST requests without payload preserve omitted-body semantics through dispatch."""
+    module = load_api_call_module()
+    config = module.LiveConfig(
+        url="https://firewall.example.test/",
+        api_key="key",
+        api_secret="secret",
+        verify_ssl=True,
+    )
+    session = FakeSession()
+    call_args: list[tuple[Any, ...]] = []
+
+    def fake_load_live_config(_env_file: Any) -> Any:
+        return config
+
+    async def fake_call_api(
+        call_session: Any,
+        call_config: Any,
+        endpoint: str,
+        method: str,
+        payload: object,
+    ) -> dict[str, Any]:
+        call_args.append((call_session, call_config, endpoint, method, payload))
+        return {"ok": True}
+
+    monkeypatch.setattr(module, "load_live_config", fake_load_live_config)
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda: session)
+    monkeypatch.setattr(module, "call_api", fake_call_api)
+    monkeypatch.setattr(module, "write_output", lambda *_args: None)
+
+    exit_code = await module.async_main(
+        [
+            "--endpoint",
+            "api/v1/status",
+            "--method",
+            "post",
+        ]
+    )
+
+    assert exit_code == 0
+    assert call_args == [
+        (session, config, "/api/v1/status", "post", module._NO_PAYLOAD),
+    ]
 
 
 def test_entrypoint_exits_with_help_status_zero() -> None:

@@ -40,6 +40,7 @@ load_live_config = _common.load_live_config
 write_output = _common.write_output
 
 DOCUMENTED_DEFAULT_ENV_FILE = Path("scripts/aiopnsense.env")
+_NO_PAYLOAD = object()
 
 
 class LiveConfigProtocol(Protocol):
@@ -152,7 +153,7 @@ def _load_json_object(payload_text: str, source: str) -> dict[str, Any]:
 def load_payload(
     payload: str | None,
     payload_file: Path | None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any] | object:
     """Load POST payload from inline JSON or payload file.
 
     Args:
@@ -160,7 +161,7 @@ def load_payload(
         payload_file: Path to inline JSON file.
 
     Returns:
-        Parsed JSON object payload, or ``None`` when absent.
+        Parsed JSON object payload, or ``_NO_PAYLOAD`` when absent.
 
     Raises:
         ValueError: If both inputs are set, JSON is invalid, or payload is not object.
@@ -175,7 +176,7 @@ def load_payload(
         except OSError as err:
             raise ValueError(f"Unable to read --payload-file: {err}") from err
         return _load_json_object(payload_text, "--payload-file")
-    return None
+    return _NO_PAYLOAD
 
 
 async def call_api(
@@ -183,7 +184,7 @@ async def call_api(
     config: LiveConfigProtocol,
     endpoint: str,
     method: str,
-    payload: dict[str, Any] | None,
+    payload: dict[str, Any] | object,
 ) -> dict[str, Any]:
     """Call the configured OPNsense endpoint and return response metadata.
 
@@ -192,7 +193,7 @@ async def call_api(
         config: Live config with URL and credentials.
         endpoint: Raw endpoint path.
         method: HTTP method name (``get`` or ``post``).
-        payload: Optional POST payload dictionary.
+        payload: Optional POST payload dictionary or omitted-payload sentinel.
 
     Returns:
         Parsed response payload with request metadata.
@@ -206,7 +207,8 @@ async def call_api(
     }
     request_method = method.lower()
     if request_method == "post":
-        request_kwargs["json"] = payload or {}
+        if payload is not _NO_PAYLOAD:
+            request_kwargs["json"] = payload
         request_ctx = session.post(url, **request_kwargs)
     else:
         request_ctx = session.get(url, **request_kwargs)
