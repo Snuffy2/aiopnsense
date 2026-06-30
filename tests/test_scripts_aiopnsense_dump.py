@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 from pathlib import Path
 from types import ModuleType
 import argparse
@@ -210,6 +211,7 @@ def test_choose_endpoint_from_menu_rejects_prompt_cancellation(
     module = load_dump_module()
 
     def raise_prompt_error(_prompt: str = "") -> None:
+        """Raise the configured prompt cancellation error."""
         raise prompt_error
 
     monkeypatch.setattr("builtins.input", raise_prompt_error)
@@ -314,6 +316,7 @@ async def test_run_endpoint_collects_empty_stream_with_short_timeout() -> None:
     stream = StalledStream()
 
     def fake_stream(poll_interval: int = 1) -> StalledStream:
+        """Expose the stalled stream with capture for the polling interval."""
         del poll_interval
         client.stream_interface_traffic_calls += 1
         stream.opened = True
@@ -349,7 +352,7 @@ async def test_run_endpoint_propagates_stream_timeout_error_and_closes_stream(
             self.closed = False
             self.opened = False
 
-        def __aiter__(self) -> "TimeoutStream":
+        def __aiter__(self) -> TimeoutStream:
             return self
 
         async def __anext__(self) -> dict[str, Any]:
@@ -364,6 +367,7 @@ async def test_run_endpoint_propagates_stream_timeout_error_and_closes_stream(
     original_stream = client.stream_interface_traffic
 
     def fake_stream(poll_interval: int = 1) -> TimeoutStream:
+        """Expose the timeout stream with capture for the polling interval."""
         del poll_interval
         client.stream_interface_traffic_calls += 1
         stream.opened = True
@@ -378,6 +382,57 @@ async def test_run_endpoint_propagates_stream_timeout_error_and_closes_stream(
     assert stream.opened
     assert stream.closed
     monkeypatch.setattr(client, "stream_interface_traffic", original_stream)
+
+
+@pytest.mark.asyncio
+async def test_run_endpoint_stream_error_beats_close_error(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Primary stream errors preserve when stream close fails too."""
+    module = load_dump_module()
+
+    class TimeoutStream:
+        """Slow iterator that errors and cannot be closed."""
+
+        def __init__(self) -> None:
+            self.closed = False
+            self.opened = False
+
+        def __aiter__(self) -> TimeoutStream:
+            return self
+
+        async def __anext__(self) -> dict[str, Any]:
+            raise TimeoutError("stream-level timeout")
+
+        async def aclose(self) -> None:
+            self.closed = True
+            raise RuntimeError("close failed")
+
+    stream = TimeoutStream()
+
+    client = FakeClient(stream_samples=())
+
+    def fake_stream(poll_interval: int = 1) -> TimeoutStream:
+        """Expose the failing-close stream for polling capture."""
+        del poll_interval
+        client.stream_interface_traffic_calls += 1
+        stream.opened = True
+        return stream
+
+    monkeypatch.setattr(client, "stream_interface_traffic", fake_stream)
+
+    with caplog.at_level(logging.DEBUG, logger=module._LOGGER.name):
+        with pytest.raises(TimeoutError, match="stream-level timeout"):
+            await module.run_endpoint(client, "interface_traffic_stream", stream_seconds=5.0)
+
+    assert any(
+        "Failed to close stream after primary stream error" in record.message
+        for record in caplog.records
+    )
+    assert client.stream_interface_traffic_calls == 1
+    assert stream.opened
+    assert stream.closed
 
 
 @pytest.mark.asyncio
@@ -397,6 +452,7 @@ async def test_async_main_list_uses_write_output_and_skips_env_load(
     monkeypatch.setattr(module, "load_live_config", load_live_config)
 
     def spy_write_output(payload: Any, output: Path | None) -> None:
+        """Capture payload and output path while preserving write behavior."""
         write_calls.append((payload, output))
         original_write_output(payload, output)
 
@@ -463,6 +519,7 @@ async def test_async_main_wires_options_into_dependencies(
     monkeypatch.setattr(module.aiohttp, "ClientSession", lambda: session)
 
     def fake_create_client(config_value: object, session_value: object) -> FakeClient:
+        """Capture the resolved dependencies from async_main wiring."""
         created["cfg"] = config_value
         created["session"] = session_value
         return client
@@ -474,6 +531,7 @@ async def test_async_main_wires_options_into_dependencies(
         return endpoint_result
 
     def fake_write_output(payload: dict[str, Any], output: Path | None) -> None:
+        """Capture output write intent for assertable side effects."""
         write_calls.append((payload, output))
 
     monkeypatch.setattr(module, "create_client", fake_create_client)

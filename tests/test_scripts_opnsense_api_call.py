@@ -416,14 +416,27 @@ def test_main_converts_live_config_error_to_system_exit(monkeypatch: pytest.Monk
     assert "bad config" in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    ("payload", "name"),
+    [('{"x":1}', "object"), ("{bad_json}", "invalid-json"), ("[1, 2, 3]", "non-object")],
+)
 @pytest.mark.asyncio
 async def test_async_main_rejects_payload_with_get_method(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    payload: str,
+    name: str,
 ) -> None:
-    """GET requests cannot be combined with payload options."""
+    """GET + payload options are rejected before body parsing or output writes."""
     module = load_api_call_module()
-    output_file = tmp_path / "ignored.json"
+    output_file = tmp_path / f"ignored-{name}.json"
+    write_calls: list[tuple[dict[str, Any], Path | None]] = []
+
+    def fake_write_output(payload: dict[str, Any], output: Path | None) -> None:
+        write_calls.append((payload, output))
+
+    monkeypatch.setattr(module, "write_output", fake_write_output)
 
     with pytest.raises(SystemExit):
         await module.async_main(
@@ -433,60 +446,14 @@ async def test_async_main_rejects_payload_with_get_method(
                 "--method",
                 "get",
                 "--payload",
-                '{"x":1}',
+                payload,
                 "--output",
                 str(output_file),
             ]
         )
 
-    assert (
-        "--payload and --payload-file are only valid with --method post" in capsys.readouterr().err
-    )
-
-
-@pytest.mark.asyncio
-async def test_async_main_rejects_invalid_json_with_get_payload(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """GET + invalid inline payload uses method-specific error, not JSON parsing error."""
-    module = load_api_call_module()
-
-    with pytest.raises(SystemExit):
-        await module.async_main(
-            [
-                "--endpoint",
-                "/api/v1/status",
-                "--method",
-                "get",
-                "--payload",
-                "{bad_json}",
-            ]
-        )
-
-    assert (
-        "--payload and --payload-file are only valid with --method post" in capsys.readouterr().err
-    )
-
-
-@pytest.mark.asyncio
-async def test_async_main_rejects_non_object_payload_with_get(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """GET + non-object payload uses method-specific error, not payload-type error."""
-    module = load_api_call_module()
-
-    with pytest.raises(SystemExit):
-        await module.async_main(
-            [
-                "--endpoint",
-                "/api/v1/status",
-                "--method",
-                "get",
-                "--payload",
-                "[1, 2, 3]",
-            ]
-        )
-
+    assert not write_calls
+    assert not output_file.exists()
     assert (
         "--payload and --payload-file are only valid with --method post" in capsys.readouterr().err
     )
@@ -845,4 +812,4 @@ def test_main_converts_os_error_to_system_exit(
     with pytest.raises(SystemExit) as excinfo:
         module.main()
 
-    assert "OSError" in str(excinfo.value)
+    assert str(excinfo.value) == "OSError: output is unavailable"

@@ -120,7 +120,11 @@ def resolve_env_file_argument(env_file: Path) -> Path:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build CLI argument parser for the aiopnsense endpoint dumper."""
+    """Build CLI argument parser for the live endpoint dumper.
+
+    Returns:
+        A configured ``ArgumentParser`` for the script CLI.
+    """
     parser = argparse.ArgumentParser(description="Dump live OPNsense endpoint JSON payloads.")
     parser.add_argument(
         "--env-file",
@@ -203,7 +207,16 @@ def choose_endpoint_from_menu(endpoint_names: list[str]) -> str:
 
 
 async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -> dict[str, Any]:
-    """Run a single endpoint and return a normalized dump payload."""
+    """Run a single endpoint and return a normalized dump payload.
+
+    Args:
+        client: Active OPNsense client instance.
+        endpoint_name: CLI endpoint key mapped in ``ENDPOINTS``.
+        stream_seconds: Stream duration for streaming endpoints.
+
+    Returns:
+        A payload dictionary with endpoint metadata and returned data.
+    """
     spec = ENDPOINTS[endpoint_name]
     method_name = spec.method_name
     method = getattr(client, method_name)
@@ -219,6 +232,9 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
 
         deadline = time.monotonic() + stream_seconds
         stream = method(poll_interval=1)
+        stream_error: (
+            OPNsenseError | aiohttp.ClientError | TimeoutError | RuntimeError | OSError | None
+        ) = None
         try:
             while True:
                 remaining = deadline - time.monotonic()
@@ -238,8 +254,19 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
                 except StopAsyncIteration:
                     break
                 data.append(sample)
+        except (OPNsenseError, aiohttp.ClientError, TimeoutError, RuntimeError, OSError) as err:
+            stream_error = err
+            raise
         finally:
-            await stream.aclose()
+            try:
+                await stream.aclose()
+            except (OPNsenseError, aiohttp.ClientError, TimeoutError, RuntimeError, OSError) as err:
+                if stream_error is None:
+                    raise
+                _LOGGER.debug(
+                    "Failed to close stream after primary stream error",
+                    exc_info=err,
+                )
         return {
             "endpoint": endpoint_name,
             "method": method_name,
@@ -298,7 +325,11 @@ async def async_main(argv: list[str] | None = None) -> int:
 
 
 def main() -> int:
-    """CLI entrypoint."""
+    """Run the async entrypoint and map runtime failures to ``SystemExit``.
+
+    Returns:
+        Process exit code.
+    """
     try:
         return asyncio.run(async_main())
     except (
