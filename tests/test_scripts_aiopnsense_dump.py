@@ -62,18 +62,44 @@ class FakeClient:
 def test_endpoint_registry_contains_expected_read_only_entries() -> None:
     """Registry contains only read-only endpoints requested by the task."""
     module = load_dump_module()
-
     entries = module.list_endpoints()
-    endpoints = {entry["endpoint"] for entry in entries}
+    endpoint_map = {entry["endpoint"]: (entry["method"], entry["warning"]) for entry in entries}
+    expected_methods = {
+        "carp": "get_carp",
+        "certificates": "get_certificates",
+        "device_unique_id": "get_device_unique_id",
+        "system_info": "get_system_info",
+        "notices": "get_notices",
+        "host_firmware_version": "get_host_firmware_version",
+        "dhcp_leases": "get_dhcp_leases",
+        "firewall": "get_firewall",
+        "smart": "get_smart",
+        "speedtest": "get_speedtest",
+        "unbound_blocklist": "get_unbound_blocklist",
+        "vnstat": "get_vnstat",
+        "openvpn": "get_openvpn",
+        "wireguard": "get_wireguard",
+        "telemetry": "get_telemetry",
+        "interfaces": "get_interfaces",
+        "gateways": "get_gateways",
+        "interface_traffic": "get_interface_traffic",
+        "interface_traffic_stream": "stream_interface_traffic",
+        "arp_table": "get_arp_table",
+        "services": "get_services",
+        "upgrade_status": "upgrade_status",
+        "firmware_update_info": "get_firmware_update_info",
+    }
 
-    assert "system_info" in endpoints
-    assert "firmware_update_info" in endpoints
-    assert "system_reboot" not in endpoints
-    assert "restart_service" not in endpoints
-
-    firmware_entry = next(entry for entry in entries if entry["endpoint"] == "firmware_update_info")
-    assert firmware_entry["warning"] is not None
-    assert "firmware check" in firmware_entry["warning"]
+    assert set(endpoint_map) == set(expected_methods)
+    assert len(endpoint_map) == len(expected_methods)
+    for endpoint, method_name in expected_methods.items():
+        actual_method, warning = endpoint_map[endpoint]
+        assert actual_method == method_name
+        if endpoint == "firmware_update_info":
+            assert warning is not None
+            assert "firmware check" in warning
+        else:
+            assert warning is None
 
 
 @pytest.mark.asyncio
