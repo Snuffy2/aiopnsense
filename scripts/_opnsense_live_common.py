@@ -96,11 +96,11 @@ def load_env_file(path: Path = DEFAULT_ENV_FILE) -> dict[str, str]:
         if not line or line.startswith("#"):
             continue
         if "=" not in line:
-            raise LiveConfigError(f"Malformed env file line {line_number}: {raw_line}")
+            raise LiveConfigError(f"Malformed env file line {line_number}")
         key, raw_value = line.split("=", 1)
         key = key.strip()
         if not key:
-            raise LiveConfigError(f"Malformed env file line {line_number}: {raw_line}")
+            raise LiveConfigError(f"Malformed env file line {line_number}")
         value = _unquote(_strip_inline_comment(raw_value))
         values[key] = value
     return values
