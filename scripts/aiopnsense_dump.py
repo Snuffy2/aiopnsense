@@ -31,6 +31,7 @@ def _reexec_with_repo_venv() -> None:
 _reexec_with_repo_venv()
 
 import aiohttp  # noqa: E402
+from aiopnsense.exceptions import OPNsenseError  # noqa: E402
 
 _common = importlib.import_module("_opnsense_live_common")
 DEFAULT_ENV_FILE = _common.DEFAULT_ENV_FILE
@@ -235,8 +236,8 @@ def main() -> int:
     """CLI entrypoint."""
     try:
         return asyncio.run(async_main())
-    except LiveConfigError as err:
-        raise SystemExit(str(err))
+    except (LiveConfigError, OPNsenseError, aiohttp.ClientError, TimeoutError) as err:
+        raise SystemExit(f"{type(err).__name__}: {err}") from err
 
 
 if __name__ == "__main__":

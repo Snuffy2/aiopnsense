@@ -480,3 +480,60 @@ def test_main_turns_live_config_error_into_system_exit(
         module.main()
 
     assert "bad config" in str(excinfo.value)
+
+
+def test_main_turns_opnsense_error_into_system_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``main`` converts aiopnsense live failures into concise ``SystemExit``."""
+    module = load_dump_module()
+
+    async def raise_opnsense_error() -> None:
+        raise module.OPNsenseError("connection failed")
+
+    monkeypatch.setattr(module, "async_main", raise_opnsense_error)
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert "OPNsenseError: connection failed" in str(excinfo.value)
+
+
+def test_reexec_with_repo_venv_uses_local_python(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bootstrap re-exec uses the repo venv when launched outside it."""
+    module = load_dump_module()
+    calls: list[tuple[str, list[str]]] = []
+    repo_venv = Path(module.__file__).resolve().parents[1] / ".venv"
+    expected_python = repo_venv / "bin" / "python"
+
+    monkeypatch.delenv("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED", raising=False)
+    monkeypatch.setattr(module.sys, "prefix", "/usr/local")
+    monkeypatch.setattr(module.sys, "argv", ["aiopnsense_dump.py", "--help"])
+    monkeypatch.setattr(module.os, "execv", lambda path, args: calls.append((path, args)))
+
+    module._reexec_with_repo_venv()
+
+    assert module.os.environ["AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED"] == "1"
+    assert calls == [
+        (
+            str(expected_python),
+            [str(expected_python), module.__file__, "--help"],
+        )
+    ]
+
+
+def test_reexec_with_repo_venv_skips_when_already_in_venv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bootstrap does nothing when the repo venv is already active."""
+    module = load_dump_module()
+    repo_venv = Path(module.__file__).resolve().parents[1] / ".venv"
+    execv = MagicMock()
+
+    monkeypatch.delenv("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED", raising=False)
+    monkeypatch.setattr(module.sys, "prefix", str(repo_venv))
+    monkeypatch.setattr(module.os, "execv", execv)
+
+    module._reexec_with_repo_venv()
+
+    execv.assert_not_called()
