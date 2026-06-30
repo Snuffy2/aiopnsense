@@ -39,6 +39,8 @@ LiveConfigError = _common.LiveConfigError
 load_live_config = _common.load_live_config
 write_output = _common.write_output
 
+DOCUMENTED_DEFAULT_ENV_FILE = Path("scripts/aiopnsense.env")
+
 
 class LiveConfigProtocol(Protocol):
     """Protocol for live OPNsense connection configuration."""
@@ -55,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--env-file",
         type=Path,
-        default=DEFAULT_ENV_FILE,
+        default=DOCUMENTED_DEFAULT_ENV_FILE,
         help="Path to the env file with live credentials.",
     )
     parser.add_argument(
@@ -84,6 +86,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional path to save output JSON.",
     )
     return parser
+
+
+def resolve_env_file_argument(env_file: Path) -> Path:
+    """Resolve the documented default env path to the script-local file.
+
+    Args:
+        env_file: Parsed env file argument.
+
+    Returns:
+        Absolute script-local default for the documented default, otherwise the
+        user-provided path unchanged.
+    """
+    if env_file == DOCUMENTED_DEFAULT_ENV_FILE:
+        return DEFAULT_ENV_FILE
+    return env_file
+
+
+def parse_args(args: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments for the raw API caller.
+
+    Args:
+        args: Optional argument override for testability.
+
+    Returns:
+        Parsed arguments with runtime defaults resolved.
+    """
+    parser = build_parser()
+    parsed_args = parser.parse_args(args=args)
+    parsed_args.env_file = resolve_env_file_argument(parsed_args.env_file)
+    return parsed_args
 
 
 def normalize_endpoint(endpoint: str) -> str:
@@ -201,7 +233,7 @@ async def call_api(
 async def async_main(argv: list[str] | None = None) -> int:
     """Run the CLI flow and return shell status code."""
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parse_args(argv)
     try:
         if args.method == "get" and (args.payload is not None or args.payload_file is not None):
             parser.error("--payload and --payload-file are only valid with --method post")

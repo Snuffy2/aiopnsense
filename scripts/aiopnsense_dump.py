@@ -43,6 +43,7 @@ load_live_config = _common.load_live_config
 write_output = _common.write_output
 
 _LOGGER = logging.getLogger(__name__)
+DOCUMENTED_DEFAULT_ENV_FILE = Path("scripts/aiopnsense.env")
 
 
 @dataclass(frozen=True)
@@ -83,19 +84,55 @@ ENDPOINTS: dict[str, EndpointSpec] = {
 }
 
 
+def parse_endpoint_name(endpoint_name: str) -> str:
+    """Validate a named dump endpoint from CLI input.
+
+    Args:
+        endpoint_name: Endpoint name provided by the CLI.
+
+    Returns:
+        The validated endpoint name.
+
+    Raises:
+        argparse.ArgumentTypeError: Raised when the endpoint is unknown.
+    """
+    if endpoint_name in ENDPOINTS:
+        return endpoint_name
+    endpoint_list = ", ".join(sorted(ENDPOINTS))
+    raise argparse.ArgumentTypeError(
+        f"invalid endpoint: {endpoint_name}. Choose from: {endpoint_list}"
+    )
+
+
+def resolve_env_file_argument(env_file: Path) -> Path:
+    """Resolve the documented default env path to the script-local file.
+
+    Args:
+        env_file: Parsed env file argument.
+
+    Returns:
+        Absolute script-local default for the documented default, otherwise the
+        user-provided path unchanged.
+    """
+    if env_file == DOCUMENTED_DEFAULT_ENV_FILE:
+        return DEFAULT_ENV_FILE
+    return env_file
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser for the aiopnsense endpoint dumper."""
     parser = argparse.ArgumentParser(description="Dump live OPNsense endpoint JSON payloads.")
     parser.add_argument(
         "--env-file",
         type=Path,
-        default=DEFAULT_ENV_FILE,
+        default=DOCUMENTED_DEFAULT_ENV_FILE,
         help="Path to the env file with live credentials.",
     )
     parser.add_argument(
         "--endpoint",
-        choices=sorted(ENDPOINTS),
-        help="Endpoint to dump.",
+        metavar="ENDPOINT",
+        type=parse_endpoint_name,
+        help=f"Endpoint to dump. Available endpoints: {', '.join(sorted(ENDPOINTS))}.",
     )
     parser.add_argument(
         "--list",
@@ -126,7 +163,9 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         Parsed arguments.
     """
     parser = build_parser()
-    return parser.parse_args(args=args)
+    parsed_args = parser.parse_args(args=args)
+    parsed_args.env_file = resolve_env_file_argument(parsed_args.env_file)
+    return parsed_args
 
 
 def list_endpoints() -> list[dict[str, Any]]:

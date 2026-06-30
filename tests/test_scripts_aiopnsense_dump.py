@@ -130,6 +130,38 @@ def test_build_parser_returns_argparse_parser_for_docs() -> None:
     assert parsed.endpoint == "system_info"
 
 
+def test_build_parser_documents_endpoint_choices_in_option_help() -> None:
+    """Endpoint choices render in option help instead of bloating usage."""
+    module = load_dump_module()
+    parser = module.build_parser()
+
+    help_text = " ".join(parser.format_help().split())
+
+    assert "--endpoint ENDPOINT" in help_text
+    assert "--endpoint {arp_table" not in help_text
+    assert "Available endpoints: arp_table, carp" in help_text
+    assert "wireguard." in help_text
+
+
+def test_parse_args_resolves_documented_default_env_file() -> None:
+    """Runtime parsing resolves the documented env file path to the script directory."""
+    module = load_dump_module()
+
+    parsed = module.parse_args(["--endpoint", "system_info"])
+
+    assert parsed.env_file == module.DEFAULT_ENV_FILE
+
+
+def test_build_parser_documents_relative_default_env_file() -> None:
+    """Sphinx parser docs should show the user-facing default env path."""
+    module = load_dump_module()
+    parser = module.build_parser()
+
+    parsed = parser.parse_args(["--endpoint", "system_info"])
+
+    assert parsed.env_file == Path("scripts/aiopnsense.env")
+
+
 def test_choose_endpoint_from_menu_prints_method_and_warning(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

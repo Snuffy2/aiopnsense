@@ -123,6 +123,25 @@ def test_normalize_endpoint_requires_leading_slash() -> None:
     assert module.normalize_endpoint("status") == "/status"
 
 
+def test_parse_args_resolves_documented_default_env_file() -> None:
+    """Runtime parsing resolves the documented env file path to the script directory."""
+    module = load_api_call_module()
+
+    parsed = module.parse_args(["--endpoint", "status", "--method", "get"])
+
+    assert parsed.env_file == module.DEFAULT_ENV_FILE
+
+
+def test_build_parser_documents_relative_default_env_file() -> None:
+    """Sphinx parser docs should show the user-facing default env path."""
+    module = load_api_call_module()
+    parser = module.build_parser()
+
+    parsed = parser.parse_args(["--endpoint", "status", "--method", "get"])
+
+    assert parsed.env_file == Path("scripts/aiopnsense.env")
+
+
 def test_normalize_endpoint_rejects_blank_value() -> None:
     """Blank endpoints are rejected with a clear ``ValueError``."""
     module = load_api_call_module()
