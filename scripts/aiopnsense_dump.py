@@ -140,15 +140,36 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
     method = getattr(client, method_name)
     if method_name == "stream_interface_traffic":
         data: list[Any] = []
+        if stream_seconds <= 0:
+            return {
+                "endpoint": endpoint_name,
+                "method": method_name,
+                "warning": spec.warning,
+                "data": data,
+            }
+
         deadline = time.monotonic() + stream_seconds
         stream = method(poll_interval=1)
         try:
-            async for sample in stream:
-                if time.monotonic() >= deadline:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    sample = await asyncio.wait_for(anext(stream), timeout=remaining)
+                except TimeoutError:
+                    break
+                except StopAsyncIteration:
                     break
                 data.append(sample)
         finally:
             await stream.aclose()
+        return {
+            "endpoint": endpoint_name,
+            "method": method_name,
+            "warning": spec.warning,
+            "data": data,
+        }
     else:
         data = await method()
 

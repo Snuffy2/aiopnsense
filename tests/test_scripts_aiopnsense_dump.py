@@ -33,6 +33,7 @@ class FakeClient:
     async_close: AsyncMock
     get_system_info: AsyncMock
     get_firmware_update_info: AsyncMock
+    stream_interface_traffic_calls: int
     stream_poll_intervals: list[int]
     stream_samples: tuple[dict[str, Any], ...]
 
@@ -49,14 +50,20 @@ class FakeClient:
         self.get_firmware_update_info = AsyncMock(
             return_value=firmware_update_return or {"firmware": "ok"}
         )
+        self.stream_interface_traffic_calls = 0
         self.stream_poll_intervals = []
         self.stream_samples = stream_samples
 
-    async def stream_interface_traffic(self, poll_interval: int = 1) -> Any:
+    def stream_interface_traffic(self, poll_interval: int = 1) -> Any:
         """Return a bounded async sequence for streaming endpoint tests."""
+        self.stream_interface_traffic_calls += 1
         self.stream_poll_intervals.append(poll_interval)
-        for sample in self.stream_samples:
-            yield sample
+
+        async def _stream() -> Any:
+            for sample in self.stream_samples:
+                yield sample
+
+        return _stream()
 
 
 class FakeClientSession:
@@ -182,9 +189,7 @@ async def test_run_endpoint_includes_warning_for_refreshing_method() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_endpoint_collects_stream_for_fixed_duration(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_run_endpoint_collects_stream_for_fixed_duration() -> None:
     """Streaming endpoint collects samples until the provided deadline passes."""
     module = load_dump_module()
     stream_samples = (
@@ -195,13 +200,6 @@ async def test_run_endpoint_collects_stream_for_fixed_duration(
         {"sample": 5},
     )
     client = FakeClient(stream_samples=stream_samples)
-    state = {"value": 0.0}
-
-    def fake_monotonic() -> float:
-        state["value"] += 0.4
-        return state["value"]
-
-    monkeypatch.setattr(module.time, "monotonic", fake_monotonic)
 
     result = await module.run_endpoint(client, "interface_traffic_stream", stream_seconds=2.0)
 
@@ -212,7 +210,67 @@ async def test_run_endpoint_collects_stream_for_fixed_duration(
         {"sample": 2},
         {"sample": 3},
         {"sample": 4},
+        {"sample": 5},
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_endpoint_returns_empty_when_stream_seconds_is_zero() -> None:
+    """Non-positive stream duration should return an empty sample list without polling."""
+    module = load_dump_module()
+    stream_samples = ({"sample": 1}, {"sample": 2})
+    client = FakeClient(stream_samples=stream_samples)
+
+    result = await module.run_endpoint(client, "interface_traffic_stream", stream_seconds=0.0)
+
+    assert client.stream_interface_traffic_calls == 0
+    assert result["data"] == []
+    assert result["warning"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_endpoint_collects_empty_stream_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stalled stream honors timeout and returns no samples."""
+    module = load_dump_module()
+    client = FakeClient(stream_samples=())
+
+    class StalledStream:
+        """Never yields and records when it is closed."""
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def __anext__(self) -> dict[str, Any]:
+            raise TimeoutError
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    stream = StalledStream()
+
+    def fake_stream(poll_interval: int = 1) -> StalledStream:
+        del poll_interval
+        client.stream_interface_traffic_calls += 1
+        return stream
+
+    async def fake_wait_for(awaitable: Any, timeout: float) -> Any:
+        del timeout
+        try:
+            await awaitable
+        except Exception:
+            pass
+        raise TimeoutError
+
+    monkeypatch.setattr(module.asyncio, "wait_for", fake_wait_for)
+    monkeypatch.setattr(client, "stream_interface_traffic", fake_stream)
+
+    result = await module.run_endpoint(client, "interface_traffic_stream", stream_seconds=5.0)
+
+    assert client.stream_interface_traffic_calls == 1
+    assert stream.closed
+    assert result["data"] == []
 
 
 @pytest.mark.asyncio
