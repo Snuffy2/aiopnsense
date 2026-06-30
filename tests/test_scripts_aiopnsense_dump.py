@@ -336,6 +336,51 @@ async def test_run_endpoint_collects_empty_stream_with_short_timeout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_endpoint_propagates_stream_timeout_error_and_closes_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Iterator TimeoutError must propagate and the stream must still close."""
+    module = load_dump_module()
+
+    class TimeoutStream:
+        """Slow iterator that fails with stream-level TimeoutError."""
+
+        def __init__(self) -> None:
+            self.closed = False
+            self.opened = False
+
+        def __aiter__(self) -> "TimeoutStream":
+            return self
+
+        async def __anext__(self) -> dict[str, Any]:
+            raise TimeoutError("stream-level timeout")
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    stream = TimeoutStream()
+
+    client = FakeClient(stream_samples=())
+    original_stream = client.stream_interface_traffic
+
+    def fake_stream(poll_interval: int = 1) -> TimeoutStream:
+        del poll_interval
+        client.stream_interface_traffic_calls += 1
+        stream.opened = True
+        return stream
+
+    monkeypatch.setattr(client, "stream_interface_traffic", fake_stream)
+
+    with pytest.raises(TimeoutError, match="stream-level timeout"):
+        await module.run_endpoint(client, "interface_traffic_stream", stream_seconds=5.0)
+
+    assert client.stream_interface_traffic_calls == 1
+    assert stream.opened
+    assert stream.closed
+    monkeypatch.setattr(client, "stream_interface_traffic", original_stream)
+
+
+@pytest.mark.asyncio
 async def test_async_main_list_uses_write_output_and_skips_env_load(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

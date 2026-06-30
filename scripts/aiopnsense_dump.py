@@ -225,9 +225,16 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
                 if remaining <= 0:
                     break
                 try:
-                    sample = await asyncio.wait_for(anext(stream), timeout=remaining)
-                except TimeoutError:
-                    break
+                    next_item = asyncio.create_task(anext(stream))
+                    done, _pending = await asyncio.wait({next_item}, timeout=remaining)
+                    if not done:
+                        next_item.cancel()
+                        try:
+                            await next_item
+                        except asyncio.CancelledError:
+                            pass
+                        break
+                    sample = next_item.result()
                 except StopAsyncIteration:
                     break
                 data.append(sample)
