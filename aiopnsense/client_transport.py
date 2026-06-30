@@ -1,6 +1,7 @@
 """Raw HTTP transport and response coercion helpers for OPNsenseClient."""
 
-from collections.abc import MutableMapping
+import codecs
+from collections.abc import AsyncGenerator, MutableMapping
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -8,6 +9,8 @@ import aiohttp
 
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .helpers import _LOGGER
+
+_STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
 
 
 class ClientTransportMixin:
@@ -107,6 +110,168 @@ class ClientTransportMixin:
                 raise
 
         return {}
+
+    async def _stream_json_events(
+        self,
+        path: str,
+        *,
+        yield_reset_events: bool = False,
+        sock_read_timeout_seconds: float | None = None,
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """Yield decoded JSON objects from a server-sent event stream.
+
+        Args:
+            path (str): API endpoint path to request.
+            yield_reset_events (bool): Yield internal reset events when UTF-8
+                decoding fails. Default is disabled for backwards compatibility.
+            sock_read_timeout_seconds (float | None): Optional per-read timeout
+                for streamed responses.
+
+        Yields:
+            dict[str, Any]: Decoded JSON object from each valid ``data:`` event.
+        """
+        self._rest_api_query_count += 1
+        url: str = f"{self._url}{path}"
+        _LOGGER.debug("[stream_json_events] url: %s", url)
+        try:
+            async with self._session.get(
+                url,
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                timeout=aiohttp.ClientTimeout(
+                    total=None,
+                    sock_connect=DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                    sock_read=self._normalize_timeout_seconds(sock_read_timeout_seconds),
+                ),
+                ssl=self._verify_ssl,
+            ) as response:
+                if not response.ok:
+                    if response.status == 403:
+                        _LOGGER.error(
+                            "Permission Error in stream_json_events. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
+                            url,
+                        )
+                    else:
+                        _LOGGER.error(
+                            "Error in stream_json_events. Path: %s. Response %s: %s",
+                            url,
+                            response.status,
+                            response.reason,
+                        )
+                    if self._throw_errors:
+                        raise aiohttp.ClientResponseError(
+                            request_info=response.request_info,
+                            history=response.history,
+                            status=response.status,
+                            message=f"HTTP Status Error: {response.status} {response.reason}",
+                            headers=response.headers,
+                        )
+                    return
+
+                decoder = codecs.getincrementaldecoder("utf-8")()
+                buffer = ""
+                pending_cr = False
+
+                def _drain_buffer(
+                    source_buffer: str,
+                ) -> tuple[str, list[dict[str, Any]]]:
+                    """Drain complete JSON SSE events from a text buffer.
+
+                    Args:
+                        source_buffer (str): Buffered stream text to parse.
+
+                    Returns:
+                        tuple[str, list[dict[str, Any]]]: Remaining unparsed buffer
+                            text and decoded JSON events.
+                    """
+                    events: list[dict[str, Any]] = []
+                    drain_buffer = source_buffer
+                    while "\n\n" in drain_buffer:
+                        message, drain_buffer = drain_buffer.split("\n\n", 1)
+                        data_lines: list[str] = []
+                        for line in message.splitlines():
+                            if not line.startswith("data:"):
+                                continue
+                            value = line[len("data:") :]
+                            if value.startswith(" "):
+                                value = value[1:]
+                            data_lines.append(value)
+
+                        if not data_lines:
+                            continue
+
+                        response_str = "\n".join(data_lines)
+                        try:
+                            response_json = json.loads(response_str)
+                        except json.JSONDecodeError:
+                            _LOGGER.debug("Skipping malformed stream JSON event: %s", response_str)
+                            if yield_reset_events:
+                                events.append({_STREAM_JSON_EVENT_RESET_KEY: True})
+                            continue
+                        if not isinstance(response_json, MutableMapping):
+                            _LOGGER.debug(
+                                "Skipping non-mapping stream JSON event: %s (%s)",
+                                response_str,
+                                type(response_json).__name__,
+                            )
+                            if yield_reset_events:
+                                events.append({_STREAM_JSON_EVENT_RESET_KEY: True})
+                            continue
+                        events.append(dict(response_json))
+
+                    return drain_buffer, events
+
+                async for chunk in response.content.iter_chunked(1024):
+                    try:
+                        chunk_text = decoder.decode(chunk)
+                    except UnicodeDecodeError as err:
+                        _LOGGER.debug(
+                            "Dropping incomplete UTF-8 chunk in _stream_json_events: %s",
+                            err,
+                        )
+                        if yield_reset_events:
+                            yield {_STREAM_JSON_EVENT_RESET_KEY: True}
+                        decoder = codecs.getincrementaldecoder("utf-8")()
+                        buffer = ""
+                        pending_cr = False
+                        continue
+                    if pending_cr:
+                        chunk_text = f"\r{chunk_text}"
+                        pending_cr = False
+
+                    if chunk_text.endswith("\r"):
+                        chunk_text = chunk_text[:-1]
+                        pending_cr = True
+
+                    buffer += chunk_text.replace("\r\n", "\n").replace("\r", "\n")
+                    buffer, events = _drain_buffer(buffer)
+                    for event in events:
+                        yield event
+                try:
+                    tail_text = decoder.decode(b"", final=True)
+                except UnicodeDecodeError as err:
+                    _LOGGER.debug(
+                        "Dropping incomplete UTF-8 trailing bytes in _stream_json_events: %s",
+                        err,
+                    )
+                    tail_text = ""
+                if pending_cr:
+                    tail_text = f"\r{tail_text}"
+                if tail_text:
+                    if tail_text.endswith("\r"):
+                        tail_text = tail_text[:-1]
+                        pending_cr = True
+                    if tail_text:
+                        buffer += tail_text.replace("\r\n", "\n").replace("\r", "\n")
+                if pending_cr:
+                    buffer += "\n"
+
+                buffer, events = _drain_buffer(buffer)
+                for event in events:
+                    yield event
+        except (aiohttp.ClientError, TimeoutError) as err:
+            _LOGGER.error("Client error in stream_json_events. %s: %s", type(err).__name__, err)
+            if self._throw_errors:
+                raise
 
     async def _do_get(
         self,

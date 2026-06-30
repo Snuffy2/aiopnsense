@@ -11,7 +11,11 @@ import pytest
 from aiopnsense import (
     client_queue as aiopnsense_client_queue,
 )
-from tests.conftest import MakeClientFactory, make_mock_session_client
+from tests.conftest import (
+    FakeStreamResponseFactory,
+    MakeClientFactory,
+    make_mock_session_client,
+)
 
 
 @pytest.mark.asyncio
@@ -600,5 +604,36 @@ async def test_client_base_workers_start_lazily_on_first_queued_request(
         assert client._loop is asyncio.get_running_loop()
         assert client._queue_monitor is not None
         assert len(client._workers) == client._max_workers
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_does_not_enqueue_request(
+    make_client: MakeClientFactory,
+    fake_stream_response_factory: FakeStreamResponseFactory,
+) -> None:
+    """Live traffic stream should bypass the queued request worker."""
+
+    client, session = make_mock_session_client(make_client)
+    client._is_get_endpoint_available = AsyncMock(return_value=True)
+    client._queue_request = AsyncMock(side_effect=AssertionError("stream should not be queued"))
+    session.get = lambda *_args, **_kwargs: fake_stream_response_factory(
+        [
+            b'data: {"time": 1, "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}}}\n\n',
+            b'data: {"time": 2, "interfaces": {"wan": {"bytes received": 100, "bytes transmitted": 200}}}\n\n',
+        ]
+    )
+
+    samples: list[dict[str, Any]] = []
+    try:
+        async for sample in client.stream_interface_traffic(poll_interval=1):
+            samples.append(sample)
+            break
+
+        assert samples[0]["interfaces"]["wan"]["rx_bytes_per_second"] == 100.0
+        client._queue_request.assert_not_called()
+        assert client._workers == []
+        assert client._queue_monitor is None
     finally:
         await client.async_close()
