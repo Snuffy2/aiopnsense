@@ -59,6 +59,21 @@ class FakeClient:
             yield sample
 
 
+class FakeClientSession:
+    """Async context manager session stub used by async_main tests."""
+
+    def __init__(self) -> None:
+        """Create awaitable enter/exit methods."""
+        self.enter = AsyncMock(return_value=self)
+        self.exit = AsyncMock(return_value=None)
+
+    async def __aenter__(self) -> "FakeClientSession":
+        return await self.enter()
+
+    async def __aexit__(self, *_args: Any) -> None:
+        await self.exit()
+
+
 def test_endpoint_registry_contains_expected_read_only_entries() -> None:
     """Registry matches the exact read-only contract required by the task."""
     module = load_dump_module()
@@ -223,9 +238,10 @@ async def test_async_main_list_uses_write_output_and_skips_env_load(
     monkeypatch.setattr(module, "write_output", spy_write_output)
     output_path = tmp_path / "endpoints.json"
 
-    await module.async_main(["--list", "--output", str(output_path)])
+    exit_code = await module.async_main(["--list", "--output", str(output_path)])
 
     assert load_live_config.call_count == 0
+    assert exit_code == 0
     assert write_calls == [(module.list_endpoints(), output_path)]
     assert output_path.exists()
 
@@ -237,13 +253,36 @@ async def test_async_main_list_uses_write_output_and_skips_env_load(
 
 
 @pytest.mark.asyncio
+async def test_async_main_returns_zero_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Normal execution path returns zero from async_main."""
+    module = load_dump_module()
+    config = object()
+    session = FakeClientSession()
+    client = FakeClient()
+
+    monkeypatch.setattr(module, "load_live_config", MagicMock(return_value=config))
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda: session)
+    monkeypatch.setattr(module, "create_client", lambda _config, _session: client)
+    monkeypatch.setattr(module, "run_endpoint", AsyncMock(return_value={"endpoint": "system_info"}))
+    monkeypatch.setattr(module, "write_output", MagicMock())
+
+    exit_code = await module.async_main(["--endpoint", "system_info"])
+
+    assert exit_code == 0
+    session.enter.assert_awaited_once()
+    session.exit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_async_main_wires_options_into_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Endpoint, env file, output file, and stream seconds are passed through."""
     module = load_dump_module()
     config = object()
-    session = object()
+    session = FakeClientSession()
     created: dict[str, Any] = {}
     client = FakeClient()
     endpoint_result = {
@@ -279,7 +318,7 @@ async def test_async_main_wires_options_into_dependencies(
     env_path = Path("/tmp/custom.env")
     output_path = Path("/tmp/dump.json")
 
-    await module.async_main(
+    exit_code = await module.async_main(
         [
             "--endpoint",
             "system_info",
@@ -291,7 +330,7 @@ async def test_async_main_wires_options_into_dependencies(
             "9.25",
         ]
     )
-
+    assert exit_code == 0
     module.load_live_config.assert_called_once_with(env_path)
     assert created["cfg"] is config
     assert created["session"] is session
@@ -299,6 +338,8 @@ async def test_async_main_wires_options_into_dependencies(
     assert write_calls == [(endpoint_result, output_path)]
     client.validate.assert_awaited_once()
     client.async_close.assert_awaited_once()
+    session.enter.assert_awaited_once()
+    session.exit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -308,10 +349,11 @@ async def test_async_main_closes_client_when_run_endpoint_fails(
     """``async_close`` is still awaited when run_endpoint raises."""
     module = load_dump_module()
     config = object()
+    session = FakeClientSession()
     client = FakeClient()
 
     monkeypatch.setattr(module, "load_live_config", MagicMock(return_value=config))
-    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda: object())
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda: session)
     monkeypatch.setattr(module, "create_client", lambda _config, _session: client)
     monkeypatch.setattr(module, "run_endpoint", AsyncMock(side_effect=RuntimeError("boom")))
     monkeypatch.setattr(module, "write_output", MagicMock())
@@ -322,6 +364,8 @@ async def test_async_main_closes_client_when_run_endpoint_fails(
     client.validate.assert_awaited_once()
     client.async_close.assert_awaited_once()
     module.write_output.assert_not_called()
+    session.enter.assert_awaited_once()
+    session.exit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -331,7 +375,7 @@ async def test_async_main_closes_client_when_validate_fails(
     """``async_close`` is still awaited when ``validate`` raises."""
     module = load_dump_module()
     config = object()
-    session = object()
+    session = FakeClientSession()
     client = FakeClient()
     client.validate = AsyncMock(side_effect=RuntimeError("validation failed"))
 
@@ -348,6 +392,17 @@ async def test_async_main_closes_client_when_validate_fails(
     client.async_close.assert_awaited_once()
     module.run_endpoint.assert_not_awaited()
     module.write_output.assert_not_called()
+    session.enter.assert_awaited_once()
+    session.exit.assert_awaited_once()
+
+
+def test_main_returns_zero_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``main`` returns 0 when async_main completes successfully."""
+    module = load_dump_module()
+
+    monkeypatch.setattr(module, "async_main", AsyncMock(return_value=0))
+
+    assert module.main() == 0
 
 
 def test_main_turns_live_config_error_into_system_exit(

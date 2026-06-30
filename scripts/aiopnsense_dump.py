@@ -160,36 +160,44 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
     }
 
 
-async def async_main(argv: list[str] | None = None) -> None:
-    """Run the dump command."""
+async def async_main(argv: list[str] | None = None) -> int:
+    """Run the dump command.
+
+    Args:
+        argv: Optional argument list for testability.
+
+    Returns:
+        Exit status code.
+    """
     args = parse_args(argv)
 
     if args.list:
         write_output(list_endpoints(), args.output)
-        return
+        return 0
 
     endpoint = args.endpoint
     if endpoint is None:
         endpoint = choose_endpoint_from_menu(sorted(ENDPOINTS))
 
     config = load_live_config(args.env_file)
-    session = aiohttp.ClientSession()
-    client = create_client(config, session)
-    try:
-        await client.validate()
-        result = await run_endpoint(client, endpoint, args.stream_seconds)
-        write_output(result, args.output)
-    finally:
-        await client.async_close()
+    async with aiohttp.ClientSession() as session:
+        client = create_client(config, session)
+        try:
+            await client.validate()
+            result = await run_endpoint(client, endpoint, args.stream_seconds)
+            write_output(result, args.output)
+        finally:
+            await client.async_close()
+    return 0
 
 
-def main() -> None:
+def main() -> int:
     """CLI entrypoint."""
     try:
-        asyncio.run(async_main())
+        return asyncio.run(async_main())
     except LiveConfigError as err:
         raise SystemExit(str(err))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
