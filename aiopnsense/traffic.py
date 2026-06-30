@@ -216,7 +216,7 @@ class TrafficMixin(AiopnsenseClientProtocol):
 
         event_count = 0
         previous_time: float | None = None
-        stream_read_timeout = max(interval, DEFAULT_REQUEST_TIMEOUT_SECONDS)
+        stream_read_timeout = max(interval + 1, DEFAULT_REQUEST_TIMEOUT_SECONDS)
         stream_events = self._stream_json_events(
             endpoint,
             yield_reset_events=True,

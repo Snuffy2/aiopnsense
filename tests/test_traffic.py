@@ -552,7 +552,7 @@ async def test_stream_interface_traffic_passes_read_timeout_from_clamped_poll_in
 
         assert len(samples) == 1
         assert captured_timeout is not None
-        assert captured_timeout.sock_read == 120
+        assert captured_timeout.sock_read == 121
         assert samples[0]["interfaces"]["wan"]["interface"] == "wan"
     finally:
         await client.async_close()
