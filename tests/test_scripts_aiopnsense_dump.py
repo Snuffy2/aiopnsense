@@ -300,17 +300,21 @@ async def test_run_endpoint_collects_empty_stream_with_short_timeout() -> None:
         """Slow iterator that supports explicit close."""
 
         def __init__(self) -> None:
+            """Initialize the stalled stream state."""
             self.closed = False
             self.opened = False
 
         def __aiter__(self) -> "StalledStream":
+            """Return the stream iterator."""
             return self
 
         async def __anext__(self) -> dict[str, Any]:
+            """Wait briefly and then end iteration."""
             await module.asyncio.sleep(1.0)
             raise StopAsyncIteration
 
         async def aclose(self) -> None:
+            """Mark the stream as closed."""
             self.closed = True
 
     stream = StalledStream()
@@ -349,16 +353,20 @@ async def test_run_endpoint_propagates_stream_timeout_error_and_closes_stream(
         """Slow iterator that fails with stream-level TimeoutError."""
 
         def __init__(self) -> None:
+            """Initialize the timeout stream state."""
             self.closed = False
             self.opened = False
 
         def __aiter__(self) -> TimeoutStream:
+            """Return the stream iterator."""
             return self
 
         async def __anext__(self) -> dict[str, Any]:
+            """Raise the simulated stream timeout."""
             raise TimeoutError("stream-level timeout")
 
         async def aclose(self) -> None:
+            """Mark the stream as closed."""
             self.closed = True
 
     stream = TimeoutStream()
@@ -396,16 +404,20 @@ async def test_run_endpoint_stream_error_beats_close_error(
         """Slow iterator that errors and cannot be closed."""
 
         def __init__(self) -> None:
+            """Initialize the timeout stream state."""
             self.closed = False
             self.opened = False
 
         def __aiter__(self) -> TimeoutStream:
+            """Return the stream iterator."""
             return self
 
         async def __anext__(self) -> dict[str, Any]:
+            """Raise the simulated stream timeout."""
             raise TimeoutError("stream-level timeout")
 
         async def aclose(self) -> None:
+            """Raise when the stream cannot be closed cleanly."""
             self.closed = True
             raise RuntimeError("close failed")
 
@@ -422,9 +434,11 @@ async def test_run_endpoint_stream_error_beats_close_error(
 
     monkeypatch.setattr(client, "stream_interface_traffic", fake_stream)
 
-    with caplog.at_level(logging.DEBUG, logger=module._LOGGER.name):
-        with pytest.raises(TimeoutError, match="stream-level timeout"):
-            await module.run_endpoint(client, "interface_traffic_stream", stream_seconds=5.0)
+    with (
+        caplog.at_level(logging.DEBUG, logger=module._LOGGER.name),
+        pytest.raises(TimeoutError, match="stream-level timeout"),
+    ):
+        await module.run_endpoint(client, "interface_traffic_stream", stream_seconds=5.0)
 
     assert any(
         "Failed to close stream after primary stream error" in record.message
@@ -527,6 +541,7 @@ async def test_async_main_wires_options_into_dependencies(
     async def fake_run_endpoint(
         client_arg: Any, endpoint_name: str, stream_seconds: float
     ) -> dict[str, Any]:
+        """Record the endpoint wiring and return the canned result."""
         run_calls.append((client_arg, endpoint_name, stream_seconds))
         return endpoint_result
 
@@ -609,6 +624,33 @@ async def test_async_main_preserves_run_endpoint_error_when_close_fails(
     monkeypatch.setattr(module, "write_output", MagicMock())
 
     with pytest.raises(RuntimeError, match="boom"):
+        await module.async_main(["--endpoint", "system_info"])
+
+    client.validate.assert_awaited_once()
+    client.async_close.assert_awaited_once()
+    module.write_output.assert_not_called()
+    session.enter.assert_awaited_once()
+    session.exit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_main_preserves_primary_oserror_when_close_raises_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`OSError` from the endpoint remains visible when close also raises `OSError`."""
+    module = load_dump_module()
+    config = object()
+    session = FakeClientSession()
+    client = FakeClient()
+    client.async_close = AsyncMock(side_effect=OSError("close failed"))
+
+    monkeypatch.setattr(module, "load_live_config", MagicMock(return_value=config))
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda: session)
+    monkeypatch.setattr(module, "create_client", lambda _config, _session: client)
+    monkeypatch.setattr(module, "run_endpoint", AsyncMock(side_effect=OSError("primary failed")))
+    monkeypatch.setattr(module, "write_output", MagicMock())
+
+    with pytest.raises(OSError, match="primary failed"):
         await module.async_main(["--endpoint", "system_info"])
 
     client.validate.assert_awaited_once()

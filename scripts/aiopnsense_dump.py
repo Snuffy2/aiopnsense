@@ -321,7 +321,7 @@ async def async_main(argv: list[str] | None = None) -> int:
         finally:
             try:
                 await client.async_close()
-            except (OPNsenseError, aiohttp.ClientError, TimeoutError, RuntimeError) as err:
+            except (OPNsenseError, aiohttp.ClientError, TimeoutError, RuntimeError, OSError) as err:
                 if primary_error is None:
                     raise
                 _LOGGER.debug("Failed to close OPNsense client after primary failure", exc_info=err)
