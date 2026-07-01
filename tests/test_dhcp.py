@@ -1,8 +1,7 @@
 """Tests for `aiopnsense.dhcp`."""
 
 from collections.abc import Callable, MutableMapping
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -294,14 +293,14 @@ async def test_keep_latest_leases_handles_list_values(make_client: ClientType) -
 )
 async def test_is_reserved_lease_handles_legacy_and_list_flags(
     make_client: ClientType,
-    raw_reserved: Any,
-    expected: bool,
+    raw_reserved: object,
+    expected: bool,  # noqa: FBT001 - pytest injects parametrized values by name.
 ) -> None:
     """Verify reserved lease detection supports legacy and new value shapes.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        raw_reserved (Any): Raw ``is_reserved`` value from API payload.
+        raw_reserved (object): Raw ``is_reserved`` value from API payload.
         expected (bool): Expected reserved/static detection result.
 
     Returns:
@@ -531,8 +530,8 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
     try:
         client._use_snake_case = True
         client._is_get_endpoint_available = AsyncMock(return_value=True)
-        future_ts = int(datetime.now(tz=timezone.utc).timestamp()) + 3600
-        past_ts = int(datetime.now(tz=timezone.utc).timestamp()) - 3600
+        future_ts = int(datetime.now(tz=UTC).timestamp()) + 3600
+        past_ts = int(datetime.now(tz=UTC).timestamp()) - 3600
 
         client._safe_dict_get = AsyncMock(
             side_effect=[
@@ -616,7 +615,7 @@ async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientT
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
-        future_ts = int(datetime.now(tz=timezone.utc).timestamp()) + 3600
+        future_ts = int(datetime.now(tz=UTC).timestamp()) + 3600
         client._safe_dict_get = AsyncMock(
             return_value={
                 "rows": [
@@ -698,7 +697,7 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
         client._safe_dict_get = AsyncMock(return_value={"rows": "bad-shape"})
         assert await client._get_dnsmasq_leases() == []
 
-        past_ts = int(datetime.now(tz=timezone.utc).timestamp()) - 3600
+        past_ts = int(datetime.now(tz=UTC).timestamp()) - 3600
         client._safe_dict_get = AsyncMock(
             return_value={
                 "rows": [

@@ -52,11 +52,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             return tuple(sorted(self._normalize_lease_key_value(item) for item in value))
         return value
 
-    def _is_reserved_lease(self, raw_reserved: Any) -> bool:
+    def _is_reserved_lease(self, raw_reserved: object) -> bool:
         """Return whether a DHCP lease row should be treated as reserved.
 
         Args:
-            raw_reserved (Any): Raw ``is_reserved`` field returned by a DHCP lease API.
+            raw_reserved (object): Raw ``is_reserved`` field returned by a DHCP lease API.
 
         Returns:
             bool: ``True`` for reserved/static lease rows, ``False`` otherwise.
