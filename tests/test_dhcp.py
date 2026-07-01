@@ -441,6 +441,9 @@ async def test_get_dhcp_leases_combined_structure(make_client: ClientType) -> No
         client._get_isc_dhcpv4_leases = AsyncMock(
             return_value=[{"if_name": "em0", "address": "1.1.1.2", "mac": "m2"}]
         )
+        client._get_kea_dhcpv6_leases = AsyncMock(
+            return_value=[{"if_name": "em0", "address": "2001:db8::1", "mac": "m6"}]
+        )
         client._get_isc_dhcpv6_leases = AsyncMock(return_value=[])
         client._get_dnsmasq_leases = AsyncMock(return_value=[])
         client._get_kea_interfaces = AsyncMock(return_value={"em0": "eth0"})
@@ -460,8 +463,13 @@ async def test_get_dhcp_leases_combined_structure(make_client: ClientType) -> No
             lease.get("address") == "1.1.1.2" and lease.get("mac") == "m2"
             for lease in combined["leases"]["em0"]
         )
+        assert any(
+            lease.get("address") == "2001:db8::1" and lease.get("mac") == "m6"
+            for lease in combined["leases"]["em0"]
+        )
         client._get_opnsense_timezone.assert_awaited_once_with()
         client._get_kea_dhcpv4_leases.assert_awaited_once_with(opnsense_tz=local_tz)
+        client._get_kea_dhcpv6_leases.assert_awaited_once_with(opnsense_tz=local_tz)
         client._get_isc_dhcpv4_leases.assert_awaited_once_with(opnsense_tz=local_tz)
         client._get_isc_dhcpv6_leases.assert_awaited_once_with(opnsense_tz=local_tz)
         client._get_dnsmasq_leases.assert_awaited_once_with(opnsense_tz=local_tz)
@@ -590,6 +598,57 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
         assert isinstance(leases, list)
         assert len(leases) == 1
         assert leases[0]["type"] == "unknown"
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientType) -> None:
+    """Verify Kea DHCPv6 leases parse the OPNsense DUID-oriented row shape.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates Kea DHCPv6 lease normalization.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        future_ts = int(datetime.now(tz=timezone.utc).timestamp()) + 3600
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "address": "2001:db8::10",
+                        "duid": "00:01:00:01:aa:bb",
+                        "hwaddr": "",
+                        "state": 0,
+                        "if_name": "em0",
+                        "if_descr": "LAN",
+                        "hostname": "host6.",
+                        "expire": future_ts,
+                        "is_reserved": ["duid"],
+                    },
+                    {
+                        "address": "2001:db8::11",
+                        "duid": "00:01:00:01:cc:dd",
+                        "state": 1,
+                        "if_name": "em0",
+                        "is_reserved": [],
+                    },
+                ]
+            }
+        )
+
+        leases = await client._get_kea_dhcpv6_leases()
+
+        assert len(leases) == 1
+        assert leases[0]["address"] == "2001:db8::10"
+        assert leases[0]["hostname"] == "host6"
+        assert leases[0]["mac"] == "00:01:00:01:aa:bb"
+        assert leases[0]["type"] == "static"
+        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases6/search")
     finally:
         await client.async_close()
 

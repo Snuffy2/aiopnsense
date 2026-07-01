@@ -18,6 +18,7 @@ from .helpers import (
 ARP_TABLE_ENDPOINT = "/api/diagnostics/interface/search_arp"
 KEA_DHCPV4_GET_ENDPOINT = "/api/kea/dhcpv4/get"
 KEA_LEASES4_SEARCH_ENDPOINT = "/api/kea/leases4/search"
+KEA_LEASES6_SEARCH_ENDPOINT = "/api/kea/leases6/search"
 KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT = "/api/kea/dhcpv4/search_reservation"
 KEA_DHCPV4_SEARCH_RESERVATION_CAMELCASE_ENDPOINT = "/api/kea/dhcpv4/searchReservation"
 DNSMASQ_LEASES_SEARCH_ENDPOINT = "/api/dnsmasq/leases/search"
@@ -56,6 +57,21 @@ class DHCPMixin(AiopnsenseClientProtocol):
 
         Args:
             raw_reserved (Any): Raw ``is_reserved`` field returned by the dnsmasq API.
+
+        Returns:
+            bool: ``True`` for reserved/static lease rows, ``False`` otherwise.
+        """
+        if isinstance(raw_reserved, str):
+            return api_value_matches(raw_reserved, "1")
+        if isinstance(raw_reserved, list):
+            return len(raw_reserved) > 0
+        return bool(raw_reserved)
+
+    def _is_kea_reserved_lease(self, raw_reserved: Any) -> bool:
+        """Return whether a Kea lease row should be treated as reserved.
+
+        Args:
+            raw_reserved (Any): Raw ``is_reserved`` field returned by the Kea API.
 
         Returns:
             bool: ``True`` for reserved/static lease rows, ``False`` otherwise.
@@ -108,10 +124,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
         leases_raw: list = await self._get_kea_dhcpv4_leases(opnsense_tz=opnsense_tz)
+        leases_raw += await self._get_kea_dhcpv6_leases(opnsense_tz=opnsense_tz)
         leases_raw += await self._get_isc_dhcpv4_leases(opnsense_tz=opnsense_tz)
         leases_raw += await self._get_isc_dhcpv6_leases(opnsense_tz=opnsense_tz)
         leases_raw += await self._get_dnsmasq_leases(opnsense_tz=opnsense_tz)
-        # TODO: Add Kea dhcpv6 leases if API ever gets added
 
         leases: dict[str, Any] = {}
         lease_interfaces: dict[str, Any] = await self._get_kea_interfaces()
@@ -184,27 +200,79 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 addresses are omitted; lease ``type`` is ``static``,
                 ``dynamic``, or ``unknown`` depending on reservation data.
         """
-        if not await self._is_get_endpoint_available(KEA_LEASES4_SEARCH_ENDPOINT):
-            _LOGGER.debug("Kea DHCP not installed")
+        return await self._get_kea_dhcp_leases(
+            lease_endpoint=KEA_LEASES4_SEARCH_ENDPOINT,
+            reservation_endpoint=KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT,
+            reservation_camelcase_endpoint=KEA_DHCPV4_SEARCH_RESERVATION_CAMELCASE_ENDPOINT,
+            require_hardware_address=True,
+            service_name="Kea DHCPv4",
+        )
+
+    async def _get_kea_dhcpv6_leases(self, opnsense_tz: tzinfo | None = None) -> list:
+        """Return active IPv6 DHCP leases reported by Kea.
+
+        Args:
+            opnsense_tz (tzinfo | None, optional): Unused timezone parameter
+                accepted for parity with other lease providers.
+
+        Returns:
+            list: Normalized Kea IPv6 lease entries. Expired leases,
+                non-active rows, and malformed rows are omitted; lease
+                ``type`` is ``static``, ``dynamic``, or ``unknown`` depending
+                on reservation data.
+        """
+        return await self._get_kea_dhcp_leases(
+            lease_endpoint=KEA_LEASES6_SEARCH_ENDPOINT,
+            require_hardware_address=False,
+            service_name="Kea DHCPv6",
+        )
+
+    async def _get_kea_dhcp_leases(
+        self,
+        lease_endpoint: str,
+        service_name: str,
+        reservation_endpoint: str | None = None,
+        reservation_camelcase_endpoint: str | None = None,
+        require_hardware_address: bool = True,
+    ) -> list:
+        """Return active DHCP leases reported by a Kea lease endpoint.
+
+        Args:
+            lease_endpoint (str): Kea lease search endpoint path.
+            service_name (str): Display name used for debug logging.
+            reservation_endpoint (str | None, optional): Kea reservation endpoint path.
+            reservation_camelcase_endpoint (str | None, optional): CamelCase reservation endpoint path.
+            require_hardware_address (bool, optional): Whether to skip rows without ``hwaddr``.
+
+        Returns:
+            list: Normalized Kea lease entries for the supplied endpoint.
+        """
+        if not await self._is_get_endpoint_available(lease_endpoint):
+            _LOGGER.debug("%s not installed", service_name)
             return []
-        response = await self._safe_dict_get(KEA_LEASES4_SEARCH_ENDPOINT)
+        response = await self._safe_dict_get(lease_endpoint)
         if not isinstance(response.get("rows", None), list):
             return []
-        reservation_endpoint = await self._get_endpoint_path(
-            snake_case_path=KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT,
-            camel_case_path=KEA_DHCPV4_SEARCH_RESERVATION_CAMELCASE_ENDPOINT,
-        )
         res_info: list[Any] | None
-        if not await self._is_get_endpoint_available(reservation_endpoint):
-            _LOGGER.debug("Kea DHCP reservation endpoint unavailable")
+        if reservation_endpoint is None or reservation_camelcase_endpoint is None:
             res_info = None
         else:
-            res_resp = await self._safe_dict_get(reservation_endpoint)
-            if not isinstance(res_resp.get("rows", None), list):
-                _LOGGER.debug("Kea DHCP reservation lookup returned invalid rows payload")
+            selected_reservation_endpoint = await self._get_endpoint_path(
+                snake_case_path=reservation_endpoint,
+                camel_case_path=reservation_camelcase_endpoint,
+            )
+            if not await self._is_get_endpoint_available(selected_reservation_endpoint):
+                _LOGGER.debug("%s reservation endpoint unavailable", service_name)
                 res_info = None
             else:
-                res_info = res_resp.get("rows", [])
+                res_resp = await self._safe_dict_get(selected_reservation_endpoint)
+                if not isinstance(res_resp.get("rows", None), list):
+                    _LOGGER.debug(
+                        "%s reservation lookup returned invalid rows payload", service_name
+                    )
+                    res_info = None
+                else:
+                    res_info = res_resp.get("rows", [])
         reservations = {}
         if res_info is not None:
             for res in res_info:
@@ -219,7 +287,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 lease_info is None
                 or not isinstance(lease_info, MutableMapping)
                 or not api_value_matches(lease_info.get("state"), "0")
-                or not lease_info.get("hwaddr", None)
+                or (require_hardware_address and not lease_info.get("hwaddr", None))
             ):
                 continue
             lease: dict[str, Any] = {}
@@ -232,7 +300,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
             )
             lease["if_descr"] = lease_info.get("if_descr", None)
             lease["if_name"] = lease_info.get("if_name", None)
-            if res_info is None:
+            if self._is_kea_reserved_lease(lease_info.get("is_reserved")):
+                lease["type"] = "static"
+            elif res_info is None:
                 lease["type"] = "unknown"
             elif (
                 lease_info.get("hwaddr", None)
@@ -242,7 +312,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 lease["type"] = "static"
             else:
                 lease["type"] = "dynamic"
-            lease["mac"] = lease_info.get("hwaddr", None)
+            lease["mac"] = lease_info.get("hwaddr", None) or lease_info.get("duid", None)
             if try_to_int(lease_info.get("expire", None)):
                 lease["expires"] = timestamp_to_datetime(
                     try_to_int(lease_info.get("expire", None)) or 0
