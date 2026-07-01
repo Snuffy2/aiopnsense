@@ -52,26 +52,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             return tuple(sorted(self._normalize_lease_key_value(item) for item in value))
         return value
 
-    def _is_dnsmasq_reserved_lease(self, raw_reserved: Any) -> bool:
-        """Return whether a dnsmasq lease row should be treated as reserved.
+    def _is_reserved_lease(self, raw_reserved: Any) -> bool:
+        """Return whether a DHCP lease row should be treated as reserved.
 
         Args:
-            raw_reserved (Any): Raw ``is_reserved`` field returned by the dnsmasq API.
-
-        Returns:
-            bool: ``True`` for reserved/static lease rows, ``False`` otherwise.
-        """
-        if isinstance(raw_reserved, str):
-            return api_value_matches(raw_reserved, "1")
-        if isinstance(raw_reserved, list):
-            return len(raw_reserved) > 0
-        return bool(raw_reserved)
-
-    def _is_kea_reserved_lease(self, raw_reserved: Any) -> bool:
-        """Return whether a Kea lease row should be treated as reserved.
-
-        Args:
-            raw_reserved (Any): Raw ``is_reserved`` field returned by the Kea API.
+            raw_reserved (Any): Raw ``is_reserved`` field returned by a DHCP lease API.
 
         Returns:
             bool: ``True`` for reserved/static lease rows, ``False`` otherwise.
@@ -305,13 +290,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
             )
             lease["if_descr"] = lease_info.get("if_descr", None)
             lease["if_name"] = lease_info.get("if_name", None)
-            if self._is_kea_reserved_lease(lease_info.get("is_reserved")):
+            if self._is_reserved_lease(lease_info.get("is_reserved")):
                 lease["type"] = "static"
             elif res_info is None:
                 if (
                     dynamic_when_reservation_lookup_unavailable
                     and "is_reserved" in lease_info
-                    and not self._is_kea_reserved_lease(lease_info.get("is_reserved"))
+                    and not self._is_reserved_lease(lease_info.get("is_reserved"))
                 ):
                     lease["type"] = "dynamic"
                 else:
@@ -411,7 +396,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             )
             lease["if_descr"] = lease_info.get("if_descr", None)
             lease["if_name"] = lease_info.get("if", None)
-            if self._is_dnsmasq_reserved_lease(lease_info.get("is_reserved")):
+            if self._is_reserved_lease(lease_info.get("is_reserved")):
                 lease["type"] = "static"
             else:
                 lease["type"] = "dynamic"
