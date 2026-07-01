@@ -33,11 +33,11 @@
 - Preserve existing comments and keep imports at the top of files.
 - Do not use `assert` or `cast` in main code.
 - Follow existing repository style; run `prek`.
-- Python 3.14 syntax is allowed, including PEP 695 type parameters and PEP 758 grouped exception handlers already used in the codebase.
+- Python 3.14 syntax is allowed, including PEP 695 type parameters and PEP 758 grouped exception handlers.
 
 ## Local tooling note
 
-- Use the repo's `prek` and `pytest` commands inside `./.venv`. You must always run these inside `./.venv`.
+- Use the repo's `prek` and `pytest` commands through the applicable repo venv path (`./.venv` here, or the main checkout venv for a worktree with no dependency changes). Do not use system Python.
 - By default, run the full pytest suite. If running targeted tests, explain why.
 
 ## Error handling & logging
@@ -50,7 +50,7 @@
 
 - Use `pytest`.
 - Add typed, well-documented tests in `tests/` and use fixtures in `conftest.py`.
-- Use `importlib` only in workflow script tests; minimize `cast` and `Any` unless the test boundary requires them.
+- Use `importlib` only in workflow script or other script/module-loading tests; minimize `cast` and `Any` unless the test boundary requires them.
 - Parameterize tests when appropriate; avoid duplicate test functions.
 
 ## PR & branch behavior
