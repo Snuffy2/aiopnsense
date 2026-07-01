@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import logging
@@ -651,6 +652,33 @@ async def test_async_main_preserves_primary_oserror_when_close_raises_oserror(
     monkeypatch.setattr(module, "write_output", MagicMock())
 
     with pytest.raises(OSError, match="primary failed"):
+        await module.async_main(["--endpoint", "system_info"])
+
+    client.validate.assert_awaited_once()
+    client.async_close.assert_awaited_once()
+    module.write_output.assert_not_called()
+    session.enter.assert_awaited_once()
+    session.exit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_main_preserves_cancelled_error_when_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``async_close`` failures do not mask cancellation."""
+    module = load_dump_module()
+    config = object()
+    session = FakeClientSession()
+    client = FakeClient()
+    client.async_close = AsyncMock(side_effect=RuntimeError("close failed"))
+
+    monkeypatch.setattr(module, "load_live_config", MagicMock(return_value=config))
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda: session)
+    monkeypatch.setattr(module, "create_client", lambda _config, _session: client)
+    monkeypatch.setattr(module, "run_endpoint", AsyncMock(side_effect=asyncio.CancelledError()))
+    monkeypatch.setattr(module, "write_output", MagicMock())
+
+    with pytest.raises(asyncio.CancelledError):
         await module.async_main(["--endpoint", "system_info"])
 
     client.validate.assert_awaited_once()
