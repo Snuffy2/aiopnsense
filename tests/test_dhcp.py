@@ -185,6 +185,7 @@ async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> No
     ("method_name", "endpoint"),
     [
         ("_get_kea_dhcpv4_leases", "/api/kea/leases4/search"),
+        ("_get_kea_dhcpv6_leases", "/api/kea/leases6/search"),
         ("_get_dnsmasq_leases", "/api/dnsmasq/leases/search"),
         ("_get_isc_dhcpv4_leases", "/api/dhcpv4/service/status"),
         ("_get_isc_dhcpv6_leases", "/api/dhcpv6/service/status"),
