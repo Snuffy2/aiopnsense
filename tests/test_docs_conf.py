@@ -15,6 +15,11 @@ EXISTING_DOCS = ["Existing docs."]
 DEPRECATED_PREFIX = ["", ".. admonition:: Deprecated", ""]
 
 
+def _load_conf_namespace() -> dict[str, Any]:
+    """Execute the Sphinx config and return its namespace."""
+    return runpy.run_path(str(CONF_PATH))
+
+
 def _append_deprecation(obj: object) -> list[str]:
     """Run the PEP 702 autodoc hook for an object.
 
@@ -24,10 +29,24 @@ def _append_deprecation(obj: object) -> list[str]:
     Returns:
         The docstring lines mutated by the hook.
     """
-    namespace: dict[str, Any] = runpy.run_path(str(CONF_PATH))
+    namespace = _load_conf_namespace()
     lines = EXISTING_DOCS.copy()
     namespace["append_pep702_deprecation"](None, "object", "example", obj, None, lines)
     return lines
+
+
+def test_sphinx_argparse_cli_extension_is_enabled() -> None:
+    """Read the Docs config enables generated argparse CLI documentation."""
+    namespace = _load_conf_namespace()
+
+    assert "sphinx_argparse_cli" in namespace["extensions"]
+
+
+def test_conf_adds_scripts_directory_to_sys_path() -> None:
+    """Sphinx config exposes repo scripts as importable modules for CLI docs."""
+    namespace = _load_conf_namespace()
+
+    assert str(namespace["ROOT"] / "scripts") in namespace["sys"].path
 
 
 def _deprecated_property() -> object:

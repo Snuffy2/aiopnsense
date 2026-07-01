@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "_ext"))
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ extensions: list[str] = [
     "sphinx.ext.viewcode",
     "myst_parser",
     "opnsense_client_api",
+    "sphinx_argparse_cli",
 ]
 
 templates_path: list[str] = ["_templates"]

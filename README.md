@@ -41,6 +41,20 @@ The client currently includes helpers for:
 
 - Read the Docs: <https://aiopnsense.readthedocs.io>
 
+## Live test scripts
+
+The `scripts/` directory includes live diagnostic helpers for maintainers:
+
+- `aiopnsense_dump.py` runs supported `aiopnsense` client endpoints and prints
+  the raw data returned by the library.
+- `opnsense_api_call.py` calls an arbitrary OPNsense API endpoint with a
+  specified method and optional POST payload.
+
+Both scripts read credentials from `scripts/aiopnsense.env` by default. Copy
+`scripts/aiopnsense.env.example` to create your local env file; it is ignored
+by git. Full CLI reference is generated in the
+[Read the Docs script documentation](https://aiopnsense.readthedocs.io/en/stable/scripts.html).
+
 ## Origin and Purpose
 
 `aiopnsense` was initially extracted from the [`hass-opnsense`](https://github.com/travisghansen/hass-opnsense) integration. It is primarily for use as an external dependency by [Home Assistant](https://www.home-assistant.io) for its [OPNsense Integration](https://www.home-assistant.io/integrations/opnsense).
