@@ -36,6 +36,7 @@ class FakeClient:
     async_close: AsyncMock
     get_system_info: AsyncMock
     get_firmware_update_info: AsyncMock
+    get_nut_ups_status: AsyncMock
     stream_interface_traffic_calls: int
     stream_poll_intervals: list[int]
     stream_samples: tuple[dict[str, Any], ...]
@@ -53,6 +54,7 @@ class FakeClient:
         self.get_firmware_update_info = AsyncMock(
             return_value=firmware_update_return or {"firmware": "ok"}
         )
+        self.get_nut_ups_status = AsyncMock(return_value={"status": {"ups.status": "OL"}})
         self.stream_interface_traffic_calls = 0
         self.stream_poll_intervals = []
         self.stream_samples = stream_samples
@@ -106,6 +108,7 @@ def test_endpoint_registry_contains_expected_read_only_entries() -> None:
         "interface_traffic": ("get_interface_traffic", None),
         "interface_traffic_stream": ("stream_interface_traffic", None),
         "notices": ("get_notices", None),
+        "nut_ups_status": ("get_nut_ups_status", None),
         "openvpn": ("get_openvpn", None),
         "services": ("get_services", None),
         "smart": ("get_smart", None),
