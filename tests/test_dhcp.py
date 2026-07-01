@@ -291,12 +291,12 @@ async def test_keep_latest_leases_handles_list_values(make_client: ClientType) -
         (None, False),
     ],
 )
-async def test_is_dnsmasq_reserved_lease_handles_legacy_and_list_flags(
+async def test_is_reserved_lease_handles_legacy_and_list_flags(
     make_client: ClientType,
     raw_reserved: Any,
     expected: bool,
 ) -> None:
-    """Verify dnsmasq reserved lease detection supports legacy and new value shapes.
+    """Verify reserved lease detection supports legacy and new value shapes.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -308,7 +308,7 @@ async def test_is_dnsmasq_reserved_lease_handles_legacy_and_list_flags(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        assert client._is_dnsmasq_reserved_lease(raw_reserved) is expected
+        assert client._is_reserved_lease(raw_reserved) is expected
     finally:
         await client.async_close()
 
