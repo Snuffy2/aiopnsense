@@ -102,8 +102,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, Any]: Mapping with ``lease_interfaces`` keyed by
                 interface name and ``leases`` keyed by interface name. Lease
-                entries are normalized across Kea, ISC DHCPv4, ISC DHCPv6, and
-                dnsmasq and include address, hostname, interface, type, MAC,
+                entries are normalized across Kea, ISC, and dnsmasq and
+                include address, hostname, interface, type, MAC,
                 and expiration when available.
         """
         if opnsense_tz is None:
