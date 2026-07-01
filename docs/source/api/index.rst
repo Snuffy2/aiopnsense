@@ -16,6 +16,7 @@ reference easier to navigate, the methods are grouped below by functional area.
    firewall
    services
    smart
+   nut
    unbound
    vpn
    vnstat

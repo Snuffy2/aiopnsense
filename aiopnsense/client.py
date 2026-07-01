@@ -23,6 +23,7 @@ from .exceptions import (
 from .firewall import FirewallMixin
 from .firmware import FirmwareMixin
 from .helpers import _LOGGER
+from .nut import NutMixin
 from .services import ServicesMixin
 from .smart import SmartMixin
 from .speedtest import SpeedtestMixin
@@ -44,6 +45,7 @@ class OPNsenseClient(
     DHCPMixin,
     ServicesMixin,
     SmartMixin,
+    NutMixin,
     SpeedtestMixin,
     SystemMixin,
     UnboundMixin,
