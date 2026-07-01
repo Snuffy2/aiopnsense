@@ -633,7 +633,17 @@ async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientT
                     {
                         "address": "2001:db8::11",
                         "duid": "00:01:00:01:cc:dd",
-                        "state": 1,
+                        "state": 0,
+                        "if_name": "em0",
+                        "if_descr": "LAN",
+                        "hostname": "skip.",
+                        "is_reserved": [],
+                        "expire": future_ts,
+                    },
+                    {
+                        "address": "2001:db8::12",
+                        "duid": "00:01:00:01:ee:ff",
+                        "state": 0,
                         "if_name": "em0",
                         "is_reserved": [],
                     },
@@ -643,11 +653,30 @@ async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientT
 
         leases = await client._get_kea_dhcpv6_leases()
 
-        assert len(leases) == 1
-        assert leases[0]["address"] == "2001:db8::10"
-        assert leases[0]["hostname"] == "host6"
-        assert leases[0]["mac"] == "00:01:00:01:aa:bb"
-        assert leases[0]["type"] == "static"
+        assert len(leases) == 3
+        assert any(
+            lease["address"] == "2001:db8::10"
+            and lease["type"] == "static"
+            and lease["hostname"] == "host6"
+            and lease["duid"] == "00:01:00:01:aa:bb"
+            and lease["mac"] is None
+            for lease in leases
+        )
+        assert any(
+            lease["address"] == "2001:db8::11"
+            and lease["type"] == "dynamic"
+            and lease["duid"] == "00:01:00:01:cc:dd"
+            and lease["hostname"] == "skip"
+            and lease["mac"] is None
+            for lease in leases
+        )
+        assert any(
+            lease["address"] == "2001:db8::12"
+            and lease["type"] == "dynamic"
+            and lease["duid"] == "00:01:00:01:ee:ff"
+            and lease["mac"] is None
+            for lease in leases
+        )
         client._safe_dict_get.assert_awaited_once_with("/api/kea/leases6/search")
     finally:
         await client.async_close()

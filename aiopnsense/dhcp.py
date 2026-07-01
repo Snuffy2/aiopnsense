@@ -225,6 +225,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             lease_endpoint=KEA_LEASES6_SEARCH_ENDPOINT,
             require_hardware_address=False,
             service_name="Kea DHCPv6",
+            dynamic_when_reservation_lookup_unavailable=True,
         )
 
     async def _get_kea_dhcp_leases(
@@ -234,6 +235,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         reservation_endpoint: str | None = None,
         reservation_camelcase_endpoint: str | None = None,
         require_hardware_address: bool = True,
+        dynamic_when_reservation_lookup_unavailable: bool = False,
     ) -> list:
         """Return active DHCP leases reported by a Kea lease endpoint.
 
@@ -243,6 +245,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
             reservation_endpoint (str | None, optional): Kea reservation endpoint path.
             reservation_camelcase_endpoint (str | None, optional): CamelCase reservation endpoint path.
             require_hardware_address (bool, optional): Whether to skip rows without ``hwaddr``.
+            dynamic_when_reservation_lookup_unavailable (bool, optional): Whether lease rows with
+                explicit ``is_reserved`` set to false should be treated as ``dynamic`` when
+                reservation metadata is unavailable.
 
         Returns:
             list: Normalized Kea lease entries for the supplied endpoint.
@@ -303,7 +308,14 @@ class DHCPMixin(AiopnsenseClientProtocol):
             if self._is_kea_reserved_lease(lease_info.get("is_reserved")):
                 lease["type"] = "static"
             elif res_info is None:
-                lease["type"] = "unknown"
+                if (
+                    dynamic_when_reservation_lookup_unavailable
+                    and "is_reserved" in lease_info
+                    and not self._is_kea_reserved_lease(lease_info.get("is_reserved"))
+                ):
+                    lease["type"] = "dynamic"
+                else:
+                    lease["type"] = "unknown"
             elif (
                 lease_info.get("hwaddr", None)
                 and lease_info.get("hwaddr") in reservations
@@ -312,7 +324,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 lease["type"] = "static"
             else:
                 lease["type"] = "dynamic"
-            lease["mac"] = lease_info.get("hwaddr", None) or lease_info.get("duid", None)
+            lease["mac"] = lease_info.get("hwaddr", None) or None
+            if "duid" in lease_info:
+                lease["duid"] = lease_info.get("duid")
             if try_to_int(lease_info.get("expire", None)):
                 lease["expires"] = timestamp_to_datetime(
                     try_to_int(lease_info.get("expire", None)) or 0
