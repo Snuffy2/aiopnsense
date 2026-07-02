@@ -123,6 +123,29 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
             [
                 {
                     "uuid": "dst1",
+                    "descr": "DNAT legacy category",
+                    "disabled": 0,
+                    "category": "cat1",
+                    "%category": "WAN",
+                },
+            ],
+            {
+                "dst1": {
+                    "uuid": "dst1",
+                    "description": "DNAT legacy category",
+                    "enabled": "1",
+                    "category": "cat1",
+                    "%category": "WAN",
+                }
+            },
+            "26.1.3",
+        ),
+        (
+            "_get_nat_destination_rules",
+            "/api/firewall/d_nat/search_rule",
+            [
+                {
+                    "uuid": "dst1",
                     "descr": "DNAT rule",
                     "enabled": "0",
                     "category": "cat1",
@@ -140,7 +163,7 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
                     "%categories": "WAN",
                 }
             },
-            "26.7",
+            "26.1.4",
         ),
         (
             "_get_nat_one_to_one_rules",

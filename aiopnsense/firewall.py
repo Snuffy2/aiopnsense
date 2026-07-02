@@ -223,8 +223,9 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Destination NAT rules keyed by UUID, with
-                ``descr`` normalized to ``description`` and disabled-state
-                values converted into an ``enabled`` flag.
+                ``descr`` normalized to ``description``, ``disabled`` normalized
+                to ``enabled``, and on unified-NAT firmware category keys mirrored
+                from ``category``/``%category`` into ``categories``/``%categories``.
         """
         if not await self._is_get_endpoint_available(FIREWALL_DNAT_RULES_SEARCH_ENDPOINT):
             _LOGGER.debug("%s endpoint not available", "get_nat_destination_rules")
