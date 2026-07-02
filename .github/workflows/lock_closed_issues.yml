@@ -20,6 +20,5 @@ jobs:
         uses: dessant/lock-threads@v6
         with:
           issue-inactive-days: '7'
-          issue-lock-reason: 'resolved'
           process-only: 'issues'
           log-output: true

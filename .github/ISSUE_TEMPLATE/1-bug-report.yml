@@ -18,7 +18,8 @@ body:
   - type: input
     id: aiopnsense-version
     attributes:
-      label: aiopnsense Version
+      label: aiopnsense / consumer version
+      description: Enter the aiopnsense version, or the hass-opnsense/Home Assistant integration version you know.
     validations:
       required: true
   - type: input
