@@ -9,6 +9,7 @@ VERSION = "v1.0.15"
 OPNSENSE_LTD_FIRMWARE = "26.1.1"  # If less than this, some functions may not work but the integration in general should work.
 OPNSENSE_MIN_FIRMWARE = "25.1"  # If less than this, don't allow install. It will not work.
 
+UNIFIED_NAT_TEMPLATE_FIRMWARE = "26.7"
 LEGACY_UNBOUND_BLOCKLIST_FIRMWARE = "25.7.8"
 LEGACY_CAMELCASE_ENDPOINT_FIRMWARE = "25.7"
 
