@@ -148,6 +148,34 @@ def firmware_is_at_least(firmware_version: str | None, minimum_version: str) -> 
         return None
 
 
+def firmware_is_newer(firmware_version: str | None, comparison_version: str | None) -> bool | None:
+    """Compare whether one firmware version is newer than another.
+
+    Args:
+        firmware_version (str | None): Raw firmware version reported by OPNsense.
+        comparison_version (str | None): Firmware version to compare against.
+
+    Returns:
+        bool | None: ``True`` when ``firmware_version`` is newer than
+            ``comparison_version``, ``False`` when it is not newer, or ``None``
+            when either version cannot be compared.
+    """
+    comparable_firmware = trim_firmware_suffix(firmware_version)
+    comparable_version = trim_firmware_suffix(comparison_version)
+    if comparable_firmware is None or comparable_version is None:
+        return None
+    try:
+        return awesomeversion.AwesomeVersion(comparable_firmware) > awesomeversion.AwesomeVersion(
+            comparable_version
+        )
+    except (
+        awesomeversion.exceptions.AwesomeVersionCompareException,
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+
 def get_ip_key(item: MutableMapping[str, Any]) -> tuple:
     """Produce a sorting key for DHCP leases based on their IP addresses.
 

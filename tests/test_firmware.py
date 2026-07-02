@@ -118,6 +118,35 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
 
 
 @pytest.mark.asyncio
+async def test_get_firmware_update_info_handles_suffixed_latest_version(
+    make_client: Callable[..., Any],
+) -> None:
+    """A suffixed newer latest firmware should still trigger a details refresh."""
+    client = make_client()
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        status = {
+            "product": {
+                "product_version": "26.1.2",
+                "product_latest": "26.1.3_1",
+                "product_check": {"status": "ok"},
+            },
+            "status_msg": "There are no updates available on the selected mirror.",
+            "last_check": datetime.now(UTC).isoformat(),
+        }
+        client._safe_dict_get = AsyncMock(return_value=status)
+        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
+        client._post = AsyncMock(return_value={})
+
+        result = await client.get_firmware_update_info()
+
+        assert result == status
+        client._post.assert_awaited_once_with("/api/core/firmware/check")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("upgrade_type", "expected_path"),
     [("update", "/api/core/firmware/update"), ("upgrade", "/api/core/firmware/upgrade")],

@@ -170,7 +170,11 @@ async def test_validate_handles_firmware_thresholds_and_restores_throw_errors(
     client._throw_errors = False
     try:
         get_host_firmware_version = AsyncMock(
-            side_effect=["24.7", OPNSENSE_MIN_FIRMWARE, OPNSENSE_LTD_FIRMWARE]
+            side_effect=[
+                "24.7",
+                f"{OPNSENSE_MIN_FIRMWARE}_1",
+                f"{OPNSENSE_LTD_FIRMWARE}_1",
+            ]
         )
         get_device_unique_id = AsyncMock(return_value="aa_bb_cc")
         _patch_validate_requests(
@@ -190,7 +194,7 @@ async def test_validate_handles_firmware_thresholds_and_restores_throw_errors(
         await client.validate()
         logger_warning.assert_called_once_with(
             "OPNsense Firmware of %s is below the recommended >= %s. aiopnsense will work, but there may be some missing features.",
-            OPNSENSE_MIN_FIRMWARE,
+            f"{OPNSENSE_MIN_FIRMWARE}_1",
             OPNSENSE_LTD_FIRMWARE,
         )
         assert client._throw_errors is False

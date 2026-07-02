@@ -9,7 +9,7 @@ from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
-from .helpers import _LOGGER, _log_errors, dict_get
+from .helpers import _LOGGER, _log_errors, dict_get, firmware_is_newer, trim_firmware_suffix
 
 FIRMWARE_STATUS_ENDPOINT = "/api/core/firmware/status"
 FIRMWARE_CHECK_ENDPOINT = "/api/core/firmware/check"
@@ -32,7 +32,8 @@ class FirmwareMixin(AiopnsenseClientProtocol):
 
         firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
         firmware: str | None = dict_get(firmware_info, "product.product_version")
-        if not firmware or not awesomeversion.AwesomeVersion(firmware).valid:
+        comparable_firmware = trim_firmware_suffix(firmware)
+        if not comparable_firmware or not awesomeversion.AwesomeVersion(comparable_firmware).valid:
             old = firmware
             firmware = dict_get(firmware_info, "product.product_series", old)
             if firmware != old:
@@ -94,11 +95,11 @@ class FirmwareMixin(AiopnsenseClientProtocol):
 
         update_needs_info = False
         try:
-            if (
-                awesomeversion.AwesomeVersion(product_latest)
-                > awesomeversion.AwesomeVersion(product_version)
-                and status.get("status_msg", "").strip()
-                == "There are no updates available on the selected mirror."
+            latest_is_newer = firmware_is_newer(product_latest, product_version)
+            if latest_is_newer is None:
+                raise ValueError("Unable to compare product firmware versions")
+            if latest_is_newer and status.get("status_msg", "").strip() == (
+                "There are no updates available on the selected mirror."
             ):
                 _LOGGER.debug("Update available but missing details")
                 update_needs_info = True
