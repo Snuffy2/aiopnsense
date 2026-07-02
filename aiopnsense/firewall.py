@@ -71,7 +71,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         Returns:
             bool: ``True`` when the rule is not automatically generated.
         """
-        return not coerce_bool(rule.get("is_automatic"))
+        return FirewallMixin._is_non_automatic_rule(rule)
 
     @staticmethod
     def _is_user_source_nat_rule(rule: dict[str, Any]) -> bool:
@@ -79,6 +79,18 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         Args:
             rule (dict[str, Any]): Normalized source NAT rule row returned by OPNsense.
+
+        Returns:
+            bool: ``True`` when the rule is not automatically generated.
+        """
+        return FirewallMixin._is_non_automatic_rule(rule)
+
+    @staticmethod
+    def _is_non_automatic_rule(rule: dict[str, Any]) -> bool:
+        """Return whether a normalized firewall or NAT rule is user-defined.
+
+        Args:
+            rule (dict[str, Any]): Normalized rule row returned by OPNsense.
 
         Returns:
             bool: ``True`` when the rule is not automatically generated.

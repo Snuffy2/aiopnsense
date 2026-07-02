@@ -67,8 +67,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
             return len(raw_reserved) > 0
         return bool(raw_reserved)
 
+    @staticmethod
     def _copy_lease_identity_fields(
-        self, lease: dict[str, Any], lease_info: MutableMapping[str, Any]
+        lease: dict[str, Any], lease_info: MutableMapping[str, Any]
     ) -> None:
         """Copy optional DHCP client identity metadata to a normalized lease.
 
