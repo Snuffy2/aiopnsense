@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: hass-opnsense Issue
+    url: https://github.com/travisghansen/hass-opnsense/issues
+    about: Go here if your issue is actually with hass-opnsense
+  - name: Home Assistant OPNsense Integration Issue
+    url: https://github.com/home-assistant/core/issues?q=is%3Aissue+label%3A%22integration%3A+opnsense%22
+    about: Go here if your issue is actually with the Home Assistant OPNsense Integration
+  - name: Home Assistant OPNsense Integration Feature Request
+    url: https://github.com/orgs/home-assistant/discussions?discussions_q=label%3A%22integration%3A+opnsense%22
+    about: Go here if your feature request is actually for the Home Assistant OPNsense Integration
