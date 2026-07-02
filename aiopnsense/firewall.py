@@ -3,10 +3,11 @@
 from collections.abc import Callable, MutableMapping
 from typing import Any
 
-import awesomeversion
-
 from ._typing import AiopnsenseClientProtocol
-from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE, trim_firmware_suffix
+from .const import (
+    OPNSENSE_26_1_11_COMPAT_FIRMWARE,
+    firmware_is_at_least,
+)
 from .helpers import _LOGGER, _log_errors, api_value_matches
 
 FIREWALL_FILTER_RULES_SEARCH_ENDPOINT = "/api/firewall/filter/search_rule"
@@ -98,21 +99,14 @@ class FirewallMixin(AiopnsenseClientProtocol):
             bool: ``True`` when firmware is at or above the 26.1.11 source NAT
                 API behavior change, otherwise ``False``.
         """
-        if firmware_version is None:
-            return False
-        try:
-            comparable_firmware = trim_firmware_suffix(firmware_version)
-            if comparable_firmware is None:
-                return False
-            return awesomeversion.AwesomeVersion(
-                comparable_firmware
-            ) >= awesomeversion.AwesomeVersion(OPNSENSE_26_1_11_COMPAT_FIRMWARE)
-        except awesomeversion.exceptions.AwesomeVersionCompareException, TypeError, ValueError:
+        should_filter = firmware_is_at_least(firmware_version, OPNSENSE_26_1_11_COMPAT_FIRMWARE)
+        if should_filter is None:
             _LOGGER.debug(
                 "Unable to compare firmware version %s for source NAT automatic rule filtering",
                 firmware_version,
             )
             return False
+        return should_filter
 
     @staticmethod
     def _normalize_nat_destination_rule(rule: dict[str, Any]) -> dict[str, Any]:

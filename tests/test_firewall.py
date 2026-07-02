@@ -222,6 +222,22 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
                 }
             },
         ),
+        (
+            "not-a-version",
+            {
+                "manual-src": {
+                    "uuid": "manual-src",
+                    "description": "Manual",
+                    "enabled": "1",
+                },
+                "auto-src": {
+                    "uuid": "auto-src",
+                    "description": "Automatic",
+                    "enabled": "1",
+                    "is_automatic": True,
+                },
+            },
+        ),
     ],
 )
 async def test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11(

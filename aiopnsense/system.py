@@ -6,11 +6,14 @@ from typing import Any, NamedTuple
 import warnings
 
 import aiohttp
-import awesomeversion
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
-from .const import AMBIGUOUS_TZINFOS, OPNSENSE_26_1_11_COMPAT_FIRMWARE, trim_firmware_suffix
+from .const import (
+    AMBIGUOUS_TZINFOS,
+    OPNSENSE_26_1_11_COMPAT_FIRMWARE,
+    firmware_is_at_least,
+)
 from .exceptions import OPNsenseMissingDeviceUniqueID
 from .helpers import (
     _LOGGER,
@@ -612,17 +615,12 @@ class SystemMixin(AiopnsenseClientProtocol):
         )
         if carp_status_endpoint == CARP_STATUS_SNAKE_ENDPOINT:
             firmware_version = await self.get_host_firmware_version()
-            try:
-                normalized_firmware_version = trim_firmware_suffix(firmware_version)
-                if normalized_firmware_version is not None and awesomeversion.AwesomeVersion(
-                    normalized_firmware_version
-                ) >= awesomeversion.AwesomeVersion(OPNSENSE_26_1_11_COMPAT_FIRMWARE):
-                    carp_status_endpoint = CARP_STATUS_26_1_11_SNAKE_ENDPOINT
-            except (
-                awesomeversion.exceptions.AwesomeVersionCompareException,
-                TypeError,
-                ValueError,
-            ):
+            supports_new_carp_endpoint = firmware_is_at_least(
+                firmware_version, OPNSENSE_26_1_11_COMPAT_FIRMWARE
+            )
+            if supports_new_carp_endpoint is True:
+                carp_status_endpoint = CARP_STATUS_26_1_11_SNAKE_ENDPOINT
+            elif supports_new_carp_endpoint is None:
                 _LOGGER.debug(
                     "Unable to compare firmware version %s for CARP status endpoint",
                     firmware_version,
