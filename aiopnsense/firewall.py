@@ -4,11 +4,8 @@ from collections.abc import Callable, MutableMapping
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .const import (
-    OPNSENSE_26_1_11_COMPAT_FIRMWARE,
-    firmware_is_at_least,
-)
-from .helpers import _LOGGER, _log_errors, api_value_matches
+from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE
+from .helpers import _LOGGER, _log_errors, api_value_matches, firmware_is_at_least
 
 FIREWALL_FILTER_RULES_SEARCH_ENDPOINT = "/api/firewall/filter/search_rule"
 FIREWALL_DNAT_RULES_SEARCH_ENDPOINT = "/api/firewall/d_nat/search_rule"

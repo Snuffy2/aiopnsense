@@ -12,7 +12,6 @@ from ._typing import AiopnsenseClientProtocol
 from .const import (
     AMBIGUOUS_TZINFOS,
     OPNSENSE_26_1_11_COMPAT_FIRMWARE,
-    firmware_is_at_least,
 )
 from .exceptions import OPNsenseMissingDeviceUniqueID
 from .helpers import (
@@ -20,6 +19,7 @@ from .helpers import (
     _log_errors,
     api_value_matches,
     coerce_bool,
+    firmware_is_at_least,
     normalize_lookup_token,
     timestamp_to_datetime,
     try_to_int,

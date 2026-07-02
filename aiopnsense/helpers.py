@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiohttp
+import awesomeversion
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -101,6 +102,50 @@ def human_friendly_duration(seconds: int) -> str:
         duration.append(f"{seconds} second{'s' if seconds != 1 else ''}")
 
     return ", ".join(duration)
+
+
+def trim_firmware_suffix(firmware_version: str | None) -> str | None:
+    """Return the version part before an optional build metadata suffix.
+
+    Args:
+        firmware_version (str | None): Raw version string from OPNsense.
+
+    Returns:
+        str | None: Trimmed version if parseable as a non-empty string, otherwise ``None``.
+    """
+    if not firmware_version:
+        return None
+    trimmed_version = firmware_version.strip()
+    if not trimmed_version:
+        return None
+    return trimmed_version.split("_", 1)[0]
+
+
+def firmware_is_at_least(firmware_version: str | None, minimum_version: str) -> bool | None:
+    """Compare firmware versions after trimming optional build suffixes.
+
+    Args:
+        firmware_version (str | None): Raw firmware version reported by OPNsense.
+        minimum_version (str): Minimum comparable firmware version.
+
+    Returns:
+        bool | None: ``True`` when the installed version is at or above the
+            minimum, ``False`` when it is below the minimum, or ``None`` when
+            the version cannot be compared.
+    """
+    comparable_firmware = trim_firmware_suffix(firmware_version)
+    if comparable_firmware is None:
+        return None
+    try:
+        return awesomeversion.AwesomeVersion(comparable_firmware) >= awesomeversion.AwesomeVersion(
+            minimum_version
+        )
+    except (
+        awesomeversion.exceptions.AwesomeVersionCompareException,
+        TypeError,
+        ValueError,
+    ):
+        return None
 
 
 def get_ip_key(item: MutableMapping[str, Any]) -> tuple:
