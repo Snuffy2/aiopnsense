@@ -6,7 +6,7 @@ from typing import Any
 import awesomeversion
 
 from ._typing import AiopnsenseClientProtocol
-from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE
+from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE, trim_firmware_suffix
 from .helpers import _LOGGER, _log_errors, api_value_matches
 
 FIREWALL_FILTER_RULES_SEARCH_ENDPOINT = "/api/firewall/filter/search_rule"
@@ -101,9 +101,12 @@ class FirewallMixin(AiopnsenseClientProtocol):
         if firmware_version is None:
             return False
         try:
-            return awesomeversion.AwesomeVersion(firmware_version) >= awesomeversion.AwesomeVersion(
-                OPNSENSE_26_1_11_COMPAT_FIRMWARE
-            )
+            comparable_firmware = trim_firmware_suffix(firmware_version)
+            if comparable_firmware is None:
+                return False
+            return awesomeversion.AwesomeVersion(
+                comparable_firmware
+            ) >= awesomeversion.AwesomeVersion(OPNSENSE_26_1_11_COMPAT_FIRMWARE)
         except awesomeversion.exceptions.AwesomeVersionCompareException, TypeError, ValueError:
             _LOGGER.debug(
                 "Unable to compare firmware version %s for source NAT automatic rule filtering",

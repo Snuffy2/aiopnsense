@@ -13,6 +13,24 @@ LEGACY_UNBOUND_BLOCKLIST_FIRMWARE = "25.7.8"
 LEGACY_CAMELCASE_ENDPOINT_FIRMWARE = "25.7"
 OPNSENSE_26_1_11_COMPAT_FIRMWARE = "26.1.11"
 
+
+def trim_firmware_suffix(firmware_version: str | None) -> str | None:
+    """Return the version part before an optional build metadata suffix.
+
+    Args:
+        firmware_version (str | None): Raw version string from OPNsense.
+
+    Returns:
+        str | None: Trimmed version if parseable as a non-empty string, otherwise ``None``.
+    """
+    if not firmware_version:
+        return None
+    trimmed_version = firmware_version.strip()
+    if not trimmed_version:
+        return None
+    return trimmed_version.split("_", 1)[0]
+
+
 # Default timeout, in seconds, for API requests.
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 # Shared cache time-to-live, in seconds, for endpoint availability state.

@@ -212,6 +212,16 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
                 }
             },
         ),
+        (
+            "26.1.11_4",
+            {
+                "manual-src": {
+                    "uuid": "manual-src",
+                    "description": "Manual",
+                    "enabled": "1",
+                }
+            },
+        ),
     ],
 )
 async def test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11(
