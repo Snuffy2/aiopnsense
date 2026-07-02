@@ -209,6 +209,85 @@ async def test_validate_handles_firmware_thresholds_and_restores_throw_errors(
 
 
 @pytest.mark.asyncio
+async def test_validate_raises_unknown_firmware_for_invalid_minimum_comparison(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify invalid firmware is rejected during minimum-version validation.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts invalid firmware raises before device-ID lookup.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._throw_errors = False
+    try:
+        get_host_firmware_version = AsyncMock(return_value="invalid-version")
+        get_device_unique_id = AsyncMock(return_value="aa_bb_cc")
+        _patch_validate_requests(
+            monkeypatch,
+            client,
+            get_host_firmware_version,
+            get_device_unique_id,
+        )
+
+        with pytest.raises(OPNsenseUnknownFirmware):
+            await client.validate()
+
+        assert client._throw_errors is False
+        get_host_firmware_version.assert_awaited_once()
+        get_device_unique_id.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_validate_raises_unknown_firmware_for_invalid_recommended_comparison(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify invalid recommended-firmware comparison is rejected.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts invalid suffixed firmware raises before device-ID lookup.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._throw_errors = False
+    try:
+        get_host_firmware_version = AsyncMock(return_value=OPNSENSE_MIN_FIRMWARE)
+        get_device_unique_id = AsyncMock(return_value="aa_bb_cc")
+        _patch_validate_requests(
+            monkeypatch,
+            client,
+            get_host_firmware_version,
+            get_device_unique_id,
+        )
+        firmware_is_at_least = MagicMock(side_effect=[True, None])
+        monkeypatch.setattr(
+            aiopnsense_client,
+            "firmware_is_at_least",
+            firmware_is_at_least,
+        )
+
+        with pytest.raises(OPNsenseUnknownFirmware):
+            await client.validate()
+
+        assert client._throw_errors is False
+        get_host_firmware_version.assert_awaited_once()
+        get_device_unique_id.assert_not_awaited()
+        assert firmware_is_at_least.call_count == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_validate_raises_when_device_unique_id_missing(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,

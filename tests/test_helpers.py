@@ -80,6 +80,83 @@ def test_timestamp_to_datetime() -> None:
     assert aiopnsense_helpers.timestamp_to_datetime(None) is None
 
 
+@pytest.mark.parametrize(
+    ("firmware_version", "expected"),
+    [
+        (None, None),
+        ("   ", None),
+        ("26.1.11_4", "26.1.11"),
+    ],
+)
+def test_trim_firmware_suffix_handles_empty_and_suffixed_versions(
+    firmware_version: str | None,
+    expected: str | None,
+) -> None:
+    """Verify firmware suffix trimming handles empty and revision-suffixed values.
+
+    Args:
+        firmware_version (str | None): Firmware version value to trim.
+        expected (str | None): Expected comparable firmware version.
+
+    Returns:
+        None: This test validates trim output via assertions.
+    """
+    assert aiopnsense_helpers.trim_firmware_suffix(firmware_version) == expected
+
+
+@pytest.mark.parametrize(
+    ("firmware_version", "comparison_version"),
+    [
+        (None, "26.1.11"),
+        ("   ", "26.1.11"),
+        ("26.1.11_bad", "26.1.10"),
+        ("26.1.11", "   "),
+    ],
+)
+def test_firmware_is_newer_returns_none_for_uncomparable_versions(
+    firmware_version: str | None,
+    comparison_version: str | None,
+) -> None:
+    """Verify uncomparable firmware update versions return ``None``.
+
+    Args:
+        firmware_version (str | None): Candidate firmware version.
+        comparison_version (str | None): Firmware version to compare against.
+
+    Returns:
+        None: This test validates uncomparable-version handling via assertions.
+    """
+    assert aiopnsense_helpers.firmware_is_newer(firmware_version, comparison_version) is None
+
+
+def test_firmware_is_newer_returns_none_when_version_comparison_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify firmware update comparison failures return ``None``.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing AwesomeVersion.
+
+    Returns:
+        None: This test validates comparison exception handling via assertions.
+    """
+
+    class RaisingAwesomeVersion:
+        """AwesomeVersion stand-in that raises during construction."""
+
+        def __init__(self, _version: str) -> None:
+            """Raise a comparison setup error.
+
+            Args:
+                _version (str): Version value passed by the helper.
+            """
+            raise ValueError("comparison failed")
+
+    monkeypatch.setattr(aiopnsense_helpers.awesomeversion, "AwesomeVersion", RaisingAwesomeVersion)
+
+    assert aiopnsense_helpers.firmware_is_newer("26.1.11", "26.1.10") is None
+
+
 def test_try_to_int_and_float() -> None:
     """Coerce numeric-like strings to int/float with defaults."""
     assert aiopnsense_helpers.try_to_int("5") == 5
