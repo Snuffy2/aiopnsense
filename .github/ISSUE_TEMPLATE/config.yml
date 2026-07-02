@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
-  - name: hass-opnsense Issue
-    url: https://github.com/travisghansen/hass-opnsense/issues
-    about: Go here if your issue is actually with hass-opnsense
   - name: Security or Private Report
     url: https://github.com/Snuffy2/aiopnsense/security/advisories/new
     about: Use this for security issues or anything you should not post publicly
+  - name: hass-opnsense Issue or Feature Request
+    url: https://github.com/travisghansen/hass-opnsense/issues
+    about: Go here if your issue or Feature Request is actually for hass-opnsense
   - name: Home Assistant OPNsense Integration Issue
     url: https://github.com/home-assistant/core/issues?q=is%3Aissue+label%3A%22integration%3A+opnsense%22
     about: Go here if your issue is actually with the Home Assistant OPNsense Integration
