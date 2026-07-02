@@ -5,7 +5,7 @@ from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
 from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE, UNIFIED_NAT_TEMPLATE_FIRMWARE
-from .helpers import _LOGGER, _log_errors, api_value_matches, firmware_is_at_least
+from .helpers import _LOGGER, _log_errors, api_value_matches, coerce_bool, firmware_is_at_least
 
 FIREWALL_FILTER_RULES_SEARCH_ENDPOINT = "/api/firewall/filter/search_rule"
 FIREWALL_DNAT_RULES_SEARCH_ENDPOINT = "/api/firewall/d_nat/search_rule"
@@ -71,7 +71,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         Returns:
             bool: ``True`` when the rule is not automatically generated.
         """
-        return rule.get("is_automatic") is not True
+        return not coerce_bool(rule.get("is_automatic"))
 
     @staticmethod
     def _is_user_source_nat_rule(rule: dict[str, Any]) -> bool:
@@ -83,7 +83,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         Returns:
             bool: ``True`` when the rule is not automatically generated.
         """
-        return not api_value_matches(rule.get("is_automatic", "0"), "1")
+        return not coerce_bool(rule.get("is_automatic"))
 
     @staticmethod
     def _filters_automatic_source_nat_rules(firmware_version: str | None) -> bool:
@@ -151,6 +151,23 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 rule["categories"] = rule["category"]
             if "%category" in rule and "%categories" not in rule:
                 rule["%categories"] = rule["%category"]
+        return rule
+
+    @staticmethod
+    def _normalize_source_nat_rule(rule: dict[str, Any]) -> dict[str, Any]:
+        """Normalize source NAT rule display fields.
+
+        Args:
+            rule (dict[str, Any]): Source NAT rule row returned by OPNsense.
+
+        Returns:
+            dict[str, Any]: Normalized source NAT rule row.
+        """
+        if rule.get("target") == "" and not rule.get("%target"):
+            interface_label = rule.get("%interface") or rule.get("interface")
+            rule["%target"] = (
+                f"{interface_label} address" if interface_label else "Interface address"
+            )
         return rule
 
     async def _get_uuid_indexed_rules(
@@ -277,15 +294,18 @@ class FirewallMixin(AiopnsenseClientProtocol):
         rules: list = response.get("rows", [])
         include_rule = None
         has_automatic_rows = any(
-            isinstance(rule, MutableMapping)
-            and api_value_matches(rule.get("is_automatic", "0"), "1")
+            isinstance(rule, MutableMapping) and coerce_bool(rule.get("is_automatic"))
             for rule in rules
         )
         if has_automatic_rows and self._filters_automatic_source_nat_rules(
             await self.get_host_firmware_version()
         ):
             include_rule = self._is_user_source_nat_rule
-        rules_dict = self._index_rule_rows(rules, include_rule=include_rule)
+        rules_dict = self._index_rule_rows(
+            rules,
+            normalizer=self._normalize_source_nat_rule,
+            include_rule=include_rule,
+        )
         _LOGGER.debug(
             "[%s] rules_dict length: %s",
             "get_nat_source_rules",

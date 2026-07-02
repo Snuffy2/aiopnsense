@@ -83,6 +83,12 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
                         "descr": "Plugin generated",
                         "is_automatic": True,
                     },
+                    {
+                        "uuid": "automatic-string-rule",
+                        "enabled": "1",
+                        "descr": "Plugin generated string flag",
+                        "is_automatic": "1",
+                    },
                 ]
             }
         )
@@ -100,6 +106,38 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
             "/api/firewall/filter/search_rule"
         )
         client._safe_dict_get.assert_awaited_once_with("/api/firewall/filter/search_rule")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_nat_source_rules_labels_empty_interface_address_target(
+    make_client: ClientType,
+) -> None:
+    """Source NAT rows with an empty target should expose an interface-address label."""
+    client = make_client()
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client.get_host_firmware_version = AsyncMock(return_value="26.7")
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "uuid": "src-interface-address",
+                        "description": "Interface address target",
+                        "enabled": "1",
+                        "interface": "wan",
+                        "%interface": "WAN",
+                        "target": "",
+                    }
+                ]
+            }
+        )
+
+        result = await client._get_nat_source_rules()
+
+        assert result["src-interface-address"]["target"] == ""
+        assert result["src-interface-address"]["%target"] == "WAN address"
     finally:
         await client.async_close()
 

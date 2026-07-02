@@ -564,7 +564,9 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
                             "if_name": "em1",
                             "if_descr": "OPT",
                             "hwaddr": "aa:bb",
+                            "client_id": "01:aa:bb",
                             "expire": future_ts,
+                            "is_reserved": ["client_id"],
                         },
                     ]
                 },
@@ -584,7 +586,11 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
             lease["address"] == "192.0.2.11" and lease["type"] == "dynamic" for lease in leases
         )
         assert any(
-            lease["address"] == "192.0.2.13" and lease["type"] == "static" for lease in leases
+            lease["address"] == "192.0.2.13"
+            and lease["type"] == "static"
+            and lease["client_id"] == "01:aa:bb"
+            and lease["reserved_by"] == ["client_id"]
+            for lease in leases
         )
 
         # Reservation lookup failures should not misclassify entries as dynamic/static.
@@ -622,6 +628,7 @@ async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientT
                     {
                         "address": "2001:db8::10",
                         "duid": "00:01:00:01:aa:bb",
+                        "client_id": "00:01:00:01:aa:bb",
                         "hwaddr": "",
                         "state": 0,
                         "if_name": "em0",
@@ -659,6 +666,8 @@ async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientT
             and lease["type"] == "static"
             and lease["hostname"] == "host6"
             and lease["duid"] == "00:01:00:01:aa:bb"
+            and lease["client_id"] == "00:01:00:01:aa:bb"
+            and lease["reserved_by"] == ["duid"]
             and lease["mac"] is None
             for lease in leases
         )
@@ -714,7 +723,9 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
                         "address": "192.0.2.22",
                         "hostname": "dynamic-host",
                         "if": "em0",
+                        "if_name": "lan",
                         "is_reserved": "0",
+                        "client_id": "01:11:22",
                         "hwaddr": "",
                         "expire": "never",
                     },
@@ -722,7 +733,9 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
                         "address": "192.0.2.23",
                         "hostname": "static-host-list",
                         "if": "em0",
+                        "if_name": "lan",
                         "is_reserved": ["hwaddr"],
+                        "client_id": "01:33:44",
                         "hwaddr": "bb:bb:bb",
                         "expire": "never",
                     },
@@ -743,10 +756,14 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
         lease_by_address = {lease["address"]: lease for lease in leases}
 
         assert lease_by_address["192.0.2.22"]["type"] == "dynamic"
+        assert lease_by_address["192.0.2.22"]["if_name"] == "lan"
+        assert lease_by_address["192.0.2.22"]["client_id"] == "01:11:22"
         assert lease_by_address["192.0.2.22"]["mac"] is None
         assert lease_by_address["192.0.2.22"]["expires"] == "never"
 
         assert lease_by_address["192.0.2.23"]["type"] == "static"
+        assert lease_by_address["192.0.2.23"]["reserved_by"] == ["hwaddr"]
+        assert lease_by_address["192.0.2.23"]["client_id"] == "01:33:44"
         assert lease_by_address["192.0.2.24"]["type"] == "dynamic"
     finally:
         await client.async_close()
