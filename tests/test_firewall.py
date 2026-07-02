@@ -104,7 +104,7 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
 
 
 @pytest.mark.parametrize(
-    ("method_name", "api_endpoint", "rows", "expected"),
+    ("method_name", "api_endpoint", "rows", "expected", "firmware_version"),
     [
         (
             "_get_nat_destination_rules",
@@ -114,35 +114,66 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
                 {"uuid": "lockout-1", "descr": "ignored", "disabled": "0"},
             ],
             {"dst1": {"uuid": "dst1", "description": "DNAT rule", "enabled": "1"}},
+            "26.1.1",
+        ),
+        (
+            "_get_nat_destination_rules",
+            "/api/firewall/d_nat/search_rule",
+            [
+                {
+                    "uuid": "dst1",
+                    "descr": "DNAT rule",
+                    "disabled": 0,
+                    "category": "cat1",
+                    "%category": "WAN",
+                },
+            ],
+            {
+                "dst1": {
+                    "uuid": "dst1",
+                    "description": "DNAT rule",
+                    "enabled": "1",
+                    "category": "cat1",
+                    "%category": "WAN",
+                    "categories": "cat1",
+                    "%categories": "WAN",
+                }
+            },
+            "26.7",
         ),
         (
             "_get_nat_one_to_one_rules",
             "/api/firewall/one_to_one/search_rule",
             [{"uuid": "oto1", "description": "1:1 rule", "enabled": "1"}],
             {"oto1": {"uuid": "oto1", "description": "1:1 rule", "enabled": "1"}},
+            None,
         ),
         (
             "_get_nat_source_rules",
             "/api/firewall/source_nat/search_rule",
             [{"uuid": "src1", "description": "SNAT rule", "enabled": "0"}],
             {"src1": {"uuid": "src1", "description": "SNAT rule", "enabled": "0"}},
+            None,
         ),
         (
             "_get_nat_npt_rules",
             "/api/firewall/npt/search_rule",
             [{"uuid": "npt1", "description": "NPT rule", "enabled": "1"}],
             {"npt1": {"uuid": "npt1", "description": "NPT rule", "enabled": "1"}},
+            None,
         ),
     ],
 )
 async def test_nat_rule_helpers_parse_rows(
-    make_client, method_name, api_endpoint, rows, expected
+    make_client, method_name, api_endpoint, rows, expected, firmware_version
 ) -> None:
     """NAT rule helpers should return UUID-keyed mappings from REST search rows."""
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": rows})
+        if firmware_version is not None:
+            client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
 
         result = await getattr(client, method_name)()
 

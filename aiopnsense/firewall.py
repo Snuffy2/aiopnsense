@@ -4,7 +4,7 @@ from collections.abc import Callable, MutableMapping
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE
+from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE, UNIFIED_NAT_TEMPLATE_FIRMWARE
 from .helpers import _LOGGER, _log_errors, api_value_matches, firmware_is_at_least
 
 FIREWALL_FILTER_RULES_SEARCH_ENDPOINT = "/api/firewall/filter/search_rule"
@@ -106,17 +106,47 @@ class FirewallMixin(AiopnsenseClientProtocol):
         return should_filter
 
     @staticmethod
-    def _normalize_nat_destination_rule(rule: dict[str, Any]) -> dict[str, Any]:
+    def _uses_unified_nat_template(firmware_version: str | None) -> bool:
+        """Return whether OPNsense uses the unified NAT UI template.
+
+        Args:
+            firmware_version (str | None): Installed OPNsense firmware version.
+
+        Returns:
+            bool: ``True`` when the firmware is at or above the unified NAT
+                template threshold, otherwise ``False``.
+        """
+        uses_template = firmware_is_at_least(firmware_version, UNIFIED_NAT_TEMPLATE_FIRMWARE)
+        if uses_template is None:
+            _LOGGER.debug(
+                "Unable to compare firmware version %s for DNAT category normalization",
+                firmware_version,
+            )
+            return False
+        return uses_template
+
+    @staticmethod
+    def _normalize_nat_destination_rule(
+        rule: dict[str, Any], *, normalize_categories: bool = False
+    ) -> dict[str, Any]:
         """Normalize destination NAT rule field names and enabled state.
 
         Args:
             rule (dict[str, Any]): Destination NAT rule row returned by OPNsense.
+            normalize_categories (bool): Whether to mirror DNAT's singular
+                category keys to plural category keys for newer unified NAT UI
+                template firmware.
 
         Returns:
             dict[str, Any]: Normalized destination NAT rule row.
         """
         rule["description"] = rule.pop("descr", "")
         rule["enabled"] = "1" if api_value_matches(rule.pop("disabled", "0"), "0") else "0"
+        if normalize_categories:
+            if "category" in rule and "categories" not in rule:
+                rule["categories"] = rule["category"]
+            if "%category" in rule and "%categories" not in rule:
+                rule["%categories"] = rule["%category"]
         return rule
 
     async def _get_uuid_indexed_rules(
@@ -192,11 +222,23 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 ``descr`` normalized to ``description`` and disabled-state
                 values converted into an ``enabled`` flag.
         """
-        return await self._get_uuid_indexed_rules(
-            endpoint=FIREWALL_DNAT_RULES_SEARCH_ENDPOINT,
-            debug_label="get_nat_destination_rules",
-            normalizer=self._normalize_nat_destination_rule,
+        if not await self._is_get_endpoint_available(FIREWALL_DNAT_RULES_SEARCH_ENDPOINT):
+            _LOGGER.debug("%s endpoint not available", "get_nat_destination_rules")
+            return {}
+
+        response = await self._safe_dict_get(FIREWALL_DNAT_RULES_SEARCH_ENDPOINT)
+        normalize_categories = self._uses_unified_nat_template(
+            await self.get_host_firmware_version()
         )
+        rules: list = response.get("rows", [])
+        rules_dict = self._index_rule_rows(
+            rules,
+            normalizer=lambda rule: self._normalize_nat_destination_rule(
+                rule, normalize_categories=normalize_categories
+            ),
+        )
+        _LOGGER.debug("[get_nat_destination_rules] rules_dict length: %s", len(rules_dict))
+        return rules_dict
 
     @_log_errors
     async def _get_nat_one_to_one_rules(self) -> dict[str, Any]:
