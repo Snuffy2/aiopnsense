@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from functools import wraps
 import ipaddress
 import logging
-import operator
 import re
 import traceback
 from typing import Any
@@ -122,42 +121,6 @@ def trim_firmware_suffix(firmware_version: str | None) -> str | None:
     return trimmed_version.split("_", 1)[0]
 
 
-def _compare_firmware_versions(
-    firmware_version: str | None,
-    comparison_version: str | None,
-    comparator: Callable[
-        [awesomeversion.AwesomeVersion, awesomeversion.AwesomeVersion],
-        bool,
-    ],
-) -> bool | None:
-    """Compare firmware versions with shared trimming and parse error handling.
-
-    Args:
-        firmware_version (str | None): Raw firmware version reported by OPNsense.
-        comparison_version (str | None): Version string to compare against.
-        comparator: Comparison function applied to parsed version objects.
-
-    Returns:
-        bool | None: Comparison result, or ``None`` when either version cannot
-            be trimmed or compared.
-    """
-    comparable_firmware = trim_firmware_suffix(firmware_version)
-    comparable_version = trim_firmware_suffix(comparison_version)
-    if comparable_firmware is None or comparable_version is None:
-        return None
-    try:
-        return comparator(
-            awesomeversion.AwesomeVersion(comparable_firmware),
-            awesomeversion.AwesomeVersion(comparable_version),
-        )
-    except (
-        awesomeversion.exceptions.AwesomeVersionCompareException,
-        TypeError,
-        ValueError,
-    ):
-        return None
-
-
 def firmware_is_at_least(firmware_version: str | None, minimum_version: str) -> bool | None:
     """Compare firmware versions after trimming optional build suffixes.
 
@@ -170,11 +133,19 @@ def firmware_is_at_least(firmware_version: str | None, minimum_version: str) -> 
             minimum, ``False`` when it is below the minimum, or ``None`` when
             the version cannot be compared.
     """
-    return _compare_firmware_versions(
-        firmware_version,
-        minimum_version,
-        operator.ge,
-    )
+    comparable_firmware = trim_firmware_suffix(firmware_version)
+    if comparable_firmware is None:
+        return None
+    try:
+        return awesomeversion.AwesomeVersion(comparable_firmware) >= awesomeversion.AwesomeVersion(
+            minimum_version
+        )
+    except (
+        awesomeversion.exceptions.AwesomeVersionCompareException,
+        TypeError,
+        ValueError,
+    ):
+        return None
 
 
 def firmware_is_newer(firmware_version: str | None, comparison_version: str | None) -> bool | None:
@@ -189,11 +160,20 @@ def firmware_is_newer(firmware_version: str | None, comparison_version: str | No
             ``comparison_version``, ``False`` when it is not newer, or ``None``
             when either version cannot be compared.
     """
-    return _compare_firmware_versions(
-        firmware_version,
-        comparison_version,
-        operator.gt,
-    )
+    comparable_firmware = trim_firmware_suffix(firmware_version)
+    comparable_version = trim_firmware_suffix(comparison_version)
+    if comparable_firmware is None or comparable_version is None:
+        return None
+    try:
+        return awesomeversion.AwesomeVersion(comparable_firmware) > awesomeversion.AwesomeVersion(
+            comparable_version
+        )
+    except (
+        awesomeversion.exceptions.AwesomeVersionCompareException,
+        TypeError,
+        ValueError,
+    ):
+        return None
 
 
 def get_ip_key(item: MutableMapping[str, Any]) -> tuple:
