@@ -147,6 +147,35 @@ async def test_get_firmware_update_info_handles_suffixed_latest_version(
 
 
 @pytest.mark.asyncio
+async def test_get_firmware_update_info_triggers_check_for_underscore_revision_version(
+    make_client: Callable[..., Any],
+) -> None:
+    """An underscore revision should not prevent a newer latest firmware refresh."""
+    client = make_client()
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        status = {
+            "product": {
+                "product_version": "25.7_9",
+                "product_latest": "25.7.1",
+                "product_check": {"status": "ok"},
+            },
+            "status_msg": "There are no updates available on the selected mirror.",
+            "last_check": datetime.now(UTC).isoformat(),
+        }
+        client._safe_dict_get = AsyncMock(return_value=status)
+        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
+        client._post = AsyncMock(return_value={})
+
+        result = await client.get_firmware_update_info()
+
+        assert result == status
+        client._post.assert_awaited_once_with("/api/core/firmware/check")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_firmware_update_info_triggers_check_for_hotfix_only_latest_revision(
     make_client: Callable[..., Any],
 ) -> None:

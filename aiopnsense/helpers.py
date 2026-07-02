@@ -183,7 +183,7 @@ def firmware_is_newer(firmware_version: str | None, comparison_version: str | No
         base_version, revision = trimmed_version.split("_", 1)
         if not revision.isdigit():
             return None
-        return f"{base_version}.{revision}"
+        return f"{base_version}.post{revision}"
 
     comparable_firmware = _normalize_firmware_version_for_update(firmware_version)
     comparable_version = _normalize_firmware_version_for_update(comparison_version)
