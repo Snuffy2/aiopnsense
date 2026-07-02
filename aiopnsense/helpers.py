@@ -160,8 +160,33 @@ def firmware_is_newer(firmware_version: str | None, comparison_version: str | No
             ``comparison_version``, ``False`` when it is not newer, or ``None``
             when either version cannot be compared.
     """
-    comparable_firmware = trim_firmware_suffix(firmware_version)
-    comparable_version = trim_firmware_suffix(comparison_version)
+
+    def _normalize_firmware_version_for_update(version: str | None) -> str | None:
+        """Normalize firmware versions for update comparisons.
+
+        Args:
+            version (str | None): Raw firmware version from OPNsense.
+
+        Returns:
+            str | None: Revision-aware version, or ``None`` if the suffix is
+                malformed for comparison.
+        """
+        if not version:
+            return None
+        trimmed_version = version.strip()
+        if not trimmed_version:
+            return None
+
+        if "_" not in trimmed_version:
+            return trimmed_version
+
+        base_version, revision = trimmed_version.split("_", 1)
+        if not revision.isdigit():
+            return None
+        return f"{base_version}.{revision}"
+
+    comparable_firmware = _normalize_firmware_version_for_update(firmware_version)
+    comparable_version = _normalize_firmware_version_for_update(comparison_version)
     if comparable_firmware is None or comparable_version is None:
         return None
     try:
