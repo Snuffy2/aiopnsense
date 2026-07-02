@@ -115,7 +115,11 @@ class FirewallMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Normalized destination NAT rule row.
         """
         rule["description"] = rule.pop("descr", "")
-        rule["enabled"] = "1" if api_value_matches(rule.pop("disabled", "0"), "0") else "0"
+        if "enabled" in rule:
+            rule["enabled"] = rule.pop("enabled")
+        else:
+            rule["enabled"] = "1" if api_value_matches(rule.pop("disabled", "0"), "0") else "0"
+        rule.pop("disabled", None)
         if normalize_categories:
             if "category" in rule and "categories" not in rule:
                 rule["categories"] = rule["category"]

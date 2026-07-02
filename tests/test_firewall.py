@@ -1,6 +1,7 @@
 """Tests for `aiopnsense.firewall`."""
 
 from collections.abc import Callable
+import logging
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -123,7 +124,7 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
                 {
                     "uuid": "dst1",
                     "descr": "DNAT rule",
-                    "disabled": 0,
+                    "enabled": "0",
                     "category": "cat1",
                     "%category": "WAN",
                 },
@@ -132,7 +133,7 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
                 "dst1": {
                     "uuid": "dst1",
                     "description": "DNAT rule",
-                    "enabled": "1",
+                    "enabled": "0",
                     "category": "cat1",
                     "%category": "WAN",
                     "categories": "cat1",
@@ -180,6 +181,24 @@ async def test_nat_rule_helpers_parse_rows(
         assert result == expected
         client._is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
         client._safe_dict_get.assert_awaited_once_with(api_endpoint)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_uses_unified_nat_template_handles_invalid_firmware_string(
+    make_client: Callable[..., Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Legacy normalization fallback should be used when version comparison raises."""
+    client = make_client()
+    try:
+        with caplog.at_level(logging.DEBUG):
+            result = client._uses_unified_nat_template("foo")
+
+        assert result is False
+        assert (
+            "Unable to compare firmware version foo for DNAT category normalization" in caplog.text
+        )
     finally:
         await client.async_close()
 
