@@ -124,8 +124,10 @@ async def test_get_unbound_blocklist_returns_empty_when_endpoint_unavailable(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("firmware_version", ["25.7.7", "25.7.7_1"])
 async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
     make_client: ClientType,
+    firmware_version: str,
 ) -> None:
     """Older firmware should return the legacy DNSBL payload under the legacy key.
 
@@ -137,7 +139,7 @@ async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
+        client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
         client._is_get_endpoint_available = AsyncMock()
         client._safe_dict_get = AsyncMock(
             return_value={

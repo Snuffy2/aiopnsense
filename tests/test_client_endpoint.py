@@ -756,6 +756,7 @@ async def test_set_use_snake_case_deprecated_wrapper(
     [
         ("25.1", False, "/camelCase"),
         ("25.7", True, "/snake_case"),
+        ("25.7_1", True, "/snake_case"),
         ("26.1.1", True, "/snake_case"),
         (None, True, "/snake_case"),
         ("invalid-version", True, "/snake_case"),

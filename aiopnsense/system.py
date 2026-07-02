@@ -9,13 +9,17 @@ import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
-from .const import AMBIGUOUS_TZINFOS
+from .const import (
+    AMBIGUOUS_TZINFOS,
+    OPNSENSE_26_1_11_COMPAT_FIRMWARE,
+)
 from .exceptions import OPNsenseMissingDeviceUniqueID
 from .helpers import (
     _LOGGER,
     _log_errors,
     api_value_matches,
     coerce_bool,
+    firmware_is_at_least,
     normalize_lookup_token,
     timestamp_to_datetime,
     try_to_int,
@@ -30,6 +34,7 @@ VIP_SETTINGS_ENDPOINT = "/api/interfaces/vip_settings/get"
 CORE_SYSTEM_REBOOT_ENDPOINT = "/api/core/system/reboot"
 CORE_SYSTEM_HALT_ENDPOINT = "/api/core/system/halt"
 CARP_STATUS_SNAKE_ENDPOINT = "/api/diagnostics/interface/_carp_status"
+CARP_STATUS_26_1_11_SNAKE_ENDPOINT = "/api/diagnostics/interface/carp_status"
 CARP_STATUS_CAMELCASE_ENDPOINT = "/api/diagnostics/interface/CarpStatus"
 CARP_MAINTENANCE_ENDPOINT_SUFFIX = "/maintenance"
 WOL_SET_ENDPOINT = "/api/wol/wol/set"
@@ -608,6 +613,18 @@ class SystemMixin(AiopnsenseClientProtocol):
             CARP_STATUS_SNAKE_ENDPOINT,
             CARP_STATUS_CAMELCASE_ENDPOINT,
         )
+        if carp_status_endpoint == CARP_STATUS_SNAKE_ENDPOINT:
+            firmware_version = await self.get_host_firmware_version()
+            supports_new_carp_endpoint = firmware_is_at_least(
+                firmware_version, OPNSENSE_26_1_11_COMPAT_FIRMWARE
+            )
+            if supports_new_carp_endpoint is True:
+                carp_status_endpoint = CARP_STATUS_26_1_11_SNAKE_ENDPOINT
+            elif supports_new_carp_endpoint is None:
+                _LOGGER.debug(
+                    "Unable to compare firmware version %s for CARP status endpoint",
+                    firmware_version,
+                )
         response = await self._safe_dict_post(
             f"{carp_status_endpoint}{CARP_MAINTENANCE_ENDPOINT_SUFFIX}"
         )

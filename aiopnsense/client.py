@@ -5,7 +5,6 @@ from types import TracebackType
 from typing import Self, TypeVar
 
 import aiohttp
-import awesomeversion
 
 from .client_base import ClientBaseMixin
 from .const import OPNSENSE_LTD_FIRMWARE, OPNSENSE_MIN_FIRMWARE
@@ -22,7 +21,7 @@ from .exceptions import (
 )
 from .firewall import FirewallMixin
 from .firmware import FirmwareMixin
-from .helpers import _LOGGER
+from .helpers import _LOGGER, firmware_is_at_least
 from .nut import NutMixin
 from .services import ServicesMixin
 from .smart import SmartMixin
@@ -142,30 +141,25 @@ class OPNsenseClient(
             if fw_ver is None:
                 raise OPNsenseUnknownFirmware
 
-            try:
-                if awesomeversion.AwesomeVersion(fw_ver) < awesomeversion.AwesomeVersion(
-                    OPNSENSE_MIN_FIRMWARE
-                ):
-                    msg = (
-                        f"OPNsense Firmware {fw_ver} detected. "
-                        f"aiopnsense requires OPNsense Firmware >= {OPNSENSE_MIN_FIRMWARE}"
-                    )
-                    raise OPNsenseBelowMinFirmware(msg)
+            meets_min_firmware = firmware_is_at_least(fw_ver, OPNSENSE_MIN_FIRMWARE)
+            if meets_min_firmware is None:
+                raise OPNsenseUnknownFirmware
+            if not meets_min_firmware:
+                msg = (
+                    f"OPNsense Firmware {fw_ver} detected. "
+                    f"aiopnsense requires OPNsense Firmware >= {OPNSENSE_MIN_FIRMWARE}"
+                )
+                raise OPNsenseBelowMinFirmware(msg)
 
-                if awesomeversion.AwesomeVersion(fw_ver) < awesomeversion.AwesomeVersion(
-                    OPNSENSE_LTD_FIRMWARE
-                ):
-                    _LOGGER.warning(
-                        "OPNsense Firmware of %s is below the recommended >= %s. aiopnsense will work, but there may be some missing features.",
-                        fw_ver,
-                        OPNSENSE_LTD_FIRMWARE,
-                    )
-            except (
-                awesomeversion.exceptions.AwesomeVersionCompareException,
-                TypeError,
-                ValueError,
-            ) as err:
-                raise OPNsenseUnknownFirmware from err
+            meets_recommended_firmware = firmware_is_at_least(fw_ver, OPNSENSE_LTD_FIRMWARE)
+            if meets_recommended_firmware is None:
+                raise OPNsenseUnknownFirmware
+            if not meets_recommended_firmware:
+                _LOGGER.warning(
+                    "OPNsense Firmware of %s is below the recommended >= %s. aiopnsense will work, but there may be some missing features.",
+                    fw_ver,
+                    OPNSENSE_LTD_FIRMWARE,
+                )
 
             await self._run_validation_request(self.get_device_unique_id)
         finally:
