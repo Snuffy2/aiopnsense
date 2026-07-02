@@ -11,6 +11,7 @@ OPNSENSE_MIN_FIRMWARE = "25.1"  # If less than this, don't allow install. It wil
 
 LEGACY_UNBOUND_BLOCKLIST_FIRMWARE = "25.7.8"
 LEGACY_CAMELCASE_ENDPOINT_FIRMWARE = "25.7"
+OPNSENSE_26_1_11_COMPAT_FIRMWARE = "26.1.11"
 
 # Default timeout, in seconds, for API requests.
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60

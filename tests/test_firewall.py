@@ -184,6 +184,65 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("firmware_version", "expected"),
+    [
+        (
+            "26.1.10",
+            {
+                "manual-src": {
+                    "uuid": "manual-src",
+                    "description": "Manual",
+                    "enabled": "1",
+                },
+                "auto-src": {
+                    "uuid": "auto-src",
+                    "description": "Automatic",
+                    "enabled": "1",
+                    "is_automatic": True,
+                },
+            },
+        ),
+        (
+            "26.1.11",
+            {
+                "manual-src": {
+                    "uuid": "manual-src",
+                    "description": "Manual",
+                    "enabled": "1",
+                }
+            },
+        ),
+    ],
+)
+async def test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11(
+    make_client: ClientType, firmware_version: str, expected: dict[str, Any]
+) -> None:
+    """Source NAT should hide OPNsense 26.1.11 generated automatic rows only."""
+    client = make_client()
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {"uuid": "manual-src", "description": "Manual", "enabled": "1"},
+                    {
+                        "uuid": "auto-src",
+                        "description": "Automatic",
+                        "enabled": "1",
+                        "is_automatic": True,
+                    },
+                ]
+            }
+        )
+
+        assert await client._get_nat_source_rules() == expected
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("toggle_value", "toggle_response", "apply_response", "expected_url", "expected"),
     [
         (None, {"result": "ok"}, {"status": "OK"}, "/api/firewall/filter/toggle_rule/rule1", True),
