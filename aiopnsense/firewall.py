@@ -4,7 +4,8 @@ from collections.abc import Callable, MutableMapping
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, api_value_matches
+from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE
+from .helpers import _LOGGER, _log_errors, api_value_matches, firmware_is_at_least
 
 FIREWALL_FILTER_RULES_SEARCH_ENDPOINT = "/api/firewall/filter/search_rule"
 FIREWALL_DNAT_RULES_SEARCH_ENDPOINT = "/api/firewall/d_nat/search_rule"
@@ -71,6 +72,38 @@ class FirewallMixin(AiopnsenseClientProtocol):
             bool: ``True`` when the rule is not automatically generated.
         """
         return rule.get("is_automatic") is not True
+
+    @staticmethod
+    def _is_user_source_nat_rule(rule: dict[str, Any]) -> bool:
+        """Return whether a source NAT rule should be exposed.
+
+        Args:
+            rule (dict[str, Any]): Normalized source NAT rule row returned by OPNsense.
+
+        Returns:
+            bool: ``True`` when the rule is not automatically generated.
+        """
+        return not api_value_matches(rule.get("is_automatic", "0"), "1")
+
+    @staticmethod
+    def _filters_automatic_source_nat_rules(firmware_version: str | None) -> bool:
+        """Return whether firmware exposes generated source NAT rows.
+
+        Args:
+            firmware_version (str | None): Installed OPNsense firmware version.
+
+        Returns:
+            bool: ``True`` when firmware is at or above the 26.1.11 source NAT
+                API behavior change, otherwise ``False``.
+        """
+        should_filter = firmware_is_at_least(firmware_version, OPNSENSE_26_1_11_COMPAT_FIRMWARE)
+        if should_filter is None:
+            _LOGGER.debug(
+                "Unable to compare firmware version %s for source NAT automatic rule filtering",
+                firmware_version,
+            )
+            return False
+        return should_filter
 
     @staticmethod
     def _normalize_nat_destination_rule(rule: dict[str, Any]) -> dict[str, Any]:
@@ -186,12 +219,32 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Source NAT rules keyed by UUID, excluding
-                malformed rows and lockout rules.
+                malformed rows and lockout rules. For OPNsense 26.1.11 and
+                newer, generated automatic source NAT rows are also excluded.
         """
-        return await self._get_uuid_indexed_rules(
-            endpoint=FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT,
-            debug_label="get_nat_source_rules",
+        if not await self._is_get_endpoint_available(FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT):
+            _LOGGER.debug("%s endpoint not available", "get_nat_source_rules")
+            return {}
+
+        response = await self._safe_dict_get(FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT)
+        rules: list = response.get("rows", [])
+        include_rule = None
+        has_automatic_rows = any(
+            isinstance(rule, MutableMapping)
+            and api_value_matches(rule.get("is_automatic", "0"), "1")
+            for rule in rules
         )
+        if has_automatic_rows and self._filters_automatic_source_nat_rules(
+            await self.get_host_firmware_version()
+        ):
+            include_rule = self._is_user_source_nat_rule
+        rules_dict = self._index_rule_rows(rules, include_rule=include_rule)
+        _LOGGER.debug(
+            "[%s] rules_dict length: %s",
+            "get_nat_source_rules",
+            len(rules_dict),
+        )
+        return rules_dict
 
     @_log_errors
     async def _get_nat_npt_rules(self) -> dict[str, Any]:

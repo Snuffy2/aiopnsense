@@ -4,11 +4,10 @@ from collections.abc import MutableMapping
 from typing import Any
 
 import aiohttp
-import awesomeversion
 
 from ._typing import AiopnsenseClientProtocol
 from .const import LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
-from .helpers import _LOGGER, _log_errors, api_value_matches
+from .helpers import _LOGGER, _log_errors, api_value_matches, firmware_is_at_least
 
 UNBOUND_SETTINGS_GET_ENDPOINT = "/api/unbound/settings/get"
 UNBOUND_SETTINGS_SET_ENDPOINT = "/api/unbound/settings/set"
@@ -35,22 +34,14 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 "Firmware version unavailable when determining which Unbound Blocklist method to use"
             )
             return None
-        try:
-            return awesomeversion.AwesomeVersion(firmware) < awesomeversion.AwesomeVersion(
-                LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
-            )
-        except (
-            awesomeversion.exceptions.AwesomeVersionCompareException,
-            TypeError,
-            ValueError,
-        ) as err:
-            _LOGGER.error(
-                "Error comparing firmware version %s when determining which Unbound Blocklist method to use. %s: %s",
-                firmware,
-                type(err).__name__,
-                err,
-            )
-            return None
+        uses_extended_blocklist = firmware_is_at_least(firmware, LEGACY_UNBOUND_BLOCKLIST_FIRMWARE)
+        if uses_extended_blocklist is not None:
+            return not uses_extended_blocklist
+        _LOGGER.error(
+            "Error comparing firmware version %s when determining which Unbound Blocklist method to use",
+            firmware,
+        )
+        return None
 
     @_log_errors
     async def _get_unbound_blocklist_legacy(self) -> dict[str, Any]:

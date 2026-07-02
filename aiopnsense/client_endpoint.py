@@ -5,12 +5,11 @@ from typing import TYPE_CHECKING, cast
 from warnings import deprecated
 
 import aiohttp
-import awesomeversion
 
 from ._typing import AiopnsenseClientProtocol
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS, LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
 from .exceptions import OPNsenseUnknownFirmware
-from .helpers import _LOGGER
+from .helpers import _LOGGER, firmware_is_at_least
 
 
 class ClientEndpointMixin:
@@ -141,33 +140,25 @@ class ClientEndpointMixin:
             if initial:
                 raise OPNsenseUnknownFirmware
             return
-        try:
-            if awesomeversion.AwesomeVersion(firmware_version) < awesomeversion.AwesomeVersion(
-                LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
-            ):
-                _LOGGER.debug(
-                    "Using camelCase endpoints for OPNsense < %s",
-                    LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
-                )
-                self._use_snake_case = False
-            else:
-                _LOGGER.debug(
-                    "Using snake_case endpoints for OPNsense >= %s",
-                    LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
-                )
-        except (
-            awesomeversion.exceptions.AwesomeVersionCompareException,
-            TypeError,
-            ValueError,
-        ) as err:
+        uses_snake_case = firmware_is_at_least(firmware_version, LEGACY_CAMELCASE_ENDPOINT_FIRMWARE)
+        if uses_snake_case is False:
             _LOGGER.debug(
-                "Unable to compare firmware version %s for endpoint style. %s: %s",
+                "Using camelCase endpoints for OPNsense < %s",
+                LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
+            )
+            self._use_snake_case = False
+        elif uses_snake_case is True:
+            _LOGGER.debug(
+                "Using snake_case endpoints for OPNsense >= %s",
+                LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
+            )
+        else:
+            _LOGGER.debug(
+                "Unable to compare firmware version %s for endpoint style",
                 firmware_version,
-                type(err).__name__,
-                err,
             )
             if initial:
-                raise OPNsenseUnknownFirmware from err
+                raise OPNsenseUnknownFirmware
 
     async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str:
         """Return the firmware-appropriate endpoint path.
