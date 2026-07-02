@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        We will evaluate all Feature Requests, but some may not be feasible or aligned with what we want for the integration.
+        We will evaluate all feature requests, but some may not be feasible or aligned with aiopnsense.
   - type: textarea
     id: what-do-you-want
     attributes:
