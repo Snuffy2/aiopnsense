@@ -283,12 +283,16 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
+        if method_name == "_get_nat_destination_rules":
+            client.get_host_firmware_version = AsyncMock(return_value="26.1.4")
 
         result = await getattr(client, method_name)()
 
         assert result == expected
         client._is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
         client._safe_dict_get.assert_not_awaited()
+        if method_name == "_get_nat_destination_rules":
+            client.get_host_firmware_version.assert_awaited_once()
     finally:
         await client.async_close()
 

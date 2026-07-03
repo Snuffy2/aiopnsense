@@ -220,23 +220,16 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 to ``enabled``, and on unified-NAT firmware category keys mirrored
                 from ``category``/``%category`` into ``categories``/``%categories``.
         """
-        if not await self._is_get_endpoint_available(FIREWALL_DNAT_RULES_SEARCH_ENDPOINT):
-            _LOGGER.debug("%s endpoint not available", "get_nat_destination_rules")
-            return {}
-
-        response = await self._safe_dict_get(FIREWALL_DNAT_RULES_SEARCH_ENDPOINT)
         normalize_categories = self._uses_unified_nat_template(
             await self.get_host_firmware_version()
         )
-        rules: list = response.get("rows", [])
-        rules_dict = self._index_rule_rows(
-            rules,
+        return await self._get_uuid_indexed_rules(
+            endpoint=FIREWALL_DNAT_RULES_SEARCH_ENDPOINT,
+            debug_label="get_nat_destination_rules",
             normalizer=lambda rule: self._normalize_nat_destination_rule(
                 rule, normalize_categories=normalize_categories
             ),
         )
-        _LOGGER.debug("[get_nat_destination_rules] rules_dict length: %s", len(rules_dict))
-        return rules_dict
 
     @_log_errors
     async def _get_nat_one_to_one_rules(self) -> dict[str, Any]:
