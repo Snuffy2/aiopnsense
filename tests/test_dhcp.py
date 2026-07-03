@@ -346,14 +346,7 @@ async def test_normalize_lease_key_value_handles_nested_structures(make_client: 
 async def test_copy_lease_identity_fields_sets_reserved_by_only_for_non_empty_list(
     make_client: ClientType,
 ) -> None:
-    """Ensure legacy empty ``is_reserved`` lists do not produce ``reserved_by``.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates reserved lease identity payload handling.
-    """
+    """Copy lease identity fields without creating ``reserved_by`` for empty reservations."""
     client, _session = make_mock_session_client(make_client)
     try:
         lease: dict[str, object] = {}
@@ -363,43 +356,6 @@ async def test_copy_lease_identity_fields_sets_reserved_by_only_for_non_empty_li
 
         client._copy_lease_identity_fields(lease, {"is_reserved": ["host1"]})
         assert lease["reserved_by"] == ["host1"]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_dnsmasq_leases_prefers_legacy_if_when_if_name_is_empty(
-    make_client: ClientType,
-) -> None:
-    """Use legacy dnsmasq ``if`` when ``if_name`` is present but empty.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates interface field normalization for dnsmasq lease rows.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "address": "192.0.2.20",
-                        "hostname": "host.",
-                        "if_name": "",
-                        "if": "em0",
-                        "if_descr": "LAN",
-                        "is_reserved": "1",
-                        "hwaddr": "aa:bb:cc:dd:ee:ff",
-                    }
-                ]
-            }
-        )
-
-        leases = await client._get_dnsmasq_leases()
-        assert leases[0]["if_name"] == "em0"
     finally:
         await client.async_close()
 
@@ -774,6 +730,15 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
                 "rows": [
                     None,
                     {
+                        "address": "192.0.2.20",
+                        "hostname": "fallback-if-name",
+                        "if": "em0",
+                        "if_name": "",
+                        "is_reserved": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:ff",
+                        "expire": "never",
+                    },
+                    {
                         "address": "192.0.2.21",
                         "hostname": "expired",
                         "if": "em0",
@@ -814,8 +779,11 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
         )
 
         leases = await client._get_dnsmasq_leases()
-        assert len(leases) == 3
+        assert len(leases) == 4
         lease_by_address = {lease["address"]: lease for lease in leases}
+
+        assert lease_by_address["192.0.2.20"]["type"] == "dynamic"
+        assert lease_by_address["192.0.2.20"]["if_name"] == "em0"
 
         assert lease_by_address["192.0.2.22"]["type"] == "dynamic"
         assert lease_by_address["192.0.2.22"]["if_name"] == "lan"
