@@ -1,6 +1,7 @@
 """Tests for `aiopnsense.firewall`."""
 
 from collections.abc import Callable
+import logging
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -82,6 +83,12 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
                         "descr": "Plugin generated",
                         "is_automatic": True,
                     },
+                    {
+                        "uuid": "automatic-string-rule",
+                        "enabled": "1",
+                        "descr": "Plugin generated string flag",
+                        "is_automatic": "1",
+                    },
                 ]
             }
         )
@@ -103,8 +110,40 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
         await client.async_close()
 
 
+@pytest.mark.asyncio
+async def test_get_nat_source_rules_labels_empty_interface_address_target(
+    make_client: ClientType,
+) -> None:
+    """Source NAT rows with an empty target should expose an interface-address label."""
+    client = make_client()
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client.get_host_firmware_version = AsyncMock(return_value="26.7")
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "uuid": "src-interface-address",
+                        "description": "Interface address target",
+                        "enabled": "1",
+                        "interface": "wan",
+                        "%interface": "WAN",
+                        "target": "",
+                    }
+                ]
+            }
+        )
+
+        result = await client._get_nat_source_rules()
+
+        assert result["src-interface-address"]["target"] == ""
+        assert result["src-interface-address"]["%target"] == "WAN address"
+    finally:
+        await client.async_close()
+
+
 @pytest.mark.parametrize(
-    ("method_name", "api_endpoint", "rows", "expected"),
+    ("method_name", "api_endpoint", "rows", "expected", "firmware_version"),
     [
         (
             "_get_nat_destination_rules",
@@ -114,41 +153,140 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
                 {"uuid": "lockout-1", "descr": "ignored", "disabled": "0"},
             ],
             {"dst1": {"uuid": "dst1", "description": "DNAT rule", "enabled": "1"}},
+            "26.1.1",
+        ),
+        (
+            "_get_nat_destination_rules",
+            "/api/firewall/d_nat/search_rule",
+            [
+                {
+                    "uuid": "dst1",
+                    "descr": "DNAT legacy category",
+                    "disabled": 0,
+                    "category": "cat1",
+                    "%category": "WAN",
+                },
+            ],
+            {
+                "dst1": {
+                    "uuid": "dst1",
+                    "description": "DNAT legacy category",
+                    "enabled": "1",
+                    "category": "cat1",
+                    "%category": "WAN",
+                }
+            },
+            "26.1.3",
+        ),
+        (
+            "_get_nat_destination_rules",
+            "/api/firewall/d_nat/search_rule",
+            [
+                {
+                    "uuid": "dst1",
+                    "descr": "DNAT rule",
+                    "enabled": "0",
+                    "category": "cat1",
+                    "%category": "WAN",
+                },
+            ],
+            {
+                "dst1": {
+                    "uuid": "dst1",
+                    "description": "DNAT rule",
+                    "enabled": "0",
+                    "category": "cat1",
+                    "%category": "WAN",
+                    "categories": "cat1",
+                    "%categories": "WAN",
+                }
+            },
+            "26.1.4",
         ),
         (
             "_get_nat_one_to_one_rules",
             "/api/firewall/one_to_one/search_rule",
             [{"uuid": "oto1", "description": "1:1 rule", "enabled": "1"}],
             {"oto1": {"uuid": "oto1", "description": "1:1 rule", "enabled": "1"}},
+            None,
         ),
         (
             "_get_nat_source_rules",
             "/api/firewall/source_nat/search_rule",
             [{"uuid": "src1", "description": "SNAT rule", "enabled": "0"}],
             {"src1": {"uuid": "src1", "description": "SNAT rule", "enabled": "0"}},
+            None,
         ),
         (
             "_get_nat_npt_rules",
             "/api/firewall/npt/search_rule",
             [{"uuid": "npt1", "description": "NPT rule", "enabled": "1"}],
             {"npt1": {"uuid": "npt1", "description": "NPT rule", "enabled": "1"}},
+            None,
         ),
     ],
 )
 async def test_nat_rule_helpers_parse_rows(
-    make_client, method_name, api_endpoint, rows, expected
+    make_client, method_name, api_endpoint, rows, expected, firmware_version
 ) -> None:
     """NAT rule helpers should return UUID-keyed mappings from REST search rows."""
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": rows})
+        if firmware_version is not None:
+            client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
 
         result = await getattr(client, method_name)()
 
         assert result == expected
         client._is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
         client._safe_dict_get.assert_awaited_once_with(api_endpoint)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_uses_unified_nat_template_handles_invalid_firmware_string(
+    make_client: Callable[..., Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Legacy normalization fallback should be used when version comparison raises."""
+    client = make_client()
+    try:
+        with caplog.at_level(logging.DEBUG):
+            result = client._uses_unified_nat_template("foo")
+
+        assert result is False
+        assert (
+            "Unable to compare firmware version foo for DNAT category normalization" in caplog.text
+        )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_filters_automatic_source_nat_rules_handles_invalid_firmware_string(
+    make_client: Callable[..., Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verify source NAT filtering is disabled when version comparison fails.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory returning OPNsense clients.
+        caplog (pytest.LogCaptureFixture): Fixture capturing log output.
+
+    Returns:
+        None: This test validates source NAT firmware fallback logging.
+    """
+    client = make_client()
+    try:
+        with caplog.at_level(logging.DEBUG):
+            result = client._filters_automatic_source_nat_rules("foo")
+
+        assert result is False
+        assert (
+            "Unable to compare firmware version foo for source NAT automatic rule filtering"
+            in caplog.text
+        )
     finally:
         await client.async_close()
 
@@ -172,12 +310,16 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
+        if method_name == "_get_nat_destination_rules":
+            client.get_host_firmware_version = AsyncMock(return_value="26.1.4")
 
         result = await getattr(client, method_name)()
 
         assert result == expected
         client._is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
         client._safe_dict_get.assert_not_awaited()
+        if method_name == "_get_nat_destination_rules":
+            client.get_host_firmware_version.assert_awaited_once()
     finally:
         await client.async_close()
 

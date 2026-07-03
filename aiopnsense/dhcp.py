@@ -67,6 +67,25 @@ class DHCPMixin(AiopnsenseClientProtocol):
             return len(raw_reserved) > 0
         return bool(raw_reserved)
 
+    @staticmethod
+    def _copy_lease_identity_fields(
+        lease: dict[str, Any], lease_info: MutableMapping[str, Any]
+    ) -> None:
+        """Copy optional DHCP client identity metadata to a normalized lease.
+
+        Args:
+            lease (dict[str, Any]): Normalized lease row being built.
+            lease_info (MutableMapping[str, Any]): Raw lease row returned by OPNsense.
+
+        Returns:
+            None: The ``lease`` mapping is updated in place.
+        """
+        if lease_info.get("client_id") not in (None, ""):
+            lease["client_id"] = lease_info.get("client_id")
+        raw_reserved = lease_info.get("is_reserved")
+        if isinstance(raw_reserved, list) and raw_reserved:
+            lease["reserved_by"] = list(raw_reserved)
+
     @_log_errors
     async def get_arp_table(self, resolve_hostnames: bool = False) -> list:
         """Return active ARP table entries.
@@ -312,6 +331,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             lease["mac"] = lease_info.get("hwaddr", None) or None
             if "duid" in lease_info:
                 lease["duid"] = lease_info.get("duid")
+            self._copy_lease_identity_fields(lease, lease_info)
             if try_to_int(lease_info.get("expire", None)):
                 lease["expires"] = timestamp_to_datetime(
                     try_to_int(lease_info.get("expire", None)) or 0
@@ -395,7 +415,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 else None
             )
             lease["if_descr"] = lease_info.get("if_descr", None)
-            lease["if_name"] = lease_info.get("if", None)
+            if_name = lease_info.get("if_name", None)
+            if not isinstance(if_name, str) or len(if_name) == 0:
+                if_name = lease_info.get("if", None)
+            lease["if_name"] = if_name
             if self._is_reserved_lease(lease_info.get("is_reserved")):
                 lease["type"] = "static"
             else:
@@ -406,6 +429,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 and len(lease_info.get("hwaddr", "")) > 0
                 else None
             )
+            self._copy_lease_identity_fields(lease, lease_info)
 
             if try_to_int(lease_info.get("expire", None)):
                 lease["expires"] = timestamp_to_datetime(

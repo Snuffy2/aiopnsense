@@ -4,8 +4,8 @@ from collections.abc import Callable, MutableMapping
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE
-from .helpers import _LOGGER, _log_errors, api_value_matches, firmware_is_at_least
+from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE, UNIFIED_NAT_TEMPLATE_FIRMWARE
+from .helpers import _LOGGER, _log_errors, api_value_matches, coerce_bool, firmware_is_at_least
 
 FIREWALL_FILTER_RULES_SEARCH_ENDPOINT = "/api/firewall/filter/search_rule"
 FIREWALL_DNAT_RULES_SEARCH_ENDPOINT = "/api/firewall/d_nat/search_rule"
@@ -62,30 +62,6 @@ class FirewallMixin(AiopnsenseClientProtocol):
         return rules_dict
 
     @staticmethod
-    def _is_user_firewall_rule(rule: dict[str, Any]) -> bool:
-        """Return whether a firewall filter rule should be exposed.
-
-        Args:
-            rule (dict[str, Any]): Normalized firewall filter rule row returned by OPNsense.
-
-        Returns:
-            bool: ``True`` when the rule is not automatically generated.
-        """
-        return rule.get("is_automatic") is not True
-
-    @staticmethod
-    def _is_user_source_nat_rule(rule: dict[str, Any]) -> bool:
-        """Return whether a source NAT rule should be exposed.
-
-        Args:
-            rule (dict[str, Any]): Normalized source NAT rule row returned by OPNsense.
-
-        Returns:
-            bool: ``True`` when the rule is not automatically generated.
-        """
-        return not api_value_matches(rule.get("is_automatic", "0"), "1")
-
-    @staticmethod
     def _filters_automatic_source_nat_rules(firmware_version: str | None) -> bool:
         """Return whether firmware exposes generated source NAT rows.
 
@@ -96,27 +72,95 @@ class FirewallMixin(AiopnsenseClientProtocol):
             bool: ``True`` when firmware is at or above the 26.1.11 source NAT
                 API behavior change, otherwise ``False``.
         """
-        should_filter = firmware_is_at_least(firmware_version, OPNSENSE_26_1_11_COMPAT_FIRMWARE)
-        if should_filter is None:
-            _LOGGER.debug(
-                "Unable to compare firmware version %s for source NAT automatic rule filtering",
-                firmware_version,
-            )
-            return False
-        return should_filter
+        return FirewallMixin._is_feature_available_for_firmware(
+            firmware_version,
+            OPNSENSE_26_1_11_COMPAT_FIRMWARE,
+            "source NAT automatic rule filtering",
+        )
 
     @staticmethod
-    def _normalize_nat_destination_rule(rule: dict[str, Any]) -> dict[str, Any]:
+    def _uses_unified_nat_template(firmware_version: str | None) -> bool:
+        """Return whether OPNsense uses the unified NAT UI template.
+
+        Args:
+            firmware_version (str | None): Installed OPNsense firmware version.
+
+        Returns:
+            bool: ``True`` when the firmware is at or above the unified NAT
+                template threshold, otherwise ``False``.
+        """
+        return FirewallMixin._is_feature_available_for_firmware(
+            firmware_version,
+            UNIFIED_NAT_TEMPLATE_FIRMWARE,
+            "DNAT category normalization",
+        )
+
+    @staticmethod
+    def _is_feature_available_for_firmware(
+        firmware_version: str | None, minimum_version: str, feature_context: str
+    ) -> bool:
+        """Return whether a firmware-dependent feature flag is enabled.
+
+        Args:
+            firmware_version (str | None): Installed firmware version.
+            minimum_version (str): Minimum firmware version required for the feature.
+            feature_context (str): Human-readable context for firmware comparison logs.
+
+        Returns:
+            bool: ``True`` when ``firmware_version`` meets or exceeds the minimum
+                version, otherwise ``False``.
+        """
+        is_available = firmware_is_at_least(firmware_version, minimum_version)
+        if is_available is None:
+            _LOGGER.debug(
+                "Unable to compare firmware version %s for %s",
+                firmware_version,
+                feature_context,
+            )
+            return False
+        return is_available
+
+    @staticmethod
+    def _normalize_nat_destination_rule(
+        rule: dict[str, Any], *, normalize_categories: bool = False
+    ) -> dict[str, Any]:
         """Normalize destination NAT rule field names and enabled state.
 
         Args:
             rule (dict[str, Any]): Destination NAT rule row returned by OPNsense.
+            normalize_categories (bool): Whether to mirror DNAT's singular
+                category keys to plural category keys for newer unified NAT UI
+                template firmware.
 
         Returns:
             dict[str, Any]: Normalized destination NAT rule row.
         """
         rule["description"] = rule.pop("descr", "")
-        rule["enabled"] = "1" if api_value_matches(rule.pop("disabled", "0"), "0") else "0"
+        if "enabled" not in rule:
+            rule["enabled"] = "1" if api_value_matches(rule.pop("disabled", "0"), "0") else "0"
+        rule.pop("disabled", None)
+        if normalize_categories:
+            if "category" in rule and "categories" not in rule:
+                rule["categories"] = rule["category"]
+            if "%category" in rule and "%categories" not in rule:
+                rule["%categories"] = rule["%category"]
+        return rule
+
+    @staticmethod
+    def _normalize_source_nat_rule(rule: dict[str, Any]) -> dict[str, Any]:
+        """Normalize source NAT rule display fields.
+
+        Args:
+            rule (dict[str, Any]): Source NAT rule row returned by OPNsense.
+
+        Returns:
+            dict[str, Any]: Normalized source NAT rule row.
+        """
+        if rule.get("target") == "" and not rule.get("%target"):
+            interface_label = rule.get("%interface") or rule.get("interface")
+            rule["%target"] = (
+                f"{interface_label} address" if interface_label else "Interface address"
+            )
         return rule
 
     async def _get_uuid_indexed_rules(
@@ -180,7 +224,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         return await self._get_uuid_indexed_rules(
             endpoint=FIREWALL_FILTER_RULES_SEARCH_ENDPOINT,
             debug_label="get_firewall_rules",
-            include_rule=self._is_user_firewall_rule,
+            include_rule=lambda rule: not coerce_bool(rule.get("is_automatic")),
         )
 
     @_log_errors
@@ -189,13 +233,19 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Destination NAT rules keyed by UUID, with
-                ``descr`` normalized to ``description`` and disabled-state
-                values converted into an ``enabled`` flag.
+                ``descr`` normalized to ``description``, ``disabled`` normalized
+                to ``enabled``, and on unified-NAT firmware category keys mirrored
+                from ``category``/``%category`` into ``categories``/``%categories``.
         """
+        normalize_categories = self._uses_unified_nat_template(
+            await self.get_host_firmware_version()
+        )
         return await self._get_uuid_indexed_rules(
             endpoint=FIREWALL_DNAT_RULES_SEARCH_ENDPOINT,
             debug_label="get_nat_destination_rules",
-            normalizer=self._normalize_nat_destination_rule,
+            normalizer=lambda rule: self._normalize_nat_destination_rule(
+                rule, normalize_categories=normalize_categories
+            ),
         )
 
     @_log_errors
@@ -228,17 +278,22 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         response = await self._safe_dict_get(FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT)
         rules: list = response.get("rows", [])
-        include_rule = None
         has_automatic_rows = any(
-            isinstance(rule, MutableMapping)
-            and api_value_matches(rule.get("is_automatic", "0"), "1")
+            isinstance(rule, MutableMapping) and coerce_bool(rule.get("is_automatic"))
             for rule in rules
         )
-        if has_automatic_rows and self._filters_automatic_source_nat_rules(
+        filter_automatic_rules = has_automatic_rows and self._filters_automatic_source_nat_rules(
             await self.get_host_firmware_version()
-        ):
-            include_rule = self._is_user_source_nat_rule
-        rules_dict = self._index_rule_rows(rules, include_rule=include_rule)
+        )
+        rules_dict = self._index_rule_rows(
+            rules,
+            normalizer=self._normalize_source_nat_rule,
+            include_rule=(
+                (lambda rule: not coerce_bool(rule.get("is_automatic")))
+                if filter_automatic_rules
+                else None
+            ),
+        )
         _LOGGER.debug(
             "[%s] rules_dict length: %s",
             "get_nat_source_rules",
