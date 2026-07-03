@@ -265,6 +265,33 @@ async def test_uses_unified_nat_template_handles_invalid_firmware_string(
 
 
 @pytest.mark.asyncio
+async def test_filters_automatic_source_nat_rules_handles_invalid_firmware_string(
+    make_client: Callable[..., Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verify source NAT filtering is disabled when version comparison fails.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory returning OPNsense clients.
+        caplog (pytest.LogCaptureFixture): Fixture capturing log output.
+
+    Returns:
+        None: This test validates source NAT firmware fallback logging.
+    """
+    client = make_client()
+    try:
+        with caplog.at_level(logging.DEBUG):
+            result = client._filters_automatic_source_nat_rules("foo")
+
+        assert result is False
+        assert (
+            "Unable to compare firmware version foo for source NAT automatic rule filtering"
+            in caplog.text
+        )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method_name", "api_endpoint", "expected"),
     [

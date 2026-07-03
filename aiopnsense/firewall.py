@@ -72,14 +72,11 @@ class FirewallMixin(AiopnsenseClientProtocol):
             bool: ``True`` when firmware is at or above the 26.1.11 source NAT
                 API behavior change, otherwise ``False``.
         """
-        should_filter = firmware_is_at_least(firmware_version, OPNSENSE_26_1_11_COMPAT_FIRMWARE)
-        if should_filter is None:
-            _LOGGER.debug(
-                "Unable to compare firmware version %s for source NAT automatic rule filtering",
-                firmware_version,
-            )
-            return False
-        return should_filter
+        return FirewallMixin._is_feature_available_for_firmware(
+            firmware_version,
+            OPNSENSE_26_1_11_COMPAT_FIRMWARE,
+            "source NAT automatic rule filtering",
+        )
 
     @staticmethod
     def _uses_unified_nat_template(firmware_version: str | None) -> bool:
@@ -92,14 +89,36 @@ class FirewallMixin(AiopnsenseClientProtocol):
             bool: ``True`` when the firmware is at or above the unified NAT
                 template threshold, otherwise ``False``.
         """
-        uses_template = firmware_is_at_least(firmware_version, UNIFIED_NAT_TEMPLATE_FIRMWARE)
-        if uses_template is None:
+        return FirewallMixin._is_feature_available_for_firmware(
+            firmware_version,
+            UNIFIED_NAT_TEMPLATE_FIRMWARE,
+            "DNAT category normalization",
+        )
+
+    @staticmethod
+    def _is_feature_available_for_firmware(
+        firmware_version: str | None, minimum_version: str, feature_context: str
+    ) -> bool:
+        """Return whether a firmware-dependent feature flag is enabled.
+
+        Args:
+            firmware_version (str | None): Installed firmware version.
+            minimum_version (str): Minimum firmware version required for the feature.
+            feature_context (str): Human-readable context for firmware comparison logs.
+
+        Returns:
+            bool: ``True`` when ``firmware_version`` meets or exceeds the minimum
+                version, otherwise ``False``.
+        """
+        is_available = firmware_is_at_least(firmware_version, minimum_version)
+        if is_available is None:
             _LOGGER.debug(
-                "Unable to compare firmware version %s for DNAT category normalization",
+                "Unable to compare firmware version %s for %s",
                 firmware_version,
+                feature_context,
             )
             return False
-        return uses_template
+        return is_available
 
     @staticmethod
     def _normalize_nat_destination_rule(
@@ -117,9 +136,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Normalized destination NAT rule row.
         """
         rule["description"] = rule.pop("descr", "")
-        if "enabled" in rule:
-            rule["enabled"] = rule.pop("enabled")
-        else:
+        if "enabled" not in rule:
             rule["enabled"] = "1" if api_value_matches(rule.pop("disabled", "0"), "0") else "0"
         rule.pop("disabled", None)
         if normalize_categories:
