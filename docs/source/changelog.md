@@ -1,5 +1,29 @@
 # Changelog
 
+## [v1.1.0](https://github.com/Snuffy2/aiopnsense/tree/v1.1.0) (2026-07-03)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.15...v1.1.0)
+
+**New Features**
+
+- Add Kea DHCPv6 lease support [\#64](https://github.com/Snuffy2/aiopnsense/pull/64) ([Snuffy2](https://github.com/Snuffy2))
+- Add NUT UPS status endpoint [\#63](https://github.com/Snuffy2/aiopnsense/pull/63) ([Snuffy2](https://github.com/Snuffy2))
+- Add live OPNsense test scripts [\#62](https://github.com/Snuffy2/aiopnsense/pull/62) ([Snuffy2](https://github.com/Snuffy2))
+- Add diagnostics traffic stream support [\#61](https://github.com/Snuffy2/aiopnsense/pull/61) ([Snuffy2](https://github.com/Snuffy2))
+
+**Enhancements**
+
+- Handle OPNsense 26.1.11 API changes [\#69](https://github.com/Snuffy2/aiopnsense/pull/69) ([Snuffy2](https://github.com/Snuffy2))
+- Normalize OPNsense NAT and DHCP payloads [\#68](https://github.com/Snuffy2/aiopnsense/pull/68) ([Snuffy2](https://github.com/Snuffy2))
+
+**Code Quality**
+
+- Update agent instructions [\#66](https://github.com/Snuffy2/aiopnsense/pull/66) ([Snuffy2](https://github.com/Snuffy2))
+
+**Maintenance**
+
+- Add issue templates [\#67](https://github.com/Snuffy2/aiopnsense/pull/67) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.0.15](https://github.com/Snuffy2/aiopnsense/tree/v1.0.15) (2026-06-28)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.14...v1.0.15)
