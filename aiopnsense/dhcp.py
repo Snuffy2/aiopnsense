@@ -83,7 +83,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if lease_info.get("client_id") not in (None, ""):
             lease["client_id"] = lease_info.get("client_id")
         raw_reserved = lease_info.get("is_reserved")
-        if isinstance(raw_reserved, list):
+        if isinstance(raw_reserved, list) and raw_reserved:
             lease["reserved_by"] = list(raw_reserved)
 
     @_log_errors
@@ -415,7 +415,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 else None
             )
             lease["if_descr"] = lease_info.get("if_descr", None)
-            lease["if_name"] = lease_info.get("if_name", lease_info.get("if", None))
+            if_name = lease_info.get("if_name", None)
+            if not isinstance(if_name, str) or len(if_name) == 0:
+                if_name = lease_info.get("if", None)
+            lease["if_name"] = if_name
             if self._is_reserved_lease(lease_info.get("is_reserved")):
                 lease["type"] = "static"
             else:

@@ -343,6 +343,68 @@ async def test_normalize_lease_key_value_handles_nested_structures(make_client: 
 
 
 @pytest.mark.asyncio
+async def test_copy_lease_identity_fields_sets_reserved_by_only_for_non_empty_list(
+    make_client: ClientType,
+) -> None:
+    """Ensure legacy empty ``is_reserved`` lists do not produce ``reserved_by``.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates reserved lease identity payload handling.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        lease: dict[str, object] = {}
+
+        client._copy_lease_identity_fields(lease, {"is_reserved": []})
+        assert "reserved_by" not in lease
+
+        client._copy_lease_identity_fields(lease, {"is_reserved": ["host1"]})
+        assert lease["reserved_by"] == ["host1"]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_dnsmasq_leases_prefers_legacy_if_when_if_name_is_empty(
+    make_client: ClientType,
+) -> None:
+    """Use legacy dnsmasq ``if`` when ``if_name`` is present but empty.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates interface field normalization for dnsmasq lease rows.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "address": "192.0.2.20",
+                        "hostname": "host.",
+                        "if_name": "",
+                        "if": "em0",
+                        "if_descr": "LAN",
+                        "is_reserved": "1",
+                        "hwaddr": "aa:bb:cc:dd:ee:ff",
+                    }
+                ]
+            }
+        )
+
+        leases = await client._get_dnsmasq_leases()
+        assert leases[0]["if_name"] == "em0"
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_isc_dhcpv4_and_v6_parsing(make_client: ClientType) -> None:
     """Verify ISC DHCPv4/v6 parsing converts and filters lease fields correctly.
 
