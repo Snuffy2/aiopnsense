@@ -346,7 +346,14 @@ async def test_normalize_lease_key_value_handles_nested_structures(make_client: 
 async def test_copy_lease_identity_fields_sets_reserved_by_only_for_non_empty_list(
     make_client: ClientType,
 ) -> None:
-    """Copy lease identity fields without creating ``reserved_by`` for empty reservations."""
+    """Verify ``reserved_by`` is copied only for non-empty reservation lists.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates lease identity metadata normalization.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         lease: dict[str, object] = {}
