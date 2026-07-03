@@ -62,42 +62,6 @@ class FirewallMixin(AiopnsenseClientProtocol):
         return rules_dict
 
     @staticmethod
-    def _is_user_firewall_rule(rule: dict[str, Any]) -> bool:
-        """Return whether a firewall filter rule should be exposed.
-
-        Args:
-            rule (dict[str, Any]): Normalized firewall filter rule row returned by OPNsense.
-
-        Returns:
-            bool: ``True`` when the rule is not automatically generated.
-        """
-        return FirewallMixin._is_non_automatic_rule(rule)
-
-    @staticmethod
-    def _is_user_source_nat_rule(rule: dict[str, Any]) -> bool:
-        """Return whether a source NAT rule should be exposed.
-
-        Args:
-            rule (dict[str, Any]): Normalized source NAT rule row returned by OPNsense.
-
-        Returns:
-            bool: ``True`` when the rule is not automatically generated.
-        """
-        return FirewallMixin._is_non_automatic_rule(rule)
-
-    @staticmethod
-    def _is_non_automatic_rule(rule: dict[str, Any]) -> bool:
-        """Return whether a normalized firewall or NAT rule is user-defined.
-
-        Args:
-            rule (dict[str, Any]): Normalized rule row returned by OPNsense.
-
-        Returns:
-            bool: ``True`` when the rule is not automatically generated.
-        """
-        return not coerce_bool(rule.get("is_automatic"))
-
-    @staticmethod
     def _filters_automatic_source_nat_rules(firmware_version: str | None) -> bool:
         """Return whether firmware exposes generated source NAT rows.
 
@@ -243,7 +207,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         return await self._get_uuid_indexed_rules(
             endpoint=FIREWALL_FILTER_RULES_SEARCH_ENDPOINT,
             debug_label="get_firewall_rules",
-            include_rule=self._is_user_firewall_rule,
+            include_rule=lambda rule: not coerce_bool(rule.get("is_automatic")),
         )
 
     @_log_errors
@@ -304,19 +268,21 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         response = await self._safe_dict_get(FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT)
         rules: list = response.get("rows", [])
-        include_rule = None
         has_automatic_rows = any(
             isinstance(rule, MutableMapping) and coerce_bool(rule.get("is_automatic"))
             for rule in rules
         )
-        if has_automatic_rows and self._filters_automatic_source_nat_rules(
+        filter_automatic_rules = has_automatic_rows and self._filters_automatic_source_nat_rules(
             await self.get_host_firmware_version()
-        ):
-            include_rule = self._is_user_source_nat_rule
+        )
         rules_dict = self._index_rule_rows(
             rules,
             normalizer=self._normalize_source_nat_rule,
-            include_rule=include_rule,
+            include_rule=(
+                (lambda rule: not coerce_bool(rule.get("is_automatic")))
+                if filter_automatic_rules
+                else None
+            ),
         )
         _LOGGER.debug(
             "[%s] rules_dict length: %s",
