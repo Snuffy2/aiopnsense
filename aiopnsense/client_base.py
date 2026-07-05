@@ -146,7 +146,6 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
         self._endpoint_cache_ttl_seconds = DEFAULT_CACHE_TTL_SECONDS
         self._rest_api_query_count = 0
         self._request_queue: asyncio.Queue = asyncio.Queue()
-        self._queue_monitor: asyncio.Task[Any] | None = None
         self._workers: list[asyncio.Task[Any]] = []
         # Number of parallel workers to process the queue
         self._max_workers = 2
