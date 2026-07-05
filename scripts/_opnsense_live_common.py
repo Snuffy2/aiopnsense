@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 from typing import Any
 
 import aiohttp
@@ -15,6 +17,7 @@ from aiopnsense import OPNsenseClient
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_ENV_FILE = SCRIPT_DIR / "aiopnsense.env"
+DOCUMENTED_DEFAULT_ENV_FILE = Path("scripts/aiopnsense.env")
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
@@ -40,6 +43,39 @@ class LiveConfig:
     api_key: str
     api_secret: str
     verify_ssl: bool
+
+
+def reexec_with_repo_venv(script_path: Path) -> None:
+    """Re-run a live script with the repo virtualenv when launched directly.
+
+    Args:
+        script_path: Path to the script being executed.
+    """
+    if os.environ.get("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED") == "1":
+        return
+
+    venv_dir = script_path.resolve().parents[1] / ".venv"
+    venv_python = venv_dir / "bin" / "python"
+    if not venv_python.exists() or Path(sys.prefix).resolve() == venv_dir.resolve():
+        return
+
+    os.environ["AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED"] = "1"
+    os.execv(str(venv_python), [str(venv_python), str(script_path), *sys.argv[1:]])
+
+
+def resolve_env_file_argument(env_file: Path) -> Path:
+    """Resolve the documented default env path to the script-local file.
+
+    Args:
+        env_file: Parsed env file argument.
+
+    Returns:
+        Absolute script-local default for the documented default, otherwise the
+        user-provided path unchanged.
+    """
+    if env_file == DOCUMENTED_DEFAULT_ENV_FILE:
+        return DEFAULT_ENV_FILE
+    return env_file
 
 
 def _strip_inline_comment(value: str) -> str:
