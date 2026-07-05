@@ -59,7 +59,6 @@ additional_dependencies = [
   "types-pyRFC3339",
   "types-python-dateutil",
   "types-PyYAML",
-  "types-requests",
   "types-setuptools",
 ]
 

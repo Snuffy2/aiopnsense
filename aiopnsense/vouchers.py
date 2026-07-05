@@ -55,7 +55,7 @@ class VouchersMixin(AiopnsenseClientProtocol):
                 )
             server = servers[0]
         server_slug = quote(str(server), safe="")
-        payload: dict[str, Any] = dict(data).copy()
+        payload: dict[str, Any] = dict(data)
         payload.pop("voucher_server", None)
         generate_vouchers_url = f"{generate_vouchers_endpoint}/{server_slug}/"
         _LOGGER.debug("[generate_vouchers] url: %s, payload: %s", generate_vouchers_url, payload)
