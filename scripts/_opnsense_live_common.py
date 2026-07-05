@@ -7,6 +7,7 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 import sys
 from typing import TYPE_CHECKING, Any
@@ -14,8 +15,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import aiohttp
     from aiopnsense import OPNsenseClient
-
-_OPNSENSE_CLIENT_CLASS: Any | None = None
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -252,6 +251,14 @@ def write_output(payload: Any, output_path: Path | None = None) -> None:
         output_path.write_text(rendered, encoding="utf-8")
 
 
+@cache
+def _get_client_class() -> type["OPNsenseClient"]:
+    """Return the lazily imported OPNsense client class."""
+    from aiopnsense import OPNsenseClient
+
+    return OPNsenseClient
+
+
 def create_client(config: LiveConfig, session: aiohttp.ClientSession) -> "OPNsenseClient":
     """Create an OPNsense client for live scripts.
 
@@ -262,14 +269,8 @@ def create_client(config: LiveConfig, session: aiohttp.ClientSession) -> "OPNsen
     Returns:
         Configured OPNsenseClient.
     """
-    global _OPNSENSE_CLIENT_CLASS
-
-    if _OPNSENSE_CLIENT_CLASS is None:
-        from aiopnsense import OPNsenseClient as _OPNsenseClient
-
-        _OPNSENSE_CLIENT_CLASS = _OPNsenseClient
-
-    return _OPNSENSE_CLIENT_CLASS(
+    client_class = _get_client_class()
+    return client_class(
         url=config.url,
         username=config.api_key,
         password=config.api_secret,

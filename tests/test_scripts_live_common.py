@@ -77,17 +77,24 @@ def test_reexec_with_repo_venv_uses_local_python(
 
 def test_reexec_with_repo_venv_skips_when_already_in_venv(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Bootstrap does nothing when the repo venv is already active."""
     common = load_common_module()
-    repo_venv = Path(__file__).parents[1] / ".venv"
+    script_path = tmp_path / "scripts" / "aiopnsense_dump.py"
+    script_path.parent.mkdir()
+    script_path.write_text("", encoding="utf-8")
+    repo_venv = tmp_path / ".venv"
+    expected_python = repo_venv / "bin" / "python"
+    expected_python.parent.mkdir(parents=True)
+    expected_python.write_text("", encoding="utf-8")
     execv = MagicMock()
 
     monkeypatch.delenv("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED", raising=False)
     monkeypatch.setattr(common.sys, "prefix", str(repo_venv))
     monkeypatch.setattr(common.os, "execv", execv)
 
-    common.reexec_with_repo_venv(Path(__file__).parents[1] / "scripts" / "aiopnsense_dump.py")
+    common.reexec_with_repo_venv(script_path)
 
     execv.assert_not_called()
 
@@ -341,7 +348,7 @@ def test_create_client_uses_live_config(monkeypatch: pytest.MonkeyPatch) -> None
     fake_client = FakeOPNsenseClient()
     fake_constructor = MagicMock(return_value=fake_client)
 
-    monkeypatch.setattr(common, "_OPNSENSE_CLIENT_CLASS", fake_constructor)
+    monkeypatch.setattr(common, "_get_client_class", lambda: fake_constructor)
     config = common.LiveConfig(
         url="https://firewall.example.test",
         api_key="my-key",
