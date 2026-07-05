@@ -9,11 +9,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import aiohttp
+if TYPE_CHECKING:
+    import aiohttp
+    from aiopnsense import OPNsenseClient
 
-from aiopnsense import OPNsenseClient
+_OPNSENSE_CLIENT_CLASS: Any | None = None
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_ENV_FILE = SCRIPT_DIR / "aiopnsense.env"
@@ -249,7 +252,7 @@ def write_output(payload: Any, output_path: Path | None = None) -> None:
         output_path.write_text(rendered, encoding="utf-8")
 
 
-def create_client(config: LiveConfig, session: aiohttp.ClientSession) -> OPNsenseClient:
+def create_client(config: LiveConfig, session: aiohttp.ClientSession) -> "OPNsenseClient":
     """Create an OPNsense client for live scripts.
 
     Args:
@@ -259,7 +262,14 @@ def create_client(config: LiveConfig, session: aiohttp.ClientSession) -> OPNsens
     Returns:
         Configured OPNsenseClient.
     """
-    return OPNsenseClient(
+    global _OPNSENSE_CLIENT_CLASS
+
+    if _OPNSENSE_CLIENT_CLASS is None:
+        from aiopnsense import OPNsenseClient as _OPNsenseClient
+
+        _OPNSENSE_CLIENT_CLASS = _OPNsenseClient
+
+    return _OPNSENSE_CLIENT_CLASS(
         url=config.url,
         username=config.api_key,
         password=config.api_secret,

@@ -8,30 +8,28 @@ import asyncio
 import importlib
 import json
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any
 
-import aiohttp  # noqa: E402
+if TYPE_CHECKING:
+    from scripts._opnsense_live_common import LiveConfig
 
 _common = importlib.import_module("_opnsense_live_common")
 DEFAULT_ENV_FILE = _common.DEFAULT_ENV_FILE
 DOCUMENTED_DEFAULT_ENV_FILE = _common.DOCUMENTED_DEFAULT_ENV_FILE
-LiveConfig = _common.LiveConfig
+if not TYPE_CHECKING:
+    LiveConfig = _common.LiveConfig
 LiveConfigError = _common.LiveConfigError
 load_live_config = _common.load_live_config
 reexec_with_repo_venv = _common.reexec_with_repo_venv
 resolve_env_file_argument = _common.resolve_env_file_argument
 write_output = _common.write_output
 
+if __name__ == "__main__":
+    reexec_with_repo_venv(Path(__file__))
+
+import aiohttp  # noqa: E402
+
 _NO_PAYLOAD = object()
-
-
-class LiveConfigProtocol(Protocol):
-    """Protocol for live OPNsense connection configuration."""
-
-    url: str
-    api_key: str
-    api_secret: str
-    verify_ssl: bool
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -163,7 +161,7 @@ def load_payload(
 
 async def call_api(
     session: aiohttp.ClientSession,
-    config: LiveConfigProtocol,
+    config: "LiveConfig",
     endpoint: str,
     method: str,
     payload: dict[str, Any] | object,
@@ -258,5 +256,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    reexec_with_repo_venv(Path(__file__))
     raise SystemExit(main())

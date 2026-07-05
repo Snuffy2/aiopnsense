@@ -341,7 +341,7 @@ def test_create_client_uses_live_config(monkeypatch: pytest.MonkeyPatch) -> None
     fake_client = FakeOPNsenseClient()
     fake_constructor = MagicMock(return_value=fake_client)
 
-    monkeypatch.setattr(common, "OPNsenseClient", fake_constructor)
+    monkeypatch.setattr(common, "_OPNSENSE_CLIENT_CLASS", fake_constructor)
     config = common.LiveConfig(
         url="https://firewall.example.test",
         api_key="my-key",

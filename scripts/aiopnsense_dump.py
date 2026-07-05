@@ -12,9 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import aiohttp  # noqa: E402
-from aiopnsense.exceptions import OPNsenseError  # noqa: E402
-
 _common = importlib.import_module("_opnsense_live_common")
 DEFAULT_ENV_FILE = _common.DEFAULT_ENV_FILE
 DOCUMENTED_DEFAULT_ENV_FILE = _common.DOCUMENTED_DEFAULT_ENV_FILE
@@ -24,6 +21,12 @@ load_live_config = _common.load_live_config
 reexec_with_repo_venv = _common.reexec_with_repo_venv
 resolve_env_file_argument = _common.resolve_env_file_argument
 write_output = _common.write_output
+
+if __name__ == "__main__":
+    reexec_with_repo_venv(Path(__file__))
+
+import aiohttp  # noqa: E402
+from aiopnsense.exceptions import OPNsenseError  # noqa: E402
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -316,5 +319,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    reexec_with_repo_venv(Path(__file__))
     raise SystemExit(main())
