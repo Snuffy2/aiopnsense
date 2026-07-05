@@ -14,7 +14,6 @@ class ClientQueueMixin:
     if TYPE_CHECKING:
         _loop: asyncio.AbstractEventLoop | None
         _max_workers: int
-        _queue_monitor: asyncio.Task[Any] | None
         _request_queue: asyncio.Queue[Any]
         _workers: list[asyncio.Task[Any]]
 
@@ -47,9 +46,6 @@ class ClientQueueMixin:
     async def _ensure_workers_started(self) -> None:
         """Ensure queue workers are running on the active event loop."""
         self._loop = asyncio.get_running_loop()
-
-        if self._queue_monitor is None or self._queue_monitor.done():
-            self._queue_monitor = asyncio.create_task(self._monitor_queue())
 
         self._workers = [worker for worker in self._workers if not worker.done()]
         while len(self._workers) < self._max_workers:
@@ -182,26 +178,11 @@ class ClientQueueMixin:
                     future.set_exception(e)
             await asyncio.sleep(0.3)
 
-    async def _monitor_queue(self) -> None:
-        """Periodically log request queue backlog size for diagnostics."""
-        while True:
-            try:
-                queue_size = self._request_queue.qsize()
-                if queue_size > 0:
-                    _LOGGER.debug("OPNsense API queue backlog: %d tasks", queue_size)
-            except Exception as e:  # noqa: BLE001
-                _LOGGER.error("Error monitoring queue size. %s: %s", type(e).__name__, e)
-            await asyncio.sleep(10)
-
     async def async_close(self) -> None:
         """Cancel all running background tasks and clear the request queue."""
         _LOGGER.debug("Closing OPNsenseClient and cancelling background tasks")
 
         tasks_to_cancel = []
-
-        if self._queue_monitor and not self._queue_monitor.done():
-            self._queue_monitor.cancel()
-            tasks_to_cancel.append(self._queue_monitor)
 
         if self._workers:
             for worker in self._workers:
@@ -225,7 +206,6 @@ class ClientQueueMixin:
                     future.set_exception(asyncio.CancelledError("OPNsenseClient is closing"))
             except asyncio.QueueEmpty:
                 break
-        self._queue_monitor = None
         self._workers = []
         self._loop = None
         _LOGGER.debug("Request queue cleared")

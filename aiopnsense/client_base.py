@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import MutableMapping
 from datetime import datetime
-from typing import Any, overload
+from typing import Any
 from urllib.parse import urlparse
 import warnings
 
@@ -19,68 +19,6 @@ _UNSET: object = object()
 
 class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixin):
     """ClientBase methods for OPNsenseClient."""
-
-    @staticmethod
-    def _validate_throw_error_flag(
-        value: bool | object,
-        parameter_name: str,
-    ) -> bool:
-        """Validate required ``throw_errors``-style arguments.
-
-        Args:
-            value (bool | object): Candidate value to validate.
-            parameter_name (str): Parameter name used in the error message.
-
-        Returns:
-            bool: Validated value.
-
-        Raises:
-            TypeError: Raised when ``value`` is not an allowed type.
-        """
-        if isinstance(value, bool):
-            return value
-        raise TypeError(f"`{parameter_name}` must be a bool.")
-
-    @staticmethod
-    @overload
-    def _validate_optional_throw_error_flag(
-        value: None,
-        parameter_name: str,
-    ) -> None:
-        """Type overload for optional ``throw_errors``-style arguments set to ``None``."""
-        ...
-
-    @staticmethod
-    @overload
-    def _validate_optional_throw_error_flag(
-        value: bool,
-        parameter_name: str,
-    ) -> bool:
-        """Type overload for optional ``throw_errors``-style arguments set to ``bool``."""
-        ...
-
-    @staticmethod
-    def _validate_optional_throw_error_flag(
-        value: bool | None,
-        parameter_name: str,
-    ) -> bool | None:
-        """Validate optional ``throw_errors``-style arguments.
-
-        Args:
-            value (bool | None): Candidate value to validate.
-            parameter_name (str): Parameter name used in the error message.
-
-        Returns:
-            bool | None: Validated value.
-
-        Raises:
-            TypeError: Raised when ``value`` is not an allowed type.
-        """
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return value
-        raise TypeError(f"`{parameter_name}` must be a bool or None.")
 
     def __init__(
         self,
@@ -124,13 +62,12 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
         self._session: aiohttp.ClientSession = session
         self._throw_errors: bool = False
         if throw_errors is not _UNSET:
-            validated_throw_errors = self._validate_throw_error_flag(
-                throw_errors,
-                "throw_errors",
-            )
-            self._throw_errors = validated_throw_errors
+            if not isinstance(throw_errors, bool):
+                raise TypeError("`throw_errors` must be a bool.")
+            self._throw_errors = throw_errors
         if initial is not _UNSET:
-            validated_initial = self._validate_throw_error_flag(initial, "initial")
+            if not isinstance(initial, bool):
+                raise TypeError("`initial` must be a bool.")
             warnings.warn(
                 "In OPNsenseClient, `initial` is deprecated and will be removed in a future release. "
                 "Use `throw_errors` instead.",
@@ -138,7 +75,7 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
                 stacklevel=2,
             )
             if throw_errors is _UNSET:
-                self._throw_errors = validated_initial
+                self._throw_errors = initial
         self._firmware_version: str | None = None
         self._use_snake_case: bool | None = None
         self._endpoint_availability: dict[str, bool] = {}
@@ -146,7 +83,6 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
         self._endpoint_cache_ttl_seconds = DEFAULT_CACHE_TTL_SECONDS
         self._rest_api_query_count = 0
         self._request_queue: asyncio.Queue = asyncio.Queue()
-        self._queue_monitor: asyncio.Task[Any] | None = None
         self._workers: list[asyncio.Task[Any]] = []
         # Number of parallel workers to process the queue
         self._max_workers = 2
@@ -169,11 +105,9 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
         if throw_errors is None:
             self._throw_errors = not self._throw_errors
         else:
-            validated_throw_errors = self._validate_optional_throw_error_flag(
-                throw_errors,
-                "throw_errors",
-            )
-            self._throw_errors = validated_throw_errors
+            if not isinstance(throw_errors, bool):
+                raise TypeError("`throw_errors` must be a bool or None.")
+            self._throw_errors = throw_errors
         return self._throw_errors
 
     @property

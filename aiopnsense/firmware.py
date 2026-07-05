@@ -4,12 +4,18 @@ from collections.abc import MutableMapping
 from datetime import datetime, timedelta
 from typing import Any
 
-import awesomeversion
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
-from .helpers import _LOGGER, _log_errors, dict_get, firmware_is_newer, trim_firmware_suffix
+from .helpers import (
+    _LOGGER,
+    _log_errors,
+    dict_get,
+    firmware_is_at_least,
+    firmware_is_newer,
+    trim_firmware_suffix,
+)
 
 FIRMWARE_STATUS_ENDPOINT = "/api/core/firmware/status"
 FIRMWARE_CHECK_ENDPOINT = "/api/core/firmware/check"
@@ -33,7 +39,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
         firmware: str | None = dict_get(firmware_info, "product.product_version")
         comparable_firmware = trim_firmware_suffix(firmware)
-        if not comparable_firmware or not awesomeversion.AwesomeVersion(comparable_firmware).valid:
+        if not comparable_firmware or firmware_is_at_least(comparable_firmware, "0") is None:
             old = firmware
             firmware = dict_get(firmware_info, "product.product_series", old)
             if firmware != old:
@@ -94,21 +100,14 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             missing_data = True
 
         update_needs_info = False
-        try:
-            latest_is_newer = firmware_is_newer(product_latest, product_version)
-            if latest_is_newer is None:
-                raise ValueError("Unable to compare product firmware versions")
-            if latest_is_newer and status.get("status_msg", "").strip() == (
-                "There are no updates available on the selected mirror."
-            ):
-                _LOGGER.debug("Update available but missing details")
-                update_needs_info = True
-        except (
-            awesomeversion.exceptions.AwesomeVersionCompareException,
-            TypeError,
-            ValueError,
-        ) as e:
-            _LOGGER.debug("Error checking firmware versions. %s: %s", type(e).__name__, e)
+        latest_is_newer = firmware_is_newer(product_latest, product_version)
+        if latest_is_newer is None:
+            _LOGGER.debug("Unable to compare product firmware versions")
+            update_needs_info = True
+        elif latest_is_newer and status.get("status_msg", "").strip() == (
+            "There are no updates available on the selected mirror."
+        ):
+            _LOGGER.debug("Update available but missing details")
             update_needs_info = True
 
         last_check_str = status.get("last_check")

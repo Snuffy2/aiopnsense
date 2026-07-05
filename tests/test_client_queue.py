@@ -20,7 +20,7 @@ from tests.conftest import (
 
 @pytest.mark.asyncio
 async def test_opnsenseclient_async_close(make_client: MakeClientFactory) -> None:
-    """Verify ``async_close`` cancels worker tasks and queue monitor resources.
+    """Verify ``async_close`` cancels worker tasks and clears queued requests.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -30,23 +30,14 @@ async def test_opnsenseclient_async_close(make_client: MakeClientFactory) -> Non
     """
     client, _session = make_mock_session_client(make_client, username="user", password="pass")
     try:
-        initial_tasks = [t for t in [client._queue_monitor, *client._workers] if t is not None]
-        for task in initial_tasks:
-            task.cancel()
-        if initial_tasks:
-            await asyncio.gather(*initial_tasks, return_exceptions=True)
-
         loop = asyncio.get_running_loop()
-        monitor = loop.create_task(asyncio.sleep(60))
         worker1 = loop.create_task(asyncio.sleep(60))
         worker2 = loop.create_task(asyncio.sleep(60))
-        client._queue_monitor = monitor
         client._workers = [worker1, worker2]
         client._request_queue = asyncio.Queue()
         future = loop.create_future()
         await client._request_queue.put(("get", "/api/test", None, future, "test"))
         await client.async_close()
-        assert monitor.cancelled()
         assert worker1.cancelled()
         assert worker2.cancelled()
         assert future.done()
@@ -71,9 +62,7 @@ async def test_opnsenseclient_async_context_manager_closes_background_tasks(
     client.validate = AsyncMock()
     try:
         loop = asyncio.get_running_loop()
-        monitor = loop.create_task(asyncio.sleep(60))
         worker = loop.create_task(asyncio.sleep(60))
-        client._queue_monitor = monitor
         client._workers = [worker]
         client._request_queue = asyncio.Queue()
         future = loop.create_future()
@@ -83,7 +72,6 @@ async def test_opnsenseclient_async_context_manager_closes_background_tasks(
             assert managed_client is client
             client.validate.assert_awaited_once()
 
-        assert monitor.cancelled()
         assert worker.cancelled()
         assert future.done()
         assert isinstance(future.exception(), asyncio.CancelledError)
@@ -527,59 +515,6 @@ async def test_process_queue_cancelled_sets_future_cancelled_error(
 
 
 @pytest.mark.asyncio
-async def test_monitor_queue_handles_qsize_exception(make_client: MakeClientFactory) -> None:
-    """Verify queue monitor tolerates ``qsize`` exceptions and remains cancellable.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test asserts monitor-loop exception handling.
-    """
-    client, _session = make_mock_session_client(make_client)
-    task: asyncio.Task | None = None
-    try:
-        # make qsize raise
-        class BadQ:
-            def qsize(self) -> int:
-                """Qsize.
-
-                Returns:
-                    Any: Value produced by this helper method.
-                """
-                raise RuntimeError("boom")
-
-            def empty(self) -> bool:
-                # indicate there are no queued items so async_close won't attempt to
-                # drain a non-standard queue object; this keeps the test focused on
-                # the qsize exception handling in _monitor_queue.
-                """Empty.
-
-                Returns:
-                    Any: Value produced by this helper method.
-                """
-                return True
-
-        client._request_queue = BadQ()  # type: ignore[assignment]
-
-        loop = asyncio.get_running_loop()
-        task = loop.create_task(client._monitor_queue())
-
-        # yield control so task runs once and hits exception
-        await asyncio.sleep(0)
-
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-    finally:
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_client_base_workers_start_lazily_on_first_queued_request(
     make_client: MakeClientFactory,
 ) -> None:
@@ -594,7 +529,7 @@ async def test_client_base_workers_start_lazily_on_first_queued_request(
     client, _session = make_mock_session_client(make_client)
     try:
         assert client._loop is None
-        assert client._queue_monitor is None
+        assert not hasattr(client, "_queue_monitor")
         assert client._workers == []
 
         client._do_get = AsyncMock(return_value={"ok": True})
@@ -602,7 +537,7 @@ async def test_client_base_workers_start_lazily_on_first_queued_request(
 
         assert result == {"ok": True}
         assert client._loop is asyncio.get_running_loop()
-        assert client._queue_monitor is not None
+        assert not hasattr(client, "_queue_monitor")
         assert len(client._workers) == client._max_workers
     finally:
         await client.async_close()
@@ -634,6 +569,6 @@ async def test_stream_interface_traffic_does_not_enqueue_request(
         assert samples[0]["interfaces"]["wan"]["rx_bytes_per_second"] == 100.0
         client._queue_request.assert_not_called()
         assert client._workers == []
-        assert client._queue_monitor is None
+        assert not hasattr(client, "_queue_monitor")
     finally:
         await client.async_close()

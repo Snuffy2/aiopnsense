@@ -34,6 +34,71 @@ def test_default_env_file_points_to_scripts_env() -> None:
     assert common.DEFAULT_ENV_FILE.parent.name == "scripts"
 
 
+def test_resolve_env_file_argument_maps_documented_default() -> None:
+    """The documented env path resolves to the script-local runtime file."""
+    common = load_common_module()
+
+    assert (
+        common.resolve_env_file_argument(Path("scripts/aiopnsense.env")) == common.DEFAULT_ENV_FILE
+    )
+    custom_path = Path("local.env")
+    assert common.resolve_env_file_argument(custom_path) == custom_path
+
+
+def test_reexec_with_repo_venv_uses_local_python(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bootstrap re-exec uses the repo venv when launched outside it."""
+    common = load_common_module()
+    calls: list[tuple[str, list[str]]] = []
+    script_path = tmp_path / "scripts" / "aiopnsense_dump.py"
+    script_path.parent.mkdir()
+    script_path.write_text("", encoding="utf-8")
+    repo_venv = tmp_path / ".venv"
+    expected_python = repo_venv / "bin" / "python"
+    expected_python.parent.mkdir(parents=True)
+    expected_python.write_text("", encoding="utf-8")
+
+    monkeypatch.delenv("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED", raising=False)
+    monkeypatch.setattr(common.sys, "prefix", "/usr/local")
+    monkeypatch.setattr(common.sys, "argv", ["aiopnsense_dump.py", "--help"])
+    monkeypatch.setattr(common.os, "execv", lambda path, args: calls.append((path, args)))
+
+    common.reexec_with_repo_venv(script_path)
+
+    assert common.os.environ["AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED"] == "1"
+    assert calls == [
+        (
+            str(expected_python),
+            [str(expected_python), str(script_path), "--help"],
+        )
+    ]
+
+
+def test_reexec_with_repo_venv_skips_when_already_in_venv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Bootstrap does nothing when the repo venv is already active."""
+    common = load_common_module()
+    script_path = tmp_path / "scripts" / "aiopnsense_dump.py"
+    script_path.parent.mkdir()
+    script_path.write_text("", encoding="utf-8")
+    repo_venv = tmp_path / ".venv"
+    expected_python = repo_venv / "bin" / "python"
+    expected_python.parent.mkdir(parents=True)
+    expected_python.write_text("", encoding="utf-8")
+    execv = MagicMock()
+
+    monkeypatch.delenv("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED", raising=False)
+    monkeypatch.setattr(common.sys, "prefix", str(repo_venv))
+    monkeypatch.setattr(common.os, "execv", execv)
+
+    common.reexec_with_repo_venv(script_path)
+
+    execv.assert_not_called()
+
+
 def test_load_env_file_parses_simple_shell_style_values(tmp_path: Path) -> None:
     """Env files support blank lines, comments, quoted values, and inline comments."""
     common = load_common_module()
@@ -283,7 +348,7 @@ def test_create_client_uses_live_config(monkeypatch: pytest.MonkeyPatch) -> None
     fake_client = FakeOPNsenseClient()
     fake_constructor = MagicMock(return_value=fake_client)
 
-    monkeypatch.setattr(common, "OPNsenseClient", fake_constructor)
+    monkeypatch.setattr(common, "_get_client_class", lambda: fake_constructor)
     config = common.LiveConfig(
         url="https://firewall.example.test",
         api_key="my-key",

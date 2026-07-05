@@ -298,7 +298,7 @@ def _patch_asyncio_create_task(
         """
         qualname = getattr(coro, "__qualname__", "")
         module = getattr(coro, "__module__", "")
-        if "aiopnsense" in module or "_process_queue" in qualname or "_monitor_queue" in qualname:
+        if "aiopnsense" in module or "_process_queue" in qualname:
             with contextlib.suppress(Exception):
                 coro.close()
             return _DummyTask()

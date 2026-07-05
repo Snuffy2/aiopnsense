@@ -7,54 +7,29 @@ import argparse
 import asyncio
 import importlib
 import json
-import os
 from pathlib import Path
-import sys
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any
 
-
-def _reexec_with_repo_venv() -> None:
-    """Re-run the script with the repo virtualenv when launched directly.
-
-    Returns:
-        None. The current process is replaced when the repository virtualenv is
-        available and has not already bootstrapped the script.
-    """
-    if os.environ.get("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED") == "1":
-        return
-
-    venv_dir = Path(__file__).resolve().parents[1] / ".venv"
-    venv_python = venv_dir / "bin" / "python"
-    if not venv_python.exists() or Path(sys.prefix).resolve() == venv_dir.resolve():
-        return
-
-    os.environ["AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED"] = "1"
-    os.execv(str(venv_python), [str(venv_python), __file__, *sys.argv[1:]])
-
-
-if __name__ == "__main__":
-    _reexec_with_repo_venv()
-
-import aiohttp  # noqa: E402
+if TYPE_CHECKING:
+    from scripts._opnsense_live_common import LiveConfig
 
 _common = importlib.import_module("_opnsense_live_common")
 DEFAULT_ENV_FILE = _common.DEFAULT_ENV_FILE
-LiveConfig = _common.LiveConfig
+DOCUMENTED_DEFAULT_ENV_FILE = _common.DOCUMENTED_DEFAULT_ENV_FILE
+if not TYPE_CHECKING:
+    LiveConfig = _common.LiveConfig
 LiveConfigError = _common.LiveConfigError
 load_live_config = _common.load_live_config
+reexec_with_repo_venv = _common.reexec_with_repo_venv
+resolve_env_file_argument = _common.resolve_env_file_argument
 write_output = _common.write_output
 
-DOCUMENTED_DEFAULT_ENV_FILE = Path("scripts/aiopnsense.env")
+if __name__ == "__main__":
+    reexec_with_repo_venv(Path(__file__))
+
+import aiohttp  # noqa: E402
+
 _NO_PAYLOAD = object()
-
-
-class LiveConfigProtocol(Protocol):
-    """Protocol for live OPNsense connection configuration."""
-
-    url: str
-    api_key: str
-    api_secret: str
-    verify_ssl: bool
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -96,21 +71,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional path to save output JSON.",
     )
     return parser
-
-
-def resolve_env_file_argument(env_file: Path) -> Path:
-    """Resolve the documented default env path to the script-local file.
-
-    Args:
-        env_file: Parsed env file argument.
-
-    Returns:
-        Absolute script-local default for the documented default, otherwise the
-        user-provided path unchanged.
-    """
-    if env_file == DOCUMENTED_DEFAULT_ENV_FILE:
-        return DEFAULT_ENV_FILE
-    return env_file
 
 
 def parse_args(args: list[str] | None = None) -> argparse.Namespace:
@@ -201,7 +161,7 @@ def load_payload(
 
 async def call_api(
     session: aiohttp.ClientSession,
-    config: LiveConfigProtocol,
+    config: "LiveConfig",
     endpoint: str,
     method: str,
     payload: dict[str, Any] | object,
