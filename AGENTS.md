@@ -30,6 +30,7 @@
 
 - Add typing annotations to all functions and classes (including return types).
 - Add or update docstrings for all files, classes and methods, including private methods and nested methods. Method docstrings must follow the Google Style.
+- For protocol-only typing contract files such as `aiopnsense/_typing.py`, keep protocol members as typed signatures with `...`; do not add per-method docstrings or `abstractmethod` boilerplate.
 - Preserve existing comments and keep imports at the top of files.
 - Do not use `assert` or `cast` in main code.
 - Follow existing repository style; run `prek`.
