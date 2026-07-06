@@ -12,8 +12,7 @@
 
 ## What this library does
 
-`aiopnsense` wraps supported OPNsense REST endpoints behind a single async client,
-[`OPNsenseClient`](https://aiopnsense.readthedocs.io/en/stable/api/client.html#aiopnsense.OPNsenseClient). It is designed for applications that need to query router state or trigger supported OPNsense actions without manually building HTTP requests.
+`aiopnsense` wraps supported OPNsense REST endpoints behind a single async client, [`OPNsenseClient`](https://aiopnsense.readthedocs.io/en/stable/api/client.html#aiopnsense.OPNsenseClient). It is designed for applications that need to query router state or trigger supported OPNsense actions without manually building HTTP requests.
 
 The client currently includes helpers for:
 
@@ -45,19 +44,14 @@ The client currently includes helpers for:
 
 The `scripts/` directory includes live diagnostic helpers for maintainers:
 
-- `aiopnsense_dump.py` runs supported `aiopnsense` client endpoints and prints
-  the raw data returned by the library.
-- `opnsense_api_call.py` calls an arbitrary OPNsense API endpoint with a
-  specified method and optional POST payload.
+- `aiopnsense_dump.py` runs supported `aiopnsense` client endpoints and prints the raw data returned by the library.
+- `opnsense_api_call.py` calls an arbitrary OPNsense API endpoint with a specified method and optional POST payload.
 
-Both scripts read credentials from `scripts/aiopnsense.env` by default. Copy
-`scripts/aiopnsense.env.example` to create your local env file; it is ignored
-by git. Full CLI reference is generated in the
-[Read the Docs script documentation](https://aiopnsense.readthedocs.io/en/stable/scripts.html).
+Both scripts read credentials from `scripts/aiopnsense.env` by default. Copy `scripts/aiopnsense.env.example` to create your local env file; it is ignored by git. Full CLI reference is in the [Read the Docs script documentation](https://aiopnsense.readthedocs.io/en/stable/scripts.html).
 
 ## Origin and Purpose
 
-`aiopnsense` was initially extracted from the [`hass-opnsense`](https://github.com/travisghansen/hass-opnsense) integration. It is primarily for use as an external dependency by [Home Assistant](https://www.home-assistant.io) for its [OPNsense Integration](https://www.home-assistant.io/integrations/opnsense).
+`aiopnsense` was extracted from the [hass-opnsense](https://github.com/travisghansen/hass-opnsense) integration. It is primarily used as an external dependency by [hass-opnsense](https://github.com/travisghansen/hass-opnsense) and Home Assistant for its [OPNsense Integration](https://www.home-assistant.io/integrations/opnsense).
 
 [commits-shield]: https://img.shields.io/github/last-commit/Snuffy2/aiopnsense?style=for-the-badge
 [commits]: https://github.com/Snuffy2/aiopnsense/commits/main
