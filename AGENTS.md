@@ -63,6 +63,12 @@
 - Obtain explicit consent before any network operations outside the repository not strictly needed to run local tests.
 - Package installs required for running tests are allowed when user approves.
 
+## Live OPNsense testing
+
+- If `scripts/aiopnsense.env` exists, the live scripts may be used for live tests.
+- Non-mutating live script commands or API endpoints may be used without permission.
+- Mutating live script commands or API endpoints require explicit permission before use.
+
 ## CI/CD
 
 - Use GitHub Actions for CI/CD where applicable.
