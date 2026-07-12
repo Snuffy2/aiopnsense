@@ -303,20 +303,25 @@ async def test_validate_can_skip_device_unique_id_requirement(
     """
     client, _session = make_mock_session_client(make_client)
     client._throw_errors = False
+    client._firmware_version = "0.0"
     try:
-        get_host_firmware_version = AsyncMock(return_value=OPNSENSE_LTD_FIRMWARE)
+
+        async def _refresh_firmware_version() -> None:
+            client._firmware_version = OPNSENSE_LTD_FIRMWARE
+
+        _store_host_firmware_version = AsyncMock(side_effect=_refresh_firmware_version)
         get_device_unique_id = AsyncMock(side_effect=OPNsenseMissingDeviceUniqueID)
-        _patch_validate_requests(
-            monkeypatch,
+        monkeypatch.setattr(
             client,
-            get_host_firmware_version,
-            get_device_unique_id,
+            "_store_host_firmware_version",
+            _store_host_firmware_version,
         )
+        monkeypatch.setattr(client, "get_device_unique_id", get_device_unique_id)
 
         await client.validate(require_device_id=False)
 
         assert client._throw_errors is False
-        get_host_firmware_version.assert_awaited_once()
+        _store_host_firmware_version.assert_awaited_once()
         get_device_unique_id.assert_not_awaited()
     finally:
         await client.async_close()
