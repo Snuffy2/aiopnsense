@@ -116,10 +116,14 @@ class OPNsenseClient(
         except aiohttp.ClientError as e:
             raise OPNsenseConnectionError from e
 
-    async def validate(self) -> None:
+    async def validate(self, *, require_device_id: bool = True) -> None:
         """Validate connectivity, authentication, and minimum firmware support.
            Note that this will throw errors, regardless of what self._throw_errors is set to.
 
+
+        Args:
+            require_device_id (bool): Whether validation must resolve a physical-device
+                unique ID.
 
         Raises:
             OPNsenseInvalidURL: Raised when the configured URL is invalid.
@@ -130,8 +134,8 @@ class OPNsenseClient(
             OPNsenseConnectionError: Raised when another client connection error occurs.
             OPNsenseUnknownFirmware: Raised when firmware detection returns no version.
             OPNsenseBelowMinFirmware: Raised when the detected firmware is unsupported.
-            OPNsenseMissingDeviceUniqueID: Raised when no device unique ID can
-                be resolved from OPNsense.
+            OPNsenseMissingDeviceUniqueID: Raised when no device unique ID can be
+                resolved and `require_device_id` is `True`.
         """
         orig_throw_errors = self._throw_errors
         self._throw_errors = True
@@ -161,6 +165,7 @@ class OPNsenseClient(
                     OPNSENSE_LTD_FIRMWARE,
                 )
 
-            await self._run_validation_request(self.get_device_unique_id)
+            if require_device_id:
+                await self._run_validation_request(self.get_device_unique_id)
         finally:
             self._throw_errors = orig_throw_errors

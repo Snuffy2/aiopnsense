@@ -21,10 +21,24 @@ Minimal client setup
            session=session,
            opts={"verify_ssl": True},
        ) as client:
-           system_info = await client.get_system_info()
-           print(f"Firewall name: {system_info.get('name')}")
+               system_info = await client.get_system_info()
+               print(f"Firewall name: {system_info.get('name')}")
 
    asyncio.run(main())
+
+Virtual endpoints
+-----------------
+
+Applications that intentionally connect to a virtual endpoint without stable physical-device
+identity can retain connection, authentication, and firmware validation while skipping the
+device-ID requirement:
+
+.. code-block:: python
+
+   await client.validate(require_device_id=False)
+
+This option skips only the device-ID request. Applications remain responsible for validating
+any endpoint-specific payloads they require.
 
 Explicit validation
 -------------------
