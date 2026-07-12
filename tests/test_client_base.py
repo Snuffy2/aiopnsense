@@ -288,6 +288,46 @@ async def test_validate_raises_unknown_firmware_for_invalid_recommended_comparis
 
 
 @pytest.mark.asyncio
+async def test_validate_can_skip_device_unique_id_requirement(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify validation can skip only the device unique ID request.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning `OPNsenseClient` instances.
+
+    Returns:
+        None: This test asserts opt-out behavior and state restoration.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._throw_errors = False
+    client._firmware_version = "0.0"
+    try:
+
+        async def _refresh_firmware_version() -> None:
+            client._firmware_version = OPNSENSE_LTD_FIRMWARE
+
+        _store_host_firmware_version = AsyncMock(side_effect=_refresh_firmware_version)
+        get_device_unique_id = AsyncMock(side_effect=OPNsenseMissingDeviceUniqueID)
+        monkeypatch.setattr(
+            client,
+            "_store_host_firmware_version",
+            _store_host_firmware_version,
+        )
+        monkeypatch.setattr(client, "get_device_unique_id", get_device_unique_id)
+
+        await client.validate(require_device_id=False)
+
+        assert client._throw_errors is False
+        _store_host_firmware_version.assert_awaited_once()
+        get_device_unique_id.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_validate_raises_when_device_unique_id_missing(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,

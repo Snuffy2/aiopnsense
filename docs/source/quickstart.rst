@@ -56,3 +56,17 @@ explicit startup check before reusing a long-lived client outside the context ma
                await client.async_close()
 
    asyncio.run(main())
+
+Virtual endpoints
+-----------------
+
+Applications that intentionally connect to a virtual endpoint without stable physical-device
+identity can retain connection, authentication, and firmware validation while skipping the
+device-ID requirement:
+
+.. code-block:: python
+
+   await client.validate(require_device_id=False)
+
+This option skips only the device-ID request. Applications remain responsible for validating
+any endpoint-specific payloads they require.
