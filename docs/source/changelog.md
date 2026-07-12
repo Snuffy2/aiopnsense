@@ -1,5 +1,26 @@
 # Changelog
 
+## [v1.1.1](https://github.com/Snuffy2/aiopnsense/tree/v1.1.1) (2026-07-12)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.0...v1.1.1)
+
+**Enhancements**
+
+- Allow validation without device identity [\#75](https://github.com/Snuffy2/aiopnsense/pull/75) ([Snuffy2](https://github.com/Snuffy2))
+
+**Documentation**
+
+- Update agent and live script docs [\#73](https://github.com/Snuffy2/aiopnsense/pull/73) ([Snuffy2](https://github.com/Snuffy2))
+
+**Code Quality**
+
+- Trim audit cleanup boilerplate [\#70](https://github.com/Snuffy2/aiopnsense/pull/70) ([Snuffy2](https://github.com/Snuffy2))
+
+**Maintenance**
+
+- Run prek cleanup daily [\#72](https://github.com/Snuffy2/aiopnsense/pull/72) ([Snuffy2](https://github.com/Snuffy2))
+- Use reusable prek autoupdate workflow [\#71](https://github.com/Snuffy2/aiopnsense/pull/71) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.1.0](https://github.com/Snuffy2/aiopnsense/tree/v1.1.0) (2026-07-03)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.0.15...v1.1.0)
