@@ -7,7 +7,12 @@ from typing import Any, Callable, NoReturn
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient, OPNsenseError, OPNsenseTimeoutError
+from aiopnsense import (
+    OPNsenseClient,
+    OPNsenseError,
+    OPNsenseInvalidURL,
+    OPNsenseTimeoutError,
+)
 from aiopnsense import helpers as aiopnsense_helpers
 from tests.conftest import make_mock_session_client
 
@@ -354,3 +359,70 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
         assert await decorated(client) is None
     finally:
         await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("raw_url", "expected_redacted", "forbidden"),
+    [
+        (
+            "https://alice:secret@api.example/opn",
+            "https://<redacted>:<redacted>@api.example/opn",
+            ("alice", "secret"),
+        ),
+        (
+            "https://alice@api.example/opn",
+            "https://<redacted>@api.example/opn",
+            ("alice",),
+        ),
+        (
+            "https://alice:@api.example/opn",
+            "https://<redacted>:<redacted>@api.example/opn",
+            ("alice",),
+        ),
+        (
+            "https://alice:pa@ss@api.example/opn",
+            "https://<redacted>:<redacted>@api.example/opn",
+            ("alice", "pa@ss"),
+        ),
+        (
+            "https://alice:secret@[2001:db8::1]:443/path",
+            "https://<redacted>:<redacted>@[2001:db8::1]:443/path",
+            ("alice", "secret"),
+        ),
+        (
+            "https://alice:secret@[bad",
+            "https://<redacted>:<redacted>@[bad",
+            ("alice", "secret"),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_log_errors_redacts_url_userinfo(
+    raw_url: str, expected_redacted: str, forbidden: tuple[str, ...]
+) -> None:
+    """Verify _log_errors redacts credentials from URL-like error messages.
+
+    Args:
+        raw_url (str): URL containing credentials to redact.
+        expected_redacted (str): Redacted URL fragment expected in final error.
+        forbidden (tuple[str, ...]): Fragments that must not appear in the mapped message.
+    """
+
+    class Dummy:
+        """Small wrapper for testing redaction in error logs and mapping."""
+
+        _throw_errors = True
+
+        @aiopnsense_helpers._log_errors
+        async def boom(self) -> None:
+            """Raise an invalid URL with credential leaks."""
+            raise aiohttp.InvalidURL(raw_url)
+
+    client = Dummy()
+    with pytest.raises(OPNsenseInvalidURL) as exc_info:
+        await client.boom()
+
+    message = str(exc_info.value)
+    assert expected_redacted in message
+    for token in forbidden:
+        assert token not in message

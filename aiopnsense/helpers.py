@@ -14,7 +14,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import aiohttp
 import awesomeversion
 
-from .exceptions import OPNsenseError, OPNsenseTimeoutError, _map_opnsense_exception
+from .exceptions import (
+    OPNsenseError,
+    OPNsenseTimeoutError,
+    _map_opnsense_exception,
+    _redact_url_userinfo,
+)
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -54,11 +59,7 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
                     raise
                 raise _map_opnsense_exception(e) from e
         except Exception as e:
-            redacted_message = re.sub(
-                r"(://)([^:/@\s]+):([^@\s]+)@",
-                r"\1<redacted>:<redacted>@",
-                str(e),
-            )
+            redacted_message = _redact_url_userinfo(str(e))
             _LOGGER.error(
                 "Error in %s. %s: %s\n%s",
                 func.__name__.strip("_"),

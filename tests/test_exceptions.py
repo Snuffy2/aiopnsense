@@ -74,17 +74,64 @@ def test_arbitrary_errors_map_to_public_exceptions(
     assert isinstance(_map_opnsense_exception(source_error), expected_exception)
 
 
-def test_invalid_url_mapping_redacts_credentials() -> None:
-    """Map invalid URL errors without leaking embedded credentials."""
-    source_error = aiohttp.InvalidURL("https://user:password@api.example/opn")
+@pytest.mark.parametrize(
+    ("source_url", "expected_context", "forbidden"),
+    [
+        (
+            "https://alice:secret@api.example/opn",
+            "https://<redacted>:<redacted>@api.example/opn",
+            ("alice", "secret"),
+        ),
+        ("https://alice@api.example/opn", "https://<redacted>@api.example/opn", ("alice",)),
+        (
+            "https://alice:@api.example/opn",
+            "https://<redacted>:<redacted>@api.example/opn",
+            ("alice",),
+        ),
+        (
+            "https://alice:pa@ss@api.example/opn",
+            "https://<redacted>:<redacted>@api.example/opn",
+            ("alice", "pa@ss"),
+        ),
+        (
+            "https://u%40lice:p%40ss@api.example/opn",
+            "https://<redacted>:<redacted>@api.example/opn",
+            ("u%40lice", "p%40ss"),
+        ),
+        (
+            "https://alice:secret@[2001:db8::1]:443/path",
+            "https://<redacted>:<redacted>@[2001:db8::1]:443/path",
+            ("alice", "secret"),
+        ),
+        (
+            "https://alice:secret@[bad",
+            "https://<redacted>:<redacted>@[bad",
+            ("alice", "secret"),
+        ),
+    ],
+)
+def test_invalid_url_mapping_redacts_credentials(
+    source_url: str,
+    expected_context: str,
+    forbidden: tuple[str, ...],
+) -> None:
+    """Map invalid URL errors without leaking userinfo details.
+
+    Args:
+        source_url (str): Invalid URL that contains sensitive userinfo.
+        expected_context (str): Expected redacted URL shape in the mapped message.
+        forbidden (tuple[str, ...]): Fragments that must not appear in the mapped message.
+    """
+    source_error = aiohttp.InvalidURL(source_url)
 
     mapped = _map_opnsense_exception(source_error)
 
     assert isinstance(mapped, aiopnsense_module.OPNsenseInvalidURL)
     message = str(mapped)
-    assert "user" not in message
-    assert "password" not in message
-    assert "<redacted>:<redacted>" in message
+    assert "<redacted>" in message
+    assert expected_context in message
+    for token in forbidden:
+        assert token not in message
 
 
 def test_client_response_error_mapping_retains_status() -> None:
