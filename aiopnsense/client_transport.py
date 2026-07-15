@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from .exceptions import _map_opnsense_exception, _opnsense_http_error
 from .helpers import _LOGGER
 
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
@@ -97,17 +98,11 @@ class ClientTransportMixin:
                             response.reason,
                         )
                     if self._throw_errors:
-                        raise aiohttp.ClientResponseError(
-                            request_info=response.request_info,
-                            history=response.history,
-                            status=response.status,
-                            message=f"HTTP Status Error: {response.status} {response.reason}",
-                            headers=response.headers,
-                        )
+                        raise _opnsense_http_error(response.status, response.reason)
         except (aiohttp.ClientError, TimeoutError) as e:
             _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
             if self._throw_errors:
-                raise
+                raise _map_opnsense_exception(e) from e
 
         return {}
 
@@ -158,13 +153,7 @@ class ClientTransportMixin:
                             response.reason,
                         )
                     if self._throw_errors:
-                        raise aiohttp.ClientResponseError(
-                            request_info=response.request_info,
-                            history=response.history,
-                            status=response.status,
-                            message=f"HTTP Status Error: {response.status} {response.reason}",
-                            headers=response.headers,
-                        )
+                        raise _opnsense_http_error(response.status, response.reason)
                     return
 
                 decoder = codecs.getincrementaldecoder("utf-8")()
@@ -271,7 +260,7 @@ class ClientTransportMixin:
         except (aiohttp.ClientError, TimeoutError) as err:
             _LOGGER.error("Client error in stream_json_events. %s: %s", type(err).__name__, err)
             if self._throw_errors:
-                raise
+                raise _map_opnsense_exception(err) from err
 
     async def _do_get(
         self,
@@ -318,17 +307,11 @@ class ClientTransportMixin:
                         response.reason,
                     )
                 if self._throw_errors:
-                    raise aiohttp.ClientResponseError(
-                        request_info=response.request_info,
-                        history=response.history,
-                        status=response.status,
-                        message=f"HTTP Status Error: {response.status} {response.reason}",
-                        headers=response.headers,
-                    )
+                    raise _opnsense_http_error(response.status, response.reason)
         except (aiohttp.ClientError, TimeoutError) as e:
             _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
             if self._throw_errors:
-                raise
+                raise _map_opnsense_exception(e) from e
 
         return None
 
@@ -437,17 +420,11 @@ class ClientTransportMixin:
                         response.reason,
                     )
                 if self._throw_errors:
-                    raise aiohttp.ClientResponseError(
-                        request_info=response.request_info,
-                        history=response.history,
-                        status=response.status,
-                        message=f"HTTP Status Error: {response.status} {response.reason}",
-                        headers=response.headers,
-                    )
+                    raise _opnsense_http_error(response.status, response.reason)
         except (aiohttp.ClientError, TimeoutError) as e:
             _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
             if self._throw_errors:
-                raise
+                raise _map_opnsense_exception(e) from e
 
         return None
 

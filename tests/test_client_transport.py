@@ -15,6 +15,7 @@ from aiopnsense.client_transport import _STREAM_JSON_EVENT_RESET_KEY
 from aiopnsense.const import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
 )
+from aiopnsense.exceptions import OPNsenseConnectionError, OPNsensePrivilegeMissing
 from tests.conftest import (
     FakeResponse,
     FakeStreamResponseFactory,
@@ -158,10 +159,10 @@ async def test_normalize_timeout_seconds(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "method_name, session_method, args, kwargs",
+    "method_name, session_method, args, kwargs, expected_exception",
     [
-        ("_do_get", "get", ("/api/x",), {"caller": "tst"}),
-        ("_do_post", "post", ("/api/x",), {"payload": {}}),
+        ("_do_get", "get", ("/api/x",), {"caller": "tst"}, OPNsensePrivilegeMissing),
+        ("_do_post", "post", ("/api/x",), {"payload": {}}, OPNsenseConnectionError),
     ],
 )
 async def test_do_get_post_error_initial_behavior(
@@ -169,15 +170,17 @@ async def test_do_get_post_error_initial_behavior(
     session_method: str,
     args: tuple[str],
     kwargs: dict[str, Any],
+    expected_exception: type[OPNsenseConnectionError],
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify thrown request errors raise ``ClientResponseError``.
+    """Verify thrown request errors raise public OPNsense exceptions.
 
     Args:
         method_name (str): Client method to invoke (``_do_get`` or ``_do_post``).
         session_method (str): Session method to override (``get`` or ``post``).
         args (tuple[str]): Positional arguments passed to the client method.
         kwargs (dict[str, Any]): Keyword arguments passed to the client method.
+        expected_exception (type[OPNsenseConnectionError]): Expected public exception type.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
@@ -208,7 +211,7 @@ async def test_do_get_post_error_initial_behavior(
 
     client._throw_errors = True
     try:
-        with pytest.raises(aiohttp.ClientResponseError):
+        with pytest.raises(expected_exception):
             await getattr(client, method_name)(*args, **kwargs)
     finally:
         await client.async_close()
@@ -339,7 +342,7 @@ async def test_do_get_from_stream_error_initial_raises(
     session.get = fake_get
     try:
         client._throw_errors = True
-        with pytest.raises(aiohttp.ClientResponseError):
+        with pytest.raises(OPNsensePrivilegeMissing):
             await client._do_get_from_stream("/bad", caller="t")
     finally:
         await client.async_close()
@@ -1041,7 +1044,7 @@ async def test_stream_json_events_raises_when_throw_errors_enabled(
     )
     client = make_client(session=session, throw_errors=True)
     try:
-        with pytest.raises(aiohttp.ClientResponseError):
+        with pytest.raises(OPNsensePrivilegeMissing):
             async for _event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
                 pass
     finally:

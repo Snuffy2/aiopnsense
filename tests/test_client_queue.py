@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import (
+    OPNsenseError,
     client_queue as aiopnsense_client_queue,
 )
 from tests.conftest import (
@@ -109,7 +110,7 @@ async def test_process_queue_unknown_method_sets_future_exception(
             await task
         # future should have an exception
         exc = future.exception()
-        assert isinstance(exc, RuntimeError)
+        assert isinstance(exc, OPNsenseError)
     finally:
         if task is not None and not task.done():
             task.cancel()
@@ -434,7 +435,7 @@ async def test_process_queue_exception_sets_future_exception(
         fut = loop.create_future()
         await q.put(("get", "/g", None, fut, "t"))
 
-        with pytest.raises(ValueError):
+        with pytest.raises(OPNsenseError, match="boom"):
             await asyncio.wait_for(fut, timeout=2)
 
         task.cancel()

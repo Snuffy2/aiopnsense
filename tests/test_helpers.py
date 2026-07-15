@@ -7,7 +7,8 @@ from typing import Any, Callable, NoReturn
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient, helpers as aiopnsense_helpers
+from aiopnsense import OPNsenseClient, OPNsenseError, OPNsenseTimeoutError
+from aiopnsense import helpers as aiopnsense_helpers
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -249,7 +250,7 @@ async def test_log_errors_decorator_re_raise_and_suppress() -> None:
 
     # When error throwing is enabled, errors are re-raised.
     d2 = Dummy(throw_errors=True)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(OPNsenseError, match="boom"):
         await d2.boom()
 
 
@@ -305,9 +306,9 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
         # wrap the coroutine with the decorator
         decorated = aiopnsense_helpers._log_errors(raising_timeout)
 
-        # When error throwing is enabled we expect the TimeoutError to propagate.
+        # When error throwing is enabled we expect a public timeout error.
         client._throw_errors = True
-        with pytest.raises(TimeoutError):
+        with pytest.raises(OPNsenseTimeoutError, match="boom"):
             await decorated(client)
 
         # When error throwing is disabled the decorator suppresses ``TimeoutError``.
@@ -346,7 +347,7 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
         decorated = aiopnsense_helpers._log_errors(raising_server_timeout)
 
         client._throw_errors = True
-        with pytest.raises(aiohttp.ServerTimeoutError):
+        with pytest.raises(OPNsenseTimeoutError, match="srv"):
             await decorated(client)
 
         client._throw_errors = False

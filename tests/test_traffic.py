@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient
+from aiopnsense import OPNsenseClient, OPNsenseTimeoutError
 from tests.conftest import FakeStreamResponseFactory
 from aiopnsense.traffic import (
     DIAGNOSTICS_TRAFFIC_ENDPOINT,
@@ -249,7 +249,7 @@ async def test_get_interface_traffic_raises_when_throw_errors_is_enabled(
 
         client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
 
-        with pytest.raises(TimeoutError):
+        with pytest.raises(OPNsenseTimeoutError):
             await client.get_interface_traffic()
     finally:
         await client.async_close()
@@ -695,7 +695,7 @@ async def test_stream_interface_traffic_raises_when_probe_timeout_and_throw_erro
 
         client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
 
-        with pytest.raises(TimeoutError):
+        with pytest.raises(OPNsenseTimeoutError):
             [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
     finally:
         await client.async_close()

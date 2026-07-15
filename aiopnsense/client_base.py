@@ -13,6 +13,7 @@ from .client_endpoint import ClientEndpointMixin
 from .client_queue import ClientQueueMixin
 from .client_transport import ClientTransportMixin
 from .const import DEFAULT_CACHE_TTL_SECONDS
+from .exceptions import OPNsenseInvalidArgument
 
 _UNSET: object = object()
 
@@ -48,7 +49,7 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
             name (str): Display name for the client instance.
 
         Raises:
-            TypeError: Raised when ``initial`` or ``throw_errors`` is not a ``bool``.
+            OPNsenseInvalidArgument: Raised when ``initial`` or ``throw_errors`` is not a ``bool``.
         """
 
         self._username: str = username
@@ -63,11 +64,11 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
         self._throw_errors: bool = False
         if throw_errors is not _UNSET:
             if not isinstance(throw_errors, bool):
-                raise TypeError("`throw_errors` must be a bool.")
+                raise OPNsenseInvalidArgument("`throw_errors` must be a bool.")
             self._throw_errors = throw_errors
         if initial is not _UNSET:
             if not isinstance(initial, bool):
-                raise TypeError("`initial` must be a bool.")
+                raise OPNsenseInvalidArgument("`initial` must be a bool.")
             warnings.warn(
                 "In OPNsenseClient, `initial` is deprecated and will be removed in a future release. "
                 "Use `throw_errors` instead.",
@@ -100,13 +101,13 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
             bool: Updated error propagation state.
 
         Raises:
-            TypeError: Raised when ``throw_errors`` is not a ``bool`` or ``None``.
+            OPNsenseInvalidArgument: Raised when ``throw_errors`` is not a ``bool`` or ``None``.
         """
         if throw_errors is None:
             self._throw_errors = not self._throw_errors
         else:
             if not isinstance(throw_errors, bool):
-                raise TypeError("`throw_errors` must be a bool or None.")
+                raise OPNsenseInvalidArgument("`throw_errors` must be a bool or None.")
             self._throw_errors = throw_errors
         return self._throw_errors
 

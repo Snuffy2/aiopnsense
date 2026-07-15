@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import aiohttp
 import awesomeversion
 
+from .exceptions import OPNsenseError, OPNsenseTimeoutError, _map_opnsense_exception
+
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
@@ -45,10 +47,12 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
             return await func(self, *args, **kwargs)
         except asyncio.CancelledError:
             raise
-        except (TimeoutError, aiohttp.ServerTimeoutError) as e:
+        except (TimeoutError, aiohttp.ServerTimeoutError, OPNsenseTimeoutError) as e:
             _LOGGER.warning("Timeout Error in %s. Will retry. %s", func.__name__.strip("_"), e)
             if self._throw_errors:
-                raise
+                if isinstance(e, OPNsenseError):
+                    raise
+                raise _map_opnsense_exception(e) from e
         except Exception as e:
             redacted_message = re.sub(
                 r"(://)([^:/@\s]+):([^@\s]+)@",
@@ -63,7 +67,9 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
                 "".join(traceback.format_tb(e.__traceback__)),
             )
             if self._throw_errors:
-                raise
+                if isinstance(e, OPNsenseError):
+                    raise
+                raise _map_opnsense_exception(e) from e
         return None
 
     return inner

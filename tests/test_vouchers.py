@@ -8,7 +8,7 @@ import pytest
 
 import aiopnsense as aiopnsense_module
 from aiopnsense import OPNsenseClient
-from tests.test_client_base import _client_response_error
+from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -196,7 +196,9 @@ async def test_generate_vouchers_returns_empty_on_404_generate_endpoint_with_thr
         client._throw_errors = True
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_list_get = AsyncMock(return_value=[])
-        client._safe_list_post = AsyncMock(side_effect=_client_response_error(404))
+        client._safe_list_post = AsyncMock(
+            side_effect=OPNsenseConnectionError("not found", status=404)
+        )
 
         got = await client.generate_vouchers({"voucher_server": "srv"})
 
