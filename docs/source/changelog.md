@@ -1,5 +1,13 @@
 # Changelog
 
+## [v1.1.2](https://github.com/Snuffy2/aiopnsense/tree/v1.1.2) (2026-07-15)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.1...v1.1.2)
+
+**Enhancements**
+
+- Raise public OPNsense exceptions consistently [\#76](https://github.com/Snuffy2/aiopnsense/pull/76) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.1.1](https://github.com/Snuffy2/aiopnsense/tree/v1.1.1) (2026-07-12)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.0...v1.1.1)
