@@ -362,79 +362,40 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
 
 
 @pytest.mark.parametrize(
-    ("raw_url", "expected_redacted", "forbidden"),
+    ("raw_url", "forbidden"),
     [
+        ("https://alice:secret@api.example/opn", ("alice", "secret")),
+        ("https://alice secret@api.example/opn", ("alice secret",)),
+        ("'https://alice:secret@api.example/opn'", ("alice", "secret")),
+        ('"https://alice:secret@api.example/opn"', ("alice", "secret")),
+        ("<https://alice:secret@api.example/opn>", ("alice", "secret")),
+        ("`https://alice:secret@api.example/opn`", ("alice", "secret")),
+        ("https://alice@api.example/opn", ("alice",)),
+        ("https://alice:@api.example/opn", ("alice",)),
+        ("https://alice:pa@ss@api.example/opn", ("alice", "pa@ss")),
+        ("https://u%40lice:p%40ss@api.example/opn", ("u%40lice", "p%40ss")),
+        ("https://u:pa@ss@api.example/path@with@ats", ("u", "pa@ss")),
+        ("https://alice:secret@[2001:db8::1]:443/path", ("alice", "secret")),
+        ("https://alice:secret@[bad", ("alice", "secret")),
         (
-            "https://alice:secret@api.example/opn",
-            "https://<redacted>:<redacted>@api.example/opn",
+            "https://public.example/path https://alice:secret@api.example/opn",
             ("alice", "secret"),
         ),
+        ("https://alice?bad:secret@api.example/opn", ("alice?bad", "secret")),
+        ("https://alice#bad:secret@api.example/opn", ("alice#bad", "secret")),
+        ("https://alice:pa/ss@api.example/opn", ("alice", "pa/ss")),
         (
-            "https://alice secret@api.example/opn",
-            "https://<redacted>@api.example/opn",
-            ("alice secret",),
-        ),
-        (
-            "'https://alice:secret@api.example/opn'",
-            "'https://<redacted>:<redacted>@api.example/opn'",
-            ("alice", "secret"),
-        ),
-        (
-            '"https://alice:secret@api.example/opn"',
-            '"https://<redacted>:<redacted>@api.example/opn"',
-            ("alice", "secret"),
-        ),
-        (
-            "<https://alice:secret@api.example/opn>",
-            "<https://<redacted>:<redacted>@api.example/opn>",
-            ("alice", "secret"),
-        ),
-        (
-            "`https://alice:secret@api.example/opn`",
-            "`https://<redacted>:<redacted>@api.example/opn`",
-            ("alice", "secret"),
-        ),
-        (
-            "https://alice@api.example/opn",
-            "https://<redacted>@api.example/opn",
-            ("alice",),
-        ),
-        (
-            "https://alice:@api.example/opn",
-            "https://<redacted>:<redacted>@api.example/opn",
-            ("alice",),
-        ),
-        (
-            "https://alice:pa@ss@api.example/opn",
-            "https://<redacted>:<redacted>@api.example/opn",
-            ("alice", "pa@ss"),
-        ),
-        (
-            "https://u:pa@ss@api.example/path@with@ats",
-            "https://<redacted>:<redacted>@api.example/path@with@ats",
-            ("u", "pa@ss"),
-        ),
-        (
-            "https://alice:secret@[2001:db8::1]:443/path",
-            "https://<redacted>:<redacted>@[2001:db8::1]:443/path",
-            ("alice", "secret"),
-        ),
-        (
-            "https://alice:secret@[bad",
-            "https://<redacted>:<redacted>@[bad",
-            ("alice", "secret"),
+            "https://alice:secret@api.example/opn https://bob:pass@other.example/opn",
+            ("alice", "secret", "bob", "pass"),
         ),
     ],
 )
 @pytest.mark.asyncio
-async def test_log_errors_redacts_url_userinfo(
-    raw_url: str, expected_redacted: str, forbidden: tuple[str, ...]
-) -> None:
-    """Verify _log_errors redacts credentials from URL-like error messages.
+async def test_log_errors_redacts_url_userinfo(raw_url: str, forbidden: tuple[str, ...]) -> None:
+    """Verify _log_errors maps invalid URLs using a constant-safe message.
 
     Args:
         raw_url (str): URL containing credentials to redact.
-        expected_redacted (str): Redacted URL fragment expected in final error.
         forbidden (tuple[str, ...]): Fragments that must not appear in the mapped message.
     """
 
@@ -453,6 +414,7 @@ async def test_log_errors_redacts_url_userinfo(
         await client.boom()
 
     message = str(exc_info.value)
-    assert expected_redacted in message
+    assert message == "Invalid OPNsense URL"
+    assert raw_url not in message
     for token in forbidden:
         assert token not in message

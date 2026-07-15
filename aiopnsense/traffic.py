@@ -174,7 +174,14 @@ class TrafficMixin(AiopnsenseClientProtocol):
                 return empty_sample
             payload = await self._safe_dict_get(DIAGNOSTICS_TRAFFIC_ENDPOINT)
             return normalize_traffic_payload(payload, interval=1.0, include_per_second_rates=False)
-        except (TimeoutError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        except (
+            TimeoutError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            OPNsenseError,
+        ) as exc:
             if self._throw_errors:
                 if isinstance(exc, OPNsenseError):
                     raise
@@ -207,7 +214,14 @@ class TrafficMixin(AiopnsenseClientProtocol):
             if not await self._is_get_endpoint_available(endpoint):
                 _LOGGER.debug("Diagnostics traffic stream endpoint unavailable")
                 return
-        except (TimeoutError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        except (
+            TimeoutError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            OPNsenseError,
+        ) as exc:
             if self._throw_errors:
                 if isinstance(exc, OPNsenseError):
                     raise

@@ -1,7 +1,5 @@
 """Custom exceptions and exception mapping for aiopnsense."""
 
-import re
-
 import aiohttp
 
 
@@ -63,61 +61,9 @@ class OPNsenseInvalidArgument(OPNsenseError, TypeError):
     """Raised when an aiopnsense argument has an invalid type or value."""
 
 
-_URL_SCHEME_PATTERN = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://")
-
-
-def _redact_url_userinfo(message: str) -> str:
-    """Redact credentials in URL userinfo while preserving non-secret context.
-
-    The strategy is conservative and line-based: for each URL scheme on a line,
-    redact everything from the start of authority up to the last ``@`` before path
-    delimiters. This avoids malformed parse behavior while ensuring raw userinfo
-    never appears in logs or mapped exceptions.
-
-    Args:
-        message (str): Message that may contain one or more URL-like values.
-
-    Returns:
-        str: Message with all matching URL userinfo values redacted.
-    """
-
-    def _redact_line(line: str) -> str:
-        cursor = 0
-        parts: list[str] = []
-        while True:
-            scheme_match = _URL_SCHEME_PATTERN.search(line, cursor)
-            if not scheme_match:
-                parts.append(line[cursor:])
-                return "".join(parts)
-
-            parts.append(line[cursor : scheme_match.start()])
-
-            search_start = scheme_match.end()
-            search_end = len(line)
-            for separator in ("/", "?", "#"):
-                separator_pos = line.find(separator, search_start)
-                if separator_pos != -1:
-                    search_end = min(search_end, separator_pos)
-
-            authority = line[search_start:search_end]
-            at_sign = authority.rfind("@")
-            if at_sign < 0:
-                parts.append(line[scheme_match.start() : search_end])
-                cursor = search_end
-                continue
-
-            userinfo = authority[:at_sign]
-            if not userinfo:
-                parts.append(line[scheme_match.start() : search_end])
-                cursor = search_end
-                continue
-
-            redacted_userinfo = "<redacted>:<redacted>" if ":" in userinfo else "<redacted>"
-            parts.append(line[scheme_match.start() : search_start])
-            parts.append(redacted_userinfo)
-            cursor = search_start + at_sign
-
-    return "".join(_redact_line(line) for line in message.splitlines(keepends=True))
+def _invalid_url_error_message() -> str:
+    """Return a constant-safe invalid URL message."""
+    return "Invalid OPNsense URL"
 
 
 def _map_opnsense_exception(error: Exception) -> OPNsenseError:
@@ -131,8 +77,10 @@ def _map_opnsense_exception(error: Exception) -> OPNsenseError:
     """
     if isinstance(error, OPNsenseError):
         return error
-    if isinstance(error, (aiohttp.ClientConnectorDNSError, aiohttp.InvalidURL)):
-        return OPNsenseInvalidURL(_redact_url_userinfo(str(error)))
+    if isinstance(error, aiohttp.InvalidURL):
+        return OPNsenseInvalidURL(_invalid_url_error_message())
+    if isinstance(error, aiohttp.ClientConnectorDNSError):
+        return OPNsenseInvalidURL(str(error))
     if isinstance(error, aiohttp.ClientSSLError):
         return OPNsenseSSLError(str(error))
     if isinstance(error, (TimeoutError, aiohttp.ServerTimeoutError)):

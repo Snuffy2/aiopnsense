@@ -18,7 +18,7 @@ from .exceptions import (
     OPNsenseError,
     OPNsenseTimeoutError,
     _map_opnsense_exception,
-    _redact_url_userinfo,
+    _invalid_url_error_message,
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -59,12 +59,14 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
                     raise
                 raise _map_opnsense_exception(e) from e
         except Exception as e:
-            redacted_message = _redact_url_userinfo(str(e))
+            logged_message = (
+                _invalid_url_error_message() if isinstance(e, aiohttp.InvalidURL) else str(e)
+            )
             _LOGGER.error(
                 "Error in %s. %s: %s\n%s",
                 func.__name__.strip("_"),
                 type(e).__name__,
-                redacted_message,
+                logged_message,
                 "".join(traceback.format_tb(e.__traceback__)),
             )
             if self._throw_errors:
