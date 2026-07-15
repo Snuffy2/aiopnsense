@@ -10,7 +10,7 @@ import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient, OPNsenseError, OPNsenseTimeoutError
-from tests.conftest import FakeStreamResponseFactory
+from tests.conftest import FakeStreamResponseFactory, MakeClientFactory
 from aiopnsense.traffic import (
     DIAGNOSTICS_TRAFFIC_ENDPOINT,
     DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX,
@@ -240,7 +240,7 @@ async def test_get_interface_traffic_returns_empty_sample_on_probe_timeout(
 
 @pytest.mark.asyncio
 async def test_get_interface_traffic_returns_empty_sample_on_probed_opnsense_error(
-    make_client: Callable[..., Any],
+    make_client: MakeClientFactory,
 ) -> None:
     """Mapped OPNsense errors from endpoint probing should fallback when throw_errors is disabled."""
     client = make_client()
@@ -277,7 +277,7 @@ async def test_get_interface_traffic_raises_when_throw_errors_is_enabled(
 
 @pytest.mark.asyncio
 async def test_get_interface_traffic_raises_same_opnsense_error_when_throw_errors_is_enabled(
-    make_client: Callable[..., Any],
+    make_client: MakeClientFactory,
 ) -> None:
     """Mapped OPNsense errors from endpoint probing should be re-raised when throw_errors is enabled."""
     client = make_client(throw_errors=True)
@@ -725,7 +725,7 @@ async def test_stream_interface_traffic_returns_empty_iteration_on_probe_timeout
 
 @pytest.mark.asyncio
 async def test_stream_interface_traffic_returns_empty_iteration_on_opnsense_error(
-    make_client: Callable[..., Any],
+    make_client: MakeClientFactory,
 ) -> None:
     """Mapped OPNsense errors from endpoint probing should fallback when throw_errors is disabled."""
     client = make_client()
@@ -745,7 +745,7 @@ async def test_stream_interface_traffic_returns_empty_iteration_on_opnsense_erro
 
 @pytest.mark.asyncio
 async def test_stream_interface_traffic_raises_same_opnsense_error_when_throw_errors_enabled(
-    make_client: Callable[..., Any],
+    make_client: MakeClientFactory,
 ) -> None:
     """Mapped OPNsense errors from endpoint probing should be re-raised when throw_errors is enabled."""
     client = make_client(throw_errors=True)
