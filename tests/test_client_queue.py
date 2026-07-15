@@ -410,12 +410,23 @@ async def test_post_uses_unknown_when_inspect_stack_raises(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_error", "expect_cause"),
+    [
+        pytest.param(ValueError("boom"), True, id="mapped-error"),
+        pytest.param(OPNsenseError("boom"), False, id="public-error"),
+    ],
+)
 async def test_process_queue_exception_sets_future_exception(
+    source_error: Exception,
+    expect_cause: bool,
     make_client: MakeClientFactory,
 ) -> None:
     """Verify worker exceptions are propagated to request futures.
 
     Args:
+        source_error (Exception): Error raised by the queued request handler.
+        expect_cause (bool): Whether the queue maps and chains the source error.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
@@ -424,7 +435,7 @@ async def test_process_queue_exception_sets_future_exception(
     client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
-        client._do_get = AsyncMock(side_effect=ValueError("boom"))
+        client._do_get = AsyncMock(side_effect=source_error)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
@@ -435,8 +446,13 @@ async def test_process_queue_exception_sets_future_exception(
         fut = loop.create_future()
         await q.put(("get", "/g", None, fut, "t"))
 
-        with pytest.raises(OPNsenseError, match="boom"):
+        with pytest.raises(OPNsenseError, match="boom") as exc_info:
             await asyncio.wait_for(fut, timeout=2)
+        if expect_cause:
+            assert exc_info.value.__cause__ is source_error
+        else:
+            assert exc_info.value is source_error
+            assert exc_info.value.__cause__ is None
 
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

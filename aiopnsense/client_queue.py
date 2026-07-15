@@ -176,7 +176,10 @@ class ClientQueueMixin:
                     e,
                 )
                 if future is not None and not future.done():
-                    future.set_exception(_map_opnsense_exception(e))
+                    mapped_error = _map_opnsense_exception(e)
+                    if mapped_error is not e:
+                        mapped_error.__cause__ = e
+                    future.set_exception(mapped_error)
             await asyncio.sleep(0.3)
 
     async def async_close(self) -> None:
