@@ -7,6 +7,7 @@ from typing import Any
 
 from .client_transport import _STREAM_JSON_EVENT_RESET_KEY
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from .exceptions import OPNsenseError, _map_opnsense_exception
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, try_to_float, try_to_int
 
@@ -173,9 +174,18 @@ class TrafficMixin(AiopnsenseClientProtocol):
                 return empty_sample
             payload = await self._safe_dict_get(DIAGNOSTICS_TRAFFIC_ENDPOINT)
             return normalize_traffic_payload(payload, interval=1.0, include_per_second_rates=False)
-        except (TimeoutError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        except (
+            TimeoutError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            OPNsenseError,
+        ) as exc:
             if self._throw_errors:
-                raise
+                if isinstance(exc, OPNsenseError):
+                    raise
+                raise _map_opnsense_exception(exc) from exc
             _LOGGER.debug(
                 "Falling back to empty interface traffic sample due to %s: %s",
                 type(exc).__name__,
@@ -204,9 +214,18 @@ class TrafficMixin(AiopnsenseClientProtocol):
             if not await self._is_get_endpoint_available(endpoint):
                 _LOGGER.debug("Diagnostics traffic stream endpoint unavailable")
                 return
-        except (TimeoutError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        except (
+            TimeoutError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            OPNsenseError,
+        ) as exc:
             if self._throw_errors:
-                raise
+                if isinstance(exc, OPNsenseError):
+                    raise
+                raise _map_opnsense_exception(exc) from exc
             _LOGGER.debug(
                 "Falling back to empty interface traffic stream due to %s: %s",
                 type(exc).__name__,

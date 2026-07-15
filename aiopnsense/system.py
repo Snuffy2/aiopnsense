@@ -13,7 +13,7 @@ from .const import (
     AMBIGUOUS_TZINFOS,
     OPNSENSE_26_1_11_COMPAT_FIRMWARE,
 )
-from .exceptions import OPNsenseMissingDeviceUniqueID
+from .exceptions import OPNsenseMissingDeviceUniqueID, OPNsenseError
 from .helpers import (
     _LOGGER,
     _log_errors,
@@ -345,7 +345,7 @@ class SystemMixin(AiopnsenseClientProtocol):
                 return self._get_local_timezone()
             try:
                 datetime_raw = (await self._safe_dict_get(SYSTEM_TIME_ENDPOINT)).get("datetime")
-            except (aiohttp.ClientError, TimeoutError) as err:
+            except (OPNsenseError, aiohttp.ClientError, TimeoutError) as err:
                 _LOGGER.debug(
                     "Failed to fetch OPNsense system time for timezone resolution: %s: %s",
                     type(err).__name__,

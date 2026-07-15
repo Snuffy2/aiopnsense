@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import (
+    OPNsenseError,
     client_queue as aiopnsense_client_queue,
 )
 from tests.conftest import (
@@ -79,6 +80,33 @@ async def test_opnsenseclient_async_context_manager_closes_background_tasks(
         await client.async_close()
 
 
+@pytest.mark.asyncio
+async def test_get_active_loop_raises_when_worker_startup_leaves_loop_unset(
+    make_client: MakeClientFactory,
+) -> None:
+    """Raise a public error when worker startup does not retain its event loop.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts the missing-loop failure contract.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        await client._ensure_workers_started()
+        assert client._workers
+
+        client._loop = None
+        client._ensure_workers_started = AsyncMock()
+
+        with pytest.raises(OPNsenseError, match="^Event loop is not initialized$"):
+            await client._get_active_loop()
+        client._ensure_workers_started.assert_awaited_once()
+    finally:
+        await client.async_close()
+
+
 async def test_process_queue_unknown_method_sets_future_exception(
     make_client: MakeClientFactory,
 ) -> None:
@@ -109,7 +137,7 @@ async def test_process_queue_unknown_method_sets_future_exception(
             await task
         # future should have an exception
         exc = future.exception()
-        assert isinstance(exc, RuntimeError)
+        assert isinstance(exc, OPNsenseError)
     finally:
         if task is not None and not task.done():
             task.cancel()
@@ -409,12 +437,23 @@ async def test_post_uses_unknown_when_inspect_stack_raises(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_error", "expect_cause"),
+    [
+        pytest.param(ValueError("boom"), True, id="mapped-error"),
+        pytest.param(OPNsenseError("boom"), False, id="public-error"),
+    ],
+)
 async def test_process_queue_exception_sets_future_exception(
+    source_error: Exception,
+    expect_cause: bool,
     make_client: MakeClientFactory,
 ) -> None:
     """Verify worker exceptions are propagated to request futures.
 
     Args:
+        source_error (Exception): Error raised by the queued request handler.
+        expect_cause (bool): Whether the queue maps and chains the source error.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
@@ -423,7 +462,7 @@ async def test_process_queue_exception_sets_future_exception(
     client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
-        client._do_get = AsyncMock(side_effect=ValueError("boom"))
+        client._do_get = AsyncMock(side_effect=source_error)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
@@ -434,8 +473,13 @@ async def test_process_queue_exception_sets_future_exception(
         fut = loop.create_future()
         await q.put(("get", "/g", None, fut, "t"))
 
-        with pytest.raises(ValueError):
+        with pytest.raises(OPNsenseError, match="boom") as exc_info:
             await asyncio.wait_for(fut, timeout=2)
+        if expect_cause:
+            assert exc_info.value.__cause__ is source_error
+        else:
+            assert exc_info.value is source_error
+            assert exc_info.value.__cause__ is None
 
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

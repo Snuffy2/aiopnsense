@@ -8,7 +8,7 @@ import aiohttp
 
 from ._typing import AiopnsenseClientProtocol
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS, LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
-from .exceptions import OPNsenseUnknownFirmware
+from .exceptions import OPNsenseUnknownFirmware, _map_opnsense_exception, _opnsense_http_error
 from .helpers import _LOGGER, firmware_is_at_least
 
 
@@ -197,10 +197,8 @@ class ClientEndpointMixin:
                 When no exception is raised, this method always returns a ``bool``.
 
         Raises:
-            aiohttp.ClientError: Raised when an HTTP response or transport client error occurs and
+            OPNsenseError: Raised when an HTTP response or transport error occurs and
                 ``self._throw_errors`` is ``True``.
-            TimeoutError: Raised when endpoint probing times out and ``self._throw_errors``
-                is ``True``.
 
         Side Effects:
             Increments the REST query counter for uncached probes and updates
@@ -263,13 +261,7 @@ class ClientEndpointMixin:
                         response.reason,
                     )
                 if self._throw_errors:
-                    raise aiohttp.ClientResponseError(
-                        request_info=response.request_info,
-                        history=response.history,
-                        status=response.status,
-                        message=f"HTTP Status Error: {response.status} {response.reason}",
-                        headers=response.headers,
-                    )
+                    raise _opnsense_http_error(response.status, response.reason)
                 return False
         except (aiohttp.ClientError, TimeoutError) as e:
             self._endpoint_availability.pop(cache_key, None)
@@ -282,7 +274,7 @@ class ClientEndpointMixin:
                 e,
             )
             if self._throw_errors:
-                raise
+                raise _map_opnsense_exception(e) from e
             return False
 
     async def _is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:

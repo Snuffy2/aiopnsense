@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient
+from aiopnsense import OPNsenseClient, OPNsenseInvalidURL
 from aiopnsense.exceptions import OPNsenseMissingDeviceUniqueID
 from tests.conftest import make_mock_session_client
 
@@ -172,6 +172,37 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client: ClientType)
         assert fetch_fallback_tz == local_tz or fetch_fallback_tz.utcoffset(
             now_local
         ) == local_tz.utcoffset(now_local)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_opnsense_timezone_fallback_for_mapped_error(make_client: ClientType) -> None:
+    """Verify timezone fallback for mapped client errors.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates fallback when _safe_dict_get raises an OPNsenseError.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            side_effect=OPNsenseInvalidURL(
+                "https://user:password@api.example/diagnostics/system/system_time"
+            )
+        )
+
+        parsed_tz = await client._get_opnsense_timezone()
+        local_tz = datetime.now().astimezone().tzinfo
+        now_local = datetime.now().astimezone()
+
+        assert parsed_tz is not None
+        assert parsed_tz == local_tz or parsed_tz.utcoffset(now_local) == local_tz.utcoffset(
+            now_local
+        )
     finally:
         await client.async_close()
 

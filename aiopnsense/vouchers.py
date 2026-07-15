@@ -1,12 +1,11 @@
 """Captive portal voucher methods for OPNsenseClient."""
 
 from collections.abc import MutableMapping
-import aiohttp
 from typing import Any
 from urllib.parse import quote
 
 from ._typing import AiopnsenseClientProtocol
-from .exceptions import OPNsenseVoucherServerError
+from .exceptions import OPNsenseConnectionError, OPNsenseVoucherServerError
 from .helpers import _LOGGER, human_friendly_duration, timestamp_to_datetime, try_to_int
 
 VOUCHER_LIST_PROVIDERS_ENDPOINT = "/api/captiveportal/voucher/list_providers"
@@ -64,7 +63,7 @@ class VouchersMixin(AiopnsenseClientProtocol):
                 generate_vouchers_url,
                 payload=payload,
             )
-        except aiohttp.ClientResponseError as err:
+        except OPNsenseConnectionError as err:
             if err.status == 404:
                 _LOGGER.debug(
                     "Voucher generation endpoint unavailable: %s",

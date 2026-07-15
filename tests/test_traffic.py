@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient
-from tests.conftest import FakeStreamResponseFactory
+from aiopnsense import OPNsenseClient, OPNsenseError, OPNsenseTimeoutError
+from tests.conftest import FakeStreamResponseFactory, MakeClientFactory
 from aiopnsense.traffic import (
     DIAGNOSTICS_TRAFFIC_ENDPOINT,
     DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX,
@@ -239,6 +239,26 @@ async def test_get_interface_traffic_returns_empty_sample_on_probe_timeout(
 
 
 @pytest.mark.asyncio
+async def test_get_interface_traffic_returns_empty_sample_on_probed_opnsense_error(
+    make_client: MakeClientFactory,
+) -> None:
+    """Mapped OPNsense errors from endpoint probing should fallback when throw_errors is disabled."""
+    client = make_client()
+    try:
+        assert isinstance(client, OPNsenseClient)
+
+        client._is_get_endpoint_available = AsyncMock(side_effect=OPNsenseError("probe failed"))
+        client._safe_dict_get = AsyncMock()
+
+        traffic = await client.get_interface_traffic()
+        assert traffic == {"time": None, "interfaces": {}}
+        client._is_get_endpoint_available.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
+        client._safe_dict_get.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_interface_traffic_raises_when_throw_errors_is_enabled(
     make_client: Callable[..., Any],
 ) -> None:
@@ -249,8 +269,27 @@ async def test_get_interface_traffic_raises_when_throw_errors_is_enabled(
 
         client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
 
-        with pytest.raises(TimeoutError):
+        with pytest.raises(OPNsenseTimeoutError):
             await client.get_interface_traffic()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_interface_traffic_raises_same_opnsense_error_when_throw_errors_is_enabled(
+    make_client: MakeClientFactory,
+) -> None:
+    """Mapped OPNsense errors from endpoint probing should be re-raised when throw_errors is enabled."""
+    client = make_client(throw_errors=True)
+    try:
+        assert isinstance(client, OPNsenseClient)
+
+        probe_error = OPNsenseError("probe failed")
+        client._is_get_endpoint_available = AsyncMock(side_effect=probe_error)
+
+        with pytest.raises(OPNsenseError) as exc:
+            await client.get_interface_traffic()
+        assert exc.value is probe_error
     finally:
         await client.async_close()
 
@@ -685,6 +724,45 @@ async def test_stream_interface_traffic_returns_empty_iteration_on_probe_timeout
 
 
 @pytest.mark.asyncio
+async def test_stream_interface_traffic_returns_empty_iteration_on_opnsense_error(
+    make_client: MakeClientFactory,
+) -> None:
+    """Mapped OPNsense errors from endpoint probing should fallback when throw_errors is disabled."""
+    client = make_client()
+    try:
+        assert isinstance(client, OPNsenseClient)
+
+        client._is_get_endpoint_available = AsyncMock(side_effect=OPNsenseError("probe failed"))
+        client._stream_json_events = AsyncMock()
+
+        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
+
+        assert samples == []
+        client._stream_json_events.assert_not_called()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_raises_same_opnsense_error_when_throw_errors_enabled(
+    make_client: MakeClientFactory,
+) -> None:
+    """Mapped OPNsense errors from endpoint probing should be re-raised when throw_errors is enabled."""
+    client = make_client(throw_errors=True)
+    try:
+        assert isinstance(client, OPNsenseClient)
+
+        probe_error = OPNsenseError("probe failed")
+        client._is_get_endpoint_available = AsyncMock(side_effect=probe_error)
+
+        with pytest.raises(OPNsenseError) as exc:
+            [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
+        assert exc.value is probe_error
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_stream_interface_traffic_raises_when_probe_timeout_and_throw_errors_enabled(
     make_client: Callable[..., Any],
 ) -> None:
@@ -695,7 +773,7 @@ async def test_stream_interface_traffic_raises_when_probe_timeout_and_throw_erro
 
         client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
 
-        with pytest.raises(TimeoutError):
+        with pytest.raises(OPNsenseTimeoutError):
             [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
     finally:
         await client.async_close()

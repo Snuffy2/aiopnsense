@@ -1,13 +1,22 @@
 """Tests for `aiopnsense.helpers` utility and decorator helpers."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 import inspect
-from typing import Any, Callable, NoReturn
+import logging
+from unittest.mock import MagicMock
+from typing import Any, NoReturn
 
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient, helpers as aiopnsense_helpers
+from aiopnsense import (
+    OPNsenseClient,
+    OPNsenseError,
+    OPNsenseInvalidURL,
+    OPNsenseTimeoutError,
+)
+from aiopnsense import helpers as aiopnsense_helpers
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -249,7 +258,7 @@ async def test_log_errors_decorator_re_raise_and_suppress() -> None:
 
     # When error throwing is enabled, errors are re-raised.
     d2 = Dummy(throw_errors=True)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(OPNsenseError, match="boom"):
         await d2.boom()
 
 
@@ -305,9 +314,9 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
         # wrap the coroutine with the decorator
         decorated = aiopnsense_helpers._log_errors(raising_timeout)
 
-        # When error throwing is enabled we expect the TimeoutError to propagate.
+        # When error throwing is enabled we expect a public timeout error.
         client._throw_errors = True
-        with pytest.raises(TimeoutError):
+        with pytest.raises(OPNsenseTimeoutError, match="boom"):
             await decorated(client)
 
         # When error throwing is disabled the decorator suppresses ``TimeoutError``.
@@ -316,6 +325,27 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
         assert res is None
     finally:
         await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_log_errors_re_raises_existing_opnsense_timeout_instance() -> None:
+    """Verify existing OPNsense timeout errors are propagated unchanged."""
+    timeout_error = OPNsenseTimeoutError("already mapped")
+
+    class Dummy:
+        """Small wrapper for testing timeout exception identity."""
+
+        _throw_errors = True
+
+        @aiopnsense_helpers._log_errors
+        async def boom(self) -> None:
+            """Raise the pre-existing timeout error instance."""
+            raise timeout_error
+
+    with pytest.raises(OPNsenseTimeoutError) as exc_info:
+        await Dummy().boom()
+
+    assert exc_info.value is timeout_error
 
 
 @pytest.mark.asyncio
@@ -346,10 +376,103 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
         decorated = aiopnsense_helpers._log_errors(raising_server_timeout)
 
         client._throw_errors = True
-        with pytest.raises(aiohttp.ServerTimeoutError):
+        with pytest.raises(OPNsenseTimeoutError, match="srv"):
             await decorated(client)
 
         client._throw_errors = False
         assert await decorated(client) is None
     finally:
         await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("raw_url", "forbidden"),
+    [
+        ("https://alice:secret@api.example/opn", ("alice", "secret")),
+        ("https://alice secret@api.example/opn", ("alice secret",)),
+        ("'https://alice:secret@api.example/opn'", ("alice", "secret")),
+        ('"https://alice:secret@api.example/opn"', ("alice", "secret")),
+        ("<https://alice:secret@api.example/opn>", ("alice", "secret")),
+        ("`https://alice:secret@api.example/opn`", ("alice", "secret")),
+        ("https://alice@api.example/opn", ("alice",)),
+        ("https://alice:@api.example/opn", ("alice",)),
+        ("https://alice:pa@ss@api.example/opn", ("alice", "pa@ss")),
+        ("https://u%40lice:p%40ss@api.example/opn", ("u%40lice", "p%40ss")),
+        ("https://u:pa@ss@api.example/path@with@ats", ("u", "pa@ss")),
+        ("https://alice:secret@[2001:db8::1]:443/path", ("alice", "secret")),
+        ("https://alice:secret@[bad", ("alice", "secret")),
+        (
+            "https://public.example/path https://alice:secret@api.example/opn",
+            ("alice", "secret"),
+        ),
+        ("https://alice?bad:secret@api.example/opn", ("alice?bad", "secret")),
+        ("https://alice#bad:secret@api.example/opn", ("alice#bad", "secret")),
+        ("https://alice:pa/ss@api.example/opn", ("alice", "pa/ss")),
+        (
+            "https://alice:secret@api.example/opn https://bob:pass@other.example/opn",
+            ("alice", "secret", "bob", "pass"),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_log_errors_redacts_url_userinfo(raw_url: str, forbidden: tuple[str, ...]) -> None:
+    """Verify _log_errors maps invalid URLs using a constant-safe message.
+
+    Args:
+        raw_url (str): URL containing credentials to redact.
+        forbidden (tuple[str, ...]): Fragments that must not appear in the mapped message.
+    """
+
+    class Dummy:
+        """Small wrapper for testing redaction in error logs and mapping."""
+
+        _throw_errors = True
+
+        @aiopnsense_helpers._log_errors
+        async def boom(self) -> None:
+            """Raise an invalid URL with credential leaks."""
+            raise aiohttp.InvalidURL(raw_url)
+
+    client = Dummy()
+    with pytest.raises(OPNsenseInvalidURL) as exc_info:
+        await client.boom()
+
+    message = str(exc_info.value)
+    assert message == "Invalid OPNsense URL"
+    assert raw_url not in message
+    for token in forbidden:
+        assert token not in message
+
+
+@pytest.mark.asyncio
+async def test_log_errors_redacts_client_response_error_userinfo(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Verify _log_errors redacts credentials in ClientResponseError messages."""
+
+    class Dummy:
+        """Small wrapper for testing logged ClientResponseError redaction."""
+
+        _throw_errors = False
+
+        @aiopnsense_helpers._log_errors
+        async def boom(self) -> None:
+            """Raise ClientResponseError with embedded user credentials."""
+            request_info = MagicMock()
+            request_info.real_url = "https://alice:secret@api.example/opn"
+            raise aiohttp.ClientResponseError(
+                request_info=request_info,
+                history=(),
+                status=403,
+                message="forbidden",
+                headers=None,
+            )
+
+    client = Dummy()
+    with caplog.at_level(logging.ERROR):
+        assert await client.boom() is None
+
+    assert "alice" not in caplog.text
+    assert "secret" not in caplog.text
+    assert "api.example/opn" in caplog.text
+    assert "<redacted>" in caplog.text

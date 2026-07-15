@@ -7,6 +7,7 @@ import aiohttp
 
 from ._typing import AiopnsenseClientProtocol
 from .const import LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
+from .exceptions import OPNsenseError
 from .helpers import _LOGGER, _log_errors, api_value_matches, firmware_is_at_least
 
 UNBOUND_SETTINGS_GET_ENDPOINT = "/api/unbound/settings/get"
@@ -94,7 +95,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         try:
             response = await self._post(UNBOUND_SETTINGS_SET_ENDPOINT, payload=payload)
-        except (TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
+        except (OPNsenseError, TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
             _LOGGER.error(
                 "Error saving legacy unbound blocklist state %s. %s: %s",
                 "On" if set_state else "Off",
@@ -113,7 +114,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         try:
             dnsbl_resp = await self._get(UNBOUND_SERVICE_DNSBL_ENDPOINT)
-        except (TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
+        except (OPNsenseError, TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
             _LOGGER.error(
                 "Error applying legacy unbound blocklist state %s. %s: %s",
                 "On" if set_state else "Off",
@@ -140,7 +141,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         try:
             restart_resp = await self._post(UNBOUND_SERVICE_RESTART_ENDPOINT)
-        except (TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
+        except (OPNsenseError, TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
             _LOGGER.error(
                 "Error restarting legacy unbound blocklist state %s. %s: %s",
                 "On" if set_state else "Off",
@@ -232,7 +233,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
                     "status", "failed"
                 ).startswith("OK"):
                     return True
-            except (TimeoutError, aiohttp.ClientError, ValueError, TypeError) as e:
+            except (OPNsenseError, TimeoutError, aiohttp.ClientError, ValueError, TypeError) as e:
                 _LOGGER.error(
                     "Error applying unbound blocklist change for uuid %s. %s: %s",
                     uuid,

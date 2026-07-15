@@ -11,13 +11,8 @@ from .const import OPNSENSE_LTD_FIRMWARE, OPNSENSE_MIN_FIRMWARE
 from .dhcp import DHCPMixin
 from .exceptions import (
     OPNsenseBelowMinFirmware,
-    OPNsenseConnectionError,
-    OPNsenseInvalidAuth,
-    OPNsenseInvalidURL,
-    OPNsensePrivilegeMissing,
-    OPNsenseSSLError,
-    OPNsenseTimeoutError,
     OPNsenseUnknownFirmware,
+    _map_opnsense_exception,
 )
 from .firewall import FirewallMixin
 from .firmware import FirmwareMixin
@@ -101,20 +96,8 @@ class OPNsenseClient(
         """
         try:
             return await request()
-        except (aiohttp.ClientConnectorDNSError, aiohttp.InvalidURL) as e:
-            raise OPNsenseInvalidURL from e
-        except aiohttp.ClientSSLError as e:
-            raise OPNsenseSSLError from e
-        except (TimeoutError, aiohttp.ServerTimeoutError) as e:
-            raise OPNsenseTimeoutError from e
-        except aiohttp.ClientResponseError as e:
-            if e.status == 401:
-                raise OPNsenseInvalidAuth from e
-            if e.status == 403:
-                raise OPNsensePrivilegeMissing from e
-            raise OPNsenseConnectionError from e
-        except aiohttp.ClientError as e:
-            raise OPNsenseConnectionError from e
+        except (aiohttp.ClientError, TimeoutError) as e:
+            raise _map_opnsense_exception(e) from e
 
     async def validate(self, *, require_device_id: bool = True) -> None:
         """Validate connectivity, authentication, and minimum firmware support.

@@ -5,6 +5,7 @@ from collections.abc import MutableMapping
 import inspect
 from typing import TYPE_CHECKING, Any, cast
 
+from .exceptions import OPNsenseError, _map_opnsense_exception
 from .helpers import _LOGGER
 
 
@@ -60,7 +61,7 @@ class ClientQueueMixin:
         """
         await self._ensure_workers_started()
         if self._loop is None:
-            raise RuntimeError("Event loop is not initialized")
+            raise OPNsenseError("Event loop is not initialized")
         return self._loop
 
     @staticmethod
@@ -160,7 +161,7 @@ class ClientQueueMixin:
                     _LOGGER.error("Unknown method to add to Queue: %s", method)
                     if future is not None and not future.done():
                         future.set_exception(
-                            RuntimeError(f"Unknown method to add to Queue: {method}")
+                            OPNsenseError(f"Unknown method to add to Queue: {method}")
                         )
             except asyncio.CancelledError:
                 _LOGGER.debug("Request queue processor cancelled (called by %s)", caller)
@@ -175,7 +176,10 @@ class ClientQueueMixin:
                     e,
                 )
                 if future is not None and not future.done():
-                    future.set_exception(e)
+                    mapped_error = _map_opnsense_exception(e)
+                    if mapped_error is not e:
+                        mapped_error.__cause__ = e
+                    future.set_exception(mapped_error)
             await asyncio.sleep(0.3)
 
     async def async_close(self) -> None:

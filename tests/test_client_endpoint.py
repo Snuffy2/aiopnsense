@@ -198,7 +198,7 @@ async def test_is_get_endpoint_available_raises_transport_error_when_throw_enabl
     session.get = _get
     try:
         path = "/api/test/endpoint"
-        with pytest.raises(_TestClientSSLError):
+        with pytest.raises(OPNsenseSSLError):
             await client._is_get_endpoint_available(path)
         assert calls == 1
         assert path not in client._endpoint_checked_at
@@ -335,7 +335,7 @@ async def test_is_get_endpoint_available_raises_non_404_http_errors_when_throw_e
     session.get = _get
     try:
         path = "/api/test/endpoint"
-        with pytest.raises(aiohttp.ClientResponseError) as err:
+        with pytest.raises(OPNsenseInvalidAuth) as err:
             await client._is_get_endpoint_available(path)
         assert err.value.status == 401
         assert calls == 1
