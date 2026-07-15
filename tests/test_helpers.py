@@ -370,6 +370,31 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
             ("alice", "secret"),
         ),
         (
+            "https://alice secret@api.example/opn",
+            "https://<redacted>@api.example/opn",
+            ("alice secret",),
+        ),
+        (
+            "'https://alice:secret@api.example/opn'",
+            "'https://<redacted>:<redacted>@api.example/opn'",
+            ("alice", "secret"),
+        ),
+        (
+            '"https://alice:secret@api.example/opn"',
+            '"https://<redacted>:<redacted>@api.example/opn"',
+            ("alice", "secret"),
+        ),
+        (
+            "<https://alice:secret@api.example/opn>",
+            "<https://<redacted>:<redacted>@api.example/opn>",
+            ("alice", "secret"),
+        ),
+        (
+            "`https://alice:secret@api.example/opn`",
+            "`https://<redacted>:<redacted>@api.example/opn`",
+            ("alice", "secret"),
+        ),
+        (
             "https://alice@api.example/opn",
             "https://<redacted>@api.example/opn",
             ("alice",),
@@ -383,6 +408,11 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
             "https://alice:pa@ss@api.example/opn",
             "https://<redacted>:<redacted>@api.example/opn",
             ("alice", "pa@ss"),
+        ),
+        (
+            "https://u:pa@ss@api.example/path@with@ats",
+            "https://<redacted>:<redacted>@api.example/path@with@ats",
+            ("u", "pa@ss"),
         ),
         (
             "https://alice:secret@[2001:db8::1]:443/path",

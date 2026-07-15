@@ -1,7 +1,6 @@
 """Custom exceptions and exception mapping for aiopnsense."""
 
 import re
-from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -64,58 +63,16 @@ class OPNsenseInvalidArgument(OPNsenseError, TypeError):
     """Raised when an aiopnsense argument has an invalid type or value."""
 
 
-_URL_AUTHORITY_PATTERN = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\"'<>`]+")
-
-
-def _fallback_redact_userinfo(url: str) -> str:
-    """Redact userinfo from a URL-like value by authority boundary parsing.
-
-    This fallback path is used when ``urlsplit`` cannot parse a malformed
-    authority reliably.
-
-    Args:
-        url (str): URL-like string that may contain userinfo in authority.
-
-    Returns:
-        str: URL with userinfo redacted if present; otherwise the input unchanged.
-    """
-    scheme_sep = url.find("://")
-    if scheme_sep < 0:
-        return url
-
-    authority_start = scheme_sep + 3
-    authority_and_rest = url[authority_start:]
-    if not authority_and_rest:
-        return url
-
-    delimiters = ("?", "#")
-    authority_end = len(authority_and_rest)
-    for delimiter in delimiters:
-        delimiter_pos = authority_and_rest.find(delimiter)
-        if 0 <= delimiter_pos < authority_end:
-            authority_end = delimiter_pos
-    path_sep = authority_and_rest.find("/")
-    if path_sep != -1 and path_sep < authority_end:
-        authority_end = path_sep
-
-    authority = authority_and_rest[:authority_end]
-    rest = authority_and_rest[authority_end:]
-
-    _, _, hostpart = authority.rpartition("@")
-    if not hostpart:
-        return url
-
-    userinfo = authority[: -len(hostpart) - 1]
-    if not userinfo:
-        return url
-
-    redacted_userinfo = "<redacted>:<redacted>" if ":" in userinfo else "<redacted>"
-    redacted_authority = f"{redacted_userinfo}@{hostpart}"
-    return url[:authority_start] + redacted_authority + rest
+_URL_SCHEME_PATTERN = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://")
 
 
 def _redact_url_userinfo(message: str) -> str:
     """Redact credentials in URL userinfo while preserving non-secret context.
+
+    The strategy is conservative and line-based: for each URL scheme on a line,
+    redact everything from the start of authority up to the last ``@`` before path
+    delimiters. This avoids malformed parse behavior while ensuring raw userinfo
+    never appears in logs or mapped exceptions.
 
     Args:
         message (str): Message that may contain one or more URL-like values.
@@ -124,24 +81,43 @@ def _redact_url_userinfo(message: str) -> str:
         str: Message with all matching URL userinfo values redacted.
     """
 
-    def _redact(match: re.Match[str]) -> str:
-        url = match.group(0)
-        try:
-            parsed = urlsplit(url)
-        except ValueError:
-            return _fallback_redact_userinfo(url)
+    def _redact_line(line: str) -> str:
+        cursor = 0
+        parts: list[str] = []
+        while True:
+            scheme_match = _URL_SCHEME_PATTERN.search(line, cursor)
+            if not scheme_match:
+                parts.append(line[cursor:])
+                return "".join(parts)
 
-        if parsed.username is None:
-            return url
+            parts.append(line[cursor : scheme_match.start()])
 
-        _, _, hostpart = parsed.netloc.rpartition("@")
-        if not hostpart:
-            return url
+            search_start = scheme_match.end()
+            search_end = len(line)
+            for separator in ("/", "?", "#"):
+                separator_pos = line.find(separator, search_start)
+                if separator_pos != -1:
+                    search_end = min(search_end, separator_pos)
 
-        redacted_userinfo = "<redacted>" if parsed.password is None else "<redacted>:<redacted>"
-        return parsed._replace(netloc=f"{redacted_userinfo}@{hostpart}").geturl()
+            authority = line[search_start:search_end]
+            at_sign = authority.rfind("@")
+            if at_sign < 0:
+                parts.append(line[scheme_match.start() : search_end])
+                cursor = search_end
+                continue
 
-    return _URL_AUTHORITY_PATTERN.sub(_redact, message)
+            userinfo = authority[:at_sign]
+            if not userinfo:
+                parts.append(line[scheme_match.start() : search_end])
+                cursor = search_end
+                continue
+
+            redacted_userinfo = "<redacted>:<redacted>" if ":" in userinfo else "<redacted>"
+            parts.append(line[scheme_match.start() : search_start])
+            parts.append(redacted_userinfo)
+            cursor = search_start + at_sign
+
+    return "".join(_redact_line(line) for line in message.splitlines(keepends=True))
 
 
 def _map_opnsense_exception(error: Exception) -> OPNsenseError:

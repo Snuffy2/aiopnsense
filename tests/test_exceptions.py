@@ -82,6 +82,31 @@ def test_arbitrary_errors_map_to_public_exceptions(
             "https://<redacted>:<redacted>@api.example/opn",
             ("alice", "secret"),
         ),
+        (
+            "https://alice secret@api.example/opn",
+            "https://<redacted>@api.example/opn",
+            ("alice secret",),
+        ),
+        (
+            "'https://alice:secret@api.example/opn'",
+            "'https://<redacted>:<redacted>@api.example/opn'",
+            ("alice", "secret"),
+        ),
+        (
+            '"https://alice:secret@api.example/opn"',
+            '"https://<redacted>:<redacted>@api.example/opn"',
+            ("alice", "secret"),
+        ),
+        (
+            "<https://alice:secret@api.example/opn>",
+            "<https://<redacted>:<redacted>@api.example/opn>",
+            ("alice", "secret"),
+        ),
+        (
+            "`https://alice:secret@api.example/opn`",
+            "`https://<redacted>:<redacted>@api.example/opn`",
+            ("alice", "secret"),
+        ),
         ("https://alice@api.example/opn", "https://<redacted>@api.example/opn", ("alice",)),
         (
             "https://alice:@api.example/opn",
@@ -97,6 +122,11 @@ def test_arbitrary_errors_map_to_public_exceptions(
             "https://u%40lice:p%40ss@api.example/opn",
             "https://<redacted>:<redacted>@api.example/opn",
             ("u%40lice", "p%40ss"),
+        ),
+        (
+            "https://u:pa@ss@api.example/path@with@ats",
+            "https://<redacted>:<redacted>@api.example/path@with@ats",
+            ("u", "pa@ss"),
         ),
         (
             "https://alice:secret@[2001:db8::1]:443/path",
