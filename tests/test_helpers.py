@@ -328,6 +328,27 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
 
 
 @pytest.mark.asyncio
+async def test_log_errors_re_raises_existing_opnsense_timeout_instance() -> None:
+    """Verify existing OPNsense timeout errors are propagated unchanged."""
+    timeout_error = OPNsenseTimeoutError("already mapped")
+
+    class Dummy:
+        """Small wrapper for testing timeout exception identity."""
+
+        _throw_errors = True
+
+        @aiopnsense_helpers._log_errors
+        async def boom(self) -> None:
+            """Raise the pre-existing timeout error instance."""
+            raise timeout_error
+
+    with pytest.raises(OPNsenseTimeoutError) as exc_info:
+        await Dummy().boom()
+
+    assert exc_info.value is timeout_error
+
+
+@pytest.mark.asyncio
 async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: ClientType) -> None:
     """Verify ``_log_errors`` re-raises or suppresses ``ServerTimeoutError`` by configuration.
 

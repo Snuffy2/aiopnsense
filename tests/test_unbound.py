@@ -505,6 +505,30 @@ async def test_enable_unbound_blocklist_legacy_returns_false_when_state_cannot_b
 
 
 @pytest.mark.asyncio
+async def test_enable_unbound_blocklist_legacy_returns_false_when_save_raises_opnsense_error(
+    make_client: ClientType,
+    legacy_dnsbl_payload: dict[str, Any],
+) -> None:
+    """Verify legacy DNSBL saves fail closed on mapped OPNsense errors."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
+        client._safe_dict_get = AsyncMock(return_value=deepcopy(legacy_dnsbl_payload))
+        client._post = AsyncMock(
+            side_effect=OPNsenseInvalidURL("https://user:password@api.example/unbound/settings/set")
+        )
+        client._get = AsyncMock()
+
+        result = await client.enable_unbound_blocklist()
+
+        assert result is False
+        client._post.assert_awaited_once()
+        client._get.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failing_call", ["get", "post", "mapped_get", "mapped_post"])
 async def test_enable_unbound_blocklist_legacy_returns_false_on_apply_exception(
     make_client: ClientType,

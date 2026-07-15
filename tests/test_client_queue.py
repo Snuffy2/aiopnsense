@@ -80,6 +80,33 @@ async def test_opnsenseclient_async_context_manager_closes_background_tasks(
         await client.async_close()
 
 
+@pytest.mark.asyncio
+async def test_get_active_loop_raises_when_worker_startup_leaves_loop_unset(
+    make_client: MakeClientFactory,
+) -> None:
+    """Raise a public error when worker startup does not retain its event loop.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts the missing-loop failure contract.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        await client._ensure_workers_started()
+        assert client._workers
+
+        client._loop = None
+        client._ensure_workers_started = AsyncMock()
+
+        with pytest.raises(OPNsenseError, match="^Event loop is not initialized$"):
+            await client._get_active_loop()
+        client._ensure_workers_started.assert_awaited_once()
+    finally:
+        await client.async_close()
+
+
 async def test_process_queue_unknown_method_sets_future_exception(
     make_client: MakeClientFactory,
 ) -> None:

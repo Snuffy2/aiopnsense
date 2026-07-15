@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
+from aiohttp.client_reqrep import ConnectionKey
 
 import aiopnsense as aiopnsense_module
 from aiopnsense.exceptions import _map_opnsense_exception, _opnsense_http_error
@@ -139,6 +140,28 @@ def test_client_response_error_mapping_retains_status() -> None:
 
     assert isinstance(error, aiopnsense_module.OPNsensePrivilegeMissing)
     assert error.status == 403
+
+
+def test_client_connector_dns_error_maps_to_invalid_url() -> None:
+    """Map a realistic DNS connector failure to an invalid URL exception."""
+    connection_key = ConnectionKey(
+        host="opnsense.example",
+        port=443,
+        is_ssl=True,
+        ssl=True,
+        proxy=None,
+        proxy_auth=None,
+        proxy_headers_hash=None,
+    )
+    source_error = aiohttp.ClientConnectorDNSError(
+        connection_key,
+        OSError(-2, "Name or service not known"),
+    )
+
+    mapped = _map_opnsense_exception(source_error)
+
+    assert isinstance(mapped, aiopnsense_module.OPNsenseInvalidURL)
+    assert str(mapped) == str(source_error)
 
 
 def test_existing_opnsense_error_is_preserved() -> None:
