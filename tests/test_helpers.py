@@ -1,10 +1,11 @@
 """Tests for `aiopnsense.helpers` utility and decorator helpers."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime
-import logging
 import inspect
+import logging
 from unittest.mock import MagicMock
-from typing import Any, Callable, NoReturn
+from typing import Any, NoReturn
 
 import aiohttp
 import pytest

@@ -159,7 +159,7 @@ async def test_normalize_timeout_seconds(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "method_name, session_method, args, kwargs, expected_exception",
+    ("method_name", "session_method", "args", "kwargs", "expected_exception"),
     [
         ("_do_get", "get", ("/api/x",), {"caller": "tst"}, OPNsensePrivilegeMissing),
         ("_do_post", "post", ("/api/x",), {"payload": {}}, OPNsenseConnectionError),
