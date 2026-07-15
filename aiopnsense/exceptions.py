@@ -2,6 +2,8 @@
 
 import aiohttp
 
+_INVALID_URL_ERROR_MESSAGE = "Invalid OPNsense URL"
+
 
 class OPNsenseError(Exception):
     """Base exception for aiopnsense errors."""
@@ -61,11 +63,6 @@ class OPNsenseInvalidArgument(OPNsenseError, TypeError):
     """Raised when an aiopnsense argument has an invalid type or value."""
 
 
-def _invalid_url_error_message() -> str:
-    """Return a constant-safe invalid URL message."""
-    return "Invalid OPNsense URL"
-
-
 def _map_opnsense_exception(error: Exception) -> OPNsenseError:
     """Map an arbitrary library failure to the public OPNsense exception hierarchy.
 
@@ -78,7 +75,7 @@ def _map_opnsense_exception(error: Exception) -> OPNsenseError:
     if isinstance(error, OPNsenseError):
         return error
     if isinstance(error, aiohttp.InvalidURL):
-        return OPNsenseInvalidURL(_invalid_url_error_message())
+        return OPNsenseInvalidURL(_INVALID_URL_ERROR_MESSAGE)
     if isinstance(error, aiohttp.ClientConnectorDNSError):
         return OPNsenseInvalidURL(str(error))
     if isinstance(error, aiohttp.ClientSSLError):

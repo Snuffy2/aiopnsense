@@ -15,9 +15,9 @@ import aiohttp
 import awesomeversion
 
 from .exceptions import (
+    _INVALID_URL_ERROR_MESSAGE,
     OPNsenseError,
     OPNsenseTimeoutError,
-    _invalid_url_error_message,
     _map_opnsense_exception,
 )
 
@@ -60,7 +60,7 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
                 raise _map_opnsense_exception(e) from e
         except Exception as e:
             logged_message = (
-                _invalid_url_error_message()
+                _INVALID_URL_ERROR_MESSAGE
                 if isinstance(e, aiohttp.InvalidURL)
                 else re.sub(
                     r"(://)([^:/@\s]+):([^@\s]+)@",
