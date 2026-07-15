@@ -17,8 +17,8 @@ import awesomeversion
 from .exceptions import (
     OPNsenseError,
     OPNsenseTimeoutError,
-    _map_opnsense_exception,
     _invalid_url_error_message,
+    _map_opnsense_exception,
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -60,7 +60,13 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
                 raise _map_opnsense_exception(e) from e
         except Exception as e:
             logged_message = (
-                _invalid_url_error_message() if isinstance(e, aiohttp.InvalidURL) else str(e)
+                _invalid_url_error_message()
+                if isinstance(e, aiohttp.InvalidURL)
+                else re.sub(
+                    r"(://)([^:/@\s]+):([^@\s]+)@",
+                    r"\1<redacted>:<redacted>@",
+                    str(e),
+                )
             )
             _LOGGER.error(
                 "Error in %s. %s: %s\n%s",

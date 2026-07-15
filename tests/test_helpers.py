@@ -1,7 +1,9 @@
 """Tests for `aiopnsense.helpers` utility and decorator helpers."""
 
 from datetime import UTC, datetime
+import logging
 import inspect
+from unittest.mock import MagicMock
 from typing import Any, Callable, NoReturn
 
 import aiohttp
@@ -418,3 +420,37 @@ async def test_log_errors_redacts_url_userinfo(raw_url: str, forbidden: tuple[st
     assert raw_url not in message
     for token in forbidden:
         assert token not in message
+
+
+@pytest.mark.asyncio
+async def test_log_errors_redacts_client_response_error_userinfo(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Verify _log_errors redacts credentials in ClientResponseError messages."""
+
+    class Dummy:
+        """Small wrapper for testing logged ClientResponseError redaction."""
+
+        _throw_errors = False
+
+        @aiopnsense_helpers._log_errors
+        async def boom(self) -> None:
+            """Raise ClientResponseError with embedded user credentials."""
+            request_info = MagicMock()
+            request_info.real_url = "https://alice:secret@api.example/opn"
+            raise aiohttp.ClientResponseError(
+                request_info=request_info,
+                history=(),
+                status=403,
+                message="forbidden",
+                headers=None,
+            )
+
+    client = Dummy()
+    with caplog.at_level(logging.ERROR):
+        assert await client.boom() is None
+
+    assert "alice" not in caplog.text
+    assert "secret" not in caplog.text
+    assert "api.example/opn" in caplog.text
+    assert "<redacted>" in caplog.text
