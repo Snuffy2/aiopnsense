@@ -74,6 +74,19 @@ def test_arbitrary_errors_map_to_public_exceptions(
     assert isinstance(_map_opnsense_exception(source_error), expected_exception)
 
 
+def test_invalid_url_mapping_redacts_credentials() -> None:
+    """Map invalid URL errors without leaking embedded credentials."""
+    source_error = aiohttp.InvalidURL("https://user:password@api.example/opn")
+
+    mapped = _map_opnsense_exception(source_error)
+
+    assert isinstance(mapped, aiopnsense_module.OPNsenseInvalidURL)
+    message = str(mapped)
+    assert "user" not in message
+    assert "password" not in message
+    assert "<redacted>:<redacted>" in message
+
+
 def test_client_response_error_mapping_retains_status() -> None:
     """Map raw client response failures and retain their HTTP status."""
     source_error = aiohttp.ClientResponseError(

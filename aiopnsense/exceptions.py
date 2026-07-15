@@ -1,6 +1,7 @@
 """Custom exceptions and exception mapping for aiopnsense."""
 
 import aiohttp
+import re
 
 
 class OPNsenseError(Exception):
@@ -73,7 +74,9 @@ def _map_opnsense_exception(error: Exception) -> OPNsenseError:
     if isinstance(error, OPNsenseError):
         return error
     if isinstance(error, (aiohttp.ClientConnectorDNSError, aiohttp.InvalidURL)):
-        return OPNsenseInvalidURL(str(error))
+        return OPNsenseInvalidURL(
+            re.sub(r"(://)([^:/@\s]+):([^@\s]+)@", r"\1<redacted>:<redacted>@", str(error))
+        )
     if isinstance(error, aiohttp.ClientSSLError):
         return OPNsenseSSLError(str(error))
     if isinstance(error, (TimeoutError, aiohttp.ServerTimeoutError)):

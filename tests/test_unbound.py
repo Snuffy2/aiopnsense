@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, call
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient
+from aiopnsense import OPNsenseClient, OPNsenseInvalidURL
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -505,7 +505,7 @@ async def test_enable_unbound_blocklist_legacy_returns_false_when_state_cannot_b
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failing_call", ["get", "post"])
+@pytest.mark.parametrize("failing_call", ["get", "post", "mapped_get", "mapped_post"])
 async def test_enable_unbound_blocklist_legacy_returns_false_on_apply_exception(
     make_client: ClientType,
     legacy_dnsbl_payload: dict[str, Any],
@@ -526,12 +526,28 @@ async def test_enable_unbound_blocklist_legacy_returns_false_on_apply_exception(
         client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
         payload = deepcopy(legacy_dnsbl_payload)
         client._safe_dict_get = AsyncMock(return_value=payload)
-        if failing_call == "get":
+        if failing_call in ("get", "mapped_get"):
             client._post = AsyncMock(return_value={"result": "saved"})
-            client._get = AsyncMock(side_effect=aiohttp.ClientError("boom"))
+            if failing_call == "mapped_get":
+                client._get = AsyncMock(
+                    side_effect=OPNsenseInvalidURL(
+                        "https://user:password@api.example/unbound/service/dnsbl"
+                    )
+                )
+            else:
+                client._get = AsyncMock(side_effect=aiohttp.ClientError("boom"))
         else:
             client._post = AsyncMock(side_effect=[{"result": "saved"}, aiohttp.ClientError("boom")])
             client._get = AsyncMock(return_value={"status": "OK"})
+            if failing_call == "mapped_post":
+                client._post = AsyncMock(
+                    side_effect=[
+                        {"result": "saved"},
+                        OPNsenseInvalidURL(
+                            "https://user:password@api.example/unbound/settings/set"
+                        ),
+                    ]
+                )
 
         result = await client.enable_unbound_blocklist()
 
@@ -793,10 +809,18 @@ async def test_disable_unbound_blocklist_uses_expected_invalid_firmware_fallback
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "apply_error",
+    [
+        aiohttp.ClientError("boom"),
+        OPNsenseInvalidURL("https://user:password@api.example/api/unbound/service/dnsbl"),
+    ],
+)
 async def test_toggle_unbound_blocklist_handles_apply_exception(
     make_client: ClientType,
+    apply_error: Exception,
 ) -> None:
-    """Verify DNSBL toggle returns ``False`` when apply endpoint raises a client error.
+    """Verify DNSBL toggle returns ``False`` when apply endpoint raises errors.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -808,7 +832,7 @@ async def test_toggle_unbound_blocklist_handles_apply_exception(
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
         client._safe_dict_post = AsyncMock(return_value={"result": "Enabled"})
-        client._get = AsyncMock(side_effect=aiohttp.ClientError("boom"))
+        client._get = AsyncMock(side_effect=apply_error)
 
         result = await client.enable_unbound_blocklist("uuid1")
 
