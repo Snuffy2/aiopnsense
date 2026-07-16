@@ -100,6 +100,53 @@ async def test_get_firewall_rules_skips_invalid_rows(
         await client.async_close()
 
 
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (
+            '@uuid,enabled,tcpflags2,categories,description\nrule-2611,1,SA,web,"Allow, web"\n',
+            {
+                "uuid": "rule-2611",
+                "enabled": "1",
+                "tcpflags2": "SA",
+                "categories": "web",
+                "description": "Allow, web",
+            },
+        ),
+        (
+            "@uuid;enabled;tcpflags2;tcpflags_any;categories;description\n"
+            'rule-2612;1;SA;1;web;"Allow; web"\n',
+            {
+                "uuid": "rule-2612",
+                "enabled": "1",
+                "tcpflags2": "SA",
+                "tcpflags_any": "1",
+                "categories": "web",
+                "description": "Allow; web",
+            },
+        ),
+    ],
+    ids=["opnsense-26.1.1", "opnsense-26.1.2-and-newer"],
+)
+@pytest.mark.asyncio
+async def test_get_firewall_rules_supports_opnsense_csv_versions(
+    make_client: ClientType,
+    response: str,
+    expected: dict[str, str],
+) -> None:
+    """Firewall rule downloads should support all released CSV formats."""
+    client = make_client()
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._get_text = AsyncMock(return_value=response)
+
+        result = await client._get_firewall_rules()
+
+        assert result == {expected["uuid"]: expected}
+    finally:
+        await client.async_close()
+
+
 @pytest.mark.asyncio
 async def test_get_nat_source_rules_labels_empty_interface_address_target(
     make_client: ClientType,

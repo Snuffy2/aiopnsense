@@ -231,8 +231,15 @@ class FirewallMixin(AiopnsenseClientProtocol):
         if not response:
             return {}
 
+        csv_response = response.lstrip("\ufeff")
+        header = csv_response.partition("\n")[0]
+        # OPNsense 26.1 and 26.1.1 export comma-separated CSV. OPNsense 26.1.2
+        # switched the shared CSV exporter to semicolons, which remains the
+        # format used by newer releases.
+        delimiter = ";" if ";" in header else ","
+
         rows: list[dict[str, Any]] = []
-        for csv_row in csv.DictReader(StringIO(response.lstrip("\ufeff")), delimiter=";"):
+        for csv_row in csv.DictReader(StringIO(csv_response), delimiter=delimiter):
             if None in csv_row:
                 _LOGGER.debug("Skipping malformed firewall rule row with extra column")
                 continue
