@@ -233,6 +233,9 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         rows: list[dict[str, Any]] = []
         for csv_row in csv.DictReader(StringIO(response.lstrip("\ufeff")), delimiter=";"):
+            if None in csv_row:
+                _LOGGER.debug("Skipping malformed firewall rule row with extra column")
+                continue
             uuid = csv_row.pop("@uuid", None)
             if not uuid:
                 continue

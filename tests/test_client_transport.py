@@ -167,6 +167,13 @@ async def test_normalize_timeout_seconds(
     ("method_name", "session_method", "args", "kwargs", "expected_exception"),
     [
         ("_do_get", "get", ("/api/x",), {"caller": "tst"}, OPNsensePrivilegeMissing),
+        (
+            "_do_get",
+            "get",
+            ("/api/x",),
+            {"caller": "tst", "response_format": "text"},
+            OPNsensePrivilegeMissing,
+        ),
         ("_do_post", "post", ("/api/x",), {"payload": {}}, OPNsenseConnectionError),
     ],
 )
@@ -228,6 +235,7 @@ async def test_do_get_post_error_initial_behavior(
         ("_do_get_from_stream", "get", ("/stream",), {"caller": "tst"}),
         ("_stream_json_events", "get", ("/stream",), {}),
         ("_do_get", "get", ("/api/x",), {"caller": "tst"}),
+        ("_do_get", "get", ("/api/x",), {"caller": "tst", "response_format": "text"}),
         ("_do_post", "post", ("/api/x",), {"payload": {}, "caller": "tst"}),
     ],
 )
@@ -416,8 +424,10 @@ async def test_do_get_from_stream_error_initial_raises(
 
 
 @pytest.mark.asyncio
-async def test_do_get_and_do_post_success_paths(make_client: MakeClientFactory) -> None:
-    """Verify low-level GET and POST helpers return successful response bodies.
+async def test_do_get_with_response_format_text_and_post_success_paths(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify JSON GET, text GET, and POST helpers return successful response bodies.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -470,7 +480,7 @@ async def test_do_get_and_do_post_success_paths(make_client: MakeClientFactory) 
         got = await client._do_get("/api/x", caller="t")
         assert isinstance(got, MutableMapping) and got.get("a") == 1
 
-        text_result = await client._do_get_text("/api/x", caller="t")
+        text_result = await client._do_get("/api/x", caller="t", response_format="text")
         assert text_result == "a;b\n1;2\n"
 
         posted = await client._do_post("/api/x", payload={"x": 1}, caller="t")
@@ -483,7 +493,7 @@ async def test_do_get_and_do_post_success_paths(make_client: MakeClientFactory) 
 async def test_do_get_post_and_stream_permission_errors(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify permission failures do not raise when error throwing is disabled.
+    """Verify JSON GET, text GET, POST, and stream permission failures do not raise when disabled.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -511,6 +521,7 @@ async def test_do_get_post_and_stream_permission_errors(
     try:
         client._throw_errors = False
         assert await client._do_get("/x", caller="t") is None
+        assert await client._do_get("/x", caller="t", response_format="text") is None
         assert await client._do_post("/x", payload={}, caller="t") is None
         assert await client._do_get_from_stream("/x", caller="t") == {}
     finally:

@@ -159,8 +159,22 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
     task: asyncio.Task | None = None
     try:
         # patch the do_* methods
-        client._do_get = AsyncMock(return_value={"g": 1})
-        client._do_get_text = AsyncMock(return_value="text")
+        async def fake_do_get(path: Any, caller: str = "x", response_format: str = "json") -> Any:
+            """Fake ``_do_get`` with response format support.
+
+            Args:
+                path (Any): API endpoint path.
+                caller (str): Caller name used for diagnostics.
+                response_format (str): Expected response format.
+
+            Returns:
+                Any: JSON mapping for JSON format, text marker for text format.
+            """
+            if response_format == "text":
+                return "text"
+            return {"g": 1}
+
+        client._do_get = AsyncMock(side_effect=fake_do_get)
         client._do_post = AsyncMock(return_value={"p": 2})
         client._do_get_from_stream = AsyncMock(return_value={"s": 3})
 
@@ -191,6 +205,9 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
         assert res_text == "text"
         assert res2 == {"p": 2}
         assert res3 == {"s": 3}
+        assert client._do_get.await_count == 2
+        client._do_get.assert_any_await("/g", "t")
+        client._do_get.assert_any_await("/gt", "t", response_format="text")
 
         # cancel the processor task
         task.cancel()

@@ -64,7 +64,9 @@ async def test_get_firewall_aggregates_rest_payload(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
+async def test_get_firewall_rules_skips_invalid_rows(
+    make_client, caplog: pytest.LogCaptureFixture
+) -> None:
     """Firewall rule downloads should parse editable rows and skip invalid rows."""
     client = make_client()
     try:
@@ -73,12 +75,14 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
             return_value=(
                 "@uuid;enabled;description\n"
                 'rule-ok;1;"Allow; DNS"\n'
+                'rule-extra;1;"Has; extra";extra\n'
                 ";1;Missing UUID\n"
                 "lockout-1;1;Lockout\n"
             )
         )
 
-        result = await client._get_firewall_rules()
+        with caplog.at_level(logging.DEBUG):
+            result = await client._get_firewall_rules()
 
         assert result == {
             "rule-ok": {
@@ -87,6 +91,7 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
                 "description": "Allow; DNS",
             },
         }
+        assert "Skipping malformed firewall rule row with extra column" in caplog.text
         client._is_get_endpoint_available.assert_awaited_once_with(
             "/api/firewall/filter/download_rules"
         )
