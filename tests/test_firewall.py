@@ -64,48 +64,85 @@ async def test_get_firewall_aggregates_rest_payload(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_firewall_rules_skips_invalid_rows(make_client) -> None:
-    """Firewall search results should skip malformed, lockout, and automatic rows."""
+async def test_get_firewall_rules_skips_invalid_rows(
+    make_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Firewall rule downloads should parse editable rows and skip invalid rows."""
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    "bad-row",
-                    None,
-                    {"enabled": "1"},
-                    {"uuid": "lockout-1", "enabled": "1"},
-                    {"uuid": "rule-ok", "enabled": "1", "descr": "Allow"},
-                    {
-                        "uuid": "automatic-rule",
-                        "enabled": "1",
-                        "descr": "Plugin generated",
-                        "is_automatic": True,
-                    },
-                    {
-                        "uuid": "automatic-string-rule",
-                        "enabled": "1",
-                        "descr": "Plugin generated string flag",
-                        "is_automatic": "1",
-                    },
-                ]
-            }
+        client._get_text = AsyncMock(
+            return_value=(
+                "@uuid;enabled;description\n"
+                'rule-ok;1;"Allow; DNS"\n'
+                'rule-extra;1;"Has; extra";extra\n'
+                ";1;Missing UUID\n"
+                "lockout-1;1;Lockout\n"
+            )
         )
 
-        result = await client._get_firewall_rules()
+        with caplog.at_level(logging.DEBUG):
+            result = await client._get_firewall_rules()
 
         assert result == {
             "rule-ok": {
                 "uuid": "rule-ok",
                 "enabled": "1",
-                "descr": "Allow",
+                "description": "Allow; DNS",
             },
         }
+        assert "Skipping malformed firewall rule row with extra column" in caplog.text
         client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/firewall/filter/search_rule"
+            "/api/firewall/filter/download_rules"
         )
-        client._safe_dict_get.assert_awaited_once_with("/api/firewall/filter/search_rule")
+        client._get_text.assert_awaited_once_with("/api/firewall/filter/download_rules")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (
+            '@uuid,enabled,tcpflags2,categories,description\nrule-2611,1,SA,web,"Allow, web"\n',
+            {
+                "uuid": "rule-2611",
+                "enabled": "1",
+                "tcpflags2": "SA",
+                "categories": "web",
+                "description": "Allow, web",
+            },
+        ),
+        (
+            "@uuid;enabled;tcpflags2;tcpflags_any;categories;description\n"
+            'rule-2612;1;SA;1;web;"Allow; web"\n',
+            {
+                "uuid": "rule-2612",
+                "enabled": "1",
+                "tcpflags2": "SA",
+                "tcpflags_any": "1",
+                "categories": "web",
+                "description": "Allow; web",
+            },
+        ),
+    ],
+    ids=["opnsense-26.1.1", "opnsense-26.1.2-and-newer"],
+)
+@pytest.mark.asyncio
+async def test_get_firewall_rules_supports_opnsense_csv_versions(
+    make_client: ClientType,
+    response: str,
+    expected: dict[str, str],
+) -> None:
+    """Firewall rule downloads should support all released CSV formats."""
+    client = make_client()
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._get_text = AsyncMock(return_value=response)
+
+        result = await client._get_firewall_rules()
+
+        assert result == {expected["uuid"]: expected}
     finally:
         await client.async_close()
 
@@ -295,7 +332,7 @@ async def test_filters_automatic_source_nat_rules_handles_invalid_firmware_strin
 @pytest.mark.parametrize(
     ("method_name", "api_endpoint", "expected"),
     [
-        ("_get_firewall_rules", "/api/firewall/filter/search_rule", {}),
+        ("_get_firewall_rules", "/api/firewall/filter/download_rules", {}),
         ("_get_nat_destination_rules", "/api/firewall/d_nat/search_rule", {}),
         ("_get_nat_one_to_one_rules", "/api/firewall/one_to_one/search_rule", {}),
         ("_get_nat_source_rules", "/api/firewall/source_nat/search_rule", {}),

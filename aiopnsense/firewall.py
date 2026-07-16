@@ -1,13 +1,15 @@
 """Firewall, NAT, alias, and state methods for OPNsenseClient."""
 
 from collections.abc import Callable, MutableMapping
+import csv
+from io import StringIO
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
 from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE, UNIFIED_NAT_TEMPLATE_FIRMWARE
 from .helpers import _LOGGER, _log_errors, api_value_matches, coerce_bool, firmware_is_at_least
 
-FIREWALL_FILTER_RULES_SEARCH_ENDPOINT = "/api/firewall/filter/search_rule"
+FIREWALL_FILTER_RULES_DOWNLOAD_ENDPOINT = "/api/firewall/filter/download_rules"
 FIREWALL_DNAT_RULES_SEARCH_ENDPOINT = "/api/firewall/d_nat/search_rule"
 FIREWALL_ONE_TO_ONE_RULES_SEARCH_ENDPOINT = "/api/firewall/one_to_one/search_rule"
 FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT = "/api/firewall/source_nat/search_rule"
@@ -219,13 +221,39 @@ class FirewallMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, Any]: Firewall filter rules keyed by UUID, excluding
                 malformed rows, lockout rules, and automatically generated
-                rules.
+                rules (the download endpoint exports only MVC model rules
+                and structurally excludes plugin-generated entries).
         """
-        return await self._get_uuid_indexed_rules(
-            endpoint=FIREWALL_FILTER_RULES_SEARCH_ENDPOINT,
-            debug_label="get_firewall_rules",
-            include_rule=lambda rule: not coerce_bool(rule.get("is_automatic")),
-        )
+        if not await self._is_get_endpoint_available(FIREWALL_FILTER_RULES_DOWNLOAD_ENDPOINT):
+            _LOGGER.debug("get_firewall_rules endpoint not available")
+            return {}
+
+        response = await self._get_text(FIREWALL_FILTER_RULES_DOWNLOAD_ENDPOINT)
+        if not response:
+            return {}
+
+        csv_response = response.lstrip("\ufeff")
+        header = csv_response.partition("\n")[0]
+        # OPNsense 26.1 and 26.1.1 export comma-separated CSV. OPNsense 26.1.2
+        # switched the shared CSV exporter to semicolons, which remains the
+        # format used by newer releases.
+        delimiter = ";" if ";" in header else ","
+
+        rows: list[dict[str, Any]] = []
+        for csv_row in csv.DictReader(StringIO(csv_response), delimiter=delimiter):
+            if None in csv_row:
+                _LOGGER.debug("Skipping malformed firewall rule row with extra column")
+                continue
+            uuid = csv_row.pop("@uuid", None)
+            if not uuid:
+                continue
+            row = {key: value for key, value in csv_row.items() if key is not None}
+            row["uuid"] = uuid
+            rows.append(row)
+
+        rules = self._index_rule_rows(rows)
+        _LOGGER.debug("[get_firewall_rules] rules_dict length: %s", len(rules))
+        return rules
 
     @_log_errors
     async def _get_nat_destination_rules(self) -> dict[str, Any]:

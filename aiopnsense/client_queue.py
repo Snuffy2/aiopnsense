@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import MutableMapping
 import inspect
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .exceptions import OPNsenseError, _map_opnsense_exception
 from .helpers import _LOGGER
@@ -23,7 +23,9 @@ class ClientQueueMixin:
             path: str,
             caller: str = "Unknown",
             timeout_seconds: float | None = None,
-        ) -> MutableMapping[str, Any] | list | None:
+            *,
+            response_format: Literal["json", "text"] = "json",
+        ) -> MutableMapping[str, Any] | list | str | None:
             """Execute a queued GET request."""
             ...
 
@@ -121,6 +123,20 @@ class ClientQueueMixin:
         """
         return await self._queue_request("get", path)
 
+    async def _get_text(self, path: str) -> str | None:
+        """Queue a GET request and return its text body.
+
+        Args:
+            path (str): API endpoint path to request.
+
+        Returns:
+            str | None: Response body text, or ``None`` when the request fails.
+        """
+        result = await self._queue_request("get_text", path)
+        if result is None or isinstance(result, str):
+            return result
+        raise OPNsenseError(f"Expected text response for {path}, got {type(result)}")
+
     async def _post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
     ) -> MutableMapping[str, Any] | list | None:
@@ -151,6 +167,10 @@ class ClientQueueMixin:
                         future.set_result(result)
                 elif method == "get":
                     result = await self._do_get(path, caller)
+                    if future is not None and not future.done():
+                        future.set_result(result)
+                elif method == "get_text":
+                    result = await self._do_get(path, caller, response_format="text")
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "post":

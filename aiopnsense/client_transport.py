@@ -3,7 +3,7 @@
 import codecs
 from collections.abc import AsyncGenerator, MutableMapping
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
 
@@ -267,16 +267,20 @@ class ClientTransportMixin:
         path: str,
         caller: str = "Unknown",
         timeout_seconds: float | None = None,
-    ) -> MutableMapping[str, Any] | list | None:
+        *,
+        response_format: Literal["json", "text"] = "json",
+    ) -> MutableMapping[str, Any] | list | str | None:
         """Execute a GET request immediately without queueing.
 
         Args:
             path (str): API endpoint path to request.
             caller (str): Caller name used for diagnostics and logging.
             timeout_seconds (float | None, optional): Request timeout in seconds for this call.
+            response_format (Literal["json", "text"], optional): Response decoding mode.
 
         Returns:
-            MutableMapping[str, Any] | list | None: Decoded response payload returned by the GET request.
+            MutableMapping[str, Any] | list | str | None: Decoded response payload
+                returned by the GET request.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -291,6 +295,8 @@ class ClientTransportMixin:
             ) as response:
                 _LOGGER.debug("[get] Response %s: %s", response.status, response.reason)
                 if response.ok:
+                    if response_format == "text":
+                        return await response.text()
                     return await response.json(content_type=None)
                 if response.status == 403:
                     _LOGGER.error(

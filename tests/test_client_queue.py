@@ -159,7 +159,22 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
     task: asyncio.Task | None = None
     try:
         # patch the do_* methods
-        client._do_get = AsyncMock(return_value={"g": 1})
+        async def fake_do_get(path: Any, caller: str = "x", response_format: str = "json") -> Any:
+            """Fake ``_do_get`` with response format support.
+
+            Args:
+                path (Any): API endpoint path.
+                caller (str): Caller name used for diagnostics.
+                response_format (str): Expected response format.
+
+            Returns:
+                Any: JSON mapping for JSON format, text marker for text format.
+            """
+            if response_format == "text":
+                return "text"
+            return {"g": 1}
+
+        client._do_get = AsyncMock(side_effect=fake_do_get)
         client._do_post = AsyncMock(return_value={"p": 2})
         client._do_get_from_stream = AsyncMock(return_value={"s": 3})
 
@@ -172,20 +187,27 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
 
         loop = asyncio.get_running_loop()
         fut_get = loop.create_future()
+        fut_get_text = loop.create_future()
         fut_post = loop.create_future()
         fut_stream = loop.create_future()
 
         await q.put(("get", "/g", None, fut_get, "t"))
+        await q.put(("get_text", "/gt", None, fut_get_text, "t"))
         await q.put(("post", "/p", {"x": 1}, fut_post, "t"))
         await q.put(("get_from_stream", "/s", None, fut_stream, "t"))
 
         res1 = await asyncio.wait_for(fut_get, timeout=2)
+        res_text = await asyncio.wait_for(fut_get_text, timeout=2)
         res2 = await asyncio.wait_for(fut_post, timeout=2)
         res3 = await asyncio.wait_for(fut_stream, timeout=2)
 
         assert res1 == {"g": 1}
+        assert res_text == "text"
         assert res2 == {"p": 2}
         assert res3 == {"s": 3}
+        assert client._do_get.await_count == 2
+        client._do_get.assert_any_await("/g", "t")
+        client._do_get.assert_any_await("/gt", "t", response_format="text")
 
         # cancel the processor task
         task.cancel()
@@ -245,6 +267,36 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
         assert res == returned
         # caller should be the test function name when inspect.stack works
         assert called.get("caller") is not None
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_text_rejects_unexpected_type(make_client: MakeClientFactory) -> None:
+    """Raise a public error when text-mode queue responses are not text.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts unexpected response types raise ``OPNsenseError``.
+    """
+    client, _session = make_mock_session_client(make_client)
+    task: asyncio.Task | None = None
+    try:
+        q: asyncio.Queue = asyncio.Queue()
+        client._request_queue = q
+
+        client._do_get = AsyncMock(return_value={"ok": 1})
+
+        task = asyncio.get_running_loop().create_task(client._process_queue())
+
+        with pytest.raises(OPNsenseError, match=r"Expected text response"):
+            await client._get_text("/text")
     finally:
         if task is not None and not task.done():
             task.cancel()
