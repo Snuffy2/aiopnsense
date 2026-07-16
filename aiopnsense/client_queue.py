@@ -132,7 +132,10 @@ class ClientQueueMixin:
         Returns:
             str | None: Response body text, or ``None`` when the request fails.
         """
-        return cast(str | None, await self._queue_request("get_text", path))
+        result = await self._queue_request("get_text", path)
+        if result is None or isinstance(result, str):
+            return result
+        raise OPNsenseError(f"Expected text response for {path}, got {type(result)}")
 
     async def _post(
         self, path: str, payload: MutableMapping[str, Any] | None = None

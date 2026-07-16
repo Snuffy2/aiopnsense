@@ -276,6 +276,36 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
 
 
 @pytest.mark.asyncio
+async def test_get_text_rejects_unexpected_type(make_client: MakeClientFactory) -> None:
+    """Raise a public error when text-mode queue responses are not text.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts unexpected response types raise ``OPNsenseError``.
+    """
+    client, _session = make_mock_session_client(make_client)
+    task: asyncio.Task | None = None
+    try:
+        q: asyncio.Queue = asyncio.Queue()
+        client._request_queue = q
+
+        client._do_get = AsyncMock(return_value={"ok": 1})
+
+        task = asyncio.get_running_loop().create_task(client._process_queue())
+
+        with pytest.raises(OPNsenseError, match=r"Expected text response"):
+            await client._get_text("/text")
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_uses_unknown_when_inspect_stack_raises(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,
