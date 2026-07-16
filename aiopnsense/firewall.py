@@ -1,7 +1,7 @@
 """Firewall, NAT, alias, and state methods for OPNsenseClient."""
 
-import csv
 from collections.abc import Callable, MutableMapping
+import csv
 from io import StringIO
 from typing import Any
 
@@ -221,7 +221,8 @@ class FirewallMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, Any]: Firewall filter rules keyed by UUID, excluding
                 malformed rows, lockout rules, and automatically generated
-                rules.
+                rules (the download endpoint exports only MVC model rules
+                and structurally excludes plugin-generated entries).
         """
         if not await self._is_get_endpoint_available(FIREWALL_FILTER_RULES_DOWNLOAD_ENDPOINT):
             _LOGGER.debug("get_firewall_rules endpoint not available")
