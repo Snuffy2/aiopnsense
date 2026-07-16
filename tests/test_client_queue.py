@@ -160,6 +160,7 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
     try:
         # patch the do_* methods
         client._do_get = AsyncMock(return_value={"g": 1})
+        client._do_get_text = AsyncMock(return_value="text")
         client._do_post = AsyncMock(return_value={"p": 2})
         client._do_get_from_stream = AsyncMock(return_value={"s": 3})
 
@@ -172,18 +173,22 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
 
         loop = asyncio.get_running_loop()
         fut_get = loop.create_future()
+        fut_get_text = loop.create_future()
         fut_post = loop.create_future()
         fut_stream = loop.create_future()
 
         await q.put(("get", "/g", None, fut_get, "t"))
+        await q.put(("get_text", "/gt", None, fut_get_text, "t"))
         await q.put(("post", "/p", {"x": 1}, fut_post, "t"))
         await q.put(("get_from_stream", "/s", None, fut_stream, "t"))
 
         res1 = await asyncio.wait_for(fut_get, timeout=2)
+        res_text = await asyncio.wait_for(fut_get_text, timeout=2)
         res2 = await asyncio.wait_for(fut_post, timeout=2)
         res3 = await asyncio.wait_for(fut_stream, timeout=2)
 
         assert res1 == {"g": 1}
+        assert res_text == "text"
         assert res2 == {"p": 2}
         assert res3 == {"s": 3}
 

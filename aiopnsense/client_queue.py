@@ -27,6 +27,10 @@ class ClientQueueMixin:
             """Execute a queued GET request."""
             ...
 
+        async def _do_get_text(self, path: str, caller: str = "Unknown") -> str | None:
+            """Execute a queued GET request and return its text body."""
+            ...
+
         async def _do_get_from_stream(
             self,
             path: str,
@@ -121,6 +125,17 @@ class ClientQueueMixin:
         """
         return await self._queue_request("get", path)
 
+    async def _get_text(self, path: str) -> str | None:
+        """Queue a GET request and return its text body.
+
+        Args:
+            path (str): API endpoint path to request.
+
+        Returns:
+            str | None: Response body text, or ``None`` when the request fails.
+        """
+        return cast(str | None, await self._queue_request("get_text", path))
+
     async def _post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
     ) -> MutableMapping[str, Any] | list | None:
@@ -151,6 +166,10 @@ class ClientQueueMixin:
                         future.set_result(result)
                 elif method == "get":
                     result = await self._do_get(path, caller)
+                    if future is not None and not future.done():
+                        future.set_result(result)
+                elif method == "get_text":
+                    result = await self._do_get_text(path, caller)
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "post":

@@ -417,7 +417,7 @@ async def test_do_get_from_stream_error_initial_raises(
 
 @pytest.mark.asyncio
 async def test_do_get_and_do_post_success_paths(make_client: MakeClientFactory) -> None:
-    """Verify ``_do_get`` and ``_do_post`` return parsed JSON for successful responses.
+    """Verify low-level GET and POST helpers return successful response bodies.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -442,6 +442,7 @@ async def test_do_get_and_do_post_success_paths(make_client: MakeClientFactory) 
             reason="OK",
             ok=True,
             json_payload={"a": 1},
+            text_payload="a;b\n1;2\n",
             stream_chunks=[b""],
         )
 
@@ -468,6 +469,9 @@ async def test_do_get_and_do_post_success_paths(make_client: MakeClientFactory) 
     try:
         got = await client._do_get("/api/x", caller="t")
         assert isinstance(got, MutableMapping) and got.get("a") == 1
+
+        text_result = await client._do_get_text("/api/x", caller="t")
+        assert text_result == "a;b\n1;2\n"
 
         posted = await client._do_post("/api/x", payload={"x": 1}, caller="t")
         assert isinstance(posted, list) and posted[0] == 1
