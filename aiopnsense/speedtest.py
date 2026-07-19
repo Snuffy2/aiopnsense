@@ -52,7 +52,12 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("Speedtest statistics endpoint unavailable")
             show_stat = {}
 
-        server_id, server_name = self._parse_speedtest_server(latest_result.get("server"))
+        server_id = latest_result.get("server_id")
+        if not isinstance(server_id, str):
+            server_id = None
+        server_name = latest_result.get("server")
+        if not isinstance(server_name, str):
+            server_name = None
         date = latest_result.get("date") if isinstance(latest_result.get("date"), str) else None
         url = latest_result.get("url") if isinstance(latest_result.get("url"), str) else None
 
@@ -109,11 +114,22 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
         if not isinstance(latest, list) or len(latest) < 9:
             return {}
 
-        server_id = str(latest[2]).strip() if isinstance(latest[2], (str, int)) else ""
-        server_name = latest[3].strip() if isinstance(latest[3], str) else ""
-        server = " ".join(part for part in (server_id, server_name) if part) or None
+        raw_server_id = latest[2].strip() if isinstance(latest[2], str) else latest[2]
+        if not isinstance(raw_server_id, int | str):
+            server_id = None
+        else:
+            server_id = str(raw_server_id).strip()
+            if not server_id:
+                server_id = None
+
+        raw_server = latest[3].strip() if isinstance(latest[3], str) else latest[3]
+        if not isinstance(raw_server, str):
+            server = None
+        else:
+            server = raw_server.strip() or None
         return {
             "date": latest[0],
+            "server_id": server_id,
             "server": server,
             "download": latest[5],
             "upload": latest[6],

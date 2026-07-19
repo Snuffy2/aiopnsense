@@ -234,6 +234,62 @@ async def test_parse_showlog_latest_rejects_malformed_rows(
         await client.async_close()
 
 
+@pytest.mark.parametrize(
+    (
+        "raw_server_id",
+        "raw_server_name",
+        "expected_server_id",
+        "expected_server_name",
+    ),
+    [
+        (
+            "",
+            "123 Fiber",
+            None,
+            "123 Fiber",
+        ),
+        (
+            "72800",
+            "",
+            "72800",
+            None,
+        ),
+    ],
+    ids=("name-looks-like-id", "empty-name-with-valid-id"),
+)
+@pytest.mark.asyncio
+async def test_parse_showlog_latest_preserves_server_fields(
+    make_client: ClientType,
+    raw_server_id: str,
+    raw_server_name: str,
+    expected_server_id: str | None,
+    expected_server_name: str | None,
+) -> None:
+    """_parse_showlog_latest should preserve separate server id and server name."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        parsed = client._parse_showlog_latest(
+            [
+                [
+                    "2026-03-14T03:09:45",
+                    "198.51.100.10",
+                    raw_server_id,
+                    raw_server_name,
+                    "United States",
+                    "1",
+                    "2",
+                    "3",
+                    "https://www.speedtest.net/result/c/abc",
+                ]
+            ]
+        )
+
+        assert parsed.get("server_id") == expected_server_id
+        assert parsed.get("server") == expected_server_name
+    finally:
+        await client.async_close()
+
+
 @pytest.mark.asyncio
 async def test_run_speedtest_uses_extended_timeout(make_client) -> None:
     """run_speedtest should use custom timeout helper for long-running endpoint calls."""
