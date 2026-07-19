@@ -55,18 +55,6 @@ VNSTAT_MONTHLY_ENDPOINT = f"{VNSTAT_SERVICE_ENDPOINT_PREFIX}monthly"
 class VnstatMixin(AiopnsenseClientProtocol):
     """vnStat methods for OPNsenseClient."""
 
-    async def _fetch_vnstat_for(self, endpoint: str, expected_period: str) -> dict[str, Any]:
-        """Fetch and parse vnStat payload for a specific endpoint and period.
-
-        Args:
-            endpoint (str): API endpoint path to request.
-            expected_period (str): Expected period label for parser validation.
-
-        Returns:
-            dict[str, Any]: Parsed payload or fallback empty mapping when endpoint is unavailable.
-        """
-        return (await self._fetch_vnstat_for_result(endpoint, expected_period)).data
-
     async def _fetch_vnstat_for_result(
         self, endpoint: str, expected_period: str
     ) -> CategoryResult[dict[str, Any]]:
@@ -108,7 +96,7 @@ class VnstatMixin(AiopnsenseClientProtocol):
             return {}
 
         endpoint = f"{VNSTAT_SERVICE_ENDPOINT_PREFIX}{requested_period}"
-        payload = await self._fetch_vnstat_for(endpoint, requested_period)
+        payload = (await self._fetch_vnstat_for_result(endpoint, requested_period)).data
         if not payload.get("interfaces"):
             return {}
         return payload
