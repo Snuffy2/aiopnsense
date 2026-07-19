@@ -958,6 +958,35 @@ async def test_check_optional_get_endpoint_cached_positive_not_mutated_by_transi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/dhcpv4/leases/search_lease",
+        "/api/dhcpv4/leases/searchLease",
+        "/api/dhcpv6/leases/search_lease",
+        "/api/dhcpv6/leases/searchLease",
+    ],
+)
+async def test_isc_dhcp_lease_paths_are_exact_optional_capabilities(
+    path: str,
+    make_client: MakeClientFactory,
+) -> None:
+    """Each supported ISC DHCP lease spelling has its own optional cache key."""
+    client, _session = make_mock_session_client(make_client)
+    client._get_optional = AsyncMock(return_value=("available", {"rows": []}))
+
+    try:
+        assert await client._check_optional_get_endpoint(path) == (
+            "available",
+            {"rows": []},
+        )
+        assert client._endpoint_availability[("get", path)] is True
+        client._get_optional.assert_awaited_once_with(path)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["available", "malformed"])
 async def test_check_optional_post_endpoint_refreshes_positive_exact_cache_key(
     state: str,

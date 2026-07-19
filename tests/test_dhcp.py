@@ -186,8 +186,6 @@ async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> No
         ("_get_kea_dhcpv4_leases", "/api/kea/leases4/search"),
         ("_get_kea_dhcpv6_leases", "/api/kea/leases6/search"),
         ("_get_dnsmasq_leases", "/api/dnsmasq/leases/search"),
-        ("_get_isc_dhcpv4_leases", "/api/dhcpv4/service/status"),
-        ("_get_isc_dhcpv6_leases", "/api/dhcpv6/service/status"),
     ],
 )
 async def test_dhcp_endpoint_unavailable(
@@ -213,6 +211,39 @@ async def test_dhcp_endpoint_unavailable(
         assert leases == []
         client._is_get_endpoint_available.assert_awaited_once_with(endpoint)
         client._safe_dict_get.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "endpoint"),
+    [
+        ("_get_isc_dhcpv4_leases", "/api/dhcpv4/leases/search_lease"),
+        ("_get_isc_dhcpv6_leases", "/api/dhcpv6/leases/search_lease"),
+    ],
+)
+@pytest.mark.parametrize("status", ["missing", "unavailable", "malformed"])
+async def test_isc_dhcp_optional_endpoint_failure(
+    make_client: ClientType,
+    method_name: str,
+    endpoint: str,
+    status: str,
+) -> None:
+    """ISC DHCP lease helpers fail closed for non-available plugin states.
+
+    Args:
+        make_client: Fixture factory returning ``OPNsenseClient`` instances.
+        method_name: ISC lease helper method name to invoke.
+        endpoint: Selected optional lease endpoint.
+        status: Optional endpoint state returned by the reconciliation helper.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._use_snake_case = True
+    client._check_optional_get_endpoint = AsyncMock(return_value=(status, {}))
+    try:
+        assert await getattr(client, method_name)() == []
+        client._check_optional_get_endpoint.assert_awaited_once_with(endpoint)
     finally:
         await client.async_close()
 
@@ -386,9 +417,9 @@ async def test_get_isc_dhcpv4_and_v6_parsing(make_client: ClientType) -> None:
 
         # v4: ends present and in future
         future_dt = (datetime.now(tz=local_tz) + timedelta(hours=1)).strftime("%Y/%m/%d %H:%M:%S")
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=(
+                "available",
                 {
                     "rows": [
                         {
@@ -401,34 +432,35 @@ async def test_get_isc_dhcpv4_and_v6_parsing(make_client: ClientType) -> None:
                         }
                     ]
                 },
-                {"rows": []},
-            ]
+            )
         )
-        v4_safe_dict_get = client._safe_dict_get
         v4 = await client._get_isc_dhcpv4_leases()
         assert isinstance(v4, list) and len(v4) == 1
         assert v4[0]["address"] == "10.0.0.1"
         assert v4[0]["mac"] == "m1"
         assert v4[0]["hostname"] == "h1"
         assert isinstance(v4[0].get("expires"), datetime)
-        v4_safe_dict_get.assert_awaited_once_with("/api/dhcpv4/leases/search_lease")
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/dhcpv4/leases/search_lease"
+        )
 
         # v6: ends missing -> field passed through
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "state": "active",
-                        "mac": "m2",
-                        "address": "fe80::1",
-                        "hostname": "h2",
-                        "if": "em1",
-                    }
-                ]
-            }
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=(
+                "available",
+                {
+                    "rows": [
+                        {
+                            "state": "active",
+                            "mac": "m2",
+                            "address": "fe80::1",
+                            "hostname": "h2",
+                            "if": "em1",
+                        }
+                    ]
+                },
+            )
         )
-        v6_safe_dict_get = client._safe_dict_get
         v6 = await client._get_isc_dhcpv6_leases()
         assert isinstance(v6, list) and len(v6) == 1
         assert v6[0]["address"] == "fe80::1"
@@ -438,7 +470,9 @@ async def test_get_isc_dhcpv4_and_v6_parsing(make_client: ClientType) -> None:
         assert v6[0].get("expires") is None
         assert "ends_at" not in v6[0] or v6[0]["ends_at"] is None
         assert "expiry" not in v6[0] or v6[0]["expiry"] is None
-        v6_safe_dict_get.assert_awaited_once_with("/api/dhcpv6/leases/search_lease")
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/dhcpv6/leases/search_lease"
+        )
     finally:
         await client.async_close()
 
@@ -824,21 +858,27 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
         local_tz = datetime.now().astimezone().tzinfo
         assert local_tz is not None
         client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-
         past_str = (datetime.now(tz=local_tz) - timedelta(hours=2)).strftime("%Y/%m/%d %H:%M:%S")
 
-        client._safe_dict_get = AsyncMock(
+        client._check_optional_get_endpoint = AsyncMock(
             side_effect=[
-                {"rows": "bad"},
-                {
-                    "rows": [
-                        {"state": "inactive", "mac": "skip"},
-                        {"state": "active", "mac": "bad-time", "ends": "invalid-date"},
-                        {"state": "active", "mac": "expired", "ends": past_str},
-                        {"state": "active", "mac": "ok", "address": "10.0.0.9", "if": "em0"},
-                    ]
-                },
+                ("available", {"rows": "bad"}),
+                (
+                    "available",
+                    {
+                        "rows": [
+                            {"state": "inactive", "mac": "skip"},
+                            {"state": "active", "mac": "bad-time", "ends": "invalid-date"},
+                            {"state": "active", "mac": "expired", "ends": past_str},
+                            {
+                                "state": "active",
+                                "mac": "ok",
+                                "address": "10.0.0.9",
+                                "if": "em0",
+                            },
+                        ]
+                    },
+                ),
             ]
         )
         assert await client._get_isc_dhcpv4_leases() == []
@@ -847,17 +887,29 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
         assert v4_leases[0]["mac"] == "ok"
         assert v4_leases[0]["expires"] is None
 
-        client._safe_dict_get = AsyncMock(
+        client._check_optional_get_endpoint = AsyncMock(
             side_effect=[
-                {"rows": "bad"},
-                {
-                    "rows": [
-                        None,
-                        {"state": "active", "mac": "bad-time-v6", "ends": "invalid-date"},
-                        {"state": "active", "mac": "expired-v6", "ends": past_str},
-                        {"state": "active", "mac": "ok-v6", "address": "2001:db8::10", "if": "em1"},
-                    ]
-                },
+                ("available", {"rows": "bad"}),
+                (
+                    "available",
+                    {
+                        "rows": [
+                            None,
+                            {
+                                "state": "active",
+                                "mac": "bad-time-v6",
+                                "ends": "invalid-date",
+                            },
+                            {"state": "active", "mac": "expired-v6", "ends": past_str},
+                            {
+                                "state": "active",
+                                "mac": "ok-v6",
+                                "address": "2001:db8::10",
+                                "if": "em1",
+                            },
+                        ]
+                    },
+                ),
             ]
         )
         assert await client._get_isc_dhcpv6_leases() == []
@@ -899,33 +951,17 @@ async def test_version_switched_dhcp_endpoints_rows_empty_when_reservation_unava
             == "/api/kea/dhcpv4/search_reservation"
         )
 
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_dict_get = AsyncMock()
+        client._check_optional_get_endpoint = AsyncMock(return_value=("missing", {}))
         assert await client._get_isc_dhcpv4_leases() == []
-        assert client._is_get_endpoint_available.await_count == 2
-        assert (
-            client._is_get_endpoint_available.await_args_list[0].args[0]
-            == "/api/dhcpv4/service/status"
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/dhcpv4/leases/search_lease"
         )
-        assert (
-            client._is_get_endpoint_available.await_args_list[1].args[0]
-            == "/api/dhcpv4/leases/search_lease"
-        )
-        client._safe_dict_get.assert_not_awaited()
 
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_dict_get = AsyncMock()
+        client._check_optional_get_endpoint = AsyncMock(return_value=("missing", {}))
         assert await client._get_isc_dhcpv6_leases() == []
-        assert client._is_get_endpoint_available.await_count == 2
-        assert (
-            client._is_get_endpoint_available.await_args_list[0].args[0]
-            == "/api/dhcpv6/service/status"
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/dhcpv6/leases/search_lease"
         )
-        assert (
-            client._is_get_endpoint_available.await_args_list[1].args[0]
-            == "/api/dhcpv6/leases/search_lease"
-        )
-        client._safe_dict_get.assert_not_awaited()
     finally:
         await client.async_close()
 
@@ -1027,13 +1063,13 @@ async def test_dhcp_switched_endpoints_follow_selected_case(
         await client._get_kea_dhcpv4_leases()
         assert client._safe_dict_get.await_args_list[1].args[0] == expected_kea
 
-        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        client._check_optional_get_endpoint = AsyncMock(return_value=("available", {"rows": []}))
         await client._get_isc_dhcpv4_leases()
-        client._safe_dict_get.assert_awaited_once_with(expected_v4)
+        client._check_optional_get_endpoint.assert_awaited_once_with(expected_v4)
 
-        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        client._check_optional_get_endpoint = AsyncMock(return_value=("available", {"rows": []}))
         await client._get_isc_dhcpv6_leases()
-        client._safe_dict_get.assert_awaited_once_with(expected_v6)
+        client._check_optional_get_endpoint.assert_awaited_once_with(expected_v6)
     finally:
         await client.async_close()
 
