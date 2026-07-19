@@ -66,12 +66,32 @@ async def test_get_nut_ups_status_parses_raw_status_response(make_client: Client
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
-            return_value={"response": "battery.charge: 100\nups.status: OL\n"}
+            return_value={
+                "response": (
+                    "battery.charge: 100\n"
+                    "ups.status: OL\n"
+                    "input.L1-N.voltage: 120\n"
+                    "input.L1-L2.voltage: 240\n"
+                )
+            }
         )
 
         nut_status = await client.get_nut_ups_status()
 
-        assert nut_status == {"status": {"battery.charge": "100", "ups.status": "OL"}}
+        assert nut_status == {
+            "response": (
+                "battery.charge: 100\n"
+                "ups.status: OL\n"
+                "input.L1-N.voltage: 120\n"
+                "input.L1-L2.voltage: 240\n"
+            ),
+            "status": {
+                "battery.charge": "100",
+                "ups.status": "OL",
+                "input.L1-N.voltage": "120",
+                "input.L1-L2.voltage": "240",
+            },
+        }
         client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
         client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
     finally:
@@ -96,13 +116,18 @@ async def test_get_nut_ups_status_prefers_mapped_status_when_available(
         client._safe_dict_get = AsyncMock(
             return_value={
                 "status": {"ups.status": "OL"},
+                "request_id": "abc-123",
                 "response": "ups.status: OB",
             }
         )
 
         nut_status = await client.get_nut_ups_status()
 
-        assert nut_status == {"status": {"ups.status": "OL"}}
+        assert nut_status == {
+            "status": {"ups.status": "OL"},
+            "request_id": "abc-123",
+            "response": "ups.status: OB",
+        }
         client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
         client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
     finally:
@@ -128,7 +153,10 @@ async def test_get_nut_ups_status_uses_raw_response_when_mapped_status_is_empty(
 
         nut_status = await client.get_nut_ups_status()
 
-        assert nut_status == {"status": {"ups.status": "OL"}}
+        assert nut_status == {
+            "response": "ups.status: OL",
+            "status": {"ups.status": "OL"},
+        }
         client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
         client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
     finally:
@@ -168,11 +196,21 @@ async def test_get_nut_ups_status_parses_colon_in_value_and_ignores_invalid_line
         nut_status = await client.get_nut_ups_status()
 
         assert nut_status == {
+            "response": "\n".join(
+                [
+                    "battery.charge: 100",
+                    "  ",
+                    "Error: UPS unavailable",
+                    "ups.message: on battery: replace battery",
+                    "this-line-is-invalid",
+                    "ups.load: 12",
+                ]
+            ),
             "status": {
                 "battery.charge": "100",
                 "ups.message": "on battery: replace battery",
                 "ups.load": "12",
-            }
+            },
         }
         client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
         client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
@@ -181,12 +219,28 @@ async def test_get_nut_ups_status_parses_colon_in_value_and_ignores_invalid_line
 
 
 @pytest.mark.parametrize(
-    "response_payload",
-    [None, {}, {"response": None}, {"response": 123}, {"status": "not-a-mapping"}],
+    "response_payload, expected, expect_falsey, expect_no_status",
+    [
+        (None, {}, True, False),
+        ({}, {}, True, False),
+        ({"response": None}, {"response": None}, False, False),
+        ({"response": 123}, {"response": 123}, False, False),
+        ({"status": "not-a-mapping"}, {"status": "not-a-mapping"}, False, False),
+        (
+            {"response": "Error: UPS unavailable", "request_id": "abc"},
+            {"response": "Error: UPS unavailable", "request_id": "abc"},
+            False,
+            True,
+        ),
+    ],
 )
 @pytest.mark.asyncio
 async def test_get_nut_ups_status_handles_invalid_payloads(
-    make_client: ClientType, response_payload: Any
+    make_client: ClientType,
+    response_payload: Any,
+    expected: dict[str, Any],
+    expect_falsey: bool,
+    expect_no_status: bool,
 ) -> None:
     """NUT UPS status should fail gracefully for malformed payload shapes.
 
@@ -204,7 +258,11 @@ async def test_get_nut_ups_status_handles_invalid_payloads(
 
         nut_status = await client.get_nut_ups_status()
 
-        assert nut_status == {"status": {}}
+        if expect_falsey:
+            assert not nut_status
+        assert nut_status == expected
+        if expect_no_status:
+            assert "status" not in nut_status
         client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
         client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
     finally:

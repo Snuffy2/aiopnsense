@@ -8,7 +8,7 @@ from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors
 
 NUT_DIAGNOSTICS_UPS_STATUS_ENDPOINT = "/api/nut/diagnostics/upsstatus"
-_NUT_DOT_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_]+\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$")
+_NUT_DOT_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
 
 
 class NutMixin(AiopnsenseClientProtocol):
@@ -37,21 +37,23 @@ class NutMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Normalized NUT status payload in the shape
-                ``{"status": mapping}`` when possible, otherwise
-                ``{"status": {}}``.
+                ``{..., "status": mapping}`` when parsable status data exists,
+                otherwise a shallow copy of the original mapping payload.
         """
         if not isinstance(payload, Mapping):
-            return {"status": {}}
+            return {}
 
+        normalized_payload = dict(payload)
         status_value = payload.get("status")
         if isinstance(status_value, Mapping):
             status_mapping = dict(status_value)
             if status_mapping:
-                return {"status": status_mapping}
+                normalized_payload["status"] = status_mapping
+                return normalized_payload
 
         response_value = payload.get("response")
         if not isinstance(response_value, str):
-            return {"status": {}}
+            return normalized_payload
 
         status: dict[str, str] = {}
         for line in response_value.splitlines():
@@ -65,4 +67,8 @@ class NutMixin(AiopnsenseClientProtocol):
                 continue
             status[parsed_key] = value.strip()
 
-        return {"status": status}
+        if not status:
+            return normalized_payload
+
+        normalized_payload["status"] = status
+        return normalized_payload
