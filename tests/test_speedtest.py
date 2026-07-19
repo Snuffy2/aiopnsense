@@ -17,43 +17,46 @@ async def test_get_speedtest_skips_calls_when_endpoint_missing(make_client) -> N
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        client._safe_list_get = AsyncMock()
 
         result = await client.get_speedtest()
 
         assert result == {"available": False}
-        client._safe_dict_get.assert_not_awaited()
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/speedtest/service/showrecent"
-        )
+        client._safe_list_get.assert_not_awaited()
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/speedtest/service/showlog")
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_get_speedtest_normalizes_recent_and_stat_payloads(make_client) -> None:
-    """get_speedtest should normalize showrecent and showstat payload fields."""
+async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client) -> None:
+    """get_speedtest should normalize shared showlog and showstat payload fields."""
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(side_effect=[True, True])
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
-                {
-                    "date": "2026-03-14T03:09:45",
-                    "server": "72800 RippleFiber, Newark, NJ",
-                    "download": "836.05",
-                    "upload": "832.97",
-                    "latency": "4.0",
-                    "url": "https://www.speedtest.net/result/c/abc",
-                },
-                {
-                    "samples": 10717,
-                    "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
-                    "latency": {"avg": 13.42, "min": 2.35, "max": 1266.74},
-                    "download": {"avg": 723.83, "min": 4.18, "max": 942.02},
-                    "upload": {"avg": 706.7, "min": 1.54, "max": 890.32},
-                },
+        client._safe_list_get = AsyncMock(
+            return_value=[
+                [
+                    "2026-03-14T03:09:45",
+                    "198.51.100.10",
+                    "72800",
+                    "RippleFiber, Newark, NJ",
+                    "United States",
+                    "836.05",
+                    "832.97",
+                    "4.0",
+                    "https://www.speedtest.net/result/c/abc",
+                ]
             ]
+        )
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "samples": 10717,
+                "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
+                "latency": {"avg": 13.42, "min": 2.35, "max": 1266.74},
+                "download": {"avg": 723.83, "min": 4.18, "max": 942.02},
+                "upload": {"avg": 706.7, "min": 1.54, "max": 890.32},
+            }
         )
 
         result = await client.get_speedtest()
@@ -73,20 +76,15 @@ async def test_get_speedtest_normalizes_recent_and_stat_payloads(make_client) ->
 
 
 @pytest.mark.parametrize(
-    ("endpoint_side_effect", "safe_dict_get_payload", "showstat_available"),
+    ("endpoint_side_effect", "showstat_available"),
     [
         pytest.param(
             [True, True],
-            [
-                {"download": "1", "upload": "2", "latency": "3"},
-                {},
-            ],
             True,
             id="showstat-available",
         ),
         pytest.param(
             [True, False],
-            {"download": "1", "upload": "2", "latency": "3"},
             False,
             id="showstat-missing",
         ),
@@ -96,7 +94,6 @@ async def test_get_speedtest_normalizes_recent_and_stat_payloads(make_client) ->
 async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
     make_client: ClientType,
     endpoint_side_effect: list[bool],
-    safe_dict_get_payload: list[dict[str, str]] | dict[str, str],
     showstat_available: bool,
 ) -> None:
     """Validate ``get_speedtest`` probes ``showstat`` before optional fetches.
@@ -104,8 +101,6 @@ async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         endpoint_side_effect (list[bool]): Endpoint availability responses in call order.
-        safe_dict_get_payload (list[dict[str, str]] | dict[str, str]): Mocked payloads for
-            endpoint fetches.
         showstat_available (bool): Whether the ``showstat`` endpoint should be fetched.
 
     Returns:
@@ -114,29 +109,39 @@ async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(side_effect=endpoint_side_effect)
-        if showstat_available:
-            client._safe_dict_get = AsyncMock(side_effect=safe_dict_get_payload)
-        else:
-            client._safe_dict_get = AsyncMock(return_value=safe_dict_get_payload)
+        client._safe_list_get = AsyncMock(
+            return_value=[
+                [
+                    "2026-03-14T03:09:45",
+                    "198.51.100.10",
+                    "72800",
+                    "Test ISP, New York, NY",
+                    "United States",
+                    "1",
+                    "2",
+                    "3",
+                    "https://www.speedtest.net/result/c/abc",
+                ]
+            ]
+        )
+        client._safe_dict_get = AsyncMock(return_value={})
 
         result = await client.get_speedtest()
 
         assert result["available"] is True
         assert client._is_get_endpoint_available.await_args_list == [
-            call("/api/speedtest/service/showrecent"),
+            call("/api/speedtest/service/showlog"),
             call("/api/speedtest/service/showstat"),
         ]
+        client._safe_list_get.assert_awaited_once_with("/api/speedtest/service/showlog")
 
         if showstat_available:
-            assert client._safe_dict_get.await_args_list == [
-                call("/api/speedtest/service/showrecent"),
-                call("/api/speedtest/service/showstat"),
-            ]
+            client._safe_dict_get.assert_awaited_once_with("/api/speedtest/service/showstat")
             assert result["last"]["download"]["value"] == 1.0
             assert result["last"]["upload"]["value"] == 2.0
             assert result["last"]["latency"]["value"] == 3.0
         else:
-            client._safe_dict_get.assert_awaited_once_with("/api/speedtest/service/showrecent")
+            client._safe_dict_get.assert_not_awaited()
             assert result["last"]["download"]["value"] == 1.0
             assert result["last"]["upload"]["value"] == 2.0
             assert result["last"]["latency"]["value"] == 3.0
@@ -150,24 +155,29 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client) -> None:
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(side_effect=[True, True])
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
-                {
-                    "date": 12345,
-                    "server": "Regional POP - NYC",
-                    "download": "bad-number",
-                    "upload": "12.5",
-                    "latency": None,
-                    "url": 999,
-                },
-                {
-                    "samples": "not-an-int",
-                    "period": "bad-period-shape",
-                    "download": "bad-download-shape",
-                    "upload": None,
-                    "latency": ["bad-latency-shape"],
-                },
+        client._safe_list_get = AsyncMock(
+            return_value=[
+                [
+                    12345,
+                    "198.51.100.10",
+                    None,
+                    "Regional POP - NYC",
+                    "United States",
+                    "bad-number",
+                    "12.5",
+                    None,
+                    999,
+                ]
             ]
+        )
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "samples": "not-an-int",
+                "period": "bad-period-shape",
+                "download": "bad-download-shape",
+                "upload": None,
+                "latency": ["bad-latency-shape"],
+            }
         )
 
         result = await client.get_speedtest()
@@ -191,18 +201,88 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client) -> None:
         await client.async_close()
 
 
+@pytest.mark.parametrize("show_log", [None, {}, [], ["malformed-row"], [["too", "short"]]])
 @pytest.mark.asyncio
-async def test_parse_recent_server_variants(make_client) -> None:
-    """_parse_recent_server should parse known server formats safely."""
+async def test_parse_showlog_latest_rejects_malformed_rows(
+    make_client: ClientType, show_log: object
+) -> None:
+    """_parse_showlog_latest should reject missing or malformed history rows."""
     client, _session = make_mock_session_client(make_client)
     try:
-        assert client._parse_recent_server(None) == (None, None)
-        assert client._parse_recent_server("   ") == (None, None)
-        assert client._parse_recent_server("10001 Test ISP, NY") == ("10001", "Test ISP, NY")
-        assert client._parse_recent_server("Unstructured Server Name") == (
+        assert client._parse_showlog_latest(show_log) == {}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    (
+        "raw_server_id",
+        "raw_server_name",
+        "expected_server_id",
+        "expected_server_name",
+    ),
+    [
+        (
+            "",
+            "123 Fiber",
             None,
-            "Unstructured Server Name",
+            "123 Fiber",
+        ),
+        (
+            "72800",
+            "",
+            "72800",
+            None,
+        ),
+        (
+            True,
+            "123 Fiber",
+            None,
+            "123 Fiber",
+        ),
+        (
+            False,
+            "123 Fiber",
+            None,
+            "123 Fiber",
+        ),
+    ],
+    ids=(
+        "empty-id-with-name",
+        "empty-name-with-id",
+        "bool-true-id",
+        "bool-false-id",
+    ),
+)
+@pytest.mark.asyncio
+async def test_parse_showlog_latest_preserves_server_fields(
+    make_client: ClientType,
+    raw_server_id: object,
+    raw_server_name: str,
+    expected_server_id: str | None,
+    expected_server_name: str | None,
+) -> None:
+    """_parse_showlog_latest should preserve separate server id and server name."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        parsed = client._parse_showlog_latest(
+            [
+                [
+                    "2026-03-14T03:09:45",
+                    "198.51.100.10",
+                    raw_server_id,
+                    raw_server_name,
+                    "United States",
+                    "1",
+                    "2",
+                    "3",
+                    "https://www.speedtest.net/result/c/abc",
+                ]
+            ]
         )
+
+        assert parsed.get("server_id") == expected_server_id
+        assert parsed.get("server") == expected_server_name
     finally:
         await client.async_close()
 
@@ -218,6 +298,7 @@ async def test_run_speedtest_uses_extended_timeout(make_client) -> None:
         result = await client.run_speedtest()
 
         assert result == {"timestamp": "x"}
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/speedtest/service/showlog")
         client._safe_dict_get_with_timeout.assert_awaited_once_with(
             "/api/speedtest/service/run", timeout_seconds=180
         )
@@ -237,9 +318,7 @@ async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client) ->
 
         assert result == {}
         client._safe_dict_get_with_timeout.assert_not_awaited()
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/speedtest/service/showrecent"
-        )
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/speedtest/service/showlog")
     finally:
         await client.async_close()
 
@@ -255,9 +334,7 @@ async def test_run_speedtest_returns_empty_for_non_mapping_response(make_client)
         result = await client.run_speedtest()
 
         assert result == {}
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/speedtest/service/showrecent"
-        )
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/speedtest/service/showlog")
         client._safe_dict_get_with_timeout.assert_awaited_once_with(
             "/api/speedtest/service/run", timeout_seconds=180
         )

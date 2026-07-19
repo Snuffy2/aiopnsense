@@ -20,7 +20,7 @@ from typing import Any
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors, try_to_float, try_to_int
 
-SPEEDTEST_SHOW_RECENT_ENDPOINT = "/api/speedtest/service/showrecent"
+SPEEDTEST_SHOW_LOG_ENDPOINT = "/api/speedtest/service/showlog"
 SPEEDTEST_SHOW_STAT_ENDPOINT = "/api/speedtest/service/showstat"
 SPEEDTEST_RUN_ENDPOINT = "/api/speedtest/service/run"
 
@@ -39,20 +39,27 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 include min, max, sample count, and period bounds. Returns
                 ``{"available": False}`` when the plugin endpoint is missing.
         """
-        if not await self._is_get_endpoint_available(SPEEDTEST_SHOW_RECENT_ENDPOINT):
+        if not await self._is_get_endpoint_available(SPEEDTEST_SHOW_LOG_ENDPOINT):
             _LOGGER.debug("Speedtest not installed")
             return {"available": False}
 
-        show_recent = await self._safe_dict_get(SPEEDTEST_SHOW_RECENT_ENDPOINT)
+        latest_result = self._parse_showlog_latest(
+            await self._safe_list_get(SPEEDTEST_SHOW_LOG_ENDPOINT)
+        )
         if await self._is_get_endpoint_available(SPEEDTEST_SHOW_STAT_ENDPOINT):
             show_stat = await self._safe_dict_get(SPEEDTEST_SHOW_STAT_ENDPOINT)
         else:
             _LOGGER.debug("Speedtest statistics endpoint unavailable")
             show_stat = {}
 
-        server_id, server_name = self._parse_recent_server(show_recent.get("server"))
-        date = show_recent.get("date") if isinstance(show_recent.get("date"), str) else None
-        url = show_recent.get("url") if isinstance(show_recent.get("url"), str) else None
+        server_id = latest_result.get("server_id")
+        if not isinstance(server_id, str):
+            server_id = None
+        server_name = latest_result.get("server")
+        if not isinstance(server_name, str):
+            server_name = None
+        date = latest_result.get("date") if isinstance(latest_result.get("date"), str) else None
+        url = latest_result.get("url") if isinstance(latest_result.get("url"), str) else None
 
         samples = try_to_int(show_stat.get("samples"))
         period = show_stat.get("period", {})
@@ -65,7 +72,7 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
             "average": {},
         }
         for metric in ("download", "upload", "latency"):
-            recent_value = try_to_float(show_recent.get(metric))
+            recent_value = try_to_float(latest_result.get(metric))
             stat_metric = show_stat.get(metric, {})
 
             output["last"][metric] = {
@@ -91,28 +98,45 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
             }
         return output
 
-    def _parse_recent_server(self, server_text: Any) -> tuple[str | None, str | None]:
-        """Parse the ``showrecent.server`` field into server ID and name.
+    def _parse_showlog_latest(self, show_log: object) -> dict[str, Any]:
+        """Normalize the newest row returned by the Speedtest ``showlog`` endpoint.
 
         Args:
-            server_text (Any): Raw ``showrecent.server`` text, commonly either
-                ``"<id> <name>"`` or just the server name.
+            show_log (object): Raw Speedtest history payload, ordered newest
+                first.
 
         Returns:
-            tuple[str | None, str | None]: Parsed server id and server name.
-                The id is ``None`` when the field has no numeric prefix; both
-                values are ``None`` when the field is missing or empty.
+            dict[str, Any]: Latest result using the legacy ``showrecent`` field
+                names, or an empty mapping when no valid row is available.
         """
-        if not isinstance(server_text, str):
-            return None, None
-        cleaned = server_text.strip()
-        if not cleaned:
-            return None, None
+        if not isinstance(show_log, list) or not show_log:
+            return {}
+        latest = show_log[0]
+        if not isinstance(latest, list) or len(latest) < 9:
+            return {}
 
-        parts = cleaned.split(" ", 1)
-        if len(parts) == 2 and parts[0].isdigit():
-            return parts[0], parts[1].strip()
-        return None, cleaned
+        raw_server_id = latest[2].strip() if isinstance(latest[2], str) else latest[2]
+        if isinstance(raw_server_id, bool) or not isinstance(raw_server_id, int | str):
+            server_id = None
+        else:
+            server_id = str(raw_server_id)
+            if not server_id:
+                server_id = None
+
+        raw_server = latest[3].strip() if isinstance(latest[3], str) else latest[3]
+        if not isinstance(raw_server, str):
+            server = None
+        else:
+            server = raw_server or None
+        return {
+            "date": latest[0],
+            "server_id": server_id,
+            "server": server,
+            "download": latest[5],
+            "upload": latest[6],
+            "latency": latest[7],
+            "url": latest[8],
+        }
 
     @_log_errors
     async def run_speedtest(self) -> dict[str, Any]:
@@ -123,7 +147,7 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 endpoint, or an empty mapping when the plugin endpoint is
                 unavailable or returns a malformed payload.
         """
-        if not await self._is_get_endpoint_available(SPEEDTEST_SHOW_RECENT_ENDPOINT):
+        if not await self._is_get_endpoint_available(SPEEDTEST_SHOW_LOG_ENDPOINT):
             _LOGGER.debug("Speedtest not installed")
             return {}
 
