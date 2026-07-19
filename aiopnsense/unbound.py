@@ -185,7 +185,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             )
             legacy = await self._get_unbound_blocklist_legacy()
             if not legacy:
-                return CategoryResult({"legacy": {}}, "malformed", True)
+                return CategoryResult({"legacy": {}}, "malformed", False)
             return CategoryResult({"legacy": legacy}, "available", True)
 
         result = CategoryResult.coerce(
@@ -196,19 +196,26 @@ class UnboundMixin(AiopnsenseClientProtocol):
             return CategoryResult({}, result.state, result.authoritative)
         dnsbl_raw = result.data
         if not isinstance(dnsbl_raw, MutableMapping):
-            return CategoryResult({}, "malformed", True)
+            return CategoryResult({}, "malformed", False)
         dnsbl_rows = dnsbl_raw.get("rows", [])
         if not isinstance(dnsbl_rows, list):
-            return CategoryResult({}, "malformed", True)
+            return CategoryResult({}, "malformed", False)
         if not dnsbl_rows:
             return CategoryResult({}, "available", True)
         dnsbl_full: dict[str, Any] = {}
+        malformed = False
         for dnsbl in dnsbl_rows:
             if not isinstance(dnsbl, MutableMapping):
+                malformed = True
                 continue
-            if dnsbl.get("uuid"):
-                dnsbl_full.update({dnsbl["uuid"]: dnsbl})
+            uuid = dnsbl.get("uuid")
+            if not isinstance(uuid, str) or not uuid:
+                malformed = True
+                continue
+            dnsbl_full[uuid] = dict(dnsbl)
         _LOGGER.debug("[get_unbound_blocklist] dnsbl_full length: %s", len(dnsbl_full))
+        if malformed:
+            return CategoryResult(dnsbl_full, "malformed", False)
         return CategoryResult(dnsbl_full, "available", True)
 
     async def _toggle_unbound_blocklist(self, set_state: bool, uuid: str | None) -> bool:

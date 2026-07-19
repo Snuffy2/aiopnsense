@@ -36,27 +36,32 @@ class SmartMixin(AiopnsenseClientProtocol):
             return CategoryResult([], result.state, result.authoritative)
         smart_info = result.data
         if not isinstance(smart_info, MutableMapping):
-            return CategoryResult([], "malformed", True)
+            return CategoryResult([], "malformed", False)
         devices = smart_info.get("devices", [])
         if not isinstance(devices, list):
             _LOGGER.debug(
                 "Discarding SMART devices payload because devices is not a list: %r", devices
             )
-            return CategoryResult([], "malformed", True)
+            return CategoryResult([], "malformed", False)
         smart_devices: list[dict[str, Any]] = []
+        malformed = False
         for device in devices:
             if not isinstance(device, MutableMapping):
+                malformed = True
                 _LOGGER.debug(
                     "Discarding SMART device row because item is not a mapping: %r", device
                 )
                 continue
             ident = device.get("ident", "")
             if not isinstance(ident, str) or not ident.strip():
+                malformed = True
                 _LOGGER.debug(
                     "Discarding SMART device row because ident is missing or invalid: %r", device
                 )
                 continue
             smart_devices.append(dict(device))
+        if malformed:
+            return CategoryResult(smart_devices, "malformed", False)
         return CategoryResult(smart_devices, "available", True)
 
     @_log_errors

@@ -58,6 +58,7 @@ class ClientEndpointMixin:
         {
             "/api/speedtest/service/showlog",
             "/api/speedtest/service/showstat",
+            "/api/diagnostics/interface/search_arp",
             "/api/nut/diagnostics/upsstatus",
             "/api/dhcpv4/leases/search_lease",
             "/api/dhcpv4/leases/searchLease",
@@ -432,6 +433,7 @@ class ClientEndpointMixin:
     async def _check_optional_get_endpoint(
         self,
         path: str,
+        cache_path: str | None = None,
         *,
         force_refresh: bool = False,
     ) -> CategoryResult[object]:
@@ -439,7 +441,7 @@ class ClientEndpointMixin:
         return await self._check_optional_endpoint(
             method="get",
             path=path,
-            cache_path=path,
+            cache_path=cache_path or path,
             payload=None,
             force_refresh=force_refresh,
         )
@@ -513,7 +515,7 @@ class ClientEndpointMixin:
             had_confirmed_negative = self._endpoint_availability.get(cache_key) == "missing"
             cached_state = self._get_cached_endpoint_availability(method, cache_path, force_refresh)
             if cached_state == "missing":
-                return CategoryResult({}, "missing", True)
+                return CategoryResult({}, "missing", False)
 
             was_pending = cache_key in self._optional_endpoint_missing_pending_confirmation
             if method == "post":
@@ -542,7 +544,7 @@ class ClientEndpointMixin:
                 self._store_confirmed_negative_endpoint_observation(
                     cache_key, f"confirmed_{method}_404"
                 )
-                return CategoryResult({}, "missing", True)
+                return CategoryResult({}, "missing", False)
             return CategoryResult({}, "pending", False)
 
     async def _is_core_firmware_endpoint_healthy(self) -> bool:

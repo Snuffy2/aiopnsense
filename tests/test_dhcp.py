@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from aiopnsense import OPNsenseClient
+from aiopnsense import CategoryResult, OPNsenseClient
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -164,15 +164,18 @@ async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> No
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=CategoryResult({"rows": []}, "available", True)
+        )
 
         await client.get_arp_table(resolve_hostnames=True)
-        client._safe_dict_get.assert_awaited_with(
-            "/api/diagnostics/interface/search_arp?resolve=yes"
+        client._check_optional_get_endpoint.assert_awaited_with(
+            "/api/diagnostics/interface/search_arp?resolve=yes",
+            cache_path="/api/diagnostics/interface/search_arp",
         )
 
         await client.get_arp_table(resolve_hostnames=False)
-        assert client._safe_dict_get.await_args_list[1].args[0] == (
+        assert client._check_optional_get_endpoint.await_args_list[1].args[0] == (
             "/api/diagnostics/interface/search_arp?resolve=no"
         )
     finally:
@@ -1088,27 +1091,18 @@ async def test_version_switched_get_arp_table_endpoint_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        client._check_optional_get_endpoint = AsyncMock(
+            side_effect=[
+                CategoryResult({"rows": []}, "available", True),
+                CategoryResult({}, "missing", False),
+            ]
+        )
 
         assert await client.get_arp_table(resolve_hostnames=True) == []
-        client._safe_dict_get.assert_awaited_once_with(
-            "/api/diagnostics/interface/search_arp?resolve=yes"
-        )
-        assert client._is_get_endpoint_available.await_count == 1
-        assert (
-            client._is_get_endpoint_available.await_args_list[0].args[0]
-            == "/api/diagnostics/interface/search_arp"
-        )
+        assert client._check_optional_get_endpoint.await_count == 1
 
-        client._safe_dict_get = AsyncMock()
         assert await client.get_arp_table(resolve_hostnames=False) == []
-        client._safe_dict_get.assert_not_awaited()
-        assert client._is_get_endpoint_available.await_count == 2
-        assert (
-            client._is_get_endpoint_available.await_args_list[1].args[0]
-            == "/api/diagnostics/interface/search_arp"
-        )
+        assert client._check_optional_get_endpoint.await_count == 2
     finally:
         await client.async_close()
 

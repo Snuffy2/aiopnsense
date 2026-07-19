@@ -13,7 +13,7 @@ from .client_queue import ClientQueueMixin
 from .client_transport import ClientTransportMixin
 from .const import DEFAULT_CACHE_TTL_SECONDS, DEFAULT_NEGATIVE_CACHE_TTL_SECONDS
 from .exceptions import OPNsenseInvalidArgument
-from ._typing import EndpointAvailabilityState
+from ._typing import CategoryState, EndpointAvailabilityState
 
 _UNSET: object = object()
 
@@ -88,6 +88,7 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
         self._optional_endpoint_missing_pending_confirmation: set[
             tuple[Literal["get", "post"], str]
         ] = set()
+        self._dhcp_source_states: list[CategoryState] = []
         positive_ttl = self._opts.get(
             "endpoint_positive_cache_ttl_seconds", DEFAULT_CACHE_TTL_SECONDS
         )

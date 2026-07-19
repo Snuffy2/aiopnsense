@@ -355,14 +355,14 @@ class ClientTransportMixin:
                             path,
                             err,
                         )
-                        return CategoryResult({}, "malformed", True)
+                        return CategoryResult({}, "malformed", False)
                 if response.status == 404:
                     _LOGGER.debug(
                         "Optional GET endpoint unavailable (HTTP 404). Path: %s (called by %s)",
                         path,
                         caller,
                     )
-                    return CategoryResult({}, "missing", True)
+                    return CategoryResult({}, "missing", False)
                 if response.status == 403:
                     _LOGGER.error(
                         "Permission Error in optional_get (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
@@ -429,14 +429,14 @@ class ClientTransportMixin:
                             path,
                             err,
                         )
-                        return CategoryResult({}, "malformed", True)
+                        return CategoryResult({}, "malformed", False)
                 if response.status == 404:
                     _LOGGER.debug(
                         "Optional POST endpoint unavailable (HTTP 404). Path: %s (called by %s)",
                         path,
                         caller,
                     )
-                    return CategoryResult({}, "missing", True)
+                    return CategoryResult({}, "missing", False)
                 if response.status == 403:
                     _LOGGER.error(
                         "Permission Error in optional_post (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",

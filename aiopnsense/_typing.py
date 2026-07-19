@@ -19,6 +19,11 @@ class CategoryResult[T]:
     state: CategoryState
     authoritative: bool
 
+    def __post_init__(self) -> None:
+        """Reject envelopes whose authority contradicts their state."""
+        if self.authoritative is not (self.state == "available"):
+            raise ValueError("authoritative must be true exactly when state is 'available'")
+
     @staticmethod
     def coerce(value: object) -> "CategoryResult[object]":
         """Normalize legacy internal tuple results during the contract migration."""
@@ -28,10 +33,8 @@ class CategoryResult[T]:
             state: CategoryState | str = "transient" if value[0] == "unavailable" else value[0]
             if state in {"available", "pending", "missing", "transient", "malformed"}:
                 typed_state: CategoryState = state
-                return CategoryResult(
-                    value[1], typed_state, typed_state in {"available", "missing", "malformed"}
-                )
-        return CategoryResult({}, "malformed", True)
+                return CategoryResult(value[1], typed_state, typed_state == "available")
+        return CategoryResult({}, "malformed", False)
 
     def __iter__(self) -> Iterator[object]:
         """Yield legacy state/data tuple values for internal compatibility."""
@@ -61,6 +64,7 @@ class AiopnsenseClientProtocol(Protocol):
     _endpoint_checked_at: dict[tuple[Literal["get", "post"], str], float]
     _endpoint_locks: dict[tuple[Literal["get", "post"], str], asyncio.Lock]
     _optional_endpoint_missing_pending_confirmation: set[tuple[Literal["get", "post"], str]]
+    _dhcp_source_states: list[CategoryState]
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None: ...
 
@@ -121,6 +125,7 @@ class AiopnsenseClientProtocol(Protocol):
     async def _check_optional_get_endpoint(
         self,
         path: str,
+        cache_path: str | None = None,
         *,
         force_refresh: bool = False,
     ) -> CategoryResult[object]: ...
@@ -143,3 +148,7 @@ class AiopnsenseClientProtocol(Protocol):
     async def get_dhcp_leases_result(
         self, opnsense_tz: tzinfo | None = None
     ) -> CategoryResult[dict[str, Any]]: ...
+
+    async def get_arp_table_result(
+        self, resolve_hostnames: bool = False
+    ) -> CategoryResult[list[dict[str, Any]]]: ...
