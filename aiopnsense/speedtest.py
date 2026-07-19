@@ -118,7 +118,7 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
         if not isinstance(raw_server_id, int | str):
             server_id = None
         else:
-            server_id = str(raw_server_id).strip()
+            server_id = str(raw_server_id)
             if not server_id:
                 server_id = None
 
@@ -126,7 +126,7 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
         if not isinstance(raw_server, str):
             server = None
         else:
-            server = raw_server.strip() or None
+            server = raw_server or None
         return {
             "date": latest[0],
             "server_id": server_id,
