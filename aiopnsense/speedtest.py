@@ -137,29 +137,6 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
             "url": latest[8],
         }
 
-    def _parse_speedtest_server(self, server_text: Any) -> tuple[str | None, str | None]:
-        """Parse normalized Speedtest server text into server ID and name.
-
-        Args:
-            server_text (Any): Raw server text, commonly either
-                ``"<id> <name>"`` or just the server name.
-
-        Returns:
-            tuple[str | None, str | None]: Parsed server id and server name.
-                The id is ``None`` when the field has no numeric prefix; both
-                values are ``None`` when the field is missing or empty.
-        """
-        if not isinstance(server_text, str):
-            return None, None
-        cleaned = server_text.strip()
-        if not cleaned:
-            return None, None
-
-        parts = cleaned.split(" ", 1)
-        if len(parts) == 2 and parts[0].isdigit():
-            return parts[0], parts[1].strip()
-        return None, cleaned
-
     @_log_errors
     async def run_speedtest(self) -> dict[str, Any]:
         """Start a Speedtest run and return the raw run response.

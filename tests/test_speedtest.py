@@ -202,25 +202,6 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client) -> None:
         await client.async_close()
 
 
-@pytest.mark.asyncio
-async def test_parse_speedtest_server_variants(make_client) -> None:
-    """_parse_speedtest_server should parse known server formats safely."""
-    client, _session = make_mock_session_client(make_client)
-    try:
-        assert client._parse_speedtest_server(None) == (None, None)
-        assert client._parse_speedtest_server("   ") == (None, None)
-        assert client._parse_speedtest_server("10001 Test ISP, NY") == (
-            "10001",
-            "Test ISP, NY",
-        )
-        assert client._parse_speedtest_server("Unstructured Server Name") == (
-            None,
-            "Unstructured Server Name",
-        )
-    finally:
-        await client.async_close()
-
-
 @pytest.mark.parametrize("show_log", [None, {}, [], ["malformed-row"], [["too", "short"]]])
 @pytest.mark.asyncio
 async def test_parse_showlog_latest_rejects_malformed_rows(
