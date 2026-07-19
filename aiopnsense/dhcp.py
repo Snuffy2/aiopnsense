@@ -117,9 +117,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
         arp_table_info = result.data
         if not isinstance(arp_table_info, MutableMapping):
             return CategoryResult([], "malformed", False)
-        rows = arp_table_info.get("rows", [])
-        if not isinstance(rows, list):
+        if "rows" not in arp_table_info or not isinstance(arp_table_info["rows"], list):
             return CategoryResult([], "malformed", False)
+        rows = arp_table_info["rows"]
         arp_table = [dict(row) for row in rows if isinstance(row, MutableMapping)]
         if len(arp_table) != len(rows):
             return CategoryResult(arp_table, "malformed", False)
@@ -147,14 +147,18 @@ class DHCPMixin(AiopnsenseClientProtocol):
         self, opnsense_tz: tzinfo | None = None
     ) -> CategoryResult[dict[str, Any]]:
         """Return DHCP leases with authority derived from every applicable source."""
-        self._dhcp_source_states = []
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
-        leases_raw: list = await self._get_kea_dhcpv4_leases(opnsense_tz=opnsense_tz)
-        leases_raw += await self._get_kea_dhcpv6_leases(opnsense_tz=opnsense_tz)
-        leases_raw += await self._get_isc_dhcpv4_leases(opnsense_tz=opnsense_tz)
-        leases_raw += await self._get_isc_dhcpv6_leases(opnsense_tz=opnsense_tz)
-        leases_raw += await self._get_dnsmasq_leases(opnsense_tz=opnsense_tz)
+        state_token = self._dhcp_source_states_context.set([])
+        try:
+            leases_raw: list = await self._get_kea_dhcpv4_leases(opnsense_tz=opnsense_tz)
+            leases_raw += await self._get_kea_dhcpv6_leases(opnsense_tz=opnsense_tz)
+            leases_raw += await self._get_isc_dhcpv4_leases(opnsense_tz=opnsense_tz)
+            leases_raw += await self._get_isc_dhcpv6_leases(opnsense_tz=opnsense_tz)
+            leases_raw += await self._get_dnsmasq_leases(opnsense_tz=opnsense_tz)
+            source_states = list(self._dhcp_source_states_context.get() or [])
+        finally:
+            self._dhcp_source_states_context.reset(state_token)
 
         leases: dict[str, Any] = {}
         lease_interfaces: dict[str, Any] = await self._get_kea_interfaces()
@@ -184,13 +188,14 @@ class DHCPMixin(AiopnsenseClientProtocol):
             "lease_interfaces": sorted_lease_interfaces,
             "leases": sorted_leases,
         }
-        source_states = self._dhcp_source_states
         aggregate_state, authoritative = self._aggregate_dhcp_source_states(source_states)
         return CategoryResult(dhcp_leases, aggregate_state, authoritative)
 
     def _record_dhcp_source_state(self, state: CategoryState) -> None:
         """Record the schema-aware state of one DHCP provider."""
-        self._dhcp_source_states.append(state)
+        source_states = self._dhcp_source_states_context.get()
+        if source_states is not None:
+            source_states.append(state)
 
     def _unavailable_dhcp_source_state(self, path: str) -> CategoryState:
         """Resolve a failed source probe as confirmed missing or transient."""
@@ -310,7 +315,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("%s not installed", service_name)
             return []
         response = await self._safe_dict_get(lease_endpoint)
-        if not isinstance(response.get("rows", None), list):
+        if "rows" not in response or not isinstance(response["rows"], list):
             self._record_dhcp_source_state("malformed")
             return []
         malformed = False
@@ -327,14 +332,14 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 res_info = None
             else:
                 res_resp = await self._safe_dict_get(selected_reservation_endpoint)
-                if not isinstance(res_resp.get("rows", None), list):
+                if "rows" not in res_resp or not isinstance(res_resp["rows"], list):
                     malformed = True
                     _LOGGER.debug(
                         "%s reservation lookup returned invalid rows payload", service_name
                     )
                     res_info = None
                 else:
-                    res_info = res_resp.get("rows", [])
+                    res_info = res_resp["rows"]
         reservations = {}
         if res_info is not None:
             for res in res_info:
@@ -343,7 +348,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                     continue
                 if res.get("hw_address", None):
                     reservations.update({res.get("hw_address"): res.get("ip_address", "")})
-        leases_info: list = response.get("rows", [])
+        leases_info: list = response["rows"]
         leases: list = []
         for lease_info in leases_info:
             if not isinstance(lease_info, MutableMapping):
@@ -460,10 +465,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("Dnsmasq DHCP not installed")
             return []
         response = await self._safe_dict_get(DNSMASQ_LEASES_SEARCH_ENDPOINT)
-        leases_info: list = response.get("rows", [])
-        if not isinstance(leases_info, list):
+        if "rows" not in response or not isinstance(response["rows"], list):
             self._record_dhcp_source_state("malformed")
             return []
+        leases_info: list = response["rows"]
         malformed = any(not isinstance(row, MutableMapping) for row in leases_info)
         cleaned_leases = self._keep_latest_leases(leases_info)
 
@@ -539,10 +544,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if not isinstance(response, MutableMapping):
             self._record_dhcp_source_state("malformed")
             return []
-        leases_info: list = response.get("rows", [])
-        if not isinstance(leases_info, list):
+        if "rows" not in response or not isinstance(response["rows"], list):
             self._record_dhcp_source_state("malformed")
             return []
+        leases_info: list = response["rows"]
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
         leases: list = []
@@ -613,10 +618,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if not isinstance(response, MutableMapping):
             self._record_dhcp_source_state("malformed")
             return []
-        leases_info: list = response.get("rows", [])
-        if not isinstance(leases_info, list):
+        if "rows" not in response or not isinstance(response["rows"], list):
             self._record_dhcp_source_state("malformed")
             return []
+        leases_info: list = response["rows"]
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
         leases: list = []

@@ -1,5 +1,6 @@
 """Tests for authoritative optional-category result contracts."""
 
+import asyncio
 from dataclasses import FrozenInstanceError
 from datetime import UTC
 from unittest.mock import AsyncMock
@@ -74,6 +75,9 @@ async def test_smart_result_preserves_valid_rows_but_marks_mixed_schema_malforme
             {"devices": []}, "available", True
         )
         assert await client.get_smart_result() == CategoryResult([], "available", True)
+
+        client._check_optional_post_endpoint.return_value = CategoryResult({}, "available", True)
+        assert await client.get_smart_result() == CategoryResult([], "malformed", False)
     finally:
         await client.async_close()
 
@@ -96,6 +100,9 @@ async def test_unbound_result_distinguishes_mixed_invalid_rows_from_empty(make_c
             {"rows": []}, "available", True
         )
         assert await client.get_unbound_blocklist_result() == CategoryResult({}, "available", True)
+
+        client._check_optional_get_endpoint.return_value = CategoryResult({}, "available", True)
+        assert await client.get_unbound_blocklist_result() == CategoryResult({}, "malformed", False)
     finally:
         await client.async_close()
 
@@ -115,6 +122,9 @@ async def test_vnstat_result_distinguishes_non_string_response_from_valid_empty(
         assert result.state == "malformed"
         assert result.authoritative is False
 
+        client._check_optional_get_endpoint.return_value = CategoryResult({}, "available", True)
+        assert (await client.get_vnstat_result()).state == "malformed"
+
         client._check_optional_get_endpoint.return_value = CategoryResult(
             {"response": ""}, "available", True
         )
@@ -130,23 +140,26 @@ async def test_vnstat_result_distinguishes_non_string_response_from_valid_empty(
     "provider",
     ["kea", "dnsmasq", "isc_v4", "isc_v6"],
 )
-async def test_dhcp_provider_invalid_rows_are_schema_malformed(make_client, provider: str) -> None:
-    """Every applicable DHCP provider classifies a non-list rows field as malformed."""
+@pytest.mark.parametrize("payload", [{}, {"rows": "bad"}])
+async def test_dhcp_provider_invalid_rows_are_schema_malformed(
+    make_client, provider: str, payload: dict
+) -> None:
+    """Every DHCP provider requires an explicitly present list-valued rows field."""
     client: OPNsenseClient = make_client()
+    state_token = client._dhcp_source_states_context.set([])
     try:
-        client._dhcp_source_states = []
         if provider == "kea":
             client._is_get_endpoint_available = AsyncMock(return_value=True)
-            client._safe_dict_get = AsyncMock(return_value={"rows": "bad"})
+            client._safe_dict_get = AsyncMock(return_value=payload)
             await client._get_kea_dhcp_leases("/api/kea/leases4/search", "Kea")
         elif provider == "dnsmasq":
             client._is_get_endpoint_available = AsyncMock(return_value=True)
-            client._safe_dict_get = AsyncMock(return_value={"rows": "bad"})
+            client._safe_dict_get = AsyncMock(return_value=payload)
             await client._get_dnsmasq_leases()
         else:
             client._get_endpoint_path = AsyncMock(return_value=f"/{provider}")
             client._check_optional_get_endpoint = AsyncMock(
-                return_value=CategoryResult({"rows": "bad"}, "available", True)
+                return_value=CategoryResult(payload, "available", True)
             )
             method = (
                 client._get_isc_dhcpv4_leases
@@ -154,8 +167,30 @@ async def test_dhcp_provider_invalid_rows_are_schema_malformed(make_client, prov
                 else client._get_isc_dhcpv6_leases
             )
             await method(opnsense_tz=UTC)
-        assert client._dhcp_source_states == ["malformed"]
+        assert client._dhcp_source_states_context.get() == ["malformed"]
     finally:
+        client._dhcp_source_states_context.reset(state_token)
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_kea_reservation_provider_requires_rows_key(make_client) -> None:
+    """An available Kea reservation response without rows makes the source malformed."""
+    client = make_client()
+    state_token = client._dhcp_source_states_context.set([])
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._get_endpoint_path = AsyncMock(return_value="/reservation")
+        client._safe_dict_get = AsyncMock(side_effect=[{"rows": []}, {}])
+        await client._get_kea_dhcp_leases(
+            "/api/kea/leases4/search",
+            "Kea",
+            "/reservation",
+            "/reservationCamel",
+        )
+        assert client._dhcp_source_states_context.get() == ["malformed"]
+    finally:
+        client._dhcp_source_states_context.reset(state_token)
         await client.async_close()
 
 
@@ -231,10 +266,83 @@ async def test_arp_result_distinguishes_available_empty_and_malformed_partial_ro
         )
         assert await client.get_arp_table_result() == CategoryResult([], "available", True)
 
+        client._check_optional_get_endpoint.return_value = CategoryResult({}, "available", True)
+        assert await client.get_arp_table_result() == CategoryResult([], "malformed", False)
+
         valid = {"ip-address": "192.0.2.1"}
         client._check_optional_get_endpoint.return_value = CategoryResult(
             {"rows": [valid, "bad"]}, "available", True
         )
         assert await client.get_arp_table_result() == CategoryResult([valid], "malformed", False)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("period", ["hourly", "daily", "monthly", "yearly"])
+async def test_vnstat_period_result_requires_response_key(make_client, period: str) -> None:
+    """Every vnStat period requires an explicitly present response string."""
+    client = make_client()
+    try:
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=CategoryResult({}, "available", True)
+        )
+        result = await client._fetch_vnstat_for_result(f"/vnstat/{period}", period)
+        assert result.state == "malformed"
+        assert result.authoritative is False
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_dhcp_results_keep_provider_states_request_local(make_client) -> None:
+    """Interleaved DHCP collections on one client cannot contaminate authority state."""
+    client = make_client()
+    available_started = asyncio.Event()
+    malformed_recorded = asyncio.Event()
+
+    async def first_provider(**_kwargs) -> list[dict]:
+        """Interleave the first provider based on the current task name."""
+        task = asyncio.current_task()
+        if task is not None and task.get_name() == "available-collection":
+            client._record_dhcp_source_state("available")
+            available_started.set()
+            await malformed_recorded.wait()
+        else:
+            await available_started.wait()
+            client._record_dhcp_source_state("malformed")
+            malformed_recorded.set()
+        return []
+
+    async def missing_provider(**_kwargs) -> list[dict]:
+        """Record a confirmed inapplicable provider for the current request."""
+        client._record_dhcp_source_state("missing")
+        await asyncio.sleep(0)
+        return []
+
+    try:
+        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
+        client._get_kea_dhcpv4_leases = AsyncMock(side_effect=first_provider)
+        for name in (
+            "_get_kea_dhcpv6_leases",
+            "_get_isc_dhcpv4_leases",
+            "_get_isc_dhcpv6_leases",
+            "_get_dnsmasq_leases",
+        ):
+            setattr(client, name, AsyncMock(side_effect=missing_provider))
+        client._get_kea_interfaces = AsyncMock(return_value={})
+
+        available_task = asyncio.create_task(
+            client.get_dhcp_leases_result(), name="available-collection"
+        )
+        malformed_task = asyncio.create_task(
+            client.get_dhcp_leases_result(), name="malformed-collection"
+        )
+        available_result, malformed_result = await asyncio.gather(available_task, malformed_task)
+
+        assert available_result.state == "available"
+        assert available_result.authoritative is True
+        assert malformed_result.state == "malformed"
+        assert malformed_result.authoritative is False
     finally:
         await client.async_close()

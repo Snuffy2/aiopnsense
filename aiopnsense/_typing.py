@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncGenerator, MutableMapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import tzinfo
 from typing import Any, Iterator, Literal, Protocol
@@ -64,7 +65,7 @@ class AiopnsenseClientProtocol(Protocol):
     _endpoint_checked_at: dict[tuple[Literal["get", "post"], str], float]
     _endpoint_locks: dict[tuple[Literal["get", "post"], str], asyncio.Lock]
     _optional_endpoint_missing_pending_confirmation: set[tuple[Literal["get", "post"], str]]
-    _dhcp_source_states: list[CategoryState]
+    _dhcp_source_states_context: ContextVar[list[CategoryState] | None]
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None: ...
 

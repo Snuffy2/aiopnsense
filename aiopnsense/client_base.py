@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import MutableMapping
+from contextvars import ContextVar
 from typing import Any, Literal
 from urllib.parse import urlparse
 import warnings
@@ -88,7 +89,9 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
         self._optional_endpoint_missing_pending_confirmation: set[
             tuple[Literal["get", "post"], str]
         ] = set()
-        self._dhcp_source_states: list[CategoryState] = []
+        self._dhcp_source_states_context: ContextVar[list[CategoryState] | None] = ContextVar(
+            "dhcp_source_states", default=None
+        )
         positive_ttl = self._opts.get(
             "endpoint_positive_cache_ttl_seconds", DEFAULT_CACHE_TTL_SECONDS
         )

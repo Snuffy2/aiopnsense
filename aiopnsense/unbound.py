@@ -197,9 +197,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
         dnsbl_raw = result.data
         if not isinstance(dnsbl_raw, MutableMapping):
             return CategoryResult({}, "malformed", False)
-        dnsbl_rows = dnsbl_raw.get("rows", [])
-        if not isinstance(dnsbl_rows, list):
+        if "rows" not in dnsbl_raw or not isinstance(dnsbl_raw["rows"], list):
             return CategoryResult({}, "malformed", False)
+        dnsbl_rows = dnsbl_raw["rows"]
         if not dnsbl_rows:
             return CategoryResult({}, "available", True)
         dnsbl_full: dict[str, Any] = {}

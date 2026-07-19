@@ -77,8 +77,10 @@ class VnstatMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("vnStat %s endpoint unavailable", expected_period)
             return CategoryResult(empty, result.state, False)
         payload = result.data
-        if not isinstance(payload, MutableMapping) or not isinstance(
-            payload.get("response", ""), str
+        if (
+            not isinstance(payload, MutableMapping)
+            or "response" not in payload
+            or not isinstance(payload["response"], str)
         ):
             return CategoryResult(empty, "malformed", False)
         return CategoryResult(
@@ -136,7 +138,7 @@ class VnstatMixin(AiopnsenseClientProtocol):
         hourly_raw = result.data
         if not isinstance(hourly_raw, MutableMapping):
             return CategoryResult(empty, "malformed", False)
-        if not isinstance(hourly_raw.get("response", ""), str):
+        if "response" not in hourly_raw or not isinstance(hourly_raw["response"], str):
             return CategoryResult(empty, "malformed", False)
         opnsense_tz = await self._get_opnsense_timezone()
         hourly = self._parse_vnstat_payload(hourly_raw, expected_period="hourly")
