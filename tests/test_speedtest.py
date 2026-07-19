@@ -1,7 +1,6 @@
 """Tests for `aiopnsense.speedtest`."""
 
 from collections.abc import Callable
-from typing import Any
 from unittest.mock import AsyncMock, call
 
 import pytest
@@ -205,7 +204,7 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client) -> None:
 @pytest.mark.parametrize("show_log", [None, {}, [], ["malformed-row"], [["too", "short"]]])
 @pytest.mark.asyncio
 async def test_parse_showlog_latest_rejects_malformed_rows(
-    make_client: ClientType, show_log: Any
+    make_client: ClientType, show_log: object
 ) -> None:
     """_parse_showlog_latest should reject missing or malformed history rows."""
     client, _session = make_mock_session_client(make_client)
@@ -235,13 +234,30 @@ async def test_parse_showlog_latest_rejects_malformed_rows(
             "72800",
             None,
         ),
+        (
+            True,
+            "123 Fiber",
+            None,
+            "123 Fiber",
+        ),
+        (
+            False,
+            "123 Fiber",
+            None,
+            "123 Fiber",
+        ),
     ],
-    ids=("name-looks-like-id", "empty-name-with-valid-id"),
+    ids=(
+        "empty-id-with-name",
+        "empty-name-with-id",
+        "bool-true-id",
+        "bool-false-id",
+    ),
 )
 @pytest.mark.asyncio
 async def test_parse_showlog_latest_preserves_server_fields(
     make_client: ClientType,
-    raw_server_id: str,
+    raw_server_id: object,
     raw_server_name: str,
     expected_server_id: str | None,
     expected_server_name: str | None,

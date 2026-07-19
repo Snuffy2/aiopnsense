@@ -98,11 +98,12 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
             }
         return output
 
-    def _parse_showlog_latest(self, show_log: Any) -> dict[str, Any]:
+    def _parse_showlog_latest(self, show_log: object) -> dict[str, Any]:
         """Normalize the newest row returned by the Speedtest ``showlog`` endpoint.
 
         Args:
-            show_log (Any): Raw Speedtest history payload, ordered newest first.
+            show_log (object): Raw Speedtest history payload, ordered newest
+                first.
 
         Returns:
             dict[str, Any]: Latest result using the legacy ``showrecent`` field
@@ -115,7 +116,7 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
             return {}
 
         raw_server_id = latest[2].strip() if isinstance(latest[2], str) else latest[2]
-        if not isinstance(raw_server_id, int | str):
+        if isinstance(raw_server_id, bool) or not isinstance(raw_server_id, int | str):
             server_id = None
         else:
             server_id = str(raw_server_id)
