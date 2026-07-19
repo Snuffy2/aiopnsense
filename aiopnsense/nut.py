@@ -1,5 +1,6 @@
 """NUT plugin methods for OPNsenseClient."""
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -7,6 +8,7 @@ from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, _log_errors
 
 NUT_DIAGNOSTICS_UPS_STATUS_ENDPOINT = "/api/nut/diagnostics/upsstatus"
+_NUT_DOT_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_]+\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$")
 
 
 class NutMixin(AiopnsenseClientProtocol):
@@ -43,7 +45,9 @@ class NutMixin(AiopnsenseClientProtocol):
 
         status_value = payload.get("status")
         if isinstance(status_value, Mapping):
-            return {"status": dict(status_value)}
+            status_mapping = dict(status_value)
+            if status_mapping:
+                return {"status": status_mapping}
 
         response_value = payload.get("response")
         if not isinstance(response_value, str):
@@ -57,7 +61,7 @@ class NutMixin(AiopnsenseClientProtocol):
                 continue
             key, value = line.split(":", 1)
             parsed_key = key.strip()
-            if not parsed_key:
+            if not parsed_key or not _NUT_DOT_KEY_PATTERN.match(parsed_key):
                 continue
             status[parsed_key] = value.strip()
 

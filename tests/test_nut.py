@@ -79,6 +79,63 @@ async def test_get_nut_ups_status_parses_raw_status_response(make_client: Client
 
 
 @pytest.mark.asyncio
+async def test_get_nut_ups_status_prefers_mapped_status_when_available(
+    make_client: ClientType,
+) -> None:
+    """NUT UPS status should prefer non-empty mapped status over raw response parsing.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test verifies precedence and coexistence semantics.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "status": {"ups.status": "OL"},
+                "response": "ups.status: OB",
+            }
+        )
+
+        nut_status = await client.get_nut_ups_status()
+
+        assert nut_status == {"status": {"ups.status": "OL"}}
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+        client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_nut_ups_status_uses_raw_response_when_mapped_status_is_empty(
+    make_client: ClientType,
+) -> None:
+    """NUT UPS status should parse raw response data when mapped status is empty.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates fallback behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value={"status": {}, "response": "ups.status: OL"})
+
+        nut_status = await client.get_nut_ups_status()
+
+        assert nut_status == {"status": {"ups.status": "OL"}}
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+        client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_nut_ups_status_parses_colon_in_value_and_ignores_invalid_lines(
     make_client: ClientType,
 ) -> None:
@@ -99,6 +156,7 @@ async def test_get_nut_ups_status_parses_colon_in_value_and_ignores_invalid_line
                     [
                         "battery.charge: 100",
                         "  ",
+                        "Error: UPS unavailable",
                         "ups.message: on battery: replace battery",
                         "this-line-is-invalid",
                         "ups.load: 12",
