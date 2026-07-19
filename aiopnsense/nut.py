@@ -41,6 +41,10 @@ class NutMixin(AiopnsenseClientProtocol):
                 otherwise a shallow copy of the original mapping payload.
         """
         if not isinstance(payload, Mapping):
+            _LOGGER.debug(
+                "NUT UPS status payload is not a mapping (type=%s), returning {}",
+                type(payload).__name__,
+            )
             return {}
 
         normalized_payload = dict(payload)
@@ -53,6 +57,10 @@ class NutMixin(AiopnsenseClientProtocol):
 
         response_value = payload.get("response")
         if not isinstance(response_value, str):
+            _LOGGER.debug(
+                "NUT UPS status payload response is not a string (type=%s), returning unchanged",
+                type(response_value).__name__,
+            )
             return normalized_payload
 
         status: dict[str, str] = {}
@@ -68,6 +76,7 @@ class NutMixin(AiopnsenseClientProtocol):
             status[parsed_key] = value.strip()
 
         if not status:
+            _LOGGER.debug("NUT UPS status response did not contain parseable entries")
             return normalized_payload
 
         normalized_payload["status"] = status
