@@ -1,6 +1,7 @@
 """Tests for `aiopnsense.nut`."""
 
 from collections.abc import Callable
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -12,14 +13,16 @@ ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
-async def test_get_nut_ups_status_returns_status_payload(make_client: ClientType) -> None:
-    """NUT UPS status queries should return the decoded diagnostics payload.
+async def test_get_nut_ups_status_preserves_nested_status_payload(
+    make_client: ClientType,
+) -> None:
+    """NUT UPS status should preserve already structured status payloads.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test validates NUT UPS status payload handling.
+        None: This test validates compatibility with already mapped responses.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -43,6 +46,107 @@ async def test_get_nut_ups_status_returns_status_payload(make_client: ClientType
                 "ups.load": "12",
             }
         }
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+        client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_nut_ups_status_parses_raw_status_response(make_client: ClientType) -> None:
+    """NUT UPS status should parse raw colon-separated text responses.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates parsing of plugin string responses into status mappings.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={"response": "battery.charge: 100\nups.status: OL\n"}
+        )
+
+        nut_status = await client.get_nut_ups_status()
+
+        assert nut_status == {"status": {"battery.charge": "100", "ups.status": "OL"}}
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+        client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_nut_ups_status_parses_colon_in_value_and_ignores_invalid_lines(
+    make_client: ClientType,
+) -> None:
+    """NUT UPS status parsing should preserve colons in values and ignore malformed lines.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates robust line parsing behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "response": "\n".join(
+                    [
+                        "battery.charge: 100",
+                        "  ",
+                        "ups.message: on battery: replace battery",
+                        "this-line-is-invalid",
+                        "ups.load: 12",
+                    ]
+                )
+            }
+        )
+
+        nut_status = await client.get_nut_ups_status()
+
+        assert nut_status == {
+            "status": {
+                "battery.charge": "100",
+                "ups.message": "on battery: replace battery",
+                "ups.load": "12",
+            }
+        }
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+        client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    "response_payload",
+    [None, {}, {"response": None}, {"response": 123}, {"status": "not-a-mapping"}],
+)
+@pytest.mark.asyncio
+async def test_get_nut_ups_status_handles_invalid_payloads(
+    make_client: ClientType, response_payload: Any
+) -> None:
+    """NUT UPS status should fail gracefully for malformed payload shapes.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        response_payload (Any): Invalid payloads to exercise normalization safety.
+
+    Returns:
+        None: This test validates defensive handling of malformed responses.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value=response_payload)
+
+        nut_status = await client.get_nut_ups_status()
+
+        assert nut_status == {"status": {}}
         client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
         client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
     finally:
