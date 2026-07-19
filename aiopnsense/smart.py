@@ -21,10 +21,13 @@ class SmartMixin(AiopnsenseClientProtocol):
         Returns:
             list[dict[str, Any]]: SMART device rows returned by the detailed API.
         """
-        if not await self._is_post_endpoint_available(SMART_SERVICE_LIST_ENDPOINT):
+        list_status, smart_info = await self._check_optional_post_endpoint(
+            SMART_SERVICE_DETAIL_ENDPOINT,
+            cache_path=SMART_SERVICE_LIST_ENDPOINT,
+        )
+        if list_status != "available" or not isinstance(smart_info, MutableMapping):
             _LOGGER.debug("SMART plugin unavailable")
             return []
-        smart_info = await self._safe_dict_post(SMART_SERVICE_DETAIL_ENDPOINT)
         devices = smart_info.get("devices", [])
         if not isinstance(devices, list):
             _LOGGER.debug(
@@ -66,12 +69,17 @@ class SmartMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Decoded SMART detail payload. Non-mapping outputs
                 are wrapped under ``output`` to preserve a stable mapping API.
         """
-        if not await self._is_post_endpoint_available(SMART_SERVICE_INFO_ENDPOINT):
+        info_payload = {
+            "device": device,
+            "type": info_type,
+            "json": True,
+        }
+        info_status, response = await self._check_optional_post_endpoint(
+            SMART_SERVICE_INFO_ENDPOINT,
+            payload=info_payload,
+        )
+        if info_status != "available" or not isinstance(response, MutableMapping):
             _LOGGER.debug("SMART plugin unavailable")
             return {}
-        response = await self._safe_dict_post(
-            SMART_SERVICE_INFO_ENDPOINT,
-            {"device": device, "type": info_type, "json": True},
-        )
         output = response.get("output", {})
         return dict(output) if isinstance(output, MutableMapping) else {"output": output}

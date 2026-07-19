@@ -22,10 +22,12 @@ class NutMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Decoded NUT UPS status payload, or an empty
                 dictionary when the NUT diagnostics endpoint is unavailable.
         """
-        if not await self._is_get_endpoint_available(NUT_DIAGNOSTICS_UPS_STATUS_ENDPOINT):
+        optional_state, raw_payload = await self._check_optional_get_endpoint(
+            NUT_DIAGNOSTICS_UPS_STATUS_ENDPOINT
+        )
+        if optional_state != "available":
             _LOGGER.debug("NUT UPS status endpoint unavailable")
             return {}
-        raw_payload = await self._safe_dict_get(NUT_DIAGNOSTICS_UPS_STATUS_ENDPOINT)
         return self._normalize_nut_ups_status_payload(raw_payload)
 
     @staticmethod

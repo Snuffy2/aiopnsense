@@ -321,6 +321,146 @@ class ClientTransportMixin:
 
         return None
 
+    async def _do_optional_get(
+        self, path: str, caller: str = "Unknown"
+    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+        """Execute an optional GET request immediately.
+
+        Args:
+            path (str): API endpoint path to request.
+            caller (str): Caller name used for diagnostics and logging.
+
+        Returns:
+            tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+                Availability state and parsed response payload.
+        """
+        self._rest_api_query_count += 1
+        url: str = f"{self._url}{path}"
+        _LOGGER.debug("[optional_get] url: %s", url)
+        try:
+            async with self._session.get(
+                url,
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
+                ssl=self._verify_ssl,
+            ) as response:
+                _LOGGER.debug("[optional_get] Response %s: %s", response.status, response.reason)
+                if response.ok:
+                    try:
+                        return "available", await response.json(content_type=None)
+                    except (ValueError, UnicodeDecodeError) as err:
+                        _LOGGER.debug(
+                            "Optional GET endpoint returned malformed JSON for %s: %s",
+                            path,
+                            err,
+                        )
+                        return "malformed", {}
+                if response.status == 404:
+                    _LOGGER.debug(
+                        "Optional GET endpoint unavailable (HTTP 404). Path: %s (called by %s)",
+                        path,
+                        caller,
+                    )
+                    return "missing", {}
+                if response.status == 403:
+                    _LOGGER.error(
+                        "Permission Error in optional_get (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
+                        caller,
+                        url,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Transient optional GET endpoint failure for %s. Response %s: %s",
+                        path,
+                        response.status,
+                        response.reason,
+                    )
+                if self._throw_errors:
+                    raise _opnsense_http_error(response.status, response.reason)
+        except (aiohttp.ClientError, TimeoutError) as e:
+            _LOGGER.warning(
+                "Optional GET endpoint availability check failed for %s. %s: %s.",
+                path,
+                type(e).__name__,
+                e,
+            )
+            if self._throw_errors:
+                raise _map_opnsense_exception(e) from e
+
+        return "unavailable", {}
+
+    async def _do_optional_post(
+        self,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+        caller: str = "Unknown",
+    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+        """Execute an explicitly read-only optional POST immediately.
+
+        Args:
+            path: API endpoint path to request.
+            payload: Optional JSON request payload.
+            caller: Caller name used for diagnostics and logging.
+
+        Returns:
+            Availability state and decoded response payload.
+        """
+        self._rest_api_query_count += 1
+        url = f"{self._url}{path}"
+        _LOGGER.debug("[optional_post] url: %s", url)
+        try:
+            async with self._session.post(
+                url,
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
+                ssl=self._verify_ssl,
+            ) as response:
+                _LOGGER.debug("[optional_post] Response %s: %s", response.status, response.reason)
+                if response.ok:
+                    try:
+                        return "available", await response.json(content_type=None)
+                    except (ValueError, UnicodeDecodeError) as err:
+                        _LOGGER.debug(
+                            "Optional POST endpoint returned malformed JSON for %s: %s",
+                            path,
+                            err,
+                        )
+                        return "malformed", {}
+                if response.status == 404:
+                    _LOGGER.debug(
+                        "Optional POST endpoint unavailable (HTTP 404). Path: %s (called by %s)",
+                        path,
+                        caller,
+                    )
+                    return "missing", {}
+                if response.status == 403:
+                    _LOGGER.error(
+                        "Permission Error in optional_post (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
+                        caller,
+                        url,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Transient optional POST endpoint failure for %s. Response %s: %s",
+                        path,
+                        response.status,
+                        response.reason,
+                    )
+                if self._throw_errors:
+                    raise _opnsense_http_error(response.status, response.reason)
+        except (aiohttp.ClientError, TimeoutError) as err:
+            _LOGGER.warning(
+                "Optional POST endpoint availability check failed for %s. %s: %s.",
+                path,
+                type(err).__name__,
+                err,
+            )
+            if self._throw_errors:
+                raise _map_opnsense_exception(err) from err
+
+        return "unavailable", {}
+
     def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
         """Normalize per-call timeout values to a positive float in seconds.
 

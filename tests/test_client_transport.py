@@ -229,12 +229,100 @@ async def test_do_get_post_error_initial_behavior(
         await client.async_close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "ok", "expected"),
+    [
+        (200, True, ("available", {"value": 1})),
+        (404, False, ("missing", {})),
+        (403, False, ("unavailable", {})),
+        (429, False, ("unavailable", {})),
+        (500, False, ("unavailable", {})),
+    ],
+)
+async def test_do_optional_get_returns_tri_state_envelope(
+    status: int,
+    ok: bool,
+    expected: tuple[str, object],
+    make_client: MakeClientFactory,
+) -> None:
+    """Optional GET preserves the distinction between 404 and router failures."""
+    client, session = make_mock_session_client(make_client)
+    session.get = lambda *_args, **_kwargs: FakeResponse(
+        status=status,
+        reason="test",
+        ok=ok,
+        json_payload={"value": 1},
+    )
+    try:
+        assert await client._do_optional_get("/api/optional", caller="test") == expected
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "ok", "expected"),
+    [
+        (200, True, ("available", {"value": 1})),
+        (404, False, ("missing", {})),
+        (403, False, ("unavailable", {})),
+        (429, False, ("unavailable", {})),
+        (500, False, ("unavailable", {})),
+    ],
+)
+async def test_do_optional_post_returns_tri_state_envelope(
+    status: int,
+    ok: bool,
+    expected: tuple[str, object],
+    make_client: MakeClientFactory,
+) -> None:
+    """Optional read-only POST distinguishes route absence from router failures."""
+    client, session = make_mock_session_client(make_client)
+    session.post = lambda *_args, **_kwargs: FakeResponse(
+        status=status,
+        reason="test",
+        ok=ok,
+        json_payload={"value": 1},
+    )
+    try:
+        assert (
+            await client._do_optional_post("/api/optional", {"read": True}, caller="test")
+            == expected
+        )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["get", "post"])
+async def test_optional_transport_classifies_malformed_success(
+    method: str,
+    make_client: MakeClientFactory,
+) -> None:
+    """Malformed JSON remains a successful route observation with no payload."""
+    client, session = make_mock_session_client(make_client)
+    response = FakeResponse(status=200, ok=True)
+    response.json = AsyncMock(side_effect=ValueError("invalid JSON"))
+    setattr(session, method, lambda *_args, **_kwargs: response)
+    try:
+        if method == "get":
+            result = await client._do_optional_get("/api/optional", caller="test")
+        else:
+            result = await client._do_optional_post("/api/optional", caller="test")
+        assert result == ("malformed", {})
+    finally:
+        await client.async_close()
+
+
 @pytest.mark.parametrize(
     ("method_name", "session_method", "args", "kwargs"),
     [
         ("_do_get_from_stream", "get", ("/stream",), {"caller": "tst"}),
         ("_stream_json_events", "get", ("/stream",), {}),
         ("_do_get", "get", ("/api/x",), {"caller": "tst"}),
+        ("_do_optional_get", "get", ("/api/x",), {"caller": "tst"}),
+        ("_do_optional_post", "post", ("/api/x",), {"caller": "tst"}),
         ("_do_get", "get", ("/api/x",), {"caller": "tst", "response_format": "text"}),
         ("_do_post", "post", ("/api/x",), {"payload": {}, "caller": "tst"}),
     ],

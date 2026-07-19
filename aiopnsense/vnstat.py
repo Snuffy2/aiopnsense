@@ -65,14 +65,11 @@ class VnstatMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, Any]: Parsed payload or fallback empty mapping when endpoint is unavailable.
         """
-        if not await self._is_get_endpoint_available(endpoint):
+        status, payload = await self._check_optional_get_endpoint(endpoint)
+        if status != "available" or not isinstance(payload, MutableMapping):
             _LOGGER.debug("vnStat %s endpoint unavailable", expected_period)
             return {"period": expected_period, "interfaces": {}}
-
-        return self._parse_vnstat_payload(
-            await self._safe_dict_get(endpoint),
-            expected_period=expected_period,
-        )
+        return self._parse_vnstat_payload(payload, expected_period=expected_period)
 
     @_log_errors
     async def get_vnstat_metrics(self, period: str) -> dict[str, Any]:
@@ -109,15 +106,12 @@ class VnstatMixin(AiopnsenseClientProtocol):
                 convenience byte counters for today, this month, yesterday,
                 last month, and the last complete hour.
         """
-        if not await self._is_get_endpoint_available(VNSTAT_HOURLY_ENDPOINT):
+        hourly_status, hourly_raw = await self._check_optional_get_endpoint(VNSTAT_HOURLY_ENDPOINT)
+        if hourly_status != "available" or not isinstance(hourly_raw, MutableMapping):
             _LOGGER.debug("vnStat not installed")
             return {"interfaces": {}, "interface_count": 0}
-
         opnsense_tz = await self._get_opnsense_timezone()
-        hourly = self._parse_vnstat_payload(
-            await self._safe_dict_get(VNSTAT_HOURLY_ENDPOINT),
-            expected_period="hourly",
-        )
+        hourly = self._parse_vnstat_payload(hourly_raw, expected_period="hourly")
         daily = await self._fetch_vnstat_for(VNSTAT_DAILY_ENDPOINT, "daily")
         monthly = await self._fetch_vnstat_for(VNSTAT_MONTHLY_ENDPOINT, "monthly")
         interface_names = self._collect_vnstat_interfaces(hourly, daily, monthly)

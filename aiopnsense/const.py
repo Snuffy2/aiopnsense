@@ -19,6 +19,8 @@ OPNSENSE_26_1_11_COMPAT_FIRMWARE = "26.1.11"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 # Shared cache time-to-live, in seconds, for endpoint availability state.
 DEFAULT_CACHE_TTL_SECONDS = 6 * 60 * 60
+# Retry confirmed optional-plugin absence after five minutes.
+DEFAULT_NEGATIVE_CACHE_TTL_SECONDS = 5 * 60
 
 # Mapping of ambiguous timezone abbreviations to explicit IANA timezones.
 AMBIGUOUS_TZINFOS: dict[str, Any] = {

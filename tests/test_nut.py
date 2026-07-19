@@ -27,15 +27,17 @@ async def test_get_nut_ups_status_preserves_nested_status_payload(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "status": {
-                    "ups.status": "OL",
-                    "battery.charge": "100",
-                    "ups.load": "12",
-                }
-            }
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=(
+                "available",
+                {
+                    "status": {
+                        "ups.status": "OL",
+                        "battery.charge": "100",
+                        "ups.load": "12",
+                    }
+                },
+            )
         )
 
         nut_status = await client.get_nut_ups_status()
@@ -47,8 +49,9 @@ async def test_get_nut_ups_status_preserves_nested_status_payload(
                 "ups.load": "12",
             }
         }
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
-        client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/nut/diagnostics/upsstatus"
+        )
     finally:
         await client.async_close()
 
@@ -65,16 +68,18 @@ async def test_get_nut_ups_status_parses_raw_status_response(make_client: Client
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "response": (
-                    "battery.charge: 100\n"
-                    "ups.status: OL\n"
-                    "input.L1-N.voltage: 120\n"
-                    "input.L1-L2.voltage: 240\n"
-                )
-            }
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=(
+                "available",
+                {
+                    "response": (
+                        "battery.charge: 100\n"
+                        "ups.status: OL\n"
+                        "input.L1-N.voltage: 120\n"
+                        "input.L1-L2.voltage: 240\n"
+                    )
+                },
+            )
         )
 
         nut_status = await client.get_nut_ups_status()
@@ -93,8 +98,9 @@ async def test_get_nut_ups_status_parses_raw_status_response(make_client: Client
                 "input.L1-L2.voltage": "240",
             },
         }
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
-        client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/nut/diagnostics/upsstatus"
+        )
     finally:
         await client.async_close()
 
@@ -113,13 +119,15 @@ async def test_get_nut_ups_status_prefers_mapped_status_when_available(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "status": {"ups.status": "OL"},
-                "request_id": "abc-123",
-                "response": "ups.status: OB",
-            }
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=(
+                "available",
+                {
+                    "status": {"ups.status": "OL"},
+                    "request_id": "abc-123",
+                    "response": "ups.status: OB",
+                },
+            )
         )
 
         nut_status = await client.get_nut_ups_status()
@@ -129,8 +137,9 @@ async def test_get_nut_ups_status_prefers_mapped_status_when_available(
             "request_id": "abc-123",
             "response": "ups.status: OB",
         }
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
-        client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/nut/diagnostics/upsstatus"
+        )
     finally:
         await client.async_close()
 
@@ -149,8 +158,9 @@ async def test_get_nut_ups_status_uses_raw_response_when_mapped_status_is_empty(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"status": {}, "response": "ups.status: OL"})
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=("available", {"status": {}, "response": "ups.status: OL"})
+        )
 
         nut_status = await client.get_nut_ups_status()
 
@@ -158,8 +168,9 @@ async def test_get_nut_ups_status_uses_raw_response_when_mapped_status_is_empty(
             "response": "ups.status: OL",
             "status": {"ups.status": "OL"},
         }
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
-        client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/nut/diagnostics/upsstatus"
+        )
     finally:
         await client.async_close()
 
@@ -178,20 +189,22 @@ async def test_get_nut_ups_status_parses_colon_in_value_and_ignores_invalid_line
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "response": "\n".join(
-                    [
-                        "battery.charge: 100",
-                        "  ",
-                        "Error: UPS unavailable",
-                        "ups.message: on battery: replace battery",
-                        "this-line-is-invalid",
-                        "ups.load: 12",
-                    ]
-                )
-            }
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=(
+                "available",
+                {
+                    "response": "\n".join(
+                        [
+                            "battery.charge: 100",
+                            "  ",
+                            "Error: UPS unavailable",
+                            "ups.message: on battery: replace battery",
+                            "this-line-is-invalid",
+                            "ups.load: 12",
+                        ]
+                    )
+                },
+            )
         )
 
         nut_status = await client.get_nut_ups_status()
@@ -213,8 +226,9 @@ async def test_get_nut_ups_status_parses_colon_in_value_and_ignores_invalid_line
                 "ups.load": "12",
             },
         }
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
-        client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/nut/diagnostics/upsstatus"
+        )
     finally:
         await client.async_close()
 
@@ -254,8 +268,9 @@ async def test_get_nut_ups_status_handles_invalid_payloads(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value=response_payload)
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=("available", response_payload)
+        )
 
         nut_status = await client.get_nut_ups_status()
 
@@ -264,15 +279,18 @@ async def test_get_nut_ups_status_handles_invalid_payloads(
         assert nut_status == expected
         if expect_no_status:
             assert "status" not in nut_status
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
-        client._safe_dict_get.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/nut/diagnostics/upsstatus"
+        )
     finally:
         await client.async_close()
 
 
+@pytest.mark.parametrize("state", ["missing", "unavailable"])
 @pytest.mark.asyncio
 async def test_get_nut_ups_status_returns_empty_dict_when_endpoint_unavailable(
     make_client: ClientType,
+    state: str,
 ) -> None:
     """NUT UPS status queries should fail closed when the endpoint is unavailable.
 
@@ -284,14 +302,14 @@ async def test_get_nut_ups_status_returns_empty_dict_when_endpoint_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock(return_value={})
+        client._check_optional_get_endpoint = AsyncMock(return_value=(state, {}))
 
         nut_status = await client.get_nut_ups_status()
 
         assert nut_status == {}
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/nut/diagnostics/upsstatus")
-        client._safe_dict_get.assert_not_awaited()
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/nut/diagnostics/upsstatus"
+        )
     finally:
         await client.async_close()
 

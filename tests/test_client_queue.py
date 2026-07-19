@@ -177,6 +177,8 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
         client._do_get = AsyncMock(side_effect=fake_do_get)
         client._do_post = AsyncMock(return_value={"p": 2})
         client._do_get_from_stream = AsyncMock(return_value={"s": 3})
+        client._do_optional_get = AsyncMock(return_value=("available", {"o": 4}))
+        client._do_optional_post = AsyncMock(return_value=("available", {"op": 5}))
 
         # replace request queue with a real one
         q: asyncio.Queue = asyncio.Queue()
@@ -190,24 +192,34 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
         fut_get_text = loop.create_future()
         fut_post = loop.create_future()
         fut_stream = loop.create_future()
+        fut_optional = loop.create_future()
+        fut_optional_post = loop.create_future()
 
         await q.put(("get", "/g", None, fut_get, "t"))
         await q.put(("get_text", "/gt", None, fut_get_text, "t"))
         await q.put(("post", "/p", {"x": 1}, fut_post, "t"))
         await q.put(("get_from_stream", "/s", None, fut_stream, "t"))
+        await q.put(("optional_get", "/o", None, fut_optional, "t"))
+        await q.put(("optional_post", "/op", {"read": True}, fut_optional_post, "t"))
 
         res1 = await asyncio.wait_for(fut_get, timeout=2)
         res_text = await asyncio.wait_for(fut_get_text, timeout=2)
         res2 = await asyncio.wait_for(fut_post, timeout=2)
         res3 = await asyncio.wait_for(fut_stream, timeout=2)
+        res4 = await asyncio.wait_for(fut_optional, timeout=2)
+        res5 = await asyncio.wait_for(fut_optional_post, timeout=2)
 
         assert res1 == {"g": 1}
         assert res_text == "text"
         assert res2 == {"p": 2}
         assert res3 == {"s": 3}
+        assert res4 == ("available", {"o": 4})
+        assert res5 == ("available", {"op": 5})
         assert client._do_get.await_count == 2
         client._do_get.assert_any_await("/g", "t")
         client._do_get.assert_any_await("/gt", "t", response_format="text")
+        client._do_optional_get.assert_awaited_once_with("/o", "t")
+        client._do_optional_post.assert_awaited_once_with("/op", {"read": True}, "t")
 
         # cancel the processor task
         task.cancel()

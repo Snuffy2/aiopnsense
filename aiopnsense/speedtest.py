@@ -39,17 +39,29 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 include min, max, sample count, and period bounds. Returns
                 ``{"available": False}`` when the plugin endpoint is missing.
         """
-        if not await self._is_get_endpoint_available(SPEEDTEST_SHOW_RECENT_ENDPOINT):
+        show_recent_state, show_recent_payload = await self._check_optional_get_endpoint(
+            SPEEDTEST_SHOW_RECENT_ENDPOINT
+        )
+        if show_recent_state == "missing":
             _LOGGER.debug("Speedtest not installed")
             return {"available": False}
+        if show_recent_state != "available":
+            _LOGGER.debug("Speedtest primary endpoint unavailable")
+            return {"available": True, "last": {}, "average": {}}
 
-        show_recent = await self._safe_dict_get(SPEEDTEST_SHOW_RECENT_ENDPOINT)
-        if await self._is_get_endpoint_available(SPEEDTEST_SHOW_STAT_ENDPOINT):
-            show_stat = await self._safe_dict_get(SPEEDTEST_SHOW_STAT_ENDPOINT)
+        show_stat_state, show_stat_payload = await self._check_optional_get_endpoint(
+            SPEEDTEST_SHOW_STAT_ENDPOINT
+        )
+        if show_stat_state == "available":
+            show_stat = show_stat_payload if isinstance(show_stat_payload, MutableMapping) else {}
         else:
-            _LOGGER.debug("Speedtest statistics endpoint unavailable")
+            if show_stat_state == "missing":
+                _LOGGER.debug("Speedtest statistics endpoint unavailable")
+            else:
+                _LOGGER.debug("Speedtest statistics probe unavailable")
             show_stat = {}
 
+        show_recent = show_recent_payload if isinstance(show_recent_payload, MutableMapping) else {}
         server_id, server_name = self._parse_recent_server(show_recent.get("server"))
         date = show_recent.get("date") if isinstance(show_recent.get("date"), str) else None
         url = show_recent.get("url") if isinstance(show_recent.get("url"), str) else None
@@ -123,7 +135,10 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 endpoint, or an empty mapping when the plugin endpoint is
                 unavailable or returns a malformed payload.
         """
-        if not await self._is_get_endpoint_available(SPEEDTEST_SHOW_RECENT_ENDPOINT):
+        optional_state, _payload = await self._check_optional_get_endpoint(
+            SPEEDTEST_SHOW_RECENT_ENDPOINT
+        )
+        if optional_state != "available":
             _LOGGER.debug("Speedtest not installed")
             return {}
 

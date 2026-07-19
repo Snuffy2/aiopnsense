@@ -37,6 +37,29 @@ class ClientQueueMixin:
             """Execute a queued streaming GET request."""
             ...
 
+        async def _do_optional_get(
+            self,
+            path: str,
+            caller: str = "Unknown",
+        ) -> tuple[
+            Literal["available", "malformed", "missing", "unavailable"],
+            object,
+        ]:
+            """Execute a queued optional GET request."""
+            ...
+
+        async def _do_optional_post(
+            self,
+            path: str,
+            payload: MutableMapping[str, Any] | None = None,
+            caller: str = "Unknown",
+        ) -> tuple[
+            Literal["available", "malformed", "missing", "unavailable"],
+            object,
+        ]:
+            """Execute a queued optional read-only POST request."""
+            ...
+
         async def _do_post(
             self,
             path: str,
@@ -123,6 +146,29 @@ class ClientQueueMixin:
         """
         return await self._queue_request("get", path)
 
+    async def _get_optional(
+        self, path: str
+    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+        """Queue an optional GET request and return the envelope response."""
+        return cast(
+            tuple[Literal["available", "malformed", "missing", "unavailable"], object],
+            await self._queue_request("optional_get", path),
+        )
+
+    async def _post_optional(
+        self,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+        """Queue an optional read-only POST and return its envelope response."""
+        return cast(
+            tuple[
+                Literal["available", "malformed", "missing", "unavailable"],
+                object,
+            ],
+            await self._queue_request("optional_post", path, payload),
+        )
+
     async def _get_text(self, path: str) -> str | None:
         """Queue a GET request and return its text body.
 
@@ -167,6 +213,14 @@ class ClientQueueMixin:
                         future.set_result(result)
                 elif method == "get":
                     result = await self._do_get(path, caller)
+                    if future is not None and not future.done():
+                        future.set_result(result)
+                elif method == "optional_get":
+                    result = await self._do_optional_get(path, caller)
+                    if future is not None and not future.done():
+                        future.set_result(result)
+                elif method == "optional_post":
+                    result = await self._do_optional_post(path, payload, caller)
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "get_text":

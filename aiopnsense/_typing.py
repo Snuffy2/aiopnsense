@@ -1,16 +1,31 @@
 """Typing protocol contracts for aiopnsense mixins."""
 
+import asyncio
 from collections.abc import AsyncGenerator, MutableMapping
 from datetime import tzinfo
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 
 class AiopnsenseClientProtocol(Protocol):
     """Structural typing contract used by split aiopnsense mixins."""
 
     _throw_errors: bool
+    _endpoint_availability: dict[tuple[Literal["get", "post"], str], bool]
+    _endpoint_checked_at: dict[tuple[Literal["get", "post"], str], float]
+    _endpoint_locks: dict[tuple[Literal["get", "post"], str], asyncio.Lock]
+    _optional_endpoint_missing_pending_confirmation: set[tuple[Literal["get", "post"], str]]
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None: ...
+
+    async def _get_optional(
+        self, path: str
+    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]: ...
+
+    async def _post_optional(
+        self,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]: ...
 
     async def _get_text(self, path: str) -> str | None: ...
 
@@ -57,3 +72,19 @@ class AiopnsenseClientProtocol(Protocol):
     async def _is_post_endpoint_available(
         self, path: str, force_refresh: bool = False
     ) -> bool | None: ...
+
+    async def _check_optional_get_endpoint(
+        self,
+        path: str,
+        *,
+        force_refresh: bool = False,
+    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]: ...
+
+    async def _check_optional_post_endpoint(
+        self,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+        cache_path: str | None = None,
+        *,
+        force_refresh: bool = False,
+    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]: ...
