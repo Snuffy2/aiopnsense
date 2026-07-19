@@ -473,7 +473,29 @@ class ClientEndpointMixin:
         payload: MutableMapping[str, Any] | None,
         force_refresh: bool,
     ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
-        """Run one real optional request and reconcile its registered cache key."""
+        """Run a live optional probe and reconcile the optional endpoint cache key.
+
+        Args:
+            method (Literal["get", "post"]): HTTP method for the optional probe.
+            path (str): API endpoint path that is requested.
+            cache_path (str): Cache key to reconcile against, typically
+                ``path`` or a normalized cache alias.
+            payload (MutableMapping[str, Any] | None): Optional request payload
+                used only for POST probes.
+            force_refresh (bool): Whether to bypass stale/confirmed cache state.
+
+        Returns:
+            tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+                ``("available", payload)`` or ``("malformed", payload)`` when the
+                request is reachable and can be interpreted as a response; ``("missing", {})`` only after a
+                confirmed 404 path; ``("unavailable", {})`` for transient failures
+                or unregistered optional endpoints.
+
+        Notes:
+            The method only short-circuits via a fresh confirmed-negative cache
+            state. A positive cache entry does not suppress a real request because
+            callers consume its payload and still need a fresh probe result.
+        """
         if not path or not self._is_optional_endpoint(method, cache_path):
             _LOGGER.debug("Unregistered optional endpoint: %s %s", method.upper(), path)
             return "unavailable", {}

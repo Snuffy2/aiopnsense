@@ -355,12 +355,15 @@ async def test_run_speedtest_uses_extended_timeout(make_client) -> None:
         await client.async_close()
 
 
+@pytest.mark.parametrize("optional_state", ["missing", "unavailable"])
 @pytest.mark.asyncio
-async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client) -> None:
-    """run_speedtest should return an empty payload when endpoint is unavailable."""
+async def test_run_speedtest_returns_empty_when_endpoint_not_ready(
+    make_client, optional_state: str
+) -> None:
+    """run_speedtest should return an empty payload when probe is absent or blocked."""
     client, _session = make_mock_session_client(make_client)
     try:
-        client._check_optional_get_endpoint = AsyncMock(return_value=("missing", {}))
+        client._check_optional_get_endpoint = AsyncMock(return_value=(optional_state, {}))
         client._safe_dict_get_with_timeout = AsyncMock()
 
         result = await client.run_speedtest()
@@ -369,6 +372,30 @@ async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client) ->
         client._safe_dict_get_with_timeout.assert_not_awaited()
         client._check_optional_get_endpoint.assert_awaited_once_with(
             "/api/speedtest/service/showlog"
+        )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize("optional_state", ["available", "malformed"])
+@pytest.mark.asyncio
+async def test_run_speedtest_allows_malformed_and_available_probe_payloads(
+    make_client: ClientType, optional_state: str
+) -> None:
+    """run_speedtest should proceed when probe payload is malformed or available."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_get_endpoint = AsyncMock(return_value=(optional_state, {}))
+        client._safe_dict_get_with_timeout = AsyncMock(return_value={"timestamp": "x"})
+
+        result = await client.run_speedtest()
+
+        assert result == {"timestamp": "x"}
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/speedtest/service/showlog"
+        )
+        client._safe_dict_get_with_timeout.assert_awaited_once_with(
+            "/api/speedtest/service/run", timeout_seconds=180
         )
     finally:
         await client.async_close()

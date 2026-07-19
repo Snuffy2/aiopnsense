@@ -155,14 +155,19 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, Any]: Response mapping from the Speedtest ``run``
                 endpoint, or an empty mapping when the plugin endpoint is
-                unavailable or returns a malformed payload.
+                unavailable or cannot be safely invoked.
         """
         optional_state, _payload = await self._check_optional_get_endpoint(
             SPEEDTEST_SHOW_LOG_ENDPOINT
         )
-        if optional_state != "available":
+        if optional_state == "missing":
             _LOGGER.debug("Speedtest not installed")
             return {}
+        if optional_state == "unavailable":
+            _LOGGER.debug("Speedtest temporarily unavailable")
+            return {}
+        if optional_state == "malformed":
+            _LOGGER.debug("Speedtest probe returned malformed payload; proceeding with run request")
 
         response = await self._safe_dict_get_with_timeout(
             SPEEDTEST_RUN_ENDPOINT,
