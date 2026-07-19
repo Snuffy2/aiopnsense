@@ -285,6 +285,78 @@ async def test_get_vnstat_fallback_for_optional_states(
 
 
 @pytest.mark.asyncio
+async def test_get_vnstat_result_marks_non_mapping_hourly_payload_malformed(
+    make_client: Any,
+) -> None:
+    """An available non-mapping hourly payload should be non-authoritative.
+
+    Args:
+        make_client (Any): Fixture factory returning OPNsense clients.
+
+    Returns:
+        None: This test validates the vnStat result availability envelope.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_get_endpoint = AsyncMock(return_value=("available", []))
+
+        result = await client.get_vnstat_result()
+
+        assert result.data == {"interfaces": {}, "interface_count": 0}
+        assert result.state == "malformed"
+        assert result.authoritative is False
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("daily_state", "monthly_state", "expected_state"),
+    [
+        ("pending", "malformed", "pending"),
+        ("transient", "pending", "pending"),
+        ("missing", "malformed", "malformed"),
+        ("missing", "available", "missing"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_vnstat_result_uses_subordinate_state_precedence(
+    make_client: Any,
+    daily_state: str,
+    monthly_state: str,
+    expected_state: str,
+) -> None:
+    """Daily and monthly failures should use the documented state precedence.
+
+    Args:
+        make_client (Any): Fixture factory returning OPNsense clients.
+        daily_state (str): Optional endpoint state for daily data.
+        monthly_state (str): Optional endpoint state for monthly data.
+        expected_state (str): Expected aggregate result state.
+
+    Returns:
+        None: This test validates subordinate vnStat availability precedence.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_get_endpoint = AsyncMock(
+            side_effect=[
+                ("available", {"response": ""}),
+                (daily_state, {}),
+                (monthly_state, {"response": ""} if monthly_state == "available" else {}),
+            ]
+        )
+        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
+
+        result = await client.get_vnstat_result()
+
+        assert result.data == {"interfaces": {}, "interface_count": 0}
+        assert result.state == expected_state
+        assert result.authoritative is False
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_parse_vnstat_payload_and_helpers_edge_cases(make_client) -> None:
     """VnStat payload/helper methods should handle malformed and fallback scenarios."""
     client, _session = make_mock_session_client(make_client)

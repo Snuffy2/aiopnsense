@@ -152,6 +152,31 @@ async def test_get_smart_returns_empty_list_for_non_list_payload(make_client: Cl
 
 
 @pytest.mark.asyncio
+async def test_get_smart_result_marks_non_mapping_payload_malformed(
+    make_client: ClientType,
+) -> None:
+    """SMART result queries should reject non-mapping available payloads.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates the SMART result availability envelope.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_post_endpoint = AsyncMock(return_value=("available", []))
+
+        result = await client.get_smart_result()
+
+        assert result.data == []
+        assert result.state == "malformed"
+        assert result.authoritative is False
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("operation", "endpoint", "expected"),
     [

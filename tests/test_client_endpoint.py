@@ -902,6 +902,84 @@ async def test_optional_endpoint_core_health_uses_fresh_raw_firmware_request(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response_or_error",
+    [FakeResponse(status=503, reason="Unavailable", ok=False), TimeoutError("timed out")],
+)
+async def test_optional_endpoint_core_health_rejects_failed_requests(
+    response_or_error: FakeResponse | Exception,
+    make_client: MakeClientFactory,
+) -> None:
+    """A non-OK or failed firmware request cannot confirm optional absence."""
+    client, session = make_mock_session_client(make_client)
+
+    def get(*_args: object, **_kwargs: object) -> FakeResponse:
+        """Return or raise the configured firmware health outcome."""
+        if isinstance(response_or_error, Exception):
+            raise response_or_error
+        return response_or_error
+
+    session.get = get
+    try:
+        assert await client._is_core_firmware_endpoint_healthy() is False
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_check_optional_endpoint_rejects_unregistered_route(
+    make_client: MakeClientFactory,
+) -> None:
+    """An unregistered route is transient and never reaches transport."""
+    client, _session = make_mock_session_client(make_client)
+    client._get_optional = AsyncMock()
+    try:
+        assert await client._check_optional_get_endpoint("/api/unregistered") == (
+            "transient",
+            {},
+        )
+        client._get_optional.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_endpoint_probes_share_fresh_locked_result(
+    make_client: MakeClientFactory,
+) -> None:
+    """A waiter reuses the fresh result stored by the probe holding the lock."""
+    client, session = make_mock_session_client(make_client)
+    path = "/api/test/endpoint"
+    calls = 0
+
+    class DelayedResponse(FakeResponse):
+        """Successful response that lets a competing probe reach the lock."""
+
+        async def __aenter__(self) -> FakeResponse:
+            """Yield once before exposing the successful response."""
+            await asyncio.sleep(0)
+            return await super().__aenter__()
+
+    def get(*_args: object, **_kwargs: object) -> FakeResponse:
+        """Count endpoint requests and yield once while entering the response."""
+        nonlocal calls
+        calls += 1
+        return DelayedResponse(status=200, ok=True)
+
+    session.get = get
+    try:
+        first_result, second_result = await asyncio.gather(
+            client._is_get_endpoint_available(path),
+            client._is_get_endpoint_available(path),
+        )
+        assert first_result is True
+        assert second_result is True
+        assert calls == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_optional_endpoint_calls_are_serialized_per_cache_key(
     make_client: MakeClientFactory,
 ) -> None:

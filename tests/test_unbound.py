@@ -77,6 +77,34 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_unbound_blocklist_result_marks_valid_rows_authoritative(
+    make_client: ClientType,
+) -> None:
+    """A fully valid DNSBL response should produce an authoritative result.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates the DNSBL result availability envelope.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=("available", {"rows": [{"uuid": "dnsbl1", "enabled": "1"}]})
+        )
+
+        result = await client.get_unbound_blocklist_result()
+
+        assert result.data == {"dnsbl1": {"uuid": "dnsbl1", "enabled": "1"}}
+        assert result.state == "available"
+        assert result.authoritative is True
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("api_response", [{}, {"rows": []}, {"rows": "not-a-list"}, []])
 async def test_get_unbound_blocklist_handles_empty_or_invalid_responses(
     make_client, api_response

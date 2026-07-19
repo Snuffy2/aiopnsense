@@ -149,6 +149,29 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client) ->
             False,
             id="showstat-missing",
         ),
+        pytest.param(
+            [
+                (
+                    "available",
+                    [
+                        [
+                            "2026-03-14T03:09:45",
+                            "198.51.100.10",
+                            "72800",
+                            "Test ISP, New York, NY",
+                            "United States",
+                            "1",
+                            "2",
+                            "3",
+                            "https://www.speedtest.net/result/c/abc",
+                        ]
+                    ],
+                ),
+                ("transient", {}),
+            ],
+            False,
+            id="showstat-transient",
+        ),
     ],
 )
 @pytest.mark.asyncio

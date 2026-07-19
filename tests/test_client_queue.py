@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import (
+    CategoryResult,
     OPNsenseError,
     client_queue as aiopnsense_client_queue,
 )
@@ -17,6 +18,37 @@ from tests.conftest import (
     MakeClientFactory,
     make_mock_session_client,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "path", "payload", "queue_method"),
+    [
+        ("_get_optional", "/api/optional/get", None, "optional_get"),
+        ("_post_optional", "/api/optional/post", {"read": True}, "optional_post"),
+    ],
+)
+async def test_optional_queue_wrappers_return_category_results(
+    method_name: str,
+    path: str,
+    payload: MutableMapping[str, Any] | None,
+    queue_method: str,
+    make_client: MakeClientFactory,
+) -> None:
+    """Optional wrappers enqueue the matching operation and return its envelope."""
+    client, _session = make_mock_session_client(make_client)
+    expected = CategoryResult({"value": 1}, "available", True)
+    client._queue_request = AsyncMock(return_value=expected)
+    try:
+        if payload is None:
+            result = await getattr(client, method_name)(path)
+            client._queue_request.assert_awaited_once_with(queue_method, path)
+        else:
+            result = await getattr(client, method_name)(path, payload)
+            client._queue_request.assert_awaited_once_with(queue_method, path, payload)
+        assert result is expected
+    finally:
+        await client.async_close()
 
 
 @pytest.mark.asyncio

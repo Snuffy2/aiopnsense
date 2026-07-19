@@ -818,6 +818,17 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
                         "hwaddr": "cc:cc:cc",
                         "expire": "never",
                     },
+                    {
+                        "address": None,
+                        "hostname": "missing-address",
+                        "if": "em0",
+                        "expire": "never",
+                    },
+                    {
+                        "address": "192.0.2.25",
+                        "hostname": "missing-interface",
+                        "expire": "never",
+                    },
                 ]
             }
         )
@@ -839,6 +850,7 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
         assert lease_by_address["192.0.2.23"]["reserved_by"] == ["hwaddr"]
         assert lease_by_address["192.0.2.23"]["client_id"] == "01:33:44"
         assert lease_by_address["192.0.2.24"]["type"] == "dynamic"
+        assert "192.0.2.25" not in lease_by_address
     finally:
         await client.async_close()
 
@@ -865,14 +877,34 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
 
         client._check_optional_get_endpoint = AsyncMock(
             side_effect=[
+                ("available", "bad-response"),
                 ("available", {"rows": "bad"}),
                 (
                     "available",
                     {
                         "rows": [
+                            None,
                             {"state": "inactive", "mac": "skip"},
-                            {"state": "active", "mac": "bad-time", "ends": "invalid-date"},
-                            {"state": "active", "mac": "expired", "ends": past_str},
+                            {
+                                "state": "active",
+                                "mac": "bad-identity",
+                                "address": None,
+                                "if": "em0",
+                            },
+                            {
+                                "state": "active",
+                                "mac": "bad-time",
+                                "address": "10.0.0.7",
+                                "if": "em0",
+                                "ends": "invalid-date",
+                            },
+                            {
+                                "state": "active",
+                                "mac": "expired",
+                                "address": "10.0.0.8",
+                                "if": "em0",
+                                "ends": past_str,
+                            },
                             {
                                 "state": "active",
                                 "mac": "ok",
@@ -885,6 +917,7 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
             ]
         )
         assert await client._get_isc_dhcpv4_leases() == []
+        assert await client._get_isc_dhcpv4_leases() == []
         v4_leases = await client._get_isc_dhcpv4_leases()
         assert len(v4_leases) == 1
         assert v4_leases[0]["mac"] == "ok"
@@ -892,18 +925,34 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
 
         client._check_optional_get_endpoint = AsyncMock(
             side_effect=[
+                ("available", "bad-response"),
                 ("available", {"rows": "bad"}),
                 (
                     "available",
                     {
                         "rows": [
                             None,
+                            {"state": "inactive", "mac": "skip-v6"},
+                            {"state": "active", "mac": None},
+                            {
+                                "state": "active",
+                                "mac": "bad-identity-v6",
+                                "address": "2001:db8::7",
+                            },
                             {
                                 "state": "active",
                                 "mac": "bad-time-v6",
+                                "address": "2001:db8::8",
+                                "if": "em1",
                                 "ends": "invalid-date",
                             },
-                            {"state": "active", "mac": "expired-v6", "ends": past_str},
+                            {
+                                "state": "active",
+                                "mac": "expired-v6",
+                                "address": "2001:db8::9",
+                                "if": "em1",
+                                "ends": past_str,
+                            },
                             {
                                 "state": "active",
                                 "mac": "ok-v6",
@@ -915,6 +964,7 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
                 ),
             ]
         )
+        assert await client._get_isc_dhcpv6_leases() == []
         assert await client._get_isc_dhcpv6_leases() == []
         v6_leases = await client._get_isc_dhcpv6_leases()
         assert len(v6_leases) == 1
@@ -1103,6 +1153,29 @@ async def test_version_switched_get_arp_table_endpoint_unavailable(
 
         assert await client.get_arp_table(resolve_hostnames=False) == []
         assert client._check_optional_get_endpoint.await_count == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_arp_table_result_rejects_non_mapping_data(
+    make_client: ClientType,
+) -> None:
+    """Verify available ARP responses with non-mapping data are malformed.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates schema-aware ARP response handling.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=CategoryResult("bad-response", "available", True)
+        )
+
+        assert await client.get_arp_table_result() == CategoryResult([], "malformed", False)
     finally:
         await client.async_close()
 

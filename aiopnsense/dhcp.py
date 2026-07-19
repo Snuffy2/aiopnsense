@@ -474,9 +474,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
 
         leases: list = []
         for lease_info in cleaned_leases:
-            if not isinstance(lease_info, MutableMapping):
-                malformed = True
-                continue
             lease: dict[str, Any] = {}
             lease["address"] = lease_info.get("address", None)
             lease["hostname"] = (

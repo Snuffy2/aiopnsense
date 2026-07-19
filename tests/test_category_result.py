@@ -35,6 +35,17 @@ def test_category_result_rejects_contradictory_authority(
         CategoryResult({}, state, authoritative)
 
 
+@pytest.mark.parametrize("value", [None, ("unknown", {"value": 1}), ("available",)])
+def test_category_result_coerce_rejects_invalid_legacy_values(value: object) -> None:
+    """Invalid legacy values become a non-authoritative malformed result."""
+    assert CategoryResult.coerce(value) == CategoryResult({}, "malformed", False)
+
+
+def test_category_result_comparison_with_unrelated_value_is_false() -> None:
+    """An unrelated value does not compare equal to a category result."""
+    assert CategoryResult({}, "available", True) != object()
+
+
 @pytest.mark.parametrize(
     ("states", "expected"),
     [
