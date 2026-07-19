@@ -330,8 +330,8 @@ class ClientTransportMixin:
             caller (str): Caller name used for diagnostics and logging.
 
         Returns:
-            tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
-                Availability state and parsed response payload.
+            CategoryResult[object]: Result with an ``"available"``, ``"malformed"``,
+                ``"missing"``, or ``"transient"`` state and its associated payload.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"

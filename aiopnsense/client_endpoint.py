@@ -494,11 +494,9 @@ class ClientEndpointMixin:
             force_refresh (bool): Whether to bypass stale/confirmed cache state.
 
         Returns:
-            CategoryResult: ``("available", payload)`` or ``("malformed", payload)``
-                when the request is reachable and can be interpreted as a response,
-                ``("missing", {})`` only after a confirmed 404 path, and
-                ``("unavailable", {})`` for transient failures or unregistered
-                optional endpoints.
+            CategoryResult[object]: Probe result with an ``"available"``,
+                ``"malformed"``, ``"missing"``, ``"pending"``, or ``"transient"``
+                state and its associated payload.
 
         Notes:
             The method only short-circuits via a fresh confirmed-negative cache
