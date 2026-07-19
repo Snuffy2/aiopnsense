@@ -596,7 +596,7 @@ async def test_check_optional_get_endpoint_refreshes_positive_state_and_payload(
     """Verify optional endpoint success keeps fetching fresh payload and updates timestamp."""
     client, _session = make_mock_session_client(make_client)
     times = iter([1000.0, 1001.0, 1002.0])
-    path = "/api/speedtest/service/showrecent"
+    path = "/api/speedtest/service/showlog"
     cache_key = ("get", path)
     monkeypatch.setattr(
         "aiopnsense.client_endpoint.monotonic",
@@ -698,7 +698,7 @@ async def test_check_optional_get_endpoint_stale_negative_recovers_after_ttl_exp
 ) -> None:
     """Verify stale optional misses are retried and can recover to available."""
     client, _session = make_mock_session_client(make_client)
-    path = "/api/speedtest/service/showrecent"
+    path = "/api/speedtest/service/showlog"
     cache_key = ("get", path)
     client._endpoint_availability[cache_key] = False
     times = iter([1000.0, 1001.0])
@@ -729,7 +729,7 @@ async def test_check_optional_get_endpoint_stale_negative_renews_with_one_probe(
 ) -> None:
     """A persistently missing endpoint costs one optional probe per negative TTL."""
     client, _session = make_mock_session_client(make_client)
-    path = "/api/speedtest/service/showrecent"
+    path = "/api/speedtest/service/showlog"
     cache_key = ("get", path)
     client._endpoint_availability[cache_key] = False
     client._endpoint_checked_at[cache_key] = 1000.0 - (DEFAULT_NEGATIVE_CACHE_TTL_SECONDS + 1)
@@ -793,7 +793,7 @@ async def test_check_optional_get_endpoint_force_refresh_preserves_confirmation_
 ) -> None:
     """Force refresh bypasses cache freshness without bypassing confirmation."""
     client, _session = make_mock_session_client(make_client)
-    path = "/api/speedtest/service/showrecent"
+    path = "/api/speedtest/service/showlog"
     cache_key = ("get", path)
     client._optional_endpoint_missing_pending_confirmation.add(cache_key)
     client._get_optional = AsyncMock(return_value=(state, {}))
@@ -854,7 +854,7 @@ async def test_check_optional_get_endpoint_recovers_before_core_confirmation(
 ) -> None:
     """A recovered optional route wins before a pending miss is confirmed."""
     client, _session = make_mock_session_client(make_client)
-    path = "/api/speedtest/service/showrecent"
+    path = "/api/speedtest/service/showlog"
     cache_key = ("get", path)
     client._get_optional = AsyncMock(
         side_effect=[("missing", {}), ("available", {"recovered": True})]
@@ -938,7 +938,7 @@ async def test_check_optional_get_endpoint_cached_positive_not_mutated_by_transi
 ) -> None:
     """Verify transient optional states do not erase prior positive cache."""
     client, _session = make_mock_session_client(make_client)
-    path = "/api/speedtest/service/showrecent"
+    path = "/api/speedtest/service/showlog"
     cache_key = ("get", path)
     client._endpoint_availability[cache_key] = True
     client._endpoint_checked_at[cache_key] = monotonic()

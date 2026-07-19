@@ -54,7 +54,7 @@ class ClientEndpointMixin:
     _CORE_FIRMWARE_STATUS_ENDPOINT = "/api/core/firmware/status"
     _OPTIONAL_GET_ENDPOINTS: frozenset[str] = frozenset(
         {
-            "/api/speedtest/service/showrecent",
+            "/api/speedtest/service/showlog",
             "/api/speedtest/service/showstat",
             "/api/nut/diagnostics/upsstatus",
             "/api/unbound/settings/search_dnsbl",

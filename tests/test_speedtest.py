@@ -22,7 +22,7 @@ async def test_get_speedtest_skips_calls_when_endpoint_missing(make_client) -> N
 
         assert result == {"available": False}
         client._check_optional_get_endpoint.assert_awaited_once_with(
-            "/api/speedtest/service/showrecent"
+            "/api/speedtest/service/showlog"
         )
     finally:
         await client.async_close()
@@ -46,22 +46,27 @@ async def test_get_speedtest_preserves_plugin_availability_during_transient_fail
 
 
 @pytest.mark.asyncio
-async def test_get_speedtest_normalizes_recent_and_stat_payloads(make_client) -> None:
-    """get_speedtest should normalize showrecent and showstat payload fields."""
+async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client) -> None:
+    """get_speedtest should normalize shared showlog and showstat payload fields."""
     client, _session = make_mock_session_client(make_client)
     try:
         client._check_optional_get_endpoint = AsyncMock(
             side_effect=[
                 (
                     "available",
-                    {
-                        "date": "2026-03-14T03:09:45",
-                        "server": "72800 RippleFiber, Newark, NJ",
-                        "download": "836.05",
-                        "upload": "832.97",
-                        "latency": "4.0",
-                        "url": "https://www.speedtest.net/result/c/abc",
-                    },
+                    [
+                        [
+                            "2026-03-14T03:09:45",
+                            "198.51.100.10",
+                            "72800",
+                            "RippleFiber, Newark, NJ",
+                            "United States",
+                            "836.05",
+                            "832.97",
+                            "4.0",
+                            "https://www.speedtest.net/result/c/abc",
+                        ]
+                    ],
                 ),
                 (
                     "available",
@@ -100,7 +105,22 @@ async def test_get_speedtest_normalizes_recent_and_stat_payloads(make_client) ->
     [
         pytest.param(
             [
-                ("available", {"download": "1", "upload": "2", "latency": "3"}),
+                (
+                    "available",
+                    [
+                        [
+                            "2026-03-14T03:09:45",
+                            "198.51.100.10",
+                            "72800",
+                            "Test ISP, New York, NY",
+                            "United States",
+                            "1",
+                            "2",
+                            "3",
+                            "https://www.speedtest.net/result/c/abc",
+                        ]
+                    ],
+                ),
                 ("available", {}),
             ],
             True,
@@ -108,7 +128,22 @@ async def test_get_speedtest_normalizes_recent_and_stat_payloads(make_client) ->
         ),
         pytest.param(
             [
-                ("available", {"download": "1", "upload": "2", "latency": "3"}),
+                (
+                    "available",
+                    [
+                        [
+                            "2026-03-14T03:09:45",
+                            "198.51.100.10",
+                            "72800",
+                            "Test ISP, New York, NY",
+                            "United States",
+                            "1",
+                            "2",
+                            "3",
+                            "https://www.speedtest.net/result/c/abc",
+                        ]
+                    ],
+                ),
                 ("missing", {}),
             ],
             False,
@@ -119,7 +154,7 @@ async def test_get_speedtest_normalizes_recent_and_stat_payloads(make_client) ->
 @pytest.mark.asyncio
 async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
     make_client: ClientType,
-    optional_results: list[tuple[str, dict[str, str]]],
+    optional_results: list[tuple[str, object]],
     showstat_available: bool,
 ) -> None:
     """Validate ``get_speedtest`` probes ``showstat`` before optional fetches.
@@ -140,7 +175,7 @@ async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
 
         assert result["available"] is True
         assert client._check_optional_get_endpoint.await_args_list == [
-            call("/api/speedtest/service/showrecent"),
+            call("/api/speedtest/service/showlog"),
             call("/api/speedtest/service/showstat"),
         ]
 
@@ -165,14 +200,19 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client) -> None:
             side_effect=[
                 (
                     "available",
-                    {
-                        "date": 12345,
-                        "server": "Regional POP - NYC",
-                        "download": "bad-number",
-                        "upload": "12.5",
-                        "latency": None,
-                        "url": 999,
-                    },
+                    [
+                        [
+                            12345,
+                            "198.51.100.10",
+                            None,
+                            "Regional POP - NYC",
+                            "United States",
+                            "bad-number",
+                            "12.5",
+                            None,
+                            999,
+                        ]
+                    ],
                 ),
                 (
                     "available",
@@ -208,18 +248,88 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client) -> None:
         await client.async_close()
 
 
+@pytest.mark.parametrize("show_log", [None, {}, [], ["malformed-row"], [["too", "short"]]])
 @pytest.mark.asyncio
-async def test_parse_recent_server_variants(make_client) -> None:
-    """_parse_recent_server should parse known server formats safely."""
+async def test_parse_showlog_latest_rejects_malformed_rows(
+    make_client: ClientType, show_log: object
+) -> None:
+    """_parse_showlog_latest should reject missing or malformed history rows."""
     client, _session = make_mock_session_client(make_client)
     try:
-        assert client._parse_recent_server(None) == (None, None)
-        assert client._parse_recent_server("   ") == (None, None)
-        assert client._parse_recent_server("10001 Test ISP, NY") == ("10001", "Test ISP, NY")
-        assert client._parse_recent_server("Unstructured Server Name") == (
+        assert client._parse_showlog_latest(show_log) == {}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    (
+        "raw_server_id",
+        "raw_server_name",
+        "expected_server_id",
+        "expected_server_name",
+    ),
+    [
+        (
+            "",
+            "123 Fiber",
             None,
-            "Unstructured Server Name",
+            "123 Fiber",
+        ),
+        (
+            "72800",
+            "",
+            "72800",
+            None,
+        ),
+        (
+            True,
+            "123 Fiber",
+            None,
+            "123 Fiber",
+        ),
+        (
+            False,
+            "123 Fiber",
+            None,
+            "123 Fiber",
+        ),
+    ],
+    ids=(
+        "empty-id-with-name",
+        "empty-name-with-id",
+        "bool-true-id",
+        "bool-false-id",
+    ),
+)
+@pytest.mark.asyncio
+async def test_parse_showlog_latest_preserves_server_fields(
+    make_client: ClientType,
+    raw_server_id: object,
+    raw_server_name: str,
+    expected_server_id: str | None,
+    expected_server_name: str | None,
+) -> None:
+    """_parse_showlog_latest should preserve separate server id and server name."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        parsed = client._parse_showlog_latest(
+            [
+                [
+                    "2026-03-14T03:09:45",
+                    "198.51.100.10",
+                    raw_server_id,
+                    raw_server_name,
+                    "United States",
+                    "1",
+                    "2",
+                    "3",
+                    "https://www.speedtest.net/result/c/abc",
+                ]
+            ]
         )
+
+        assert parsed.get("server_id") == expected_server_id
+        assert parsed.get("server") == expected_server_name
     finally:
         await client.async_close()
 
@@ -236,7 +346,7 @@ async def test_run_speedtest_uses_extended_timeout(make_client) -> None:
 
         assert result == {"timestamp": "x"}
         client._check_optional_get_endpoint.assert_awaited_once_with(
-            "/api/speedtest/service/showrecent"
+            "/api/speedtest/service/showlog"
         )
         client._safe_dict_get_with_timeout.assert_awaited_once_with(
             "/api/speedtest/service/run", timeout_seconds=180
@@ -258,7 +368,7 @@ async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client) ->
         assert result == {}
         client._safe_dict_get_with_timeout.assert_not_awaited()
         client._check_optional_get_endpoint.assert_awaited_once_with(
-            "/api/speedtest/service/showrecent"
+            "/api/speedtest/service/showlog"
         )
     finally:
         await client.async_close()
@@ -276,7 +386,7 @@ async def test_run_speedtest_returns_empty_for_non_mapping_response(make_client)
 
         assert result == {}
         client._check_optional_get_endpoint.assert_awaited_once_with(
-            "/api/speedtest/service/showrecent"
+            "/api/speedtest/service/showlog"
         )
         client._safe_dict_get_with_timeout.assert_awaited_once_with(
             "/api/speedtest/service/run", timeout_seconds=180
