@@ -13,6 +13,7 @@ from .client_queue import ClientQueueMixin
 from .client_transport import ClientTransportMixin
 from .const import DEFAULT_CACHE_TTL_SECONDS, DEFAULT_NEGATIVE_CACHE_TTL_SECONDS
 from .exceptions import OPNsenseInvalidArgument
+from ._typing import EndpointAvailabilityState
 
 _UNSET: object = object()
 
@@ -79,7 +80,9 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
                 self._throw_errors = initial
         self._firmware_version: str | None = None
         self._use_snake_case: bool | None = None
-        self._endpoint_availability: dict[tuple[Literal["get", "post"], str], bool] = {}
+        self._endpoint_availability: dict[
+            tuple[Literal["get", "post"], str], EndpointAvailabilityState
+        ] = {}
         self._endpoint_checked_at: dict[tuple[Literal["get", "post"], str], float] = {}
         self._endpoint_locks: dict[tuple[Literal["get", "post"], str], asyncio.Lock] = {}
         self._optional_endpoint_missing_pending_confirmation: set[

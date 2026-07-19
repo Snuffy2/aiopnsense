@@ -8,7 +8,11 @@ from warnings import deprecated
 
 import aiohttp
 
-from ._typing import AiopnsenseClientProtocol
+from ._typing import (
+    AiopnsenseClientProtocol,
+    CategoryResult,
+    EndpointAvailabilityState,
+)
 from .const import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
@@ -21,7 +25,7 @@ class ClientEndpointMixin:
     """Endpoint selection and availability methods for OPNsenseClient."""
 
     if TYPE_CHECKING:
-        _endpoint_availability: dict[tuple[Literal["get", "post"], str], bool]
+        _endpoint_availability: dict[tuple[Literal["get", "post"], str], EndpointAvailabilityState]
         _endpoint_cache_ttl_seconds: int
         _endpoint_negative_cache_ttl_seconds: int
         _endpoint_locks: dict[tuple[Literal["get", "post"], str], asyncio.Lock]
@@ -39,15 +43,13 @@ class ClientEndpointMixin:
         _verify_ssl: bool
         _endpoint_checked_at: dict[tuple[Literal["get", "post"], str], float]
 
-        async def _get_optional(
-            self, path: str
-        ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]: ...
+        async def _get_optional(self, path: str) -> CategoryResult[object]: ...
 
         async def _post_optional(
             self,
             path: str,
             payload: MutableMapping[str, Any] | None = None,
-        ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]: ...
+        ) -> CategoryResult[object]: ...
 
         async def _safe_dict_get(self, path: str) -> dict[str, Any]: ...
 
@@ -158,6 +160,10 @@ class ClientEndpointMixin:
                 return True
         return False
 
+    def _is_read_only_post_endpoint(self, path: str) -> bool:
+        """Return whether a POST endpoint is explicitly approved as read-only."""
+        return path in self._OPTIONAL_POST_ENDPOINTS or path in self._OPTIONAL_POST_CACHE_PATHS
+
     def _get_endpoint_cache_key(self, method: str, path: str) -> tuple[Literal["get", "post"], str]:
         """Build an internal endpoint cache key for method and path."""
         if method == "post":
@@ -174,10 +180,10 @@ class ClientEndpointMixin:
         self,
         method: str,
         path: str,
-        is_available: bool,
+        endpoint_state: EndpointAvailabilityState,
     ) -> int:
         """Return the endpoint cache TTL based on method/path and probe outcome."""
-        if is_available is False and self._is_optional_endpoint(method, path):
+        if endpoint_state == "missing" and self._is_optional_endpoint(method, path):
             return self._endpoint_negative_cache_ttl_seconds
         return self._endpoint_cache_ttl_seconds
 
@@ -185,11 +191,11 @@ class ClientEndpointMixin:
         self,
         method: str,
         path: str,
-        is_available: bool,
+        endpoint_state: EndpointAvailabilityState,
         checked_at: float,
     ) -> bool:
         """Return whether a cached availability result is still fresh."""
-        ttl_seconds = self._get_endpoint_cache_ttl_seconds(method, path, is_available)
+        ttl_seconds = self._get_endpoint_cache_ttl_seconds(method, path, endpoint_state)
         return monotonic() - checked_at < ttl_seconds
 
     def _get_cached_endpoint_availability(
@@ -197,7 +203,7 @@ class ClientEndpointMixin:
         method: str,
         path: str,
         force_refresh: bool,
-    ) -> bool | None:
+    ) -> EndpointAvailabilityState | None:
         """Return cached optional endpoint state when valid and not expired.
 
         Args:
@@ -206,7 +212,8 @@ class ClientEndpointMixin:
             force_refresh (bool): Whether to bypass cached availability.
 
         Returns:
-            bool | None: Cached availability state when cache is fresh, or ``None``
+            EndpointAvailabilityState | None: Cached availability state when cache
+                is fresh, or ``None``
                 when cache is missing, stale, or bypassed.
         """
         if force_refresh:
@@ -232,7 +239,11 @@ class ClientEndpointMixin:
         """Log a concise optional endpoint cache transition."""
         old_value = self._endpoint_availability.get(cache_key)
         old_state = (
-            "available" if old_value is True else "missing" if old_value is False else "unknown"
+            "available"
+            if old_value == "available"
+            else "missing"
+            if old_value == "missing"
+            else "unknown"
         )
         _LOGGER.debug(
             "Optional endpoint cache transition %s %s: %s -> %s (%s)",
@@ -250,7 +261,7 @@ class ClientEndpointMixin:
     ) -> None:
         """Refresh a registered positive optional endpoint observation."""
         self._log_endpoint_transition(cache_key, "available", reason)
-        self._endpoint_availability[cache_key] = True
+        self._endpoint_availability[cache_key] = "available"
         self._endpoint_checked_at[cache_key] = monotonic()
         self._optional_endpoint_missing_pending_confirmation.discard(cache_key)
 
@@ -261,8 +272,8 @@ class ClientEndpointMixin:
     ) -> None:
         """Invalidate an exact optional observation and mark it pending confirmation."""
         self._log_endpoint_transition(cache_key, "pending", reason)
-        self._endpoint_availability.pop(cache_key, None)
-        self._endpoint_checked_at.pop(cache_key, None)
+        self._endpoint_availability[cache_key] = "pending"
+        self._endpoint_checked_at[cache_key] = monotonic()
         self._optional_endpoint_missing_pending_confirmation.add(cache_key)
 
     def _store_confirmed_negative_endpoint_observation(
@@ -272,7 +283,7 @@ class ClientEndpointMixin:
     ) -> None:
         """Store a confirmed optional endpoint absence with the negative TTL."""
         self._log_endpoint_transition(cache_key, "missing", reason)
-        self._endpoint_availability[cache_key] = False
+        self._endpoint_availability[cache_key] = "missing"
         self._endpoint_checked_at[cache_key] = monotonic()
         self._optional_endpoint_missing_pending_confirmation.discard(cache_key)
 
@@ -309,31 +320,27 @@ class ClientEndpointMixin:
             return False
 
         cache_key = self._get_endpoint_cache_key(normalized_method, path)
-        cached_is_available = self._endpoint_availability.get(cache_key)
+        cached_state = self._endpoint_availability.get(cache_key)
         cached_at = self._endpoint_checked_at.get(cache_key)
         if (
             not force_refresh
-            and cached_is_available is not None
+            and cached_state is not None
             and cached_at is not None
-            and self._is_endpoint_cache_fresh(
-                normalized_method, path, cached_is_available, cached_at
-            )
+            and self._is_endpoint_cache_fresh(normalized_method, path, cached_state, cached_at)
         ):
-            return cached_is_available
+            return cached_state == "available"
 
         cache_lock = self._endpoint_locks.setdefault(cache_key, asyncio.Lock())
         async with cache_lock:
-            cached_is_available = self._endpoint_availability.get(cache_key)
+            cached_state = self._endpoint_availability.get(cache_key)
             cached_at = self._endpoint_checked_at.get(cache_key)
             if (
                 not force_refresh
-                and cached_is_available is not None
+                and cached_state is not None
                 and cached_at is not None
-                and self._is_endpoint_cache_fresh(
-                    normalized_method, path, cached_is_available, cached_at
-                )
+                and self._is_endpoint_cache_fresh(normalized_method, path, cached_state, cached_at)
             ):
-                return cached_is_available
+                return cached_state == "available"
 
             self._rest_api_query_count += 1
             url = f"{self._url}{path}"
@@ -349,11 +356,11 @@ class ClientEndpointMixin:
                 ) as response:
                     checked_at = monotonic()
                     if response.ok:
-                        self._endpoint_availability[cache_key] = True
+                        self._endpoint_availability[cache_key] = "available"
                         self._endpoint_checked_at[cache_key] = checked_at
                         return True
                     if response.status == 404:
-                        self._endpoint_availability[cache_key] = False
+                        self._endpoint_availability[cache_key] = "missing"
                         self._endpoint_checked_at[cache_key] = checked_at
                         return False
 
@@ -417,7 +424,7 @@ class ClientEndpointMixin:
         """
         if not isinstance(path, str) or not path:
             return None
-        if self._is_post_endpoint_probe_blocked(path):
+        if not self._is_read_only_post_endpoint(path) or self._is_post_endpoint_probe_blocked(path):
             _LOGGER.debug("POST endpoint availability probe blocked for unsafe path: %s", path)
             return None
         return await self._is_endpoint_available(path, method="post", force_refresh=force_refresh)
@@ -427,7 +434,7 @@ class ClientEndpointMixin:
         path: str,
         *,
         force_refresh: bool = False,
-    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+    ) -> CategoryResult[object]:
         """Request an explicitly optional GET and reconcile its cache observation."""
         return await self._check_optional_endpoint(
             method="get",
@@ -444,7 +451,7 @@ class ClientEndpointMixin:
         cache_path: str | None = None,
         *,
         force_refresh: bool = False,
-    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+    ) -> CategoryResult[object]:
         """Request an explicitly read-only optional POST and reconcile its cache."""
         resolved_cache_path = cache_path or path
         expected_cache_path = self._OPTIONAL_POST_CACHE_PATHS.get(path, path)
@@ -455,7 +462,7 @@ class ClientEndpointMixin:
                 resolved_cache_path,
                 expected_cache_path,
             )
-            return "unavailable", {}
+            return CategoryResult({}, "transient", False)
         return await self._check_optional_endpoint(
             method="post",
             path=path,
@@ -472,7 +479,7 @@ class ClientEndpointMixin:
         cache_path: str,
         payload: MutableMapping[str, Any] | None,
         force_refresh: bool,
-    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+    ) -> CategoryResult[object]:
         """Run a live optional probe and reconcile the optional endpoint cache key.
 
         Args:
@@ -485,11 +492,11 @@ class ClientEndpointMixin:
             force_refresh (bool): Whether to bypass stale/confirmed cache state.
 
         Returns:
-            tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
-                ``("available", payload)`` or ``("malformed", payload)`` when the
-                request is reachable and can be interpreted as a response; ``("missing", {})`` only after a
-                confirmed 404 path; ``("unavailable", {})`` for transient failures
-                or unregistered optional endpoints.
+            CategoryResult: ``("available", payload)`` or ``("malformed", payload)``
+                when the request is reachable and can be interpreted as a response,
+                ``("missing", {})`` only after a confirmed 404 path, and
+                ``("unavailable", {})`` for transient failures or unregistered
+                optional endpoints.
 
         Notes:
             The method only short-circuits via a fresh confirmed-negative cache
@@ -498,28 +505,28 @@ class ClientEndpointMixin:
         """
         if not path or not self._is_optional_endpoint(method, cache_path):
             _LOGGER.debug("Unregistered optional endpoint: %s %s", method.upper(), path)
-            return "unavailable", {}
+            return CategoryResult({}, "transient", False)
 
         cache_key = self._get_endpoint_cache_key(method, cache_path)
         cache_lock = self._endpoint_locks.setdefault(cache_key, asyncio.Lock())
         async with cache_lock:
-            had_confirmed_negative = self._endpoint_availability.get(cache_key) is False
+            had_confirmed_negative = self._endpoint_availability.get(cache_key) == "missing"
             cached_state = self._get_cached_endpoint_availability(method, cache_path, force_refresh)
-            if cached_state is False:
-                return "missing", {}
+            if cached_state == "missing":
+                return CategoryResult({}, "missing", True)
 
             was_pending = cache_key in self._optional_endpoint_missing_pending_confirmation
             if method == "post":
-                optional_state, response_payload = await self._post_optional(path, payload)
+                optional_result = CategoryResult.coerce(await self._post_optional(path, payload))
             else:
-                optional_state, response_payload = await self._get_optional(path)
+                optional_result = CategoryResult.coerce(await self._get_optional(path))
 
-            if optional_state in {"available", "malformed"}:
+            if optional_result.state in {"available", "malformed"}:
                 self._refresh_positive_endpoint_observation(cache_key, f"real_{method}_success")
-                return optional_state, response_payload
+                return optional_result
 
-            if optional_state == "unavailable":
-                return "unavailable", {}
+            if optional_result.state == "transient":
+                return optional_result
 
             if not was_pending and not had_confirmed_negative:
                 self._invalidate_endpoint_observation(cache_key, f"real_{method}_404")
@@ -529,13 +536,14 @@ class ClientEndpointMixin:
                     "Skipping optional endpoint confirmation because firmware status endpoint is unavailable: %s",
                     cache_path,
                 )
-                return "unavailable", {}
+                return CategoryResult({}, "transient", False)
 
             if was_pending or had_confirmed_negative:
                 self._store_confirmed_negative_endpoint_observation(
                     cache_key, f"confirmed_{method}_404"
                 )
-            return "missing", {}
+                return CategoryResult({}, "missing", True)
+            return CategoryResult({}, "pending", False)
 
     async def _is_core_firmware_endpoint_healthy(self) -> bool:
         """Return whether a fresh control request proves the router API is healthy.

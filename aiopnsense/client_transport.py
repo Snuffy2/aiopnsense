@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
 
+from ._typing import CategoryResult
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .exceptions import _map_opnsense_exception, _opnsense_http_error
 from .helpers import _LOGGER
@@ -321,9 +322,7 @@ class ClientTransportMixin:
 
         return None
 
-    async def _do_optional_get(
-        self, path: str, caller: str = "Unknown"
-    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+    async def _do_optional_get(self, path: str, caller: str = "Unknown") -> CategoryResult[object]:
         """Execute an optional GET request immediately.
 
         Args:
@@ -347,21 +346,23 @@ class ClientTransportMixin:
                 _LOGGER.debug("[optional_get] Response %s: %s", response.status, response.reason)
                 if response.ok:
                     try:
-                        return "available", await response.json(content_type=None)
+                        return CategoryResult(
+                            await response.json(content_type=None), "available", True
+                        )
                     except (ValueError, UnicodeDecodeError) as err:
                         _LOGGER.debug(
                             "Optional GET endpoint returned malformed JSON for %s: %s",
                             path,
                             err,
                         )
-                        return "malformed", {}
+                        return CategoryResult({}, "malformed", True)
                 if response.status == 404:
                     _LOGGER.debug(
                         "Optional GET endpoint unavailable (HTTP 404). Path: %s (called by %s)",
                         path,
                         caller,
                     )
-                    return "missing", {}
+                    return CategoryResult({}, "missing", True)
                 if response.status == 403:
                     _LOGGER.error(
                         "Permission Error in optional_get (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
@@ -387,14 +388,14 @@ class ClientTransportMixin:
             if self._throw_errors:
                 raise _map_opnsense_exception(e) from e
 
-        return "unavailable", {}
+        return CategoryResult({}, "transient", False)
 
     async def _do_optional_post(
         self,
         path: str,
         payload: MutableMapping[str, Any] | None = None,
         caller: str = "Unknown",
-    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+    ) -> CategoryResult[object]:
         """Execute an explicitly read-only optional POST immediately.
 
         Args:
@@ -419,21 +420,23 @@ class ClientTransportMixin:
                 _LOGGER.debug("[optional_post] Response %s: %s", response.status, response.reason)
                 if response.ok:
                     try:
-                        return "available", await response.json(content_type=None)
+                        return CategoryResult(
+                            await response.json(content_type=None), "available", True
+                        )
                     except (ValueError, UnicodeDecodeError) as err:
                         _LOGGER.debug(
                             "Optional POST endpoint returned malformed JSON for %s: %s",
                             path,
                             err,
                         )
-                        return "malformed", {}
+                        return CategoryResult({}, "malformed", True)
                 if response.status == 404:
                     _LOGGER.debug(
                         "Optional POST endpoint unavailable (HTTP 404). Path: %s (called by %s)",
                         path,
                         caller,
                     )
-                    return "missing", {}
+                    return CategoryResult({}, "missing", True)
                 if response.status == 403:
                     _LOGGER.error(
                         "Permission Error in optional_post (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
@@ -459,7 +462,7 @@ class ClientTransportMixin:
             if self._throw_errors:
                 raise _map_opnsense_exception(err) from err
 
-        return "unavailable", {}
+        return CategoryResult({}, "transient", False)
 
     def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
         """Normalize per-call timeout values to a positive float in seconds.

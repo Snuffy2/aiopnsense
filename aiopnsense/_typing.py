@@ -2,30 +2,75 @@
 
 import asyncio
 from collections.abc import AsyncGenerator, MutableMapping
+from dataclasses import dataclass
 from datetime import tzinfo
-from typing import Any, Literal, Protocol
+from typing import Any, Iterator, Literal, Protocol
+
+
+type CategoryState = Literal["available", "pending", "missing", "transient", "malformed"]
+EndpointAvailabilityState = Literal["available", "missing", "pending"]
+
+
+@dataclass(frozen=True, slots=True)
+class CategoryResult[T]:
+    """Immutable data and availability result for an optional API category."""
+
+    data: T
+    state: CategoryState
+    authoritative: bool
+
+    @staticmethod
+    def coerce(value: object) -> "CategoryResult[object]":
+        """Normalize legacy internal tuple results during the contract migration."""
+        if isinstance(value, CategoryResult):
+            return value
+        if isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], str):
+            state: CategoryState | str = "transient" if value[0] == "unavailable" else value[0]
+            if state in {"available", "pending", "missing", "transient", "malformed"}:
+                typed_state: CategoryState = state
+                return CategoryResult(
+                    value[1], typed_state, typed_state in {"available", "missing", "malformed"}
+                )
+        return CategoryResult({}, "malformed", True)
+
+    def __iter__(self) -> Iterator[object]:
+        """Yield legacy state/data tuple values for internal compatibility."""
+        yield self.state
+        yield self.data
+
+    def __eq__(self, other: object) -> bool:
+        """Compare result objects, with temporary support for legacy tuples."""
+        if isinstance(other, CategoryResult):
+            return (
+                self.data == other.data
+                and self.state == other.state
+                and self.authoritative == other.authoritative
+            )
+        if isinstance(other, tuple) and len(other) == 2:
+            legacy_state = "transient" if other[0] == "unavailable" else other[0]
+            return self.state == legacy_state and self.data == other[1]
+        return NotImplemented
 
 
 class AiopnsenseClientProtocol(Protocol):
     """Structural typing contract used by split aiopnsense mixins."""
 
     _throw_errors: bool
-    _endpoint_availability: dict[tuple[Literal["get", "post"], str], bool]
+    _use_snake_case: bool | None
+    _endpoint_availability: dict[tuple[Literal["get", "post"], str], EndpointAvailabilityState]
     _endpoint_checked_at: dict[tuple[Literal["get", "post"], str], float]
     _endpoint_locks: dict[tuple[Literal["get", "post"], str], asyncio.Lock]
     _optional_endpoint_missing_pending_confirmation: set[tuple[Literal["get", "post"], str]]
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None: ...
 
-    async def _get_optional(
-        self, path: str
-    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]: ...
+    async def _get_optional(self, path: str) -> CategoryResult[object]: ...
 
     async def _post_optional(
         self,
         path: str,
         payload: MutableMapping[str, Any] | None = None,
-    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]: ...
+    ) -> CategoryResult[object]: ...
 
     async def _get_text(self, path: str) -> str | None: ...
 
@@ -78,7 +123,7 @@ class AiopnsenseClientProtocol(Protocol):
         path: str,
         *,
         force_refresh: bool = False,
-    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]: ...
+    ) -> CategoryResult[object]: ...
 
     async def _check_optional_post_endpoint(
         self,
@@ -87,4 +132,14 @@ class AiopnsenseClientProtocol(Protocol):
         cache_path: str | None = None,
         *,
         force_refresh: bool = False,
-    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]: ...
+    ) -> CategoryResult[object]: ...
+
+    async def get_smart_result(self) -> CategoryResult[list[dict[str, Any]]]: ...
+
+    async def get_vnstat_result(self) -> CategoryResult[MutableMapping[str, Any]]: ...
+
+    async def get_unbound_blocklist_result(self) -> CategoryResult[dict[str, Any]]: ...
+
+    async def get_dhcp_leases_result(
+        self, opnsense_tz: tzinfo | None = None
+    ) -> CategoryResult[dict[str, Any]]: ...

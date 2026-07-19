@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import MutableMapping
 from typing import Any
 
-from ._typing import AiopnsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol, CategoryResult
 from .helpers import _LOGGER, _log_errors, try_to_float, try_to_int
 
 SPEEDTEST_SHOW_LOG_ENDPOINT = "/api/speedtest/service/showlog"
@@ -157,13 +157,14 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 endpoint, or an empty mapping when the plugin endpoint is
                 unavailable or cannot be safely invoked.
         """
-        optional_state, _payload = await self._check_optional_get_endpoint(
-            SPEEDTEST_SHOW_LOG_ENDPOINT
+        probe_result = CategoryResult.coerce(
+            await self._check_optional_get_endpoint(SPEEDTEST_SHOW_LOG_ENDPOINT)
         )
+        optional_state = probe_result.state
         if optional_state == "missing":
             _LOGGER.debug("Speedtest not installed")
             return {}
-        if optional_state == "unavailable":
+        if optional_state in {"pending", "transient"}:
             _LOGGER.debug("Speedtest temporarily unavailable")
             return {}
         if optional_state == "malformed":

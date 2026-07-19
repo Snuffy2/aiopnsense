@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import MutableMapping
 import inspect
 from typing import TYPE_CHECKING, Any, Literal, cast
+from ._typing import CategoryResult
 
 from .exceptions import OPNsenseError, _map_opnsense_exception
 from .helpers import _LOGGER
@@ -41,10 +42,7 @@ class ClientQueueMixin:
             self,
             path: str,
             caller: str = "Unknown",
-        ) -> tuple[
-            Literal["available", "malformed", "missing", "unavailable"],
-            object,
-        ]:
+        ) -> CategoryResult[object]:
             """Execute a queued optional GET request."""
             ...
 
@@ -53,10 +51,7 @@ class ClientQueueMixin:
             path: str,
             payload: MutableMapping[str, Any] | None = None,
             caller: str = "Unknown",
-        ) -> tuple[
-            Literal["available", "malformed", "missing", "unavailable"],
-            object,
-        ]:
+        ) -> CategoryResult[object]:
             """Execute a queued optional read-only POST request."""
             ...
 
@@ -146,12 +141,10 @@ class ClientQueueMixin:
         """
         return await self._queue_request("get", path)
 
-    async def _get_optional(
-        self, path: str
-    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+    async def _get_optional(self, path: str) -> CategoryResult[object]:
         """Queue an optional GET request and return the envelope response."""
         return cast(
-            tuple[Literal["available", "malformed", "missing", "unavailable"], object],
+            CategoryResult[object],
             await self._queue_request("optional_get", path),
         )
 
@@ -159,13 +152,10 @@ class ClientQueueMixin:
         self,
         path: str,
         payload: MutableMapping[str, Any] | None = None,
-    ) -> tuple[Literal["available", "malformed", "missing", "unavailable"], object]:
+    ) -> CategoryResult[object]:
         """Queue an optional read-only POST and return its envelope response."""
         return cast(
-            tuple[
-                Literal["available", "malformed", "missing", "unavailable"],
-                object,
-            ],
+            CategoryResult[object],
             await self._queue_request("optional_post", path, payload),
         )
 

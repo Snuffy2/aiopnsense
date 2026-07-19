@@ -2,9 +2,9 @@
 
 from collections.abc import MutableMapping
 from datetime import datetime, tzinfo
-from typing import Any
+from typing import Any, Literal
 
-from ._typing import AiopnsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol, CategoryResult, CategoryState
 from .helpers import (
     _LOGGER,
     _log_errors,
@@ -123,6 +123,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 include address, hostname, interface, type, MAC,
                 and expiration when available.
         """
+        return (await self.get_dhcp_leases_result(opnsense_tz=opnsense_tz)).data
+
+    async def get_dhcp_leases_result(
+        self, opnsense_tz: tzinfo | None = None
+    ) -> CategoryResult[dict[str, Any]]:
+        """Return DHCP leases with authority derived from every applicable source."""
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
         leases_raw: list = await self._get_kea_dhcpv4_leases(opnsense_tz=opnsense_tz)
@@ -159,7 +165,68 @@ class DHCPMixin(AiopnsenseClientProtocol):
             "lease_interfaces": sorted_lease_interfaces,
             "leases": sorted_leases,
         }
-        return dhcp_leases
+        source_states = await self._get_dhcp_source_states()
+        aggregate_state, authoritative = self._aggregate_dhcp_source_states(source_states)
+        return CategoryResult(dhcp_leases, aggregate_state, authoritative)
+
+    async def _get_dhcp_source_states(self) -> list[CategoryState]:
+        """Return observed availability states for DHCP lease providers."""
+        isc_v4 = self._observed_endpoint_variant(
+            ISC_DHCPV4_LEASES_SEARCH_ENDPOINT,
+            ISC_DHCPV4_LEASES_SEARCH_CAMELCASE_ENDPOINT,
+        )
+        isc_v6 = self._observed_endpoint_variant(
+            ISC_DHCPV6_LEASES_SEARCH_ENDPOINT,
+            ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT,
+        )
+        paths = (
+            KEA_LEASES4_SEARCH_ENDPOINT,
+            KEA_LEASES6_SEARCH_ENDPOINT,
+            DNSMASQ_LEASES_SEARCH_ENDPOINT,
+            isc_v4,
+            isc_v6,
+        )
+        states: list[CategoryState] = []
+        for path in paths:
+            cache_key: tuple[Literal["get", "post"], str] = ("get", path)
+            state = self._endpoint_availability.get(cache_key)
+            if state == "available":
+                states.append("available")
+            elif state == "missing":
+                states.append("missing")
+            elif (
+                state == "pending"
+                or cache_key in self._optional_endpoint_missing_pending_confirmation
+            ):
+                states.append("pending")
+            else:
+                states.append("transient")
+        return states
+
+    def _observed_endpoint_variant(self, snake_case_path: str, camel_case_path: str) -> str:
+        """Return the endpoint variant represented in the availability observations."""
+        for path in (snake_case_path, camel_case_path):
+            key = ("get", path)
+            if key in self._endpoint_availability or (
+                key in self._optional_endpoint_missing_pending_confirmation
+            ):
+                return path
+        return snake_case_path if self._use_snake_case is not False else camel_case_path
+
+    @staticmethod
+    def _aggregate_dhcp_source_states(
+        source_states: list[CategoryState],
+    ) -> tuple[CategoryState, bool]:
+        """Combine provider states without treating absent plugins as uncertainty."""
+        if "pending" in source_states:
+            return "pending", False
+        if "transient" in source_states:
+            return "transient", False
+        if "malformed" in source_states:
+            return "malformed", True
+        if "available" in source_states:
+            return "available", True
+        return "missing", True
 
     async def _get_kea_interfaces(self) -> dict[str, Any]:
         """Return interfaces selected for Kea DHCPv4.

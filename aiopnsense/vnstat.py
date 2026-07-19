@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, tzinfo
 import re
 from typing import Any
 
-from ._typing import AiopnsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol, CategoryResult
 from .helpers import _LOGGER, _log_errors, normalize_lookup_token, try_to_float
 
 _VSTAT_HEADER_RE = re.compile(
@@ -106,10 +106,20 @@ class VnstatMixin(AiopnsenseClientProtocol):
                 convenience byte counters for today, this month, yesterday,
                 last month, and the last complete hour.
         """
-        hourly_status, hourly_raw = await self._check_optional_get_endpoint(VNSTAT_HOURLY_ENDPOINT)
-        if hourly_status != "available" or not isinstance(hourly_raw, MutableMapping):
+        return (await self.get_vnstat_result()).data
+
+    async def get_vnstat_result(self) -> CategoryResult[MutableMapping[str, Any]]:
+        """Return summarized vnStat data with authoritative availability metadata."""
+        result = CategoryResult.coerce(
+            await self._check_optional_get_endpoint(VNSTAT_HOURLY_ENDPOINT)
+        )
+        empty: MutableMapping[str, Any] = {"interfaces": {}, "interface_count": 0}
+        if result.state != "available":
             _LOGGER.debug("vnStat not installed")
-            return {"interfaces": {}, "interface_count": 0}
+            return CategoryResult(empty, result.state, result.authoritative)
+        hourly_raw = result.data
+        if not isinstance(hourly_raw, MutableMapping):
+            return CategoryResult(empty, "malformed", True)
         opnsense_tz = await self._get_opnsense_timezone()
         hourly = self._parse_vnstat_payload(hourly_raw, expected_period="hourly")
         daily = await self._fetch_vnstat_for(VNSTAT_DAILY_ENDPOINT, "daily")
@@ -151,10 +161,11 @@ class VnstatMixin(AiopnsenseClientProtocol):
                 "monthly": rows_monthly,
                 "metrics": metrics,
             }
-        return {
-            "interfaces": interface_data,
-            "interface_count": len(interface_names),
-        }
+        return CategoryResult(
+            {"interfaces": interface_data, "interface_count": len(interface_names)},
+            "available",
+            True,
+        )
 
     def _parse_vnstat_payload(
         self, payload: MutableMapping[str, Any], expected_period: str

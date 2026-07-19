@@ -5,7 +5,7 @@ from typing import Any
 
 import aiohttp
 
-from ._typing import AiopnsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol, CategoryResult
 from .const import LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
 from .exceptions import OPNsenseError
 from .helpers import _LOGGER, _log_errors, api_value_matches, firmware_is_at_least
@@ -173,25 +173,35 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 set to the regular DNSBL settings. Returns an empty mapping when
                 the endpoint is unavailable or malformed.
         """
+        return (await self.get_unbound_blocklist_result()).data
+
+    async def get_unbound_blocklist_result(self) -> CategoryResult[dict[str, Any]]:
+        """Return Unbound blocklists with authoritative availability metadata."""
         use_legacy = await self._uses_legacy_unbound_blocklist()
         if use_legacy is not False:
             _LOGGER.debug(
                 "Getting Unbound regular blocklists for OPNsense < %s or when firmware detection is unavailable",
                 LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
             )
-            return {"legacy": await self._get_unbound_blocklist_legacy()}
+            legacy = await self._get_unbound_blocklist_legacy()
+            if not legacy:
+                return CategoryResult({"legacy": {}}, "malformed", True)
+            return CategoryResult({"legacy": legacy}, "available", True)
 
-        dnsbl_status, dnsbl_raw = await self._check_optional_get_endpoint(
-            UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT
+        result = CategoryResult.coerce(
+            await self._check_optional_get_endpoint(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT)
         )
-        if dnsbl_status != "available":
+        if result.state != "available":
             _LOGGER.debug("Unbound DNSBL endpoint unavailable")
-            return {}
+            return CategoryResult({}, result.state, result.authoritative)
+        dnsbl_raw = result.data
         if not isinstance(dnsbl_raw, MutableMapping):
-            return {}
+            return CategoryResult({}, "malformed", True)
         dnsbl_rows = dnsbl_raw.get("rows", [])
-        if not isinstance(dnsbl_rows, list) or not len(dnsbl_rows) > 0:
-            return {}
+        if not isinstance(dnsbl_rows, list):
+            return CategoryResult({}, "malformed", True)
+        if not dnsbl_rows:
+            return CategoryResult({}, "available", True)
         dnsbl_full: dict[str, Any] = {}
         for dnsbl in dnsbl_rows:
             if not isinstance(dnsbl, MutableMapping):
@@ -199,7 +209,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             if dnsbl.get("uuid"):
                 dnsbl_full.update({dnsbl["uuid"]: dnsbl})
         _LOGGER.debug("[get_unbound_blocklist] dnsbl_full length: %s", len(dnsbl_full))
-        return dnsbl_full
+        return CategoryResult(dnsbl_full, "available", True)
 
     async def _toggle_unbound_blocklist(self, set_state: bool, uuid: str | None) -> bool:
         """Enable or disable one extended Unbound DNSBL entry.

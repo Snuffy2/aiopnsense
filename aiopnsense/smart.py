@@ -3,7 +3,7 @@
 from collections.abc import MutableMapping
 from typing import Any
 
-from ._typing import AiopnsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol, CategoryResult
 from .helpers import _LOGGER, _log_errors
 
 SMART_SERVICE_LIST_ENDPOINT = "/api/smart/service/list"
@@ -21,19 +21,28 @@ class SmartMixin(AiopnsenseClientProtocol):
         Returns:
             list[dict[str, Any]]: SMART device rows returned by the detailed API.
         """
-        list_status, smart_info = await self._check_optional_post_endpoint(
-            SMART_SERVICE_DETAIL_ENDPOINT,
-            cache_path=SMART_SERVICE_LIST_ENDPOINT,
+        return (await self.get_smart_result()).data
+
+    async def get_smart_result(self) -> CategoryResult[list[dict[str, Any]]]:
+        """Return SMART device data with authoritative availability metadata."""
+        result = CategoryResult.coerce(
+            await self._check_optional_post_endpoint(
+                SMART_SERVICE_DETAIL_ENDPOINT,
+                cache_path=SMART_SERVICE_LIST_ENDPOINT,
+            )
         )
-        if list_status != "available" or not isinstance(smart_info, MutableMapping):
+        if result.state != "available":
             _LOGGER.debug("SMART plugin unavailable")
-            return []
+            return CategoryResult([], result.state, result.authoritative)
+        smart_info = result.data
+        if not isinstance(smart_info, MutableMapping):
+            return CategoryResult([], "malformed", True)
         devices = smart_info.get("devices", [])
         if not isinstance(devices, list):
             _LOGGER.debug(
                 "Discarding SMART devices payload because devices is not a list: %r", devices
             )
-            return []
+            return CategoryResult([], "malformed", True)
         smart_devices: list[dict[str, Any]] = []
         for device in devices:
             if not isinstance(device, MutableMapping):
@@ -48,7 +57,7 @@ class SmartMixin(AiopnsenseClientProtocol):
                 )
                 continue
             smart_devices.append(dict(device))
-        return smart_devices
+        return CategoryResult(smart_devices, "available", True)
 
     @_log_errors
     async def get_smart_info(self, device: str, info_type: str = "a") -> dict[str, Any]:

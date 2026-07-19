@@ -106,7 +106,7 @@ async def test_is_get_endpoint_available_cache_false_by_ttl_and_force_refresh(
 
     session.get = _get
     try:
-        path = "/api/test/endpoint"
+        path = "/api/smart/service/list"
         cache_key = ("get", path)
         assert await client._is_get_endpoint_available(path) is False
         assert await client._is_get_endpoint_available(path) is False
@@ -202,7 +202,7 @@ async def test_is_get_endpoint_available_raises_transport_error_when_throw_enabl
 
     session.get = _get
     try:
-        path = "/api/test/endpoint"
+        path = "/api/smart/service/list"
         cache_key = ("get", path)
         with pytest.raises(OPNsenseSSLError):
             await client._is_get_endpoint_available(path)
@@ -427,7 +427,7 @@ async def test_is_post_endpoint_available_caches_success(make_client: MakeClient
 
     session.post = _post
     try:
-        path = "/api/test/endpoint"
+        path = "/api/smart/service/list"
         cache_key = ("post", path)
         assert await client._is_post_endpoint_available(path) is True
         assert await client._is_post_endpoint_available(path) is True
@@ -469,7 +469,7 @@ async def test_is_post_endpoint_available_caches_404_missing_plugin(
 
     session.post = _post
     try:
-        path = "/api/test/endpoint"
+        path = "/api/smart/service/list"
         cache_key = ("post", path)
         assert await client._is_post_endpoint_available(path) is False
         assert await client._is_post_endpoint_available(path) is False
@@ -616,7 +616,7 @@ async def test_check_optional_get_endpoint_refreshes_positive_state_and_payload(
         assert cache_key in client._endpoint_checked_at
         assert client._endpoint_checked_at[cache_key] == 1002.0
         assert client._endpoint_checked_at[cache_key] > 1000.0
-        assert client._endpoint_availability[cache_key] is True
+        assert client._endpoint_availability[cache_key] == "available"
         assert client._get_optional.await_count == 2
     finally:
         await client.async_close()
@@ -644,10 +644,10 @@ async def test_check_optional_get_endpoint_missing_drops_cached_positive_without
         assert cache_key in client._endpoint_checked_at
 
         with caplog.at_level(logging.WARNING):
-            assert await client._check_optional_get_endpoint(path) == ("missing", {})
+            assert await client._check_optional_get_endpoint(path) == ("pending", {})
 
-        assert cache_key not in client._endpoint_availability
-        assert cache_key not in client._endpoint_checked_at
+        assert client._endpoint_availability[cache_key] == "pending"
+        assert cache_key in client._endpoint_checked_at
         assert cache_key in client._optional_endpoint_missing_pending_confirmation
         client._is_core_firmware_endpoint_healthy.assert_awaited_once_with()
         assert not any(
@@ -673,7 +673,7 @@ async def test_check_optional_get_endpoint_rechecks_pending_and_caches_negative_
         second_state, second_payload = await client._check_optional_get_endpoint(path)
         third_state, third_payload = await client._check_optional_get_endpoint(path)
 
-        assert first_state == "missing"
+        assert first_state == "pending"
         assert first_payload == {}
         assert second_state == "missing"
         assert second_payload == {}
@@ -681,7 +681,7 @@ async def test_check_optional_get_endpoint_rechecks_pending_and_caches_negative_
         assert third_payload == {}
         assert client._get_optional.await_count == 2
         assert client._is_core_firmware_endpoint_healthy.await_count == 2
-        assert client._endpoint_availability[cache_key] is False
+        assert client._endpoint_availability[cache_key] == "missing"
         assert cache_key in client._endpoint_checked_at
 
         # second pending confirmation should apply the optional negative-cache window
@@ -700,7 +700,7 @@ async def test_check_optional_get_endpoint_stale_negative_recovers_after_ttl_exp
     client, _session = make_mock_session_client(make_client)
     path = "/api/speedtest/service/showlog"
     cache_key = ("get", path)
-    client._endpoint_availability[cache_key] = False
+    client._endpoint_availability[cache_key] = "missing"
     times = iter([1000.0, 1001.0])
     monkeypatch.setattr(
         "aiopnsense.client_endpoint.monotonic",
@@ -714,7 +714,7 @@ async def test_check_optional_get_endpoint_stale_negative_recovers_after_ttl_exp
 
         assert state == "available"
         assert payload == {"status": "recovered"}
-        assert client._endpoint_availability[cache_key] is True
+        assert client._endpoint_availability[cache_key] == "available"
         assert client._endpoint_checked_at[cache_key] == 1001.0
         assert client._endpoint_checked_at[cache_key] != 1000.0 - (
             DEFAULT_NEGATIVE_CACHE_TTL_SECONDS + 1
@@ -731,7 +731,7 @@ async def test_check_optional_get_endpoint_stale_negative_renews_with_one_probe(
     client, _session = make_mock_session_client(make_client)
     path = "/api/speedtest/service/showlog"
     cache_key = ("get", path)
-    client._endpoint_availability[cache_key] = False
+    client._endpoint_availability[cache_key] = "missing"
     client._endpoint_checked_at[cache_key] = 1000.0 - (DEFAULT_NEGATIVE_CACHE_TTL_SECONDS + 1)
     times = iter([1000.0, 1001.0])
     monkeypatch.setattr("aiopnsense.client_endpoint.monotonic", lambda: next(times))
@@ -740,7 +740,7 @@ async def test_check_optional_get_endpoint_stale_negative_renews_with_one_probe(
 
     try:
         assert await client._check_optional_get_endpoint(path) == ("missing", {})
-        assert client._endpoint_availability[cache_key] is False
+        assert client._endpoint_availability[cache_key] == "missing"
         assert client._endpoint_checked_at[cache_key] == 1001.0
         assert cache_key not in client._optional_endpoint_missing_pending_confirmation
         client._get_optional.assert_awaited_once_with(path)
@@ -758,7 +758,7 @@ async def test_check_optional_get_endpoint_force_refresh_allows_recovery_before_
     path = "/api/speedtest/service/showstat"
     cache_key = ("get", path)
     client._get_optional = AsyncMock(return_value=("available", {"samples": 1}))
-    client._endpoint_availability[cache_key] = False
+    client._endpoint_availability[cache_key] = "missing"
     client._endpoint_checked_at[cache_key] = 100.0
     client._optional_endpoint_missing_pending_confirmation.add(cache_key)
 
@@ -768,7 +768,7 @@ async def test_check_optional_get_endpoint_force_refresh_allows_recovery_before_
         assert state == "available"
         assert payload == {"samples": 1}
         assert cache_key in client._endpoint_availability
-        assert client._endpoint_availability[cache_key] is True
+        assert client._endpoint_availability[cache_key] == "available"
         assert cache_key not in client._optional_endpoint_missing_pending_confirmation
         assert client._get_optional.await_count == 1
     finally:
@@ -779,16 +779,16 @@ async def test_check_optional_get_endpoint_force_refresh_allows_recovery_before_
 @pytest.mark.parametrize(
     ("state", "core_healthy", "expected_state", "expected_cached"),
     [
-        ("missing", True, "missing", False),
-        ("missing", False, "unavailable", None),
-        ("unavailable", True, "unavailable", None),
+        ("missing", True, "missing", "missing"),
+        ("missing", False, "transient", None),
+        ("transient", True, "transient", None),
     ],
 )
 async def test_check_optional_get_endpoint_force_refresh_preserves_confirmation_contract(
     state: str,
     core_healthy: bool,
     expected_state: str,
-    expected_cached: bool | None,
+    expected_cached: str | None,
     make_client: MakeClientFactory,
 ) -> None:
     """Force refresh bypasses cache freshness without bypassing confirmation."""
@@ -805,10 +805,10 @@ async def test_check_optional_get_endpoint_force_refresh_preserves_confirmation_
         assert result_state == expected_state
         assert payload == {}
         if expected_cached is None:
-            assert cache_key not in client._endpoint_availability
+            assert client._endpoint_availability.get(cache_key) in {None, "pending"}
             assert cache_key in client._optional_endpoint_missing_pending_confirmation
         else:
-            assert client._endpoint_availability[cache_key] is expected_cached
+            assert client._endpoint_availability[cache_key] == expected_cached
             assert cache_key not in client._optional_endpoint_missing_pending_confirmation
         if state == "missing":
             client._is_core_firmware_endpoint_healthy.assert_awaited_once_with()
@@ -831,15 +831,15 @@ async def test_check_optional_get_endpoint_pending_confirmation_does_not_cache_w
 
     try:
         first_state, first_payload = await client._check_optional_get_endpoint(path)
-        assert first_state == "unavailable"
+        assert first_state == "transient"
         assert cache_key in client._optional_endpoint_missing_pending_confirmation
 
         second_state, second_payload = await client._check_optional_get_endpoint(path)
-        assert second_state == "unavailable"
+        assert second_state == "transient"
         assert second_payload == {}
         assert cache_key in client._optional_endpoint_missing_pending_confirmation
-        assert cache_key not in client._endpoint_availability
-        assert cache_key not in client._endpoint_checked_at
+        assert client._endpoint_availability[cache_key] == "pending"
+        assert cache_key in client._endpoint_checked_at
         assert first_payload == {}
         assert second_payload == {}
         assert client._get_optional.await_count == 2
@@ -862,12 +862,12 @@ async def test_check_optional_get_endpoint_recovers_before_core_confirmation(
     client._is_core_firmware_endpoint_healthy = AsyncMock(return_value=True)
 
     try:
-        assert await client._check_optional_get_endpoint(path) == ("missing", {})
+        assert await client._check_optional_get_endpoint(path) == ("pending", {})
         assert await client._check_optional_get_endpoint(path) == (
             "available",
             {"recovered": True},
         )
-        assert client._endpoint_availability[cache_key] is True
+        assert client._endpoint_availability[cache_key] == "available"
         assert cache_key not in client._optional_endpoint_missing_pending_confirmation
         client._is_core_firmware_endpoint_healthy.assert_awaited_once_with()
     finally:
@@ -888,7 +888,7 @@ async def test_optional_endpoint_core_health_uses_fresh_raw_firmware_request(
         return FakeResponse(status=200, ok=True)
 
     session.get = get
-    client._endpoint_availability[("get", "/api/core/firmware/status")] = False
+    client._endpoint_availability[("get", "/api/core/firmware/status")] = "missing"
     client._endpoint_checked_at[("get", "/api/core/firmware/status")] = monotonic()
     query_count = client._rest_api_query_count
 
@@ -896,7 +896,7 @@ async def test_optional_endpoint_core_health_uses_fresh_raw_firmware_request(
         assert await client._is_core_firmware_endpoint_healthy() is True
         assert requested_urls == [f"{client._url}/api/core/firmware/status"]
         assert client._rest_api_query_count == query_count + 1
-        assert client._endpoint_availability[("get", "/api/core/firmware/status")] is False
+        assert client._endpoint_availability[("get", "/api/core/firmware/status")] == "missing"
     finally:
         await client.async_close()
 
@@ -940,17 +940,17 @@ async def test_check_optional_get_endpoint_cached_positive_not_mutated_by_transi
     client, _session = make_mock_session_client(make_client)
     path = "/api/speedtest/service/showlog"
     cache_key = ("get", path)
-    client._endpoint_availability[cache_key] = True
+    client._endpoint_availability[cache_key] = "available"
     client._endpoint_checked_at[cache_key] = monotonic()
 
-    client._get_optional = AsyncMock(return_value=("unavailable", {}))
+    client._get_optional = AsyncMock(return_value=("transient", {}))
 
     try:
         state, payload = await client._check_optional_get_endpoint(path)
 
-        assert state == "unavailable"
+        assert state == "transient"
         assert payload == {}
-        assert client._endpoint_availability[cache_key] is True
+        assert client._endpoint_availability[cache_key] == "available"
         assert cache_key in client._endpoint_checked_at
         assert cache_key not in client._optional_endpoint_missing_pending_confirmation
     finally:
@@ -980,7 +980,7 @@ async def test_isc_dhcp_lease_paths_are_exact_optional_capabilities(
             "available",
             {"rows": []},
         )
-        assert client._endpoint_availability[("get", path)] is True
+        assert client._endpoint_availability[("get", path)] == "available"
         client._get_optional.assert_awaited_once_with(path)
     finally:
         await client.async_close()
@@ -1003,7 +1003,7 @@ async def test_check_optional_post_endpoint_refreshes_positive_exact_cache_key(
         )
         assert result_state == state
         assert payload == {"devices": []}
-        assert client._endpoint_availability[cache_key] is True
+        assert client._endpoint_availability[cache_key] == "available"
         assert ("post", "/api/smart/service/list/1") not in client._endpoint_availability
         client._post_optional.assert_awaited_once_with("/api/smart/service/list/1", None)
     finally:
@@ -1022,13 +1022,13 @@ async def test_check_optional_post_endpoint_confirms_second_404_with_core_health
     try:
         assert await client._check_optional_post_endpoint(
             "/api/smart/service/info", payload={"device": "ada0"}
-        ) == ("missing", {})
+        ) == ("pending", {})
         assert cache_key in client._optional_endpoint_missing_pending_confirmation
 
         assert await client._check_optional_post_endpoint(
             "/api/smart/service/info", payload={"device": "ada0"}
         ) == ("missing", {})
-        assert client._endpoint_availability[cache_key] is False
+        assert client._endpoint_availability[cache_key] == "missing"
         assert cache_key not in client._optional_endpoint_missing_pending_confirmation
         assert client._post_optional.await_count == 2
         assert client._is_core_firmware_endpoint_healthy.await_count == 2
@@ -1044,7 +1044,7 @@ async def test_check_optional_post_endpoint_stale_negative_renews_with_one_probe
     client, _session = make_mock_session_client(make_client)
     path = "/api/smart/service/info"
     cache_key = ("post", path)
-    client._endpoint_availability[cache_key] = False
+    client._endpoint_availability[cache_key] = "missing"
     client._endpoint_checked_at[cache_key] = 1000.0 - (DEFAULT_NEGATIVE_CACHE_TTL_SECONDS + 1)
     times = iter([1000.0, 1001.0])
     monkeypatch.setattr("aiopnsense.client_endpoint.monotonic", lambda: next(times))
@@ -1057,7 +1057,7 @@ async def test_check_optional_post_endpoint_stale_negative_renews_with_one_probe
             "missing",
             {},
         )
-        assert client._endpoint_availability[cache_key] is False
+        assert client._endpoint_availability[cache_key] == "missing"
         assert client._endpoint_checked_at[cache_key] == 1001.0
         assert cache_key not in client._optional_endpoint_missing_pending_confirmation
         client._post_optional.assert_awaited_once_with(path, payload)
@@ -1073,16 +1073,16 @@ async def test_check_optional_post_endpoint_transient_failure_preserves_positive
     """A non-404 SMART failure must not mutate the positive observation."""
     client, _session = make_mock_session_client(make_client)
     cache_key = ("post", "/api/smart/service/info")
-    client._endpoint_availability[cache_key] = True
+    client._endpoint_availability[cache_key] = "available"
     checked_at = monotonic()
     client._endpoint_checked_at[cache_key] = checked_at
-    client._post_optional = AsyncMock(return_value=("unavailable", {}))
+    client._post_optional = AsyncMock(return_value=("transient", {}))
     try:
         assert await client._check_optional_post_endpoint("/api/smart/service/info") == (
             "unavailable",
             {},
         )
-        assert client._endpoint_availability[cache_key] is True
+        assert client._endpoint_availability[cache_key] == "available"
         assert client._endpoint_checked_at[cache_key] == checked_at
     finally:
         await client.async_close()
@@ -1099,7 +1099,7 @@ async def test_check_optional_post_endpoint_rejects_unregistered_mapping(
         assert await client._check_optional_post_endpoint(
             "/api/smart/service/list/1",
             cache_path="/api/smart/service/info",
-        ) == ("unavailable", {})
+        ) == ("transient", {})
         client._post_optional.assert_not_awaited()
     finally:
         await client.async_close()
@@ -1213,7 +1213,7 @@ async def test_is_post_endpoint_available_allows_read_only_post_path(
 
     session.post = _post
     try:
-        path = "/api/core/firmware/changelog/26.1.1"
+        path = "/api/smart/service/info"
         assert await client._is_post_endpoint_available(path) is True
         assert calls == 1
         assert ("post", path) in client._endpoint_checked_at
