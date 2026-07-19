@@ -354,10 +354,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
             if not isinstance(lease_info, MutableMapping):
                 malformed = True
                 continue
-            if (
-                lease_info is None
-                or not api_value_matches(lease_info.get("state"), "0")
-                or (require_hardware_address and not lease_info.get("hwaddr", None))
+            if not api_value_matches(lease_info.get("state"), "0") or (
+                require_hardware_address and not lease_info.get("hwaddr", None)
             ):
                 continue
             if not isinstance(lease_info.get("address"), str) or not isinstance(

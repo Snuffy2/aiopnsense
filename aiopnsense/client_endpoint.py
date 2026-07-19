@@ -321,26 +321,18 @@ class ClientEndpointMixin:
             return False
 
         cache_key = self._get_endpoint_cache_key(normalized_method, path)
-        cached_state = self._endpoint_availability.get(cache_key)
-        cached_at = self._endpoint_checked_at.get(cache_key)
-        if (
-            not force_refresh
-            and cached_state is not None
-            and cached_at is not None
-            and self._is_endpoint_cache_fresh(normalized_method, path, cached_state, cached_at)
-        ):
+        cached_state = self._get_cached_endpoint_availability(
+            normalized_method, path, force_refresh
+        )
+        if cached_state is not None:
             return cached_state == "available"
 
         cache_lock = self._endpoint_locks.setdefault(cache_key, asyncio.Lock())
         async with cache_lock:
-            cached_state = self._endpoint_availability.get(cache_key)
-            cached_at = self._endpoint_checked_at.get(cache_key)
-            if (
-                not force_refresh
-                and cached_state is not None
-                and cached_at is not None
-                and self._is_endpoint_cache_fresh(normalized_method, path, cached_state, cached_at)
-            ):
+            cached_state = self._get_cached_endpoint_availability(
+                normalized_method, path, force_refresh
+            )
+            if cached_state is not None:
                 return cached_state == "available"
 
             self._rest_api_query_count += 1
