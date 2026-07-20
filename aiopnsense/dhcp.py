@@ -214,7 +214,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
     async def _get_kea_interfaces(self) -> dict[str, Any]:
         """Return the data from the status-aware Kea interface lookup."""
         result = await self._get_kea_interfaces_result()
-        self._record_dhcp_source_state(result.state)
+        if result.state != "available":
+            self._record_dhcp_source_state(result.state)
         return result.data
 
     async def _get_kea_interfaces_result(self) -> CategoryResult[dict[str, Any]]:
@@ -434,6 +435,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 lease_info.get("if_name"), str
             ):
                 malformed = True
+                continue
             lease: dict[str, Any] = {}
             lease["address"] = lease_info.get("address", None)
             lease["hostname"] = (

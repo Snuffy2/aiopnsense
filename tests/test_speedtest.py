@@ -121,7 +121,19 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client) ->
                         ]
                     ],
                 ),
-                ("available", {}),
+                (
+                    "available",
+                    {
+                        "samples": 42,
+                        "period": {
+                            "oldest": "2026-03-01 00:00:00",
+                            "youngest": "2026-03-14 03:09:45",
+                        },
+                        "download": {"avg": 100.5, "min": 90.0, "max": 110.0},
+                        "upload": {"avg": 20.5, "min": 18.0, "max": 23.0},
+                        "latency": {"avg": 3.5, "min": 2.0, "max": 5.0},
+                    },
+                ),
             ],
             True,
             id="showstat-available",
@@ -202,14 +214,31 @@ async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
             call("/api/speedtest/service/showstat"),
         ]
 
+        assert result["last"]["download"]["value"] == 1.0
+        assert result["last"]["upload"]["value"] == 2.0
+        assert result["last"]["latency"]["value"] == 3.0
+
         if showstat_available:
-            assert result["last"]["download"]["value"] == 1.0
-            assert result["last"]["upload"]["value"] == 2.0
-            assert result["last"]["latency"]["value"] == 3.0
+            assert result["average"]["download"] == {
+                "value": 100.5,
+                "min": 90.0,
+                "max": 110.0,
+                "oldest": "2026-03-01 00:00:00",
+                "youngest": "2026-03-14 03:09:45",
+                "samples": 42,
+            }
+            assert result["average"]["upload"]["value"] == 20.5
+            assert result["average"]["latency"]["value"] == 3.5
         else:
-            assert result["last"]["download"]["value"] == 1.0
-            assert result["last"]["upload"]["value"] == 2.0
-            assert result["last"]["latency"]["value"] == 3.0
+            for metric in ("download", "upload", "latency"):
+                assert result["average"][metric] == {
+                    "value": None,
+                    "min": None,
+                    "max": None,
+                    "oldest": None,
+                    "youngest": None,
+                    "samples": None,
+                }
     finally:
         await client.async_close()
 

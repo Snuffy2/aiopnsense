@@ -17,6 +17,9 @@ from .exceptions import OPNsenseInvalidArgument
 from ._typing import CategoryState, EndpointAvailabilityState
 
 _UNSET: object = object()
+_DHCP_SOURCE_STATES_CONTEXT: ContextVar[list[CategoryState] | None] = ContextVar(
+    "dhcp_source_states", default=None
+)
 
 
 class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixin):
@@ -89,8 +92,8 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
         self._optional_endpoint_missing_pending_confirmation: set[
             tuple[Literal["get", "post"], str]
         ] = set()
-        self._dhcp_source_states_context: ContextVar[list[CategoryState] | None] = ContextVar(
-            "dhcp_source_states", default=None
+        self._dhcp_source_states_context: ContextVar[list[CategoryState] | None] = (
+            _DHCP_SOURCE_STATES_CONTEXT
         )
         positive_ttl = self._opts.get(
             "endpoint_positive_cache_ttl_seconds", DEFAULT_CACHE_TTL_SECONDS

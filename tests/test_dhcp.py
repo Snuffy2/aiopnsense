@@ -671,7 +671,16 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
         # Reservation lookup failures should not misclassify entries as dynamic/static.
         client._safe_dict_get = AsyncMock(
             side_effect=[
-                {"rows": [{"state": "0", "hwaddr": "aa", "address": "10.0.0.1"}]},
+                {
+                    "rows": [
+                        {
+                            "state": "0",
+                            "hwaddr": "aa",
+                            "address": "10.0.0.1",
+                            "if_name": "em0",
+                        }
+                    ]
+                },
                 {"rows": "bad"},
             ]
         )
@@ -762,6 +771,48 @@ async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientT
             for lease in leases
         )
         client._safe_dict_get.assert_awaited_once_with("/api/kea/leases6/search")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_kea_dhcpv6_leases_omits_invalid_required_fields(
+    make_client: ClientType,
+) -> None:
+    """Invalid Kea address and interface fields are omitted and mark partial data malformed."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=CategoryResult(
+                {
+                    "rows": [
+                        {"state": 0, "address": None, "if_name": "em0"},
+                        {"state": 0, "address": "2001:db8::2", "if_name": None},
+                        {"state": 0, "address": "2001:db8::3", "if_name": "em0"},
+                    ]
+                },
+                "available",
+                True,
+            )
+        )
+
+        result = await client._get_kea_dhcpv6_leases_result()
+
+        assert result == CategoryResult(
+            [
+                {
+                    "address": "2001:db8::3",
+                    "hostname": None,
+                    "if_descr": None,
+                    "if_name": "em0",
+                    "type": "unknown",
+                    "mac": None,
+                    "expires": None,
+                }
+            ],
+            "malformed",
+            False,
+        )
     finally:
         await client.async_close()
 
@@ -1057,6 +1108,7 @@ async def test_version_switched_kea_dhcpv4_returns_leases_when_reservation_unava
                     "state": "0",
                     "hwaddr": "aa:bb:cc:dd:ee:ff",
                     "address": "192.0.2.10",
+                    "if_name": "em0",
                     "hostname": "host-a.",
                 }
             ]

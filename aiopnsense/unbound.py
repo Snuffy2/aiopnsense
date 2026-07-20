@@ -185,7 +185,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             )
             legacy = await self._get_unbound_blocklist_legacy()
             if not legacy:
-                return CategoryResult({"legacy": {}}, "malformed", False)
+                return CategoryResult({}, "malformed", False)
             return CategoryResult({"legacy": legacy}, "available", True)
 
         result = CategoryResult.coerce(

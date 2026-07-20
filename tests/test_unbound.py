@@ -255,7 +255,7 @@ async def test_get_unbound_blocklist_returns_empty_for_invalid_legacy_payloads(
 
         result = await client.get_unbound_blocklist()
 
-        assert result == {"legacy": {}}
+        assert result == {}
         client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/get")
     finally:
         await client.async_close()

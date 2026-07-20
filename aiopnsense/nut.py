@@ -33,8 +33,8 @@ class NutMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("NUT UPS status endpoint unavailable")
             return CategoryResult({}, result.state, result.authoritative)
         if not isinstance(result.data, Mapping):
-            self._normalize_nut_ups_status_payload(result.data)
-            return CategoryResult({}, "malformed", False)
+            normalized_payload = self._normalize_nut_ups_status_payload(result.data)
+            return CategoryResult(normalized_payload, "malformed", False)
 
         raw_payload = dict(result.data)
         normalized_payload = self._normalize_nut_ups_status_payload(raw_payload)

@@ -1094,18 +1094,20 @@ async def test_check_optional_post_endpoint_confirms_second_404_with_core_health
 ) -> None:
     """A second read-only POST 404 plus healthy core stores a short negative."""
     client, _session = make_mock_session_client(make_client)
-    cache_key = ("post", "/api/smart/service/info")
+    cache_key = ("post", "/api/smart/service/list")
     client._post_optional = AsyncMock(return_value=("missing", {}))
     client._is_core_firmware_endpoint_healthy = AsyncMock(return_value=True)
     try:
-        assert await client._check_optional_post_endpoint(
-            "/api/smart/service/info", payload={"device": "ada0"}
-        ) == ("pending", {})
+        assert await client._check_optional_post_endpoint("/api/smart/service/list") == (
+            "pending",
+            {},
+        )
         assert cache_key in client._optional_endpoint_missing_pending_confirmation
 
-        assert await client._check_optional_post_endpoint(
-            "/api/smart/service/info", payload={"device": "ada0"}
-        ) == ("missing", {})
+        assert await client._check_optional_post_endpoint("/api/smart/service/list") == (
+            "missing",
+            {},
+        )
         assert client._endpoint_availability[cache_key] == "missing"
         assert cache_key not in client._optional_endpoint_missing_pending_confirmation
         assert client._post_optional.await_count == 2
@@ -1120,7 +1122,7 @@ async def test_check_optional_post_endpoint_stale_negative_renews_with_one_probe
 ) -> None:
     """An expired SMART absence is renewed with one read-only POST probe."""
     client, _session = make_mock_session_client(make_client)
-    path = "/api/smart/service/info"
+    path = "/api/smart/service/list"
     cache_key = ("post", path)
     client._endpoint_availability[cache_key] = "missing"
     client._endpoint_checked_at[cache_key] = 1000.0 - (DEFAULT_NEGATIVE_CACHE_TTL_SECONDS + 1)
@@ -1128,18 +1130,55 @@ async def test_check_optional_post_endpoint_stale_negative_renews_with_one_probe
     monkeypatch.setattr("aiopnsense.client_endpoint.monotonic", lambda: next(times))
     client._post_optional = AsyncMock(return_value=("missing", {}))
     client._is_core_firmware_endpoint_healthy = AsyncMock(return_value=True)
-    payload = {"device": "ada0"}
 
     try:
-        assert await client._check_optional_post_endpoint(path, payload=payload) == (
+        assert await client._check_optional_post_endpoint(path) == (
             "missing",
             {},
         )
         assert client._endpoint_availability[cache_key] == "missing"
         assert client._endpoint_checked_at[cache_key] == 1001.0
         assert cache_key not in client._optional_endpoint_missing_pending_confirmation
-        client._post_optional.assert_awaited_once_with(path, payload)
+        client._post_optional.assert_awaited_once_with(path, None)
         client._is_core_firmware_endpoint_healthy.assert_awaited_once_with()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_check_optional_smart_info_missing_payload_does_not_cache(
+    make_client: MakeClientFactory,
+) -> None:
+    """A device-specific SMART miss does not block another device request."""
+    client, _session = make_mock_session_client(make_client)
+    path = "/api/smart/service/info"
+    cache_key = ("post", path)
+    stale_payload = {"device": "ada0"}
+    available_payload = {"device": "ada1"}
+    client._post_optional = AsyncMock(
+        side_effect=[("missing", {}), ("available", {"temperature": 30})]
+    )
+    client._is_core_firmware_endpoint_healthy = AsyncMock(return_value=True)
+
+    try:
+        assert await client._check_optional_post_endpoint(path, payload=stale_payload) == (
+            "missing",
+            {},
+        )
+        assert cache_key not in client._endpoint_availability
+        assert cache_key not in client._endpoint_checked_at
+        assert cache_key not in client._optional_endpoint_missing_pending_confirmation
+
+        assert await client._check_optional_post_endpoint(path, payload=available_payload) == (
+            "available",
+            {"temperature": 30},
+        )
+        assert client._endpoint_availability[cache_key] == "available"
+        assert client._post_optional.await_args_list == [
+            ((path, stale_payload),),
+            ((path, available_payload),),
+        ]
+        client._is_core_firmware_endpoint_healthy.assert_not_awaited()
     finally:
         await client.async_close()
 

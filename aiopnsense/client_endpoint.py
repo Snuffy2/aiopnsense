@@ -508,9 +508,12 @@ class ClientEndpointMixin:
         cache_key = self._get_endpoint_cache_key(method, cache_path)
         cache_lock = self._endpoint_locks.setdefault(cache_key, asyncio.Lock())
         async with cache_lock:
+            is_payload_specific_smart_info = (
+                method == "post" and path == "/api/smart/service/info" and payload is not None
+            )
             had_confirmed_negative = self._endpoint_availability.get(cache_key) == "missing"
             cached_state = self._get_cached_endpoint_availability(method, cache_path, force_refresh)
-            if cached_state == "missing":
+            if cached_state == "missing" and not is_payload_specific_smart_info:
                 return CategoryResult({}, "missing", False)
 
             was_pending = cache_key in self._optional_endpoint_missing_pending_confirmation
@@ -524,6 +527,9 @@ class ClientEndpointMixin:
                 return optional_result
 
             if optional_result.state == "transient":
+                return optional_result
+
+            if is_payload_specific_smart_info:
                 return optional_result
 
             if not was_pending and not had_confirmed_negative:

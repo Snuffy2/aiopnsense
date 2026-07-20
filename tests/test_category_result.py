@@ -66,6 +66,18 @@ def test_dhcp_source_authority_ignores_only_confirmed_inapplicable_sources(
 
 
 @pytest.mark.asyncio
+async def test_dhcp_source_state_context_is_shared_between_clients(make_client) -> None:
+    """Client instances use one module-scoped request-local DHCP state context."""
+    first_client = make_client()
+    second_client = make_client()
+    try:
+        assert first_client._dhcp_source_states_context is second_client._dhcp_source_states_context
+    finally:
+        await first_client.async_close()
+        await second_client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_smart_result_preserves_valid_rows_but_marks_mixed_schema_malformed(
     make_client,
 ) -> None:
@@ -187,6 +199,34 @@ async def test_dhcp_provider_invalid_rows_are_schema_malformed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["kea_interfaces", "kea_leases", "dnsmasq"])
+async def test_dhcp_provider_non_mapping_payload_is_schema_malformed(
+    make_client, provider: str
+) -> None:
+    """Available DHCP payloads must be mappings before provider parsing."""
+    client: OPNsenseClient = make_client()
+    try:
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=CategoryResult("bad-response", "available", True)
+        )
+
+        if provider == "kea_interfaces":
+            assert await client._get_kea_interfaces_result() == CategoryResult(
+                {}, "malformed", False
+            )
+        elif provider == "kea_leases":
+            assert await client._get_kea_dhcp_leases_result(
+                "/api/kea/leases4/search", "Kea"
+            ) == CategoryResult([], "malformed", False)
+        else:
+            assert await client._get_dnsmasq_leases_result() == CategoryResult(
+                [], "malformed", False
+            )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_kea_reservation_provider_requires_rows_key(make_client) -> None:
     """An available Kea reservation response without rows makes the source malformed."""
     client = make_client()
@@ -208,6 +248,47 @@ async def test_kea_reservation_provider_requires_rows_key(make_client) -> None:
         assert client._dhcp_source_states_context.get() == ["malformed"]
     finally:
         client._dhcp_source_states_context.reset(state_token)
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_kea_reservation_provider_rejects_non_mapping_payload(make_client) -> None:
+    """A non-mapping reservation payload is malformed while valid leases survive."""
+    client: OPNsenseClient = make_client()
+    try:
+        client._get_endpoint_path = AsyncMock(return_value="/reservation")
+        client._check_optional_get_endpoint = AsyncMock(
+            side_effect=[
+                CategoryResult(
+                    {
+                        "rows": [
+                            {
+                                "state": "0",
+                                "hwaddr": "aa:bb:cc:dd:ee:ff",
+                                "address": "192.0.2.10",
+                                "if_name": "em0",
+                            }
+                        ]
+                    },
+                    "available",
+                    True,
+                ),
+                CategoryResult("bad-response", "available", True),
+            ]
+        )
+
+        result = await client._get_kea_dhcp_leases_result(
+            "/api/kea/leases4/search",
+            "Kea",
+            "/reservation",
+            "/reservationCamel",
+        )
+
+        assert result.state == "malformed"
+        assert result.authoritative is False
+        assert len(result.data) == 1
+        assert result.data[0]["type"] == "unknown"
+    finally:
         await client.async_close()
 
 
@@ -249,6 +330,50 @@ async def test_dhcp_result_keeps_healthy_source_data_when_another_source_is_malf
         assert result.state == "malformed"
         assert result.authoritative is False
         assert result.data["leases"]["lan"][0]["address"] == "192.0.2.1"
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("interface_state", "expected_state"),
+    [
+        ("available", "missing"),
+        ("pending", "pending"),
+        ("transient", "transient"),
+        ("malformed", "malformed"),
+        ("missing", "missing"),
+    ],
+)
+async def test_dhcp_result_treats_kea_interfaces_as_metadata_only(
+    make_client, interface_state: CategoryState, expected_state: CategoryState
+) -> None:
+    """Kea interface metadata cannot make missing lease providers authoritative."""
+    client = make_client()
+
+    async def missing_provider(**_kwargs) -> list[dict]:
+        """Record a missing lease provider."""
+        client._record_dhcp_source_state("missing")
+        return []
+
+    try:
+        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
+        for name in (
+            "_get_kea_dhcpv4_leases",
+            "_get_kea_dhcpv6_leases",
+            "_get_isc_dhcpv4_leases",
+            "_get_isc_dhcpv6_leases",
+            "_get_dnsmasq_leases",
+        ):
+            setattr(client, name, AsyncMock(side_effect=missing_provider))
+        client._get_kea_interfaces_result = AsyncMock(
+            return_value=CategoryResult({}, interface_state, interface_state == "available")
+        )
+
+        result = await client.get_dhcp_leases_result()
+
+        assert result.state == expected_state
+        assert result.authoritative is False
     finally:
         await client.async_close()
 

@@ -371,6 +371,13 @@ async def test_get_nut_ups_status_result_distinguishes_empty_and_malformed(
         assert await client.get_nut_ups_status_result() == CategoryResult({}, "available", True)
 
         client._check_optional_get_endpoint.return_value = CategoryResult(
+            {"status": {}}, "available", True
+        )
+        assert await client.get_nut_ups_status_result() == CategoryResult(
+            {"status": {}}, "available", True
+        )
+
+        client._check_optional_get_endpoint.return_value = CategoryResult(
             {"response": 123}, "available", True
         )
         assert await client.get_nut_ups_status_result() == CategoryResult(
