@@ -4,12 +4,11 @@ from collections.abc import MutableMapping
 from datetime import datetime, tzinfo
 from typing import Any
 
-from ._typing import AiopnsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol, CategoryResult, CategoryState
 from .helpers import (
     _LOGGER,
     _log_errors,
     api_value_matches,
-    dict_get,
     get_ip_key,
     timestamp_to_datetime,
     try_to_int,
@@ -22,10 +21,8 @@ KEA_LEASES6_SEARCH_ENDPOINT = "/api/kea/leases6/search"
 KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT = "/api/kea/dhcpv4/search_reservation"
 KEA_DHCPV4_SEARCH_RESERVATION_CAMELCASE_ENDPOINT = "/api/kea/dhcpv4/searchReservation"
 DNSMASQ_LEASES_SEARCH_ENDPOINT = "/api/dnsmasq/leases/search"
-ISC_DHCPV4_SERVICE_STATUS_ENDPOINT = "/api/dhcpv4/service/status"
 ISC_DHCPV4_LEASES_SEARCH_ENDPOINT = "/api/dhcpv4/leases/search_lease"
 ISC_DHCPV4_LEASES_SEARCH_CAMELCASE_ENDPOINT = "/api/dhcpv4/leases/searchLease"
-ISC_DHCPV6_SERVICE_STATUS_ENDPOINT = "/api/dhcpv6/service/status"
 ISC_DHCPV6_LEASES_SEARCH_ENDPOINT = "/api/dhcpv6/leases/search_lease"
 ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT = "/api/dhcpv6/leases/searchLease"
 
@@ -98,16 +95,34 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 including fields such as IP address, MAC address, interface,
                 expiration, and entry type when provided by the endpoint.
         """
+        return (await self.get_arp_table_result(resolve_hostnames=resolve_hostnames)).data
+
+    async def get_arp_table_result(
+        self, resolve_hostnames: bool = False
+    ) -> CategoryResult[list[dict[str, Any]]]:
+        """Return ARP rows with schema-aware endpoint authority metadata."""
         # [{'hostname': '?', 'ip-address': '<ip>', 'mac-address': '<mac>', 'interface': 'em0', 'expires': 1199, 'type': 'ethernet'}, ...]
         resolve_flag = "yes" if resolve_hostnames else "no"
-        if not await self._is_get_endpoint_available(ARP_TABLE_ENDPOINT):
-            _LOGGER.debug("ARP endpoint unavailable")
-            return []
-
         arp_endpoint_resolve = f"{ARP_TABLE_ENDPOINT}?resolve={resolve_flag}"
-        arp_table_info = await self._safe_dict_get(arp_endpoint_resolve)
-        arp_table: list = arp_table_info.get("rows", [])
-        return arp_table
+        result = CategoryResult.coerce(
+            await self._check_optional_get_endpoint(
+                arp_endpoint_resolve,
+                cache_path=ARP_TABLE_ENDPOINT,
+            )
+        )
+        if result.state != "available":
+            _LOGGER.debug("ARP endpoint unavailable")
+            return CategoryResult([], result.state, False)
+        arp_table_info = result.data
+        if not isinstance(arp_table_info, MutableMapping):
+            return CategoryResult([], "malformed", False)
+        if "rows" not in arp_table_info or not isinstance(arp_table_info["rows"], list):
+            return CategoryResult([], "malformed", False)
+        rows = arp_table_info["rows"]
+        arp_table = [dict(row) for row in rows if isinstance(row, MutableMapping)]
+        if len(arp_table) != len(rows):
+            return CategoryResult(arp_table, "malformed", False)
+        return CategoryResult(arp_table, "available", True)
 
     @_log_errors
     async def get_dhcp_leases(self, opnsense_tz: tzinfo | None = None) -> dict[str, Any]:
@@ -125,16 +140,27 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 include address, hostname, interface, type, MAC,
                 and expiration when available.
         """
+        return (await self.get_dhcp_leases_result(opnsense_tz=opnsense_tz)).data
+
+    async def get_dhcp_leases_result(
+        self, opnsense_tz: tzinfo | None = None
+    ) -> CategoryResult[dict[str, Any]]:
+        """Return DHCP leases with authority derived from every applicable source."""
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
-        leases_raw: list = await self._get_kea_dhcpv4_leases(opnsense_tz=opnsense_tz)
-        leases_raw += await self._get_kea_dhcpv6_leases(opnsense_tz=opnsense_tz)
-        leases_raw += await self._get_isc_dhcpv4_leases(opnsense_tz=opnsense_tz)
-        leases_raw += await self._get_isc_dhcpv6_leases(opnsense_tz=opnsense_tz)
-        leases_raw += await self._get_dnsmasq_leases(opnsense_tz=opnsense_tz)
+        state_token = self._dhcp_source_states_context.set([])
+        try:
+            leases_raw: list = await self._get_kea_dhcpv4_leases(opnsense_tz=opnsense_tz)
+            leases_raw += await self._get_kea_dhcpv6_leases(opnsense_tz=opnsense_tz)
+            leases_raw += await self._get_isc_dhcpv4_leases(opnsense_tz=opnsense_tz)
+            leases_raw += await self._get_isc_dhcpv6_leases(opnsense_tz=opnsense_tz)
+            leases_raw += await self._get_dnsmasq_leases(opnsense_tz=opnsense_tz)
+            lease_interfaces: dict[str, Any] = await self._get_kea_interfaces()
+            source_states = list(self._dhcp_source_states_context.get() or [])
+        finally:
+            self._dhcp_source_states_context.reset(state_token)
 
         leases: dict[str, Any] = {}
-        lease_interfaces: dict[str, Any] = await self._get_kea_interfaces()
         for lease in leases_raw:
             if (
                 not isinstance(lease, MutableMapping)
@@ -161,35 +187,87 @@ class DHCPMixin(AiopnsenseClientProtocol):
             "lease_interfaces": sorted_lease_interfaces,
             "leases": sorted_leases,
         }
-        return dhcp_leases
+        aggregate_state, authoritative = self._aggregate_dhcp_source_states(source_states)
+        return CategoryResult(dhcp_leases, aggregate_state, authoritative)
+
+    def _record_dhcp_source_state(self, state: CategoryState) -> None:
+        """Record the schema-aware state of one DHCP provider."""
+        source_states = self._dhcp_source_states_context.get()
+        if source_states is not None:
+            source_states.append(state)
+
+    @staticmethod
+    def _aggregate_dhcp_source_states(
+        source_states: list[CategoryState],
+    ) -> tuple[CategoryState, bool]:
+        """Combine provider states without treating absent plugins as uncertainty."""
+        if "pending" in source_states:
+            return "pending", False
+        if "transient" in source_states:
+            return "transient", False
+        if "malformed" in source_states:
+            return "malformed", False
+        if "available" in source_states:
+            return "available", True
+        return "missing", False
 
     async def _get_kea_interfaces(self) -> dict[str, Any]:
+        """Return the data from the status-aware Kea interface lookup."""
+        result = await self._get_kea_interfaces_result()
+        if result.state != "available":
+            self._record_dhcp_source_state(result.state)
+        return result.data
+
+    async def _get_kea_interfaces_result(self) -> CategoryResult[dict[str, Any]]:
         """Return interfaces selected for Kea DHCPv4.
 
         Returns:
             dict[str, Any]: Mapping of Kea interface identifiers to display
                 names when Kea DHCPv4 is enabled; otherwise an empty mapping.
         """
-        if not await self._is_get_endpoint_available(KEA_DHCPV4_GET_ENDPOINT):
+        source_result = CategoryResult.coerce(
+            await self._check_optional_get_endpoint(KEA_DHCPV4_GET_ENDPOINT)
+        )
+        if source_result.state != "available":
             _LOGGER.debug("Kea DHCP interface endpoint unavailable")
-            return {}
+            return CategoryResult({}, source_result.state, False)
 
-        response = await self._safe_dict_get(KEA_DHCPV4_GET_ENDPOINT)
-        lease_interfaces: dict[str, Any] = {}
-        general = dict_get(response, "dhcpv4.general", {})
+        response = source_result.data
+        if not isinstance(response, MutableMapping):
+            return CategoryResult({}, "malformed", False)
+        dhcpv4 = response.get("dhcpv4")
+        if not isinstance(dhcpv4, MutableMapping):
+            return CategoryResult({}, "malformed", False)
+        general = dhcpv4.get("general")
         if not isinstance(general, MutableMapping):
-            return {}
-        if not api_value_matches(general.get("enabled", "0"), "1"):
-            return {}
-        interfaces = general.get("interfaces", {})
+            return CategoryResult({}, "malformed", False)
+        if "enabled" not in general:
+            return CategoryResult({}, "malformed", False)
+        enabled = general["enabled"]
+        if isinstance(enabled, bool):
+            is_enabled = enabled
+        elif isinstance(enabled, int) and enabled in {0, 1}:
+            is_enabled = enabled == 1
+        elif isinstance(enabled, str) and enabled in {"0", "1"}:
+            is_enabled = enabled == "1"
+        else:
+            return CategoryResult({}, "malformed", False)
+        if not is_enabled:
+            return CategoryResult({}, "available", True)
+        interfaces = general.get("interfaces")
         if not isinstance(interfaces, MutableMapping):
-            return {}
+            return CategoryResult({}, "malformed", False)
+        lease_interfaces: dict[str, Any] = {}
+        malformed = False
         for if_name, iface in interfaces.items():
             if not isinstance(iface, MutableMapping):
+                malformed = True
                 continue
             if api_value_matches(iface.get("selected", 0), "1") and iface.get("value", None):
                 lease_interfaces[if_name] = iface.get("value")
-        return lease_interfaces
+        if malformed:
+            return CategoryResult(lease_interfaces, "malformed", False)
+        return CategoryResult(lease_interfaces, "available", True)
 
     async def _get_kea_dhcpv4_leases(self, opnsense_tz: tzinfo | None = None) -> list:
         """Return active IPv4 DHCP leases reported by Kea.
@@ -204,7 +282,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 addresses are omitted; lease ``type`` is ``static``,
                 ``dynamic``, or ``unknown`` depending on reservation data.
         """
-        return await self._get_kea_dhcp_leases(
+        result = await self._get_kea_dhcpv4_leases_result()
+        self._record_dhcp_source_state(result.state)
+        return result.data
+
+    async def _get_kea_dhcpv4_leases_result(self) -> CategoryResult[list[dict[str, Any]]]:
+        """Return status-aware normalized Kea DHCPv4 leases."""
+        return await self._get_kea_dhcp_leases_result(
             lease_endpoint=KEA_LEASES4_SEARCH_ENDPOINT,
             reservation_endpoint=KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT,
             reservation_camelcase_endpoint=KEA_DHCPV4_SEARCH_RESERVATION_CAMELCASE_ENDPOINT,
@@ -225,7 +309,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 ``type`` is ``static``, ``dynamic``, or ``unknown`` depending
                 on reservation data.
         """
-        return await self._get_kea_dhcp_leases(
+        result = await self._get_kea_dhcpv6_leases_result()
+        self._record_dhcp_source_state(result.state)
+        return result.data
+
+    async def _get_kea_dhcpv6_leases_result(self) -> CategoryResult[list[dict[str, Any]]]:
+        """Return status-aware normalized Kea DHCPv6 leases."""
+        return await self._get_kea_dhcp_leases_result(
             lease_endpoint=KEA_LEASES6_SEARCH_ENDPOINT,
             require_hardware_address=False,
             service_name="Kea DHCPv6",
@@ -241,6 +331,29 @@ class DHCPMixin(AiopnsenseClientProtocol):
         require_hardware_address: bool = True,
         dynamic_when_reservation_lookup_unavailable: bool = False,
     ) -> list:
+        """Return data from the status-aware generic Kea lease lookup."""
+        result = await self._get_kea_dhcp_leases_result(
+            lease_endpoint=lease_endpoint,
+            service_name=service_name,
+            reservation_endpoint=reservation_endpoint,
+            reservation_camelcase_endpoint=reservation_camelcase_endpoint,
+            require_hardware_address=require_hardware_address,
+            dynamic_when_reservation_lookup_unavailable=(
+                dynamic_when_reservation_lookup_unavailable
+            ),
+        )
+        self._record_dhcp_source_state(result.state)
+        return result.data
+
+    async def _get_kea_dhcp_leases_result(
+        self,
+        lease_endpoint: str,
+        service_name: str,
+        reservation_endpoint: str | None = None,
+        reservation_camelcase_endpoint: str | None = None,
+        require_hardware_address: bool = True,
+        dynamic_when_reservation_lookup_unavailable: bool = False,
+    ) -> CategoryResult[list[dict[str, Any]]]:
         """Return active DHCP leases reported by a Kea lease endpoint.
 
         Args:
@@ -254,14 +367,22 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 reservation metadata is unavailable.
 
         Returns:
-            list: Normalized Kea lease entries for the supplied endpoint.
+            CategoryResult[list[dict[str, Any]]]: Normalized leases and the
+                combined lease/reservation endpoint state.
         """
-        if not await self._is_get_endpoint_available(lease_endpoint):
+        source_result = CategoryResult.coerce(
+            await self._check_optional_get_endpoint(lease_endpoint)
+        )
+        if source_result.state != "available":
             _LOGGER.debug("%s not installed", service_name)
-            return []
-        response = await self._safe_dict_get(lease_endpoint)
-        if not isinstance(response.get("rows", None), list):
-            return []
+            return CategoryResult([], source_result.state, False)
+        response = source_result.data
+        if not isinstance(response, MutableMapping):
+            return CategoryResult([], "malformed", False)
+        if "rows" not in response or not isinstance(response["rows"], list):
+            return CategoryResult([], "malformed", False)
+        malformed = False
+        auxiliary_state: CategoryState = "available"
         res_info: list[Any] | None
         if reservation_endpoint is None or reservation_camelcase_endpoint is None:
             res_info = None
@@ -270,34 +391,50 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 snake_case_path=reservation_endpoint,
                 camel_case_path=reservation_camelcase_endpoint,
             )
-            if not await self._is_get_endpoint_available(selected_reservation_endpoint):
+            reservation_result = CategoryResult.coerce(
+                await self._check_optional_get_endpoint(selected_reservation_endpoint)
+            )
+            if reservation_result.state != "available":
                 _LOGGER.debug("%s reservation endpoint unavailable", service_name)
                 res_info = None
+                if reservation_result.state != "missing":
+                    auxiliary_state = reservation_result.state
             else:
-                res_resp = await self._safe_dict_get(selected_reservation_endpoint)
-                if not isinstance(res_resp.get("rows", None), list):
+                res_resp = reservation_result.data
+                if not isinstance(res_resp, MutableMapping):
+                    malformed = True
+                    res_info = None
+                    res_resp = {}
+                if "rows" not in res_resp or not isinstance(res_resp["rows"], list):
+                    malformed = True
                     _LOGGER.debug(
                         "%s reservation lookup returned invalid rows payload", service_name
                     )
                     res_info = None
                 else:
-                    res_info = res_resp.get("rows", [])
+                    res_info = res_resp["rows"]
         reservations = {}
         if res_info is not None:
             for res in res_info:
                 if not isinstance(res, MutableMapping):
+                    malformed = True
                     continue
                 if res.get("hw_address", None):
                     reservations.update({res.get("hw_address"): res.get("ip_address", "")})
-        leases_info: list = response.get("rows", [])
+        leases_info: list = response["rows"]
         leases: list = []
         for lease_info in leases_info:
-            if (
-                lease_info is None
-                or not isinstance(lease_info, MutableMapping)
-                or not api_value_matches(lease_info.get("state"), "0")
-                or (require_hardware_address and not lease_info.get("hwaddr", None))
+            if not isinstance(lease_info, MutableMapping):
+                malformed = True
+                continue
+            if not api_value_matches(lease_info.get("state"), "0") or (
+                require_hardware_address and not lease_info.get("hwaddr", None)
             ):
+                continue
+            if not isinstance(lease_info.get("address"), str) or not isinstance(
+                lease_info.get("if_name"), str
+            ):
+                malformed = True
                 continue
             lease: dict[str, Any] = {}
             lease["address"] = lease_info.get("address", None)
@@ -341,7 +478,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
             else:
                 lease["expires"] = lease_info.get("expire", None)
             leases.append(lease)
-        return leases
+        result_state: CategoryState = "malformed" if malformed else auxiliary_state
+        return CategoryResult(leases, result_state, result_state == "available")
 
     def _keep_latest_leases(self, reservations: list[dict]) -> list[dict]:
         """Deduplicate leases and keep the entry with the latest expiration.
@@ -392,19 +530,29 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 to the latest expiration, expired rows are omitted, and lease
                 ``type`` is derived from dnsmasq reservation metadata.
         """
-        if not await self._is_get_endpoint_available(DNSMASQ_LEASES_SEARCH_ENDPOINT):
+        result = await self._get_dnsmasq_leases_result()
+        self._record_dhcp_source_state(result.state)
+        return result.data
+
+    async def _get_dnsmasq_leases_result(self) -> CategoryResult[list[dict[str, Any]]]:
+        """Return status-aware normalized dnsmasq leases."""
+        source_result = CategoryResult.coerce(
+            await self._check_optional_get_endpoint(DNSMASQ_LEASES_SEARCH_ENDPOINT)
+        )
+        if source_result.state != "available":
             _LOGGER.debug("Dnsmasq DHCP not installed")
-            return []
-        response = await self._safe_dict_get(DNSMASQ_LEASES_SEARCH_ENDPOINT)
-        leases_info: list = response.get("rows", [])
-        if not isinstance(leases_info, list):
-            return []
+            return CategoryResult([], source_result.state, False)
+        response = source_result.data
+        if not isinstance(response, MutableMapping):
+            return CategoryResult([], "malformed", False)
+        if "rows" not in response or not isinstance(response["rows"], list):
+            return CategoryResult([], "malformed", False)
+        leases_info: list = response["rows"]
+        malformed = any(not isinstance(row, MutableMapping) for row in leases_info)
         cleaned_leases = self._keep_latest_leases(leases_info)
 
         leases: list = []
         for lease_info in cleaned_leases:
-            if not isinstance(lease_info, MutableMapping):
-                continue
             lease: dict[str, Any] = {}
             lease["address"] = lease_info.get("address", None)
             lease["hostname"] = (
@@ -418,6 +566,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
             if_name = lease_info.get("if_name", None)
             if not isinstance(if_name, str) or len(if_name) == 0:
                 if_name = lease_info.get("if", None)
+            if not isinstance(lease_info.get("address"), str) or not isinstance(if_name, str):
+                malformed = True
+                continue
             lease["if_name"] = if_name
             if self._is_reserved_lease(lease_info.get("is_reserved")):
                 lease["type"] = "static"
@@ -440,7 +591,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
             else:
                 lease["expires"] = lease_info.get("expire", None)
             leases.append(lease)
-        return leases
+        state: CategoryState = "malformed" if malformed else "available"
+        return CategoryResult(leases, state, state == "available")
 
     async def _get_isc_dhcpv4_leases(self, opnsense_tz: tzinfo | None = None) -> list:
         """Return active IPv4 DHCP leases reported by ISC DHCP.
@@ -453,29 +605,39 @@ class DHCPMixin(AiopnsenseClientProtocol):
             list: Normalized ISC DHCPv4 lease entries. Non-active, expired,
                 malformed, and MAC-less rows are omitted.
         """
-        if not await self._is_get_endpoint_available(ISC_DHCPV4_SERVICE_STATUS_ENDPOINT):
-            _LOGGER.debug("ISC DHCP not installed")
-            return []
         lease_endpoint = await self._get_endpoint_path(
             snake_case_path=ISC_DHCPV4_LEASES_SEARCH_ENDPOINT,
             camel_case_path=ISC_DHCPV4_LEASES_SEARCH_CAMELCASE_ENDPOINT,
         )
-        if not await self._is_get_endpoint_available(lease_endpoint):
+        source_result = CategoryResult.coerce(
+            await self._check_optional_get_endpoint(lease_endpoint)
+        )
+        if source_result.state != "available":
+            self._record_dhcp_source_state(source_result.state)
             _LOGGER.debug("ISC DHCPv4 lease endpoint unavailable")
             return []
-        response = await self._safe_dict_get(lease_endpoint)
-        leases_info: list = response.get("rows", [])
-        if not isinstance(leases_info, list):
+        response = source_result.data
+        if not isinstance(response, MutableMapping):
+            self._record_dhcp_source_state("malformed")
             return []
+        if "rows" not in response or not isinstance(response["rows"], list):
+            self._record_dhcp_source_state("malformed")
+            return []
+        leases_info: list = response["rows"]
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
         leases: list = []
+        malformed = False
         for lease_info in leases_info:
-            if (
-                not isinstance(lease_info, MutableMapping)
-                or lease_info.get("state", "") != "active"
-                or not lease_info.get("mac", None)
+            if not isinstance(lease_info, MutableMapping):
+                malformed = True
+                continue
+            if lease_info.get("state", "") != "active" or not lease_info.get("mac", None):
+                continue
+            if not isinstance(lease_info.get("address"), str) or not isinstance(
+                lease_info.get("if"), str
             ):
+                malformed = True
                 continue
             lease: dict[str, Any] = {}
             lease["address"] = lease_info.get("address", None)
@@ -495,6 +657,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                         lease_info.get("ends", None), "%Y/%m/%d %H:%M:%S"
                     )
                 except TypeError, ValueError:
+                    malformed = True
                     continue
                 lease["expires"] = dt.replace(tzinfo=opnsense_tz)
                 if lease["expires"] < datetime.now().astimezone():
@@ -502,6 +665,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             else:
                 lease["expires"] = lease_info.get("ends", None)
             leases.append(lease)
+        self._record_dhcp_source_state("malformed" if malformed else "available")
         return leases
 
     async def _get_isc_dhcpv6_leases(self, opnsense_tz: tzinfo | None = None) -> list:
@@ -515,29 +679,39 @@ class DHCPMixin(AiopnsenseClientProtocol):
             list: Normalized ISC DHCPv6 lease entries. Non-active, expired,
                 malformed, and MAC-less rows are omitted.
         """
-        if not await self._is_get_endpoint_available(ISC_DHCPV6_SERVICE_STATUS_ENDPOINT):
-            _LOGGER.debug("ISC DHCP not installed")
-            return []
         lease_endpoint = await self._get_endpoint_path(
             snake_case_path=ISC_DHCPV6_LEASES_SEARCH_ENDPOINT,
             camel_case_path=ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT,
         )
-        if not await self._is_get_endpoint_available(lease_endpoint):
+        source_result = CategoryResult.coerce(
+            await self._check_optional_get_endpoint(lease_endpoint)
+        )
+        if source_result.state != "available":
+            self._record_dhcp_source_state(source_result.state)
             _LOGGER.debug("ISC DHCPv6 lease endpoint unavailable")
             return []
-        response = await self._safe_dict_get(lease_endpoint)
-        leases_info: list = response.get("rows", [])
-        if not isinstance(leases_info, list):
+        response = source_result.data
+        if not isinstance(response, MutableMapping):
+            self._record_dhcp_source_state("malformed")
             return []
+        if "rows" not in response or not isinstance(response["rows"], list):
+            self._record_dhcp_source_state("malformed")
+            return []
+        leases_info: list = response["rows"]
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
         leases: list = []
+        malformed = False
         for lease_info in leases_info:
-            if (
-                not isinstance(lease_info, MutableMapping)
-                or lease_info.get("state", "") != "active"
-                or not lease_info.get("mac", None)
+            if not isinstance(lease_info, MutableMapping):
+                malformed = True
+                continue
+            if lease_info.get("state", "") != "active" or not lease_info.get("mac", None):
+                continue
+            if not isinstance(lease_info.get("address"), str) or not isinstance(
+                lease_info.get("if"), str
             ):
+                malformed = True
                 continue
             lease: dict[str, Any] = {}
             lease["address"] = lease_info.get("address", None)
@@ -557,6 +731,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                         lease_info.get("ends", None), "%Y/%m/%d %H:%M:%S"
                     )
                 except TypeError, ValueError:
+                    malformed = True
                     continue
                 lease["expires"] = dt.replace(tzinfo=opnsense_tz)
                 if lease["expires"] < datetime.now().astimezone():
@@ -564,4 +739,5 @@ class DHCPMixin(AiopnsenseClientProtocol):
             else:
                 lease["expires"] = lease_info.get("ends", None)
             leases.append(lease)
+        self._record_dhcp_source_state("malformed" if malformed else "available")
         return leases

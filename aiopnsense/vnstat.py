@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, tzinfo
 import re
 from typing import Any
 
-from ._typing import AiopnsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol, CategoryResult
 from .helpers import _LOGGER, _log_errors, normalize_lookup_token, try_to_float
 
 _VSTAT_HEADER_RE = re.compile(
@@ -55,23 +55,26 @@ VNSTAT_MONTHLY_ENDPOINT = f"{VNSTAT_SERVICE_ENDPOINT_PREFIX}monthly"
 class VnstatMixin(AiopnsenseClientProtocol):
     """vnStat methods for OPNsenseClient."""
 
-    async def _fetch_vnstat_for(self, endpoint: str, expected_period: str) -> dict[str, Any]:
-        """Fetch and parse vnStat payload for a specific endpoint and period.
-
-        Args:
-            endpoint (str): API endpoint path to request.
-            expected_period (str): Expected period label for parser validation.
-
-        Returns:
-            dict[str, Any]: Parsed payload or fallback empty mapping when endpoint is unavailable.
-        """
-        if not await self._is_get_endpoint_available(endpoint):
+    async def _fetch_vnstat_for_result(
+        self, endpoint: str, expected_period: str
+    ) -> CategoryResult[dict[str, Any]]:
+        """Fetch one vnStat period with transport and payload-schema metadata."""
+        result = CategoryResult.coerce(await self._check_optional_get_endpoint(endpoint))
+        empty = {"period": expected_period, "interfaces": {}}
+        if result.state != "available":
             _LOGGER.debug("vnStat %s endpoint unavailable", expected_period)
-            return {"period": expected_period, "interfaces": {}}
-
-        return self._parse_vnstat_payload(
-            await self._safe_dict_get(endpoint),
-            expected_period=expected_period,
+            return CategoryResult(empty, result.state, False)
+        payload = result.data
+        if (
+            not isinstance(payload, MutableMapping)
+            or "response" not in payload
+            or not isinstance(payload["response"], str)
+        ):
+            return CategoryResult(empty, "malformed", False)
+        return CategoryResult(
+            self._parse_vnstat_payload(payload, expected_period=expected_period),
+            "available",
+            True,
         )
 
     @_log_errors
@@ -93,7 +96,7 @@ class VnstatMixin(AiopnsenseClientProtocol):
             return {}
 
         endpoint = f"{VNSTAT_SERVICE_ENDPOINT_PREFIX}{requested_period}"
-        payload = await self._fetch_vnstat_for(endpoint, requested_period)
+        payload = (await self._fetch_vnstat_for_result(endpoint, requested_period)).data
         if not payload.get("interfaces"):
             return {}
         return payload
@@ -109,17 +112,28 @@ class VnstatMixin(AiopnsenseClientProtocol):
                 convenience byte counters for today, this month, yesterday,
                 last month, and the last complete hour.
         """
-        if not await self._is_get_endpoint_available(VNSTAT_HOURLY_ENDPOINT):
-            _LOGGER.debug("vnStat not installed")
-            return {"interfaces": {}, "interface_count": 0}
+        return (await self.get_vnstat_result()).data
 
-        opnsense_tz = await self._get_opnsense_timezone()
-        hourly = self._parse_vnstat_payload(
-            await self._safe_dict_get(VNSTAT_HOURLY_ENDPOINT),
-            expected_period="hourly",
+    async def get_vnstat_result(self) -> CategoryResult[MutableMapping[str, Any]]:
+        """Return summarized vnStat data with authoritative availability metadata."""
+        result = CategoryResult.coerce(
+            await self._check_optional_get_endpoint(VNSTAT_HOURLY_ENDPOINT)
         )
-        daily = await self._fetch_vnstat_for(VNSTAT_DAILY_ENDPOINT, "daily")
-        monthly = await self._fetch_vnstat_for(VNSTAT_MONTHLY_ENDPOINT, "monthly")
+        empty: MutableMapping[str, Any] = {"interfaces": {}, "interface_count": 0}
+        if result.state != "available":
+            _LOGGER.debug("vnStat not installed")
+            return CategoryResult(empty, result.state, result.authoritative)
+        hourly_raw = result.data
+        if not isinstance(hourly_raw, MutableMapping):
+            return CategoryResult(empty, "malformed", False)
+        if "response" not in hourly_raw or not isinstance(hourly_raw["response"], str):
+            return CategoryResult(empty, "malformed", False)
+        opnsense_tz = await self._get_opnsense_timezone()
+        hourly = self._parse_vnstat_payload(hourly_raw, expected_period="hourly")
+        daily_result = await self._fetch_vnstat_for_result(VNSTAT_DAILY_ENDPOINT, "daily")
+        monthly_result = await self._fetch_vnstat_for_result(VNSTAT_MONTHLY_ENDPOINT, "monthly")
+        daily = daily_result.data
+        monthly = monthly_result.data
         interface_names = self._collect_vnstat_interfaces(hourly, daily, monthly)
         interface_data: dict[str, Any] = {}
 
@@ -157,10 +171,15 @@ class VnstatMixin(AiopnsenseClientProtocol):
                 "monthly": rows_monthly,
                 "metrics": metrics,
             }
-        return {
-            "interfaces": interface_data,
-            "interface_count": len(interface_names),
-        }
+        data = {"interfaces": interface_data, "interface_count": len(interface_names)}
+        non_available = [
+            item.state for item in (daily_result, monthly_result) if item.state != "available"
+        ]
+        if non_available:
+            for state in ("pending", "transient", "malformed", "missing"):
+                if state in non_available:
+                    return CategoryResult(data, state, False)
+        return CategoryResult(data, "available", True)
 
     def _parse_vnstat_payload(
         self, payload: MutableMapping[str, Any], expected_period: str

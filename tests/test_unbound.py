@@ -49,16 +49,18 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client) -> None:
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"uuid": "dnsbl1", "enabled": "1"},
-                    {"uuid": "dnsbl2", "enabled": "0"},
-                    {"no_uuid": "skip-me"},
-                    "bad-row",
-                ]
-            }
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=(
+                "available",
+                {
+                    "rows": [
+                        {"uuid": "dnsbl1", "enabled": "1"},
+                        {"uuid": "dnsbl2", "enabled": "0"},
+                        {"no_uuid": "skip-me"},
+                        "bad-row",
+                    ]
+                },
+            )
         )
 
         result = await client.get_unbound_blocklist()
@@ -67,10 +69,37 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client) -> None:
             "dnsbl1": {"uuid": "dnsbl1", "enabled": "1"},
             "dnsbl2": {"uuid": "dnsbl2", "enabled": "0"},
         }
-        client._is_get_endpoint_available.assert_awaited_once_with(
+        client._check_optional_get_endpoint.assert_awaited_once_with(
             "/api/unbound/settings/search_dnsbl"
         )
-        client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/search_dnsbl")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_unbound_blocklist_result_marks_valid_rows_authoritative(
+    make_client: ClientType,
+) -> None:
+    """A fully valid DNSBL response should produce an authoritative result.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates the DNSBL result availability envelope.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=("available", {"rows": [{"uuid": "dnsbl1", "enabled": "1"}]})
+        )
+
+        result = await client.get_unbound_blocklist_result()
+
+        assert result.data == {"dnsbl1": {"uuid": "dnsbl1", "enabled": "1"}}
+        assert result.state == "available"
+        assert result.authoritative is True
     finally:
         await client.async_close()
 
@@ -84,41 +113,45 @@ async def test_get_unbound_blocklist_handles_empty_or_invalid_responses(
     client = make_client()
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value=api_response)
+        client._check_optional_get_endpoint = AsyncMock(return_value=("available", api_response))
 
         result = await client.get_unbound_blocklist()
 
         assert result == {}
+        client._check_optional_get_endpoint.assert_awaited_once_with(
+            "/api/unbound/settings/search_dnsbl"
+        )
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_get_unbound_blocklist_returns_empty_when_endpoint_unavailable(
+@pytest.mark.parametrize("status", ["missing", "unavailable", "malformed"])
+async def test_get_unbound_blocklist_returns_empty_for_non_available_optional_status(
     make_client: ClientType,
+    status: str,
 ) -> None:
-    """When DNSBL endpoint is unavailable, blocklist retrieval should fail closed.
+    """DNSBL endpoint status other than ``available`` should normalize to ``{}``.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        status (str): Mocked endpoint status from
+            ``_check_optional_get_endpoint``.
 
     Returns:
-        None: This test validates fail-closed DNSBL lookup behavior.
+        None: This test validates non-``available`` DNSBL status handling.
     """
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        client._check_optional_get_endpoint = AsyncMock(return_value=(status, {}))
 
         result = await client.get_unbound_blocklist()
 
         assert result == {}
-        client._is_get_endpoint_available.assert_awaited_once_with(
+        client._check_optional_get_endpoint.assert_awaited_once_with(
             "/api/unbound/settings/search_dnsbl"
         )
-        client._safe_dict_get.assert_not_awaited()
     finally:
         await client.async_close()
 
@@ -222,7 +255,7 @@ async def test_get_unbound_blocklist_returns_empty_for_invalid_legacy_payloads(
 
         result = await client.get_unbound_blocklist()
 
-        assert result == {"legacy": {}}
+        assert result == {}
         client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/get")
     finally:
         await client.async_close()

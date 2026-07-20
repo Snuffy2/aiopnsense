@@ -2,8 +2,8 @@
 
 import asyncio
 from collections.abc import MutableMapping
-from datetime import datetime
-from typing import Any
+from contextvars import ContextVar
+from typing import Any, Literal
 from urllib.parse import urlparse
 import warnings
 
@@ -12,10 +12,14 @@ import aiohttp
 from .client_endpoint import ClientEndpointMixin
 from .client_queue import ClientQueueMixin
 from .client_transport import ClientTransportMixin
-from .const import DEFAULT_CACHE_TTL_SECONDS
+from .const import DEFAULT_CACHE_TTL_SECONDS, DEFAULT_NEGATIVE_CACHE_TTL_SECONDS
 from .exceptions import OPNsenseInvalidArgument
+from ._typing import CategoryState, EndpointAvailabilityState
 
 _UNSET: object = object()
+_DHCP_SOURCE_STATES_CONTEXT: ContextVar[list[CategoryState] | None] = ContextVar(
+    "dhcp_source_states", default=None
+)
 
 
 class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixin):
@@ -41,7 +45,8 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
             password (str): Password for API authentication.
             session (aiohttp.ClientSession): HTTP client session used for API requests.
             opts (MutableMapping[str, Any] | None, optional): Optional client configuration values
-                (e.g. ``opts={"verify_ssl": True}``).
+                such as ``verify_ssl``, ``endpoint_positive_cache_ttl_seconds``,
+                and ``endpoint_negative_cache_ttl_seconds``.
             initial (bool | object): Deprecated alias for ``throw_errors``. When provided,
                 a ``DeprecationWarning`` is emitted. Ignored when ``throw_errors`` is also set.
             throw_errors (bool | object): Whether request and decorator errors should be
@@ -79,9 +84,33 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
                 self._throw_errors = initial
         self._firmware_version: str | None = None
         self._use_snake_case: bool | None = None
-        self._endpoint_availability: dict[str, bool] = {}
-        self._endpoint_checked_at: dict[str, datetime] = {}
-        self._endpoint_cache_ttl_seconds = DEFAULT_CACHE_TTL_SECONDS
+        self._endpoint_availability: dict[
+            tuple[Literal["get", "post"], str], EndpointAvailabilityState
+        ] = {}
+        self._endpoint_checked_at: dict[tuple[Literal["get", "post"], str], float] = {}
+        self._endpoint_locks: dict[tuple[Literal["get", "post"], str], asyncio.Lock] = {}
+        self._optional_endpoint_missing_pending_confirmation: set[
+            tuple[Literal["get", "post"], str]
+        ] = set()
+        self._dhcp_source_states_context: ContextVar[list[CategoryState] | None] = (
+            _DHCP_SOURCE_STATES_CONTEXT
+        )
+        positive_ttl = self._opts.get(
+            "endpoint_positive_cache_ttl_seconds", DEFAULT_CACHE_TTL_SECONDS
+        )
+        negative_ttl = self._opts.get(
+            "endpoint_negative_cache_ttl_seconds", DEFAULT_NEGATIVE_CACHE_TTL_SECONDS
+        )
+        if not isinstance(positive_ttl, int) or isinstance(positive_ttl, bool) or positive_ttl <= 0:
+            raise OPNsenseInvalidArgument(
+                "`endpoint_positive_cache_ttl_seconds` must be a positive integer."
+            )
+        if not isinstance(negative_ttl, int) or isinstance(negative_ttl, bool) or negative_ttl <= 0:
+            raise OPNsenseInvalidArgument(
+                "`endpoint_negative_cache_ttl_seconds` must be a positive integer."
+            )
+        self._endpoint_cache_ttl_seconds = positive_ttl
+        self._endpoint_negative_cache_ttl_seconds = negative_ttl
         self._rest_api_query_count = 0
         self._request_queue: asyncio.Queue = asyncio.Queue()
         self._workers: list[asyncio.Task[Any]] = []
