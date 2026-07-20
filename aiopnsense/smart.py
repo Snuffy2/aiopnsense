@@ -84,17 +84,39 @@ class SmartMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Decoded SMART detail payload. Non-mapping outputs
                 are wrapped under ``output`` to preserve a stable mapping API.
         """
+        return (await self.get_smart_info_result(device, info_type=info_type)).data
+
+    async def get_smart_info_result(
+        self, device: str, info_type: str = "a"
+    ) -> CategoryResult[dict[str, Any]]:
+        """Return SMART detail data with authoritative availability metadata.
+
+        Args:
+            device (str): SMART device name, such as ``nvme0`` or ``ada0``.
+            info_type (str): SMART info selector supported by the plugin.
+
+        Returns:
+            CategoryResult[dict[str, Any]]: Normalized detail data and its
+                authoritative availability state.
+        """
         info_payload = {
             "device": device,
             "type": info_type,
             "json": True,
         }
-        info_status, response = await self._check_optional_post_endpoint(
-            SMART_SERVICE_INFO_ENDPOINT,
-            payload=info_payload,
+        result = CategoryResult.coerce(
+            await self._check_optional_post_endpoint(
+                SMART_SERVICE_INFO_ENDPOINT,
+                payload=info_payload,
+            )
         )
-        if info_status != "available" or not isinstance(response, MutableMapping):
+        if result.state != "available":
             _LOGGER.debug("SMART plugin unavailable")
-            return {}
-        output = response.get("output", {})
-        return dict(output) if isinstance(output, MutableMapping) else {"output": output}
+            return CategoryResult({}, result.state, result.authoritative)
+        response = result.data
+        if not isinstance(response, MutableMapping) or "output" not in response:
+            _LOGGER.debug("SMART info response is missing a valid output envelope")
+            return CategoryResult({}, "malformed", False)
+        output = response["output"]
+        normalized = dict(output) if isinstance(output, MutableMapping) else {"output": output}
+        return CategoryResult(normalized, "available", True)

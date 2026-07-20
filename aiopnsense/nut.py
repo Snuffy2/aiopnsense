@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from ._typing import AiopnsenseClientProtocol
+from ._typing import AiopnsenseClientProtocol, CategoryResult
 from .helpers import _LOGGER, _log_errors
 
 NUT_DIAGNOSTICS_UPS_STATUS_ENDPOINT = "/api/nut/diagnostics/upsstatus"
@@ -22,13 +22,40 @@ class NutMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Decoded NUT UPS status payload, or an empty
                 dictionary when the NUT diagnostics endpoint is unavailable.
         """
-        optional_state, raw_payload = await self._check_optional_get_endpoint(
-            NUT_DIAGNOSTICS_UPS_STATUS_ENDPOINT
+        return (await self.get_nut_ups_status_result()).data
+
+    async def get_nut_ups_status_result(self) -> CategoryResult[dict[str, Any]]:
+        """Return NUT UPS status with authoritative availability metadata."""
+        result = CategoryResult.coerce(
+            await self._check_optional_get_endpoint(NUT_DIAGNOSTICS_UPS_STATUS_ENDPOINT)
         )
-        if optional_state != "available":
+        if result.state != "available":
             _LOGGER.debug("NUT UPS status endpoint unavailable")
-            return {}
-        return self._normalize_nut_ups_status_payload(raw_payload)
+            return CategoryResult({}, result.state, result.authoritative)
+        if not isinstance(result.data, Mapping):
+            self._normalize_nut_ups_status_payload(result.data)
+            return CategoryResult({}, "malformed", False)
+
+        raw_payload = dict(result.data)
+        normalized_payload = self._normalize_nut_ups_status_payload(raw_payload)
+        if not raw_payload:
+            return CategoryResult({}, "available", True)
+
+        status_value = raw_payload.get("status")
+        response_value = raw_payload.get("response")
+        if status_value is not None and not isinstance(status_value, Mapping):
+            return CategoryResult(normalized_payload, "malformed", False)
+        if response_value is not None and not isinstance(response_value, str):
+            return CategoryResult(normalized_payload, "malformed", False)
+        if isinstance(status_value, Mapping) and status_value:
+            return CategoryResult(normalized_payload, "available", True)
+        if isinstance(response_value, str):
+            if normalized_payload.get("status"):
+                return CategoryResult(normalized_payload, "available", True)
+            return CategoryResult(normalized_payload, "malformed", False)
+        if isinstance(status_value, Mapping):
+            return CategoryResult(normalized_payload, "available", True)
+        return CategoryResult(normalized_payload, "malformed", False)
 
     @staticmethod
     def _normalize_nut_ups_status_payload(payload: Any) -> dict[str, Any]:

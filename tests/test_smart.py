@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from aiopnsense import OPNsenseClient
+from aiopnsense import CategoryResult, CategoryState, OPNsenseClient
 from tests.conftest import FakeResponse, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -399,5 +399,74 @@ async def test_smart_post_endpoint_availability_caches_missing_plugin(
         assert await client._is_post_endpoint_available("/api/smart/service/list") is False
         assert await client._is_post_endpoint_available("/api/smart/service/list") is False
         assert calls == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ({"smart_status": "PASSED"}, {"smart_status": "PASSED"}),
+        (
+            "SMART overall-health self-assessment test result: PASSED",
+            {"output": "SMART overall-health self-assessment test result: PASSED"},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_smart_info_result_preserves_mapping_and_string_output(
+    make_client: ClientType, output: object, expected: dict[str, object]
+) -> None:
+    """SMART detail results preserve mapping and wrapped string compatibility."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_post_endpoint = AsyncMock(
+            return_value=CategoryResult({"output": output}, "available", True)
+        )
+        assert await client.get_smart_info_result("ada0", info_type="H") == CategoryResult(
+            expected, "available", True
+        )
+        assert await client.get_smart_info("ada0", info_type="H") == expected
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_smart_info_result_distinguishes_empty_and_malformed(
+    make_client: ClientType,
+) -> None:
+    """SMART detail metadata distinguishes explicit empty output and bad envelopes."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_post_endpoint = AsyncMock(
+            return_value=CategoryResult({"output": {}}, "available", True)
+        )
+        assert await client.get_smart_info_result("ada0") == CategoryResult({}, "available", True)
+
+        malformed_payloads: tuple[object, ...] = ({}, [], "bad")
+        for payload in malformed_payloads:
+            client._check_optional_post_endpoint.return_value = CategoryResult(
+                payload, "available", True
+            )
+            assert await client.get_smart_info_result("ada0") == CategoryResult(
+                {}, "malformed", False
+            )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize("state", ["pending", "missing", "transient", "malformed"])
+@pytest.mark.asyncio
+async def test_get_smart_info_result_preserves_non_available_state(
+    make_client: ClientType, state: CategoryState
+) -> None:
+    """SMART detail results preserve optional transport and parser states."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_post_endpoint = AsyncMock(
+            return_value=CategoryResult({}, state, False)
+        )
+        assert await client.get_smart_info_result("ada0") == CategoryResult({}, state, False)
+        assert await client.get_smart_info("ada0") == {}
     finally:
         await client.async_close()

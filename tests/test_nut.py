@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from aiopnsense import OPNsenseClient
+from aiopnsense import CategoryResult, CategoryState, OPNsenseClient
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -356,3 +356,48 @@ def test_normalize_nut_ups_status_payload_logs_fallback_branches(
 
     assert normalized_payload == expected
     assert expected_debug in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_get_nut_ups_status_result_distinguishes_empty_and_malformed(
+    make_client: ClientType,
+) -> None:
+    """NUT result metadata should distinguish explicit empty and invalid schemas."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=CategoryResult({}, "available", True)
+        )
+        assert await client.get_nut_ups_status_result() == CategoryResult({}, "available", True)
+
+        client._check_optional_get_endpoint.return_value = CategoryResult(
+            {"response": 123}, "available", True
+        )
+        assert await client.get_nut_ups_status_result() == CategoryResult(
+            {"response": 123}, "malformed", False
+        )
+
+        client._check_optional_get_endpoint.return_value = CategoryResult("bad", "available", True)
+        assert await client.get_nut_ups_status_result() == CategoryResult({}, "malformed", False)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize("state", ["pending", "missing", "transient"])
+@pytest.mark.asyncio
+async def test_get_nut_ups_status_result_preserves_transport_state_and_wrapper(
+    make_client: ClientType, state: CategoryState
+) -> None:
+    """NUT result states survive while the compatibility getter returns data only."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_get_endpoint = AsyncMock(
+            side_effect=[
+                CategoryResult({}, state, False),
+                CategoryResult({"status": {"ups.status": "OL"}}, "available", True),
+            ]
+        )
+        assert await client.get_nut_ups_status_result() == CategoryResult({}, state, False)
+        assert await client.get_nut_ups_status() == {"status": {"ups.status": "OL"}}
+    finally:
+        await client.async_close()
