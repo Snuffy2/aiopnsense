@@ -160,12 +160,14 @@ async def test_dhcp_provider_invalid_rows_are_schema_malformed(
     state_token = client._dhcp_source_states_context.set([])
     try:
         if provider == "kea":
-            client._is_get_endpoint_available = AsyncMock(return_value=True)
-            client._safe_dict_get = AsyncMock(return_value=payload)
+            client._check_optional_get_endpoint = AsyncMock(
+                return_value=CategoryResult(payload, "available", True)
+            )
             await client._get_kea_dhcp_leases("/api/kea/leases4/search", "Kea")
         elif provider == "dnsmasq":
-            client._is_get_endpoint_available = AsyncMock(return_value=True)
-            client._safe_dict_get = AsyncMock(return_value=payload)
+            client._check_optional_get_endpoint = AsyncMock(
+                return_value=CategoryResult(payload, "available", True)
+            )
             await client._get_dnsmasq_leases()
         else:
             client._get_endpoint_path = AsyncMock(return_value=f"/{provider}")
@@ -190,9 +192,13 @@ async def test_kea_reservation_provider_requires_rows_key(make_client) -> None:
     client = make_client()
     state_token = client._dhcp_source_states_context.set([])
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._get_endpoint_path = AsyncMock(return_value="/reservation")
-        client._safe_dict_get = AsyncMock(side_effect=[{"rows": []}, {}])
+        client._check_optional_get_endpoint = AsyncMock(
+            side_effect=[
+                CategoryResult({"rows": []}, "available", True),
+                CategoryResult({}, "available", True),
+            ]
+        )
         await client._get_kea_dhcp_leases(
             "/api/kea/leases4/search",
             "Kea",
