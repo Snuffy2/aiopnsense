@@ -9,7 +9,6 @@ from .helpers import (
     _LOGGER,
     _log_errors,
     api_value_matches,
-    dict_get,
     get_ip_key,
     timestamp_to_datetime,
     try_to_int,
@@ -235,15 +234,29 @@ class DHCPMixin(AiopnsenseClientProtocol):
         response = source_result.data
         if not isinstance(response, MutableMapping):
             return CategoryResult({}, "malformed", False)
-        lease_interfaces: dict[str, Any] = {}
-        general = dict_get(response, "dhcpv4.general", {})
+        dhcpv4 = response.get("dhcpv4")
+        if not isinstance(dhcpv4, MutableMapping):
+            return CategoryResult({}, "malformed", False)
+        general = dhcpv4.get("general")
         if not isinstance(general, MutableMapping):
             return CategoryResult({}, "malformed", False)
-        if not api_value_matches(general.get("enabled", "0"), "1"):
+        if "enabled" not in general:
+            return CategoryResult({}, "malformed", False)
+        enabled = general["enabled"]
+        if isinstance(enabled, bool):
+            is_enabled = enabled
+        elif isinstance(enabled, int) and enabled in {0, 1}:
+            is_enabled = enabled == 1
+        elif isinstance(enabled, str) and enabled in {"0", "1"}:
+            is_enabled = enabled == "1"
+        else:
+            return CategoryResult({}, "malformed", False)
+        if not is_enabled:
             return CategoryResult({}, "available", True)
-        interfaces = general.get("interfaces", {})
+        interfaces = general.get("interfaces")
         if not isinstance(interfaces, MutableMapping):
             return CategoryResult({}, "malformed", False)
+        lease_interfaces: dict[str, Any] = {}
         malformed = False
         for if_name, iface in interfaces.items():
             if not isinstance(iface, MutableMapping):

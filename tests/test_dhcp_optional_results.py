@@ -205,6 +205,114 @@ async def test_kea_interfaces_return_partial_malformed_data(make_client: ClientT
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"dhcpv4": None},
+        {"dhcpv4": {}},
+        {"dhcpv4": {"general": None}},
+        {"dhcpv4": {"general": {}}},
+        {"dhcpv4": {"general": {"enabled": None}}},
+        {"dhcpv4": {"general": {"enabled": "true"}}},
+        {"dhcpv4": {"general": {"enabled": 2}}},
+        {"dhcpv4": {"general": {"enabled": "1"}}},
+        {"dhcpv4": {"general": {"enabled": True, "interfaces": []}}},
+    ],
+)
+async def test_kea_interfaces_require_explicit_valid_config_schema(
+    make_client: ClientType, payload: object
+) -> None:
+    """Missing or invalid required Kea configuration fields are malformed."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=CategoryResult(payload, "available", True)
+        )
+
+        assert await client._get_kea_interfaces_result() == CategoryResult({}, "malformed", False)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled", [False, 0, "0"])
+async def test_kea_interfaces_explicit_disabled_is_authoritative(
+    make_client: ClientType, disabled: object
+) -> None:
+    """Every accepted explicit disabled representation is authoritative."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=CategoryResult(
+                {"dhcpv4": {"general": {"enabled": disabled}}}, "available", True
+            )
+        )
+
+        assert await client._get_kea_interfaces_result() == CategoryResult({}, "available", True)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, 1, "1"])
+async def test_kea_interfaces_explicit_enabled_empty_is_authoritative(
+    make_client: ClientType, enabled: object
+) -> None:
+    """Every accepted enabled representation permits an empty interface mapping."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=CategoryResult(
+                {"dhcpv4": {"general": {"enabled": enabled, "interfaces": {}}}},
+                "available",
+                True,
+            )
+        )
+
+        assert await client._get_kea_interfaces_result() == CategoryResult({}, "available", True)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_dhcp_aggregate_uses_real_kea_interface_authority_path(
+    make_client: ClientType,
+) -> None:
+    """Malformed Kea config makes an otherwise healthy aggregate non-authoritative."""
+    client, _session = make_mock_session_client(make_client)
+
+    async def available_provider(**_kwargs: object) -> list[dict[str, object]]:
+        """Record one healthy lease provider."""
+        client._record_dhcp_source_state("available")
+        return []
+
+    async def missing_provider(**_kwargs: object) -> list[dict[str, object]]:
+        """Record one confirmed absent lease provider."""
+        client._record_dhcp_source_state("missing")
+        return []
+
+    try:
+        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
+        client._get_kea_dhcpv4_leases = AsyncMock(side_effect=available_provider)
+        client._get_kea_dhcpv6_leases = AsyncMock(side_effect=missing_provider)
+        client._get_isc_dhcpv4_leases = AsyncMock(side_effect=missing_provider)
+        client._get_isc_dhcpv6_leases = AsyncMock(side_effect=missing_provider)
+        client._get_dnsmasq_leases = AsyncMock(side_effect=missing_provider)
+        client._get_optional = AsyncMock(
+            return_value=CategoryResult({"dhcpv4": {"general": {}}}, "available", True)
+        )
+
+        result = await client.get_dhcp_leases_result()
+
+        assert result.state == "malformed"
+        assert result.authoritative is False
+        client._get_optional.assert_awaited_once_with(KEA_DHCPV4_GET_ENDPOINT)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_concurrent_dhcp_results_keep_source_states_isolated(
     make_client: ClientType,
 ) -> None:

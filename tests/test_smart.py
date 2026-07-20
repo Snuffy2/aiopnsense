@@ -455,6 +455,26 @@ async def test_get_smart_info_result_distinguishes_empty_and_malformed(
         await client.async_close()
 
 
+@pytest.mark.parametrize("output", [None, ["line"], 1, True])
+@pytest.mark.asyncio
+async def test_get_smart_info_result_wraps_unsupported_output_as_malformed(
+    make_client: ClientType, output: object
+) -> None:
+    """Unsupported SMART output types retain data without claiming authority."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._check_optional_post_endpoint = AsyncMock(
+            return_value=CategoryResult({"output": output}, "available", True)
+        )
+
+        assert await client.get_smart_info_result("ada0") == CategoryResult(
+            {"output": output}, "malformed", False
+        )
+        assert await client.get_smart_info("ada0") == {"output": output}
+    finally:
+        await client.async_close()
+
+
 @pytest.mark.parametrize("state", ["pending", "missing", "transient", "malformed"])
 @pytest.mark.asyncio
 async def test_get_smart_info_result_preserves_non_available_state(

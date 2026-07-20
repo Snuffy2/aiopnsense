@@ -118,5 +118,9 @@ class SmartMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("SMART info response is missing a valid output envelope")
             return CategoryResult({}, "malformed", False)
         output = response["output"]
-        normalized = dict(output) if isinstance(output, MutableMapping) else {"output": output}
-        return CategoryResult(normalized, "available", True)
+        if isinstance(output, MutableMapping):
+            return CategoryResult(dict(output), "available", True)
+        normalized = {"output": output}
+        if isinstance(output, str):
+            return CategoryResult(normalized, "available", True)
+        return CategoryResult(normalized, "malformed", False)

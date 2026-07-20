@@ -45,10 +45,10 @@ class NutMixin(AiopnsenseClientProtocol):
         response_value = raw_payload.get("response")
         if status_value is not None and not isinstance(status_value, Mapping):
             return CategoryResult(normalized_payload, "malformed", False)
-        if response_value is not None and not isinstance(response_value, str):
-            return CategoryResult(normalized_payload, "malformed", False)
         if isinstance(status_value, Mapping) and status_value:
             return CategoryResult(normalized_payload, "available", True)
+        if response_value is not None and not isinstance(response_value, str):
+            return CategoryResult(normalized_payload, "malformed", False)
         if isinstance(response_value, str):
             if normalized_payload.get("status"):
                 return CategoryResult(normalized_payload, "available", True)

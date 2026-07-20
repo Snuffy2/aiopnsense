@@ -383,6 +383,25 @@ async def test_get_nut_ups_status_result_distinguishes_empty_and_malformed(
         await client.async_close()
 
 
+@pytest.mark.asyncio
+async def test_get_nut_ups_status_result_prefers_valid_status_over_invalid_response(
+    make_client: ClientType,
+) -> None:
+    """A valid structured NUT status is authoritative regardless of response metadata."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        payload = {"status": {"ups.status": "OL"}, "response": 123}
+        client._check_optional_get_endpoint = AsyncMock(
+            return_value=CategoryResult(payload, "available", True)
+        )
+
+        assert await client.get_nut_ups_status_result() == CategoryResult(
+            payload, "available", True
+        )
+    finally:
+        await client.async_close()
+
+
 @pytest.mark.parametrize("state", ["pending", "missing", "transient"])
 @pytest.mark.asyncio
 async def test_get_nut_ups_status_result_preserves_transport_state_and_wrapper(
