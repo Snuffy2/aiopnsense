@@ -1,5 +1,17 @@
 # Changelog
 
+## [v1.1.4](https://github.com/Snuffy2/aiopnsense/tree/v1.1.4) (2026-07-20)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.3...v1.1.4)
+
+**Enhancements**
+
+- Support alternate Speedtest plugins [\#80](https://github.com/Snuffy2/aiopnsense/pull/80) ([Snuffy2](https://github.com/Snuffy2))
+
+**Bug Fixes**
+
+- Parse raw NUT UPS status responses [\#79](https://github.com/Snuffy2/aiopnsense/pull/79) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.1.3](https://github.com/Snuffy2/aiopnsense/tree/v1.1.3) (2026-07-16)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.2...v1.1.3)
