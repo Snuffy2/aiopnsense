@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from datetime import timedelta, timezone
 from unittest.mock import AsyncMock, call
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -59,7 +60,7 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client) ->
                 "upload": {"avg": 706.7, "min": 1.54, "max": 890.32},
             }
         )
-        client._get_opnsense_timezone = AsyncMock(return_value=timezone(timedelta(hours=-4)))
+        client._get_opnsense_timezone = AsyncMock(return_value=ZoneInfo("America/New_York"))
 
         result = await client.get_speedtest()
 
@@ -72,8 +73,8 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client) ->
         assert result["average"]["download"]["min"] == 4.18
         assert result["average"]["download"]["max"] == 942.02
         assert result["average"]["download"]["samples"] == 10717
-        assert result["average"]["download"]["oldest"] == "2023-01-22 00:29:00"
-        assert result["average"]["download"]["youngest"] == "2026-03-14 03:09:45"
+        assert result["average"]["download"]["oldest"] == "2023-01-22T00:29:00-05:00"
+        assert result["average"]["download"]["youngest"] == "2026-03-14T03:09:45-04:00"
     finally:
         await client.async_close()
 
@@ -180,7 +181,7 @@ async def test_get_speedtest_preserves_timezone_aware_date(make_client) -> None:
         result = await client.get_speedtest()
 
         assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
-        client._get_opnsense_timezone.assert_not_awaited()
+        client._get_opnsense_timezone.assert_awaited_once_with()
     finally:
         await client.async_close()
 
@@ -211,7 +212,7 @@ async def test_get_speedtest_drops_malformed_date(make_client) -> None:
         result = await client.get_speedtest()
 
         assert result["last"]["download"]["date"] is None
-        client._get_opnsense_timezone.assert_not_awaited()
+        client._get_opnsense_timezone.assert_awaited_once_with()
     finally:
         await client.async_close()
 
@@ -246,6 +247,7 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client) -> None:
                 "latency": ["bad-latency-shape"],
             }
         )
+        client._get_opnsense_timezone = AsyncMock(return_value=timezone(timedelta(hours=-4)))
 
         result = await client.get_speedtest()
 

@@ -15,11 +15,10 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
-from datetime import datetime
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, try_to_float, try_to_int
+from .helpers import _LOGGER, _log_errors, normalize_datetime, try_to_float, try_to_int
 
 SPEEDTEST_SHOW_LOG_ENDPOINT = "/api/speedtest/service/showlog"
 SPEEDTEST_SHOW_STAT_ENDPOINT = "/api/speedtest/service/showstat"
@@ -59,13 +58,20 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
         server_name = latest_result.get("server")
         if not isinstance(server_name, str):
             server_name = None
-        date = await self._normalize_speedtest_date(latest_result.get("date"))
+        opnsense_tz = await self._get_opnsense_timezone()
+        date = normalize_datetime(latest_result.get("date"), opnsense_tz)
         url = latest_result.get("url") if isinstance(latest_result.get("url"), str) else None
 
         samples = try_to_int(show_stat.get("samples"))
         period = show_stat.get("period", {})
-        oldest = period.get("oldest") if isinstance(period, MutableMapping) else None
-        youngest = period.get("youngest") if isinstance(period, MutableMapping) else None
+        oldest = normalize_datetime(
+            period.get("oldest") if isinstance(period, MutableMapping) else None,
+            opnsense_tz,
+        )
+        youngest = normalize_datetime(
+            period.get("youngest") if isinstance(period, MutableMapping) else None,
+            opnsense_tz,
+        )
 
         output: dict[str, Any] = {
             "available": True,
@@ -98,27 +104,6 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 "samples": samples,
             }
         return output
-
-    async def _normalize_speedtest_date(self, value: object) -> str | None:
-        """Return a timezone-aware ISO 8601 Speedtest timestamp.
-
-        Args:
-            value (object): Raw date value returned by the Speedtest plugin.
-
-        Returns:
-            str | None: ISO 8601 timestamp including a UTC offset, or ``None``
-                when the value is missing or malformed.
-        """
-        if not isinstance(value, str):
-            return None
-        try:
-            parsed_date = datetime.fromisoformat(value)
-        except ValueError:
-            _LOGGER.debug("Failed to parse Speedtest date: %s", value)
-            return None
-        if parsed_date.tzinfo is None:
-            parsed_date = parsed_date.replace(tzinfo=await self._get_opnsense_timezone())
-        return parsed_date.isoformat()
 
     def _parse_showlog_latest(self, show_log: object) -> dict[str, Any]:
         """Normalize the newest row returned by the Speedtest ``showlog`` endpoint.
