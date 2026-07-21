@@ -18,7 +18,7 @@ from collections.abc import MutableMapping
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, try_to_float, try_to_int
+from .helpers import _LOGGER, _log_errors, dict_get, normalize_datetime, try_to_float, try_to_int
 
 SPEEDTEST_SHOW_LOG_ENDPOINT = "/api/speedtest/service/showlog"
 SPEEDTEST_SHOW_STAT_ENDPOINT = "/api/speedtest/service/showstat"
@@ -53,18 +53,14 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
             show_stat = {}
 
         server_id = latest_result.get("server_id")
-        if not isinstance(server_id, str):
-            server_id = None
         server_name = latest_result.get("server")
-        if not isinstance(server_name, str):
-            server_name = None
-        date = latest_result.get("date") if isinstance(latest_result.get("date"), str) else None
+        opnsense_tz = await self._get_resolved_opnsense_timezone()
+        date = normalize_datetime(latest_result.get("date"), opnsense_tz)
         url = latest_result.get("url") if isinstance(latest_result.get("url"), str) else None
 
-        samples = try_to_int(show_stat.get("samples"))
-        period = show_stat.get("period", {})
-        oldest = period.get("oldest") if isinstance(period, MutableMapping) else None
-        youngest = period.get("youngest") if isinstance(period, MutableMapping) else None
+        samples = try_to_int(dict_get(show_stat, "samples"))
+        oldest = normalize_datetime(dict_get(show_stat, "period.oldest"), opnsense_tz)
+        youngest = normalize_datetime(dict_get(show_stat, "period.youngest"), opnsense_tz)
 
         output: dict[str, Any] = {
             "available": True,
@@ -73,8 +69,6 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
         }
         for metric in ("download", "upload", "latency"):
             recent_value = try_to_float(latest_result.get(metric))
-            stat_metric = show_stat.get(metric, {})
-
             output["last"][metric] = {
                 "value": recent_value,
                 "date": date,
@@ -83,15 +77,9 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 "url": url,
             }
             output["average"][metric] = {
-                "value": try_to_float(
-                    stat_metric.get("avg") if isinstance(stat_metric, MutableMapping) else None
-                ),
-                "min": try_to_float(
-                    stat_metric.get("min") if isinstance(stat_metric, MutableMapping) else None
-                ),
-                "max": try_to_float(
-                    stat_metric.get("max") if isinstance(stat_metric, MutableMapping) else None
-                ),
+                "value": try_to_float(dict_get(show_stat, f"{metric}.avg")),
+                "min": try_to_float(dict_get(show_stat, f"{metric}.min")),
+                "max": try_to_float(dict_get(show_stat, f"{metric}.max")),
                 "oldest": oldest,
                 "youngest": youngest,
                 "samples": samples,
@@ -115,19 +103,16 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
         if not isinstance(latest, list) or len(latest) < 9:
             return {}
 
-        raw_server_id = latest[2].strip() if isinstance(latest[2], str) else latest[2]
-        if isinstance(raw_server_id, bool) or not isinstance(raw_server_id, int | str):
+        server_id = (
+            str(latest[2]).strip()
+            if isinstance(latest[2], int | str) and not isinstance(latest[2], bool)
+            else None
+        )
+        if server_id == "":
             server_id = None
-        else:
-            server_id = str(raw_server_id)
-            if not server_id:
-                server_id = None
-
-        raw_server = latest[3].strip() if isinstance(latest[3], str) else latest[3]
-        if not isinstance(raw_server, str):
-            server = None
-        else:
-            server = raw_server or None
+        raw_server = latest[3]
+        server = raw_server.strip() if isinstance(raw_server, str) else None
+        server = server or None
         return {
             "date": latest[0],
             "server_id": server_id,

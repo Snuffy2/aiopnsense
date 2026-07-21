@@ -1,7 +1,7 @@
 """Tests for `aiopnsense.helpers` utility and decorator helpers."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 import inspect
 import logging
 from unittest.mock import MagicMock
@@ -87,6 +87,40 @@ def test_timestamp_to_datetime() -> None:
     assert isinstance(dt, datetime)
     assert dt.tzinfo is not None
     assert aiopnsense_helpers.timestamp_to_datetime(None) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "default_tz", "expected"),
+    [
+        ("2026-03-14T03:09:45", timezone(timedelta(hours=-4)), "2026-03-14T03:09:45-04:00"),
+        ("2023-01-22 00:29:00", timezone(timedelta(hours=-4)), "2023-01-22T00:29:00-04:00"),
+        ("2026-03-14T03:09:45+01:30", timezone(timedelta(hours=-4)), "2026-03-14T03:09:45+01:30"),
+        ("2026-03-14T03:09:45", None, None),
+        ("2026-03-14T03:09:45+01:30", None, "2026-03-14T03:09:45+01:30"),
+        ("not-a-date", timezone(timedelta(hours=-4)), None),
+        (12345, timezone(timedelta(hours=-4)), None),
+    ],
+)
+def test_normalize_datetime(
+    value: object, default_tz: timezone | None, expected: str | None
+) -> None:
+    """Normalize naive and aware datetimes while rejecting malformed values.
+
+    Args:
+        value (object): Raw datetime value under test.
+        default_tz (timezone | None): Fallback timezone for naive values.
+        expected (str | None): Expected timezone-aware ISO result.
+
+    Returns:
+        None: This test validates helper output via assertions.
+    """
+    assert (
+        aiopnsense_helpers.normalize_datetime(
+            value,
+            default_tz,
+        )
+        == expected
+    )
 
 
 @pytest.mark.parametrize(

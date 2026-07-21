@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import Callable, MutableMapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from functools import wraps
 import ipaddress
 import logging
@@ -292,6 +292,33 @@ def timestamp_to_datetime(timestamp: int | None) -> datetime | None:
         except ZoneInfoNotFoundError:
             pass
     return utc_datetime.astimezone()
+
+
+def normalize_datetime(value: object, default_tz: tzinfo | None) -> str | None:
+    """Return a timezone-aware ISO 8601 datetime string.
+
+    Args:
+        value (object): Raw datetime value to normalize.
+        default_tz (tzinfo | None): Timezone assigned when ``value`` is naive.
+            When ``None``, naive values are returned as ``None`` so callers can
+            distinguish missing or unresolvable timezones.
+
+    Returns:
+        str | None: ISO 8601 timestamp including a UTC offset, or ``None``
+            when the value is missing or malformed.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed_date = datetime.fromisoformat(value)
+    except ValueError:
+        _LOGGER.debug("Failed to parse datetime: %s", value)
+        return None
+    if parsed_date.tzinfo is None:
+        if default_tz is None:
+            return None
+        parsed_date = parsed_date.replace(tzinfo=default_tz)
+    return parsed_date.isoformat()
 
 
 def try_to_int(value: Any | None, retval: int | None = None) -> int | None:
