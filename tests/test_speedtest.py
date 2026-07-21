@@ -1,6 +1,7 @@
 """Tests for `aiopnsense.speedtest`."""
 
 from collections.abc import Callable
+from datetime import timedelta, timezone
 from unittest.mock import AsyncMock, call
 
 import pytest
@@ -58,6 +59,7 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client) ->
                 "upload": {"avg": 706.7, "min": 1.54, "max": 890.32},
             }
         )
+        client._get_opnsense_timezone = AsyncMock(return_value=timezone(timedelta(hours=-4)))
 
         result = await client.get_speedtest()
 
@@ -65,6 +67,7 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client) ->
         assert result["last"]["download"]["value"] == 836.05
         assert result["last"]["download"]["server_id"] == "72800"
         assert result["last"]["download"]["server"] == "RippleFiber, Newark, NJ"
+        assert result["last"]["download"]["date"] == "2026-03-14T03:09:45-04:00"
         assert result["average"]["download"]["value"] == 723.83
         assert result["average"]["download"]["min"] == 4.18
         assert result["average"]["download"]["max"] == 942.02
@@ -125,6 +128,7 @@ async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
             ]
         )
         client._safe_dict_get = AsyncMock(return_value={})
+        client._get_opnsense_timezone = AsyncMock(return_value=timezone(timedelta(hours=-4)))
 
         result = await client.get_speedtest()
 
@@ -133,6 +137,7 @@ async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
             call("/api/speedtest/service/showlog"),
             call("/api/speedtest/service/showstat"),
         ]
+        client._get_opnsense_timezone.assert_awaited_once_with()
         client._safe_list_get.assert_awaited_once_with("/api/speedtest/service/showlog")
 
         if showstat_available:
@@ -145,6 +150,68 @@ async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
             assert result["last"]["download"]["value"] == 1.0
             assert result["last"]["upload"]["value"] == 2.0
             assert result["last"]["latency"]["value"] == 3.0
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_speedtest_preserves_timezone_aware_date(make_client) -> None:
+    """get_speedtest should preserve an existing timestamp UTC offset."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._safe_list_get = AsyncMock(
+            return_value=[
+                [
+                    "2026-03-14T03:09:45+01:30",
+                    "198.51.100.10",
+                    "72800",
+                    "Test ISP",
+                    "United States",
+                    "1",
+                    "2",
+                    "3",
+                    "https://www.speedtest.net/result/c/abc",
+                ]
+            ]
+        )
+        client._get_opnsense_timezone = AsyncMock()
+
+        result = await client.get_speedtest()
+
+        assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
+        client._get_opnsense_timezone.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_speedtest_drops_malformed_date(make_client) -> None:
+    """get_speedtest should omit malformed timestamp values."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._safe_list_get = AsyncMock(
+            return_value=[
+                [
+                    "not-a-date",
+                    "198.51.100.10",
+                    "72800",
+                    "Test ISP",
+                    "United States",
+                    "1",
+                    "2",
+                    "3",
+                    "https://www.speedtest.net/result/c/abc",
+                ]
+            ]
+        )
+        client._get_opnsense_timezone = AsyncMock()
+
+        result = await client.get_speedtest()
+
+        assert result["last"]["download"]["date"] is None
+        client._get_opnsense_timezone.assert_not_awaited()
     finally:
         await client.async_close()
 
