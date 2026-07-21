@@ -374,14 +374,14 @@ class SystemMixin(AiopnsenseClientProtocol):
                 timezone cannot be resolved.
         """
         if datetime_str is None:
-            if not await self._is_get_endpoint_available(SYSTEM_TIME_ENDPOINT):
-                _LOGGER.debug("System time endpoint unavailable for timezone resolution")
-                return None
             try:
+                if not await self._is_get_endpoint_available(SYSTEM_TIME_ENDPOINT):
+                    _LOGGER.debug("System time endpoint unavailable for timezone resolution")
+                    return None
                 datetime_payload = await self._safe_dict_get(SYSTEM_TIME_ENDPOINT)
             except (OPNsenseError, aiohttp.ClientError, TimeoutError) as err:
                 _LOGGER.debug(
-                    "Failed to fetch OPNsense system time for timezone resolution: %s: %s",
+                    "Failed to access OPNsense system time for timezone resolution: %s: %s",
                     type(err).__name__,
                     err,
                 )

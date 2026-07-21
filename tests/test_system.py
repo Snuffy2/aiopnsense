@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient, OPNsenseInvalidURL
+from aiopnsense import OPNsenseClient, OPNsenseInvalidURL, OPNsensePrivilegeMissing
 from aiopnsense.exceptions import OPNsenseMissingDeviceUniqueID
 from tests.conftest import make_mock_session_client
 
@@ -222,6 +222,30 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_endpoint_unavailab
         client._is_get_endpoint_available.assert_awaited_once_with(
             "/api/diagnostics/system/system_time"
         )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_resolved_opnsense_timezone_returns_none_on_probe_error(
+    make_client: ClientType,
+) -> None:
+    """Verify a mapped endpoint probe error does not abort timezone enrichment."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.toggle_throwing_errors(True)
+        client._is_get_endpoint_available = AsyncMock(
+            side_effect=OPNsensePrivilegeMissing("Missing privilege for system time")
+        )
+        client._safe_dict_get = AsyncMock()
+
+        resolved_tz = await client._get_resolved_opnsense_timezone()
+
+        assert resolved_tz is None
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            "/api/diagnostics/system/system_time"
+        )
+        client._safe_dict_get.assert_not_awaited()
     finally:
         await client.async_close()
 
