@@ -119,6 +119,20 @@ def test_normalize_datetime(value: object, expected: str | None) -> None:
 
 
 @pytest.mark.parametrize(
+    ("value", "default_tz", "expected"),
+    [
+        ("2026-03-14T03:09:45", None, None),
+        ("2026-03-14T03:09:45+01:30", None, "2026-03-14T03:09:45+01:30"),
+    ],
+)
+def test_normalize_datetime_without_default_tz(
+    value: object, default_tz: timezone | None, expected: str | None
+) -> None:
+    """Return ``None`` for naive values when no default timezone is available."""
+    assert aiopnsense_helpers.normalize_datetime(value, default_tz) == expected
+
+
+@pytest.mark.parametrize(
     ("firmware_version", "expected"),
     [
         (None, None),

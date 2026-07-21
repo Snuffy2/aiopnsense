@@ -58,7 +58,7 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
         server_name = latest_result.get("server")
         if not isinstance(server_name, str):
             server_name = None
-        opnsense_tz = await self._get_opnsense_timezone()
+        opnsense_tz = await self._get_resolved_opnsense_timezone()
         date = normalize_datetime(latest_result.get("date"), opnsense_tz)
         url = latest_result.get("url") if isinstance(latest_result.get("url"), str) else None
 

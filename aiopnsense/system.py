@@ -330,6 +330,71 @@ class SystemMixin(AiopnsenseClientProtocol):
         """
         return timezone(datetime.now().astimezone().utcoffset() or timedelta())
 
+    def _parse_opnsense_tz(self, datetime_str: str | None) -> tzinfo | None:
+        """Parse a timezone from a system timestamp string.
+
+        Args:
+            datetime_str (str | None): Raw timestamp value from the system
+                endpoint.
+
+        Returns:
+            tzinfo | None: Parsed timezone when available; ``None`` when the
+                string is missing, naive, or cannot be parsed.
+        """
+        if not datetime_str:
+            return None
+
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", UnknownTimezoneWarning)
+                parsed_time = parse(datetime_str, tzinfos=AMBIGUOUS_TZINFOS)
+            if parsed_time.tzinfo is not None:
+                return parsed_time.tzinfo
+            _LOGGER.debug("No timezone data in OPNsense datetime '%s'", datetime_str)
+        except (ValueError, TypeError, ParserError, UnknownTimezoneWarning) as err:
+            _LOGGER.debug(
+                "Failed to parse OPNsense timezone from datetime '%s': %s: %s",
+                datetime_str,
+                type(err).__name__,
+                err,
+            )
+        return None
+
+    async def _get_resolved_opnsense_timezone(
+        self, datetime_str: str | None = None
+    ) -> tzinfo | None:
+        """Resolve OPNsense timezone only when it can be determined.
+
+        Args:
+            datetime_str (str | None, optional): Datetime string from OPNsense to
+                parse instead of reading the system-time endpoint.
+
+        Returns:
+            tzinfo | None: Resolved firewall timezone, or ``None`` when the
+                timezone cannot be resolved.
+        """
+        if datetime_str is None:
+            if not await self._is_get_endpoint_available(SYSTEM_TIME_ENDPOINT):
+                _LOGGER.debug("System time endpoint unavailable for timezone resolution")
+                return None
+            try:
+                datetime_payload = await self._safe_dict_get(SYSTEM_TIME_ENDPOINT)
+            except (OPNsenseError, aiohttp.ClientError, TimeoutError) as err:
+                _LOGGER.debug(
+                    "Failed to fetch OPNsense system time for timezone resolution: %s: %s",
+                    type(err).__name__,
+                    err,
+                )
+                return None
+            datetime_value = (
+                datetime_payload.get("datetime")
+                if isinstance(datetime_payload, MutableMapping)
+                else None
+            )
+            datetime_str = datetime_value if isinstance(datetime_value, str) else None
+
+        return self._parse_opnsense_tz(datetime_str)
+
     async def _get_opnsense_timezone(self, datetime_str: str | None = None) -> tzinfo:
         """Resolve timezone information from OPNsense system time data.
 
@@ -339,40 +404,9 @@ class SystemMixin(AiopnsenseClientProtocol):
         Returns:
             tzinfo: Resolved timezone object for OPNsense system data.
         """
-        if datetime_str is None:
-            if not await self._is_get_endpoint_available(SYSTEM_TIME_ENDPOINT):
-                _LOGGER.debug("System time endpoint unavailable for timezone resolution")
-                return self._get_local_timezone()
-            try:
-                datetime_raw = (await self._safe_dict_get(SYSTEM_TIME_ENDPOINT)).get("datetime")
-            except (OPNsenseError, aiohttp.ClientError, TimeoutError) as err:
-                _LOGGER.debug(
-                    "Failed to fetch OPNsense system time for timezone resolution: %s: %s",
-                    type(err).__name__,
-                    err,
-                )
-                return self._get_local_timezone()
-            datetime_str = datetime_raw if isinstance(datetime_raw, str) else None
-
-        if datetime_str:
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("error", UnknownTimezoneWarning)
-                    parsed_time = parse(datetime_str, tzinfos=AMBIGUOUS_TZINFOS)
-                if parsed_time.tzinfo is not None:
-                    return parsed_time.tzinfo
-                _LOGGER.debug(
-                    "No timezone data in OPNsense datetime '%s', using local fallback",
-                    datetime_str,
-                )
-            except (ValueError, TypeError, ParserError, UnknownTimezoneWarning) as err:
-                _LOGGER.debug(
-                    "Failed to parse OPNsense timezone from datetime '%s': %s: %s",
-                    datetime_str,
-                    type(err).__name__,
-                    err,
-                )
-        return self._get_local_timezone()
+        return (
+            await self._get_resolved_opnsense_timezone(datetime_str) or self._get_local_timezone()
+        )
 
     @_log_errors
     async def get_device_unique_id(self, expected_id: str | None = None) -> str | None:

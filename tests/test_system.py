@@ -208,6 +208,60 @@ async def test_get_opnsense_timezone_fallback_for_mapped_error(make_client: Clie
 
 
 @pytest.mark.asyncio
+async def test_get_resolved_opnsense_timezone_returns_none_on_endpoint_unavailable(
+    make_client: ClientType,
+) -> None:
+    """Verify resolved-only timezone lookup returns ``None`` when endpoint is unavailable."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
+
+        resolved_tz = await client._get_resolved_opnsense_timezone()
+
+        assert resolved_tz is None
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            "/api/diagnostics/system/system_time"
+        )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_resolved_opnsense_timezone_returns_none_on_fetch_error(
+    make_client: ClientType,
+) -> None:
+    """Verify resolved-only timezone lookup returns ``None`` when fetch fails."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(side_effect=aiohttp.ClientError("transient fetch error"))
+
+        resolved_tz = await client._get_resolved_opnsense_timezone()
+
+        assert resolved_tz is None
+        client._safe_dict_get.assert_awaited_once_with("/api/diagnostics/system/system_time")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_resolved_opnsense_timezone_returns_none_on_malformed_datetime(
+    make_client: ClientType,
+) -> None:
+    """Verify resolved-only timezone lookup returns ``None`` for malformed data."""
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value={"datetime": "not-a-datetime"})
+
+        resolved_tz = await client._get_resolved_opnsense_timezone()
+
+        assert resolved_tz is None
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("datetime_str", "expected_dt", "expected_offset"),
     [

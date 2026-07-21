@@ -294,12 +294,14 @@ def timestamp_to_datetime(timestamp: int | None) -> datetime | None:
     return utc_datetime.astimezone()
 
 
-def normalize_datetime(value: object, default_tz: tzinfo) -> str | None:
+def normalize_datetime(value: object, default_tz: tzinfo | None) -> str | None:
     """Return a timezone-aware ISO 8601 datetime string.
 
     Args:
         value (object): Raw datetime value to normalize.
-        default_tz (tzinfo): Timezone assigned when ``value`` is naive.
+        default_tz (tzinfo | None): Timezone assigned when ``value`` is naive.
+            When ``None``, naive values are returned as ``None`` so callers can
+            distinguish missing or unresolvable timezones.
 
     Returns:
         str | None: ISO 8601 timestamp including a UTC offset, or ``None``
@@ -313,6 +315,8 @@ def normalize_datetime(value: object, default_tz: tzinfo) -> str | None:
         _LOGGER.debug("Failed to parse datetime: %s", value)
         return None
     if parsed_date.tzinfo is None:
+        if default_tz is None:
+            return None
         parsed_date = parsed_date.replace(tzinfo=default_tz)
     return parsed_date.isoformat()
 
