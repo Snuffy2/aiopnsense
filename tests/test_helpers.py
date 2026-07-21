@@ -90,20 +90,25 @@ def test_timestamp_to_datetime() -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
+    ("value", "default_tz", "expected"),
     [
-        ("2026-03-14T03:09:45", "2026-03-14T03:09:45-04:00"),
-        ("2023-01-22 00:29:00", "2023-01-22T00:29:00-04:00"),
-        ("2026-03-14T03:09:45+01:30", "2026-03-14T03:09:45+01:30"),
-        ("not-a-date", None),
-        (12345, None),
+        ("2026-03-14T03:09:45", timezone(timedelta(hours=-4)), "2026-03-14T03:09:45-04:00"),
+        ("2023-01-22 00:29:00", timezone(timedelta(hours=-4)), "2023-01-22T00:29:00-04:00"),
+        ("2026-03-14T03:09:45+01:30", timezone(timedelta(hours=-4)), "2026-03-14T03:09:45+01:30"),
+        ("2026-03-14T03:09:45", None, None),
+        ("2026-03-14T03:09:45+01:30", None, "2026-03-14T03:09:45+01:30"),
+        ("not-a-date", timezone(timedelta(hours=-4)), None),
+        (12345, timezone(timedelta(hours=-4)), None),
     ],
 )
-def test_normalize_datetime(value: object, expected: str | None) -> None:
+def test_normalize_datetime(
+    value: object, default_tz: timezone | None, expected: str | None
+) -> None:
     """Normalize naive and aware datetimes while rejecting malformed values.
 
     Args:
         value (object): Raw datetime value under test.
+        default_tz (timezone | None): Fallback timezone for naive values.
         expected (str | None): Expected timezone-aware ISO result.
 
     Returns:
@@ -112,24 +117,10 @@ def test_normalize_datetime(value: object, expected: str | None) -> None:
     assert (
         aiopnsense_helpers.normalize_datetime(
             value,
-            timezone(timedelta(hours=-4)),
+            default_tz,
         )
         == expected
     )
-
-
-@pytest.mark.parametrize(
-    ("value", "default_tz", "expected"),
-    [
-        ("2026-03-14T03:09:45", None, None),
-        ("2026-03-14T03:09:45+01:30", None, "2026-03-14T03:09:45+01:30"),
-    ],
-)
-def test_normalize_datetime_without_default_tz(
-    value: object, default_tz: timezone | None, expected: str | None
-) -> None:
-    """Return ``None`` for naive values when no default timezone is available."""
-    assert aiopnsense_helpers.normalize_datetime(value, default_tz) == expected
 
 
 @pytest.mark.parametrize(
