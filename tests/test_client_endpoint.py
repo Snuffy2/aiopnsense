@@ -298,6 +298,51 @@ async def test_is_get_endpoint_available_does_not_cache_non_404_http_errors(
 
 
 @pytest.mark.asyncio
+async def test_is_get_endpoint_available_caches_403_permission_error(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Verify permission failures are cached and logged once until cache expiry.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Captured log records for the endpoint probes.
+
+    Returns:
+        None: This test asserts quiet retry avoidance for permission failures.
+    """
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _get(*args: Any, **kwargs: Any) -> Any:
+        """Return a permission-denied endpoint response.
+
+        Args:
+            *args (Any): Positional arguments forwarded to the wrapped callable.
+            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            Any: Synthetic permission-denied response returned by the GET request.
+        """
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        return FakeResponse(status=403, reason="Forbidden", ok=False)
+
+    session.get = _get
+    try:
+        path = "/api/test/endpoint"
+        assert await client._is_get_endpoint_available(path) is False
+        assert await client._is_get_endpoint_available(path) is False
+        assert calls == 1
+        assert client._endpoint_availability[path] is False
+        assert path in client._endpoint_checked_at
+        assert sum("Permission Error" in record.message for record in caplog.records) == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_is_get_endpoint_available_raises_non_404_http_errors_when_throw_enabled(
     make_client: MakeClientFactory,
 ) -> None:

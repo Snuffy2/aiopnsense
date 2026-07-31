@@ -202,9 +202,10 @@ class ClientEndpointMixin:
 
         Side Effects:
             Increments the REST query counter for uncached probes and updates
-            endpoint availability caches. On transient transport or HTTP
-            response errors, cache entries for the method-aware key are removed
-            before returning ``False`` or re-raising in throw mode.
+            endpoint availability caches. Missing endpoints and permission
+            failures are cached as unavailable outside throw mode. On transient
+            transport or HTTP response errors, cache entries for the method-aware
+            key are removed before returning ``False`` or re-raising in throw mode.
         """
         if not isinstance(path, str) or not path:
             return False
@@ -244,22 +245,29 @@ class ClientEndpointMixin:
                     self._endpoint_checked_at[cache_key] = now
                     return False
 
-                self._endpoint_availability.pop(cache_key, None)
-                self._endpoint_checked_at.pop(cache_key, None)
                 if response.status == 403:
                     _LOGGER.error(
                         "Permission Error in is_%s_endpoint_available. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                         normalized_method,
                         url,
                     )
-                else:
-                    _LOGGER.warning(
-                        "Transient %s endpoint check failure for %s. Response %s: %s. Not caching result.",
-                        normalized_method.upper(),
-                        path,
-                        response.status,
-                        response.reason,
-                    )
+                    if self._throw_errors:
+                        self._endpoint_availability.pop(cache_key, None)
+                        self._endpoint_checked_at.pop(cache_key, None)
+                        raise _opnsense_http_error(response.status, response.reason)
+                    self._endpoint_availability[cache_key] = False
+                    self._endpoint_checked_at[cache_key] = now
+                    return False
+
+                self._endpoint_availability.pop(cache_key, None)
+                self._endpoint_checked_at.pop(cache_key, None)
+                _LOGGER.warning(
+                    "Transient %s endpoint check failure for %s. Response %s: %s. Not caching result.",
+                    normalized_method.upper(),
+                    path,
+                    response.status,
+                    response.reason,
+                )
                 if self._throw_errors:
                     raise _opnsense_http_error(response.status, response.reason)
                 return False
