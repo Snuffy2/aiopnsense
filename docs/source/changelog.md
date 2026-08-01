@@ -1,5 +1,18 @@
 # Changelog
 
+## [v1.1.6](https://github.com/Snuffy2/aiopnsense/tree/v1.1.6) (2026-08-01)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.5...v1.1.6)
+
+**Bug Fixes**
+
+- Cache endpoint permission failures [\#91](https://github.com/Snuffy2/aiopnsense/pull/91) ([Snuffy2](https://github.com/Snuffy2))
+
+**Maintenance**
+
+- Update GitHub maintenance workflows [\#90](https://github.com/Snuffy2/aiopnsense/pull/90) ([Snuffy2](https://github.com/Snuffy2))
+- Update prek\_autoupdate.yml [\#86](https://github.com/Snuffy2/aiopnsense/pull/86) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.1.5](https://github.com/Snuffy2/aiopnsense/tree/v1.1.5) (2026-07-21)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.4...v1.1.5)
