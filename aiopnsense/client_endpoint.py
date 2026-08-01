@@ -222,7 +222,9 @@ class ClientEndpointMixin:
         )
 
         if not force_refresh and cache_is_fresh and cache_key in self._endpoint_availability:
-            return self._endpoint_availability[cache_key]
+            cached_availability = self._endpoint_availability[cache_key]
+            if cached_availability or not self._throw_errors:
+                return cached_availability
 
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"

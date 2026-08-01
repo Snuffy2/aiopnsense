@@ -314,15 +314,15 @@ async def test_is_get_endpoint_available_caches_403_permission_error(
     client, session = make_mock_session_client(make_client)
     calls = 0
 
-    def _get(*args: Any, **kwargs: Any) -> Any:
+    def _get(*args: object, **kwargs: object) -> FakeResponse:
         """Return a permission-denied endpoint response.
 
         Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+            *args (object): Positional arguments forwarded to the wrapped callable.
+            **kwargs (object): Keyword arguments forwarded to the wrapped callable.
 
         Returns:
-            Any: Synthetic permission-denied response returned by the GET request.
+            FakeResponse: Synthetic permission-denied response returned by the GET request.
         """
         del args, kwargs
         nonlocal calls
@@ -338,6 +338,58 @@ async def test_is_get_endpoint_available_caches_403_permission_error(
         assert client._endpoint_availability[path] is False
         assert path in client._endpoint_checked_at
         assert sum("Permission Error" in record.message for record in caplog.records) == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_validate_reprobes_cached_403_in_throw_mode(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify validation does not trust a cached permission failure.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts validation freshly probes cached permission failures.
+    """
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _get(*args: object, **kwargs: object) -> FakeResponse:
+        """Return a permission-denied endpoint response.
+
+        Args:
+            *args (object): Positional arguments forwarded to the wrapped callable.
+            **kwargs (object): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            FakeResponse: Synthetic permission-denied response returned by the GET request.
+        """
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        return FakeResponse(
+            status=403,
+            reason="Forbidden",
+            ok=False,
+            include_request_info=True,
+        )
+
+    session.get = _get
+    try:
+        path = "/api/core/firmware/status"
+        assert await client._is_get_endpoint_available(path) is False
+        assert client._endpoint_availability[path] is False
+
+        with pytest.raises(OPNsensePrivilegeMissing):
+            await client.validate(require_device_id=False)
+
+        assert calls == 2
+        assert client._throw_errors is False
+        assert path not in client._endpoint_availability
+        assert path not in client._endpoint_checked_at
     finally:
         await client.async_close()
 
