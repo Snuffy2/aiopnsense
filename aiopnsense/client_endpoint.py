@@ -179,6 +179,16 @@ class ClientEndpointMixin:
         # so an indeterminate or newer-firmware value stays on the snake_case path.
         return snake_case_path if self._use_snake_case is not False else camel_case_path
 
+    def _clear_endpoint_cache_entry(self, cache_key: str) -> None:
+        """Clear all cached endpoint state for a method-aware key.
+
+        Args:
+            cache_key (str): Method-aware endpoint cache key to clear.
+        """
+        self._endpoint_permission_denied.discard(cache_key)
+        self._endpoint_availability.pop(cache_key, None)
+        self._endpoint_checked_at.pop(cache_key, None)
+
     async def _is_endpoint_available(
         self,
         path: str,
@@ -257,18 +267,14 @@ class ClientEndpointMixin:
                         url,
                     )
                     if self._throw_errors:
-                        self._endpoint_permission_denied.discard(cache_key)
-                        self._endpoint_availability.pop(cache_key, None)
-                        self._endpoint_checked_at.pop(cache_key, None)
+                        self._clear_endpoint_cache_entry(cache_key)
                         raise _opnsense_http_error(response.status, response.reason)
                     self._endpoint_permission_denied.add(cache_key)
                     self._endpoint_availability[cache_key] = False
                     self._endpoint_checked_at[cache_key] = now
                     return False
 
-                self._endpoint_permission_denied.discard(cache_key)
-                self._endpoint_availability.pop(cache_key, None)
-                self._endpoint_checked_at.pop(cache_key, None)
+                self._clear_endpoint_cache_entry(cache_key)
                 _LOGGER.warning(
                     "Transient %s endpoint check failure for %s. Response %s: %s. Not caching result.",
                     normalized_method.upper(),
@@ -280,9 +286,7 @@ class ClientEndpointMixin:
                     raise _opnsense_http_error(response.status, response.reason)
                 return False
         except (aiohttp.ClientError, TimeoutError) as e:
-            self._endpoint_permission_denied.discard(cache_key)
-            self._endpoint_availability.pop(cache_key, None)
-            self._endpoint_checked_at.pop(cache_key, None)
+            self._clear_endpoint_cache_entry(cache_key)
             _LOGGER.warning(
                 "%s endpoint availability check failed for %s. %s: %s. Not caching result.",
                 normalized_method.upper(),
