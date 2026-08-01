@@ -19,6 +19,7 @@ class ClientEndpointMixin:
         _endpoint_availability: dict[str, bool]
         _endpoint_cache_ttl_seconds: int
         _endpoint_checked_at: dict[str, datetime]
+        _endpoint_permission_denied: set[str]
         _unsafe_post_endpoint_probe_paths: frozenset[str] | set[str]
         _unsafe_post_endpoint_probe_prefixes: tuple[str, ...]
         _unsafe_post_endpoint_probe_segments: frozenset[str] | set[str]
@@ -178,6 +179,16 @@ class ClientEndpointMixin:
         # so an indeterminate or newer-firmware value stays on the snake_case path.
         return snake_case_path if self._use_snake_case is not False else camel_case_path
 
+    def _clear_endpoint_cache_entry(self, cache_key: str) -> None:
+        """Clear all cached endpoint state for a method-aware key.
+
+        Args:
+            cache_key (str): Method-aware endpoint cache key to clear.
+        """
+        self._endpoint_permission_denied.discard(cache_key)
+        self._endpoint_availability.pop(cache_key, None)
+        self._endpoint_checked_at.pop(cache_key, None)
+
     async def _is_endpoint_available(
         self,
         path: str,
@@ -202,9 +213,10 @@ class ClientEndpointMixin:
 
         Side Effects:
             Increments the REST query counter for uncached probes and updates
-            endpoint availability caches. On transient transport or HTTP
-            response errors, cache entries for the method-aware key are removed
-            before returning ``False`` or re-raising in throw mode.
+            endpoint availability caches. Missing endpoints and permission
+            failures are cached as unavailable outside throw mode. On transient
+            transport or HTTP response errors, cache entries for the method-aware
+            key are removed before returning ``False`` or re-raising in throw mode.
         """
         if not isinstance(path, str) or not path:
             return False
@@ -221,7 +233,9 @@ class ClientEndpointMixin:
         )
 
         if not force_refresh and cache_is_fresh and cache_key in self._endpoint_availability:
-            return self._endpoint_availability[cache_key]
+            cached_availability = self._endpoint_availability[cache_key]
+            if not (self._throw_errors and cache_key in self._endpoint_permission_denied):
+                return cached_availability
 
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -236,36 +250,43 @@ class ClientEndpointMixin:
                 ssl=self._verify_ssl,
             ) as response:
                 if response.ok:
+                    self._endpoint_permission_denied.discard(cache_key)
                     self._endpoint_availability[cache_key] = True
                     self._endpoint_checked_at[cache_key] = now
                     return True
                 if response.status == 404:
+                    self._endpoint_permission_denied.discard(cache_key)
                     self._endpoint_availability[cache_key] = False
                     self._endpoint_checked_at[cache_key] = now
                     return False
 
-                self._endpoint_availability.pop(cache_key, None)
-                self._endpoint_checked_at.pop(cache_key, None)
                 if response.status == 403:
                     _LOGGER.error(
                         "Permission Error in is_%s_endpoint_available. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                         normalized_method,
                         url,
                     )
-                else:
-                    _LOGGER.warning(
-                        "Transient %s endpoint check failure for %s. Response %s: %s. Not caching result.",
-                        normalized_method.upper(),
-                        path,
-                        response.status,
-                        response.reason,
-                    )
+                    if self._throw_errors:
+                        self._clear_endpoint_cache_entry(cache_key)
+                        raise _opnsense_http_error(response.status, response.reason)
+                    self._endpoint_permission_denied.add(cache_key)
+                    self._endpoint_availability[cache_key] = False
+                    self._endpoint_checked_at[cache_key] = now
+                    return False
+
+                self._clear_endpoint_cache_entry(cache_key)
+                _LOGGER.warning(
+                    "Transient %s endpoint check failure for %s. Response %s: %s. Not caching result.",
+                    normalized_method.upper(),
+                    path,
+                    response.status,
+                    response.reason,
+                )
                 if self._throw_errors:
                     raise _opnsense_http_error(response.status, response.reason)
                 return False
         except (aiohttp.ClientError, TimeoutError) as e:
-            self._endpoint_availability.pop(cache_key, None)
-            self._endpoint_checked_at.pop(cache_key, None)
+            self._clear_endpoint_cache_entry(cache_key)
             _LOGGER.warning(
                 "%s endpoint availability check failed for %s. %s: %s. Not caching result.",
                 normalized_method.upper(),

@@ -121,6 +121,52 @@ async def test_is_get_endpoint_available_cache_false_by_ttl_and_force_refresh(
 
 
 @pytest.mark.asyncio
+async def test_is_get_endpoint_available_uses_cached_404_in_throw_mode(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify throw mode continues to trust a cached missing endpoint.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts throw mode preserves cached 404 behavior.
+    """
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _get(*args: object, **kwargs: object) -> FakeResponse:
+        """Return a missing-endpoint response.
+
+        Args:
+            *args (object): Positional arguments forwarded to the wrapped callable.
+            **kwargs (object): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            FakeResponse: Synthetic missing-endpoint response returned by the GET request.
+        """
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        return FakeResponse(status=404, reason="Not Found", ok=False)
+
+    session.get = _get
+    try:
+        path = "/api/test/missing"
+        assert await client._is_get_endpoint_available(path) is False
+
+        client._throw_errors = True
+        assert await client._is_get_endpoint_available(path) is False
+
+        assert calls == 1
+        assert client._endpoint_availability[path] is False
+        assert path in client._endpoint_checked_at
+        assert path not in client._endpoint_permission_denied
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_is_get_endpoint_available_handles_timeout(make_client: MakeClientFactory) -> None:
     """Verify endpoint probing returns ``False`` and retries after timeouts.
 
@@ -293,6 +339,120 @@ async def test_is_get_endpoint_available_does_not_cache_non_404_http_errors(
         assert calls == 2
         assert path not in client._endpoint_checked_at
         assert path not in client._endpoint_availability
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_is_get_endpoint_available_caches_403_permission_error(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Verify permission failures are cached and logged once until cache expiry.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Captured log records for the endpoint probes.
+
+    Returns:
+        None: This test asserts quiet retry avoidance for permission failures.
+    """
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _get(*args: object, **kwargs: object) -> FakeResponse:
+        """Return a permission denial followed by a successful endpoint response.
+
+        Args:
+            *args (object): Positional arguments forwarded to the wrapped callable.
+            **kwargs (object): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            FakeResponse: Synthetic response returned by the GET request.
+        """
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return FakeResponse(status=403, reason="Forbidden", ok=False)
+        return FakeResponse(status=200, ok=True)
+
+    session.get = _get
+    try:
+        path = "/api/test/endpoint"
+        assert await client._is_get_endpoint_available(path) is False
+        assert await client._is_get_endpoint_available(path) is False
+        assert calls == 1
+        assert client._endpoint_availability[path] is False
+        assert path in client._endpoint_checked_at
+        assert path in client._endpoint_permission_denied
+        assert sum("Permission Error" in record.message for record in caplog.records) == 1
+
+        expired_at = datetime.now().astimezone() - timedelta(
+            seconds=client._endpoint_cache_ttl_seconds + 1
+        )
+        client._endpoint_checked_at[path] = expired_at
+
+        assert await client._is_get_endpoint_available(path) is True
+        assert calls == 2
+        assert client._endpoint_availability[path] is True
+        assert client._endpoint_checked_at[path] > expired_at
+        assert path not in client._endpoint_permission_denied
+        assert sum("Permission Error" in record.message for record in caplog.records) == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_validate_reprobes_cached_403_in_throw_mode(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify validation does not trust a cached permission failure.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts validation freshly probes cached permission failures.
+    """
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _get(*args: object, **kwargs: object) -> FakeResponse:
+        """Return a permission-denied endpoint response.
+
+        Args:
+            *args (object): Positional arguments forwarded to the wrapped callable.
+            **kwargs (object): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            FakeResponse: Synthetic permission-denied response returned by the GET request.
+        """
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        return FakeResponse(
+            status=403,
+            reason="Forbidden",
+            ok=False,
+            include_request_info=True,
+        )
+
+    session.get = _get
+    try:
+        path = "/api/core/firmware/status"
+        assert await client._is_get_endpoint_available(path) is False
+        assert client._endpoint_availability[path] is False
+        assert path in client._endpoint_permission_denied
+
+        with pytest.raises(OPNsensePrivilegeMissing):
+            await client.validate(require_device_id=False)
+
+        assert calls == 2
+        assert client._throw_errors is False
+        assert path not in client._endpoint_availability
+        assert path not in client._endpoint_checked_at
+        assert path not in client._endpoint_permission_denied
     finally:
         await client.async_close()
 
