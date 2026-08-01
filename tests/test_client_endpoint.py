@@ -121,6 +121,52 @@ async def test_is_get_endpoint_available_cache_false_by_ttl_and_force_refresh(
 
 
 @pytest.mark.asyncio
+async def test_is_get_endpoint_available_uses_cached_404_in_throw_mode(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify throw mode continues to trust a cached missing endpoint.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts throw mode preserves cached 404 behavior.
+    """
+    client, session = make_mock_session_client(make_client)
+    calls = 0
+
+    def _get(*args: object, **kwargs: object) -> FakeResponse:
+        """Return a missing-endpoint response.
+
+        Args:
+            *args (object): Positional arguments forwarded to the wrapped callable.
+            **kwargs (object): Keyword arguments forwarded to the wrapped callable.
+
+        Returns:
+            FakeResponse: Synthetic missing-endpoint response returned by the GET request.
+        """
+        del args, kwargs
+        nonlocal calls
+        calls += 1
+        return FakeResponse(status=404, reason="Not Found", ok=False)
+
+    session.get = _get
+    try:
+        path = "/api/test/missing"
+        assert await client._is_get_endpoint_available(path) is False
+
+        client._throw_errors = True
+        assert await client._is_get_endpoint_available(path) is False
+
+        assert calls == 1
+        assert client._endpoint_availability[path] is False
+        assert path in client._endpoint_checked_at
+        assert path not in client._endpoint_permission_denied
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_is_get_endpoint_available_handles_timeout(make_client: MakeClientFactory) -> None:
     """Verify endpoint probing returns ``False`` and retries after timeouts.
 
@@ -337,6 +383,7 @@ async def test_is_get_endpoint_available_caches_403_permission_error(
         assert calls == 1
         assert client._endpoint_availability[path] is False
         assert path in client._endpoint_checked_at
+        assert path in client._endpoint_permission_denied
         assert sum("Permission Error" in record.message for record in caplog.records) == 1
     finally:
         await client.async_close()
@@ -382,6 +429,7 @@ async def test_validate_reprobes_cached_403_in_throw_mode(
         path = "/api/core/firmware/status"
         assert await client._is_get_endpoint_available(path) is False
         assert client._endpoint_availability[path] is False
+        assert path in client._endpoint_permission_denied
 
         with pytest.raises(OPNsensePrivilegeMissing):
             await client.validate(require_device_id=False)
@@ -390,6 +438,7 @@ async def test_validate_reprobes_cached_403_in_throw_mode(
         assert client._throw_errors is False
         assert path not in client._endpoint_availability
         assert path not in client._endpoint_checked_at
+        assert path not in client._endpoint_permission_denied
     finally:
         await client.async_close()
 

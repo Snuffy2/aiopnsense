@@ -19,6 +19,7 @@ class ClientEndpointMixin:
         _endpoint_availability: dict[str, bool]
         _endpoint_cache_ttl_seconds: int
         _endpoint_checked_at: dict[str, datetime]
+        _endpoint_permission_denied: set[str]
         _unsafe_post_endpoint_probe_paths: frozenset[str] | set[str]
         _unsafe_post_endpoint_probe_prefixes: tuple[str, ...]
         _unsafe_post_endpoint_probe_segments: frozenset[str] | set[str]
@@ -223,7 +224,7 @@ class ClientEndpointMixin:
 
         if not force_refresh and cache_is_fresh and cache_key in self._endpoint_availability:
             cached_availability = self._endpoint_availability[cache_key]
-            if cached_availability or not self._throw_errors:
+            if not (self._throw_errors and cache_key in self._endpoint_permission_denied):
                 return cached_availability
 
         self._rest_api_query_count += 1
@@ -239,10 +240,12 @@ class ClientEndpointMixin:
                 ssl=self._verify_ssl,
             ) as response:
                 if response.ok:
+                    self._endpoint_permission_denied.discard(cache_key)
                     self._endpoint_availability[cache_key] = True
                     self._endpoint_checked_at[cache_key] = now
                     return True
                 if response.status == 404:
+                    self._endpoint_permission_denied.discard(cache_key)
                     self._endpoint_availability[cache_key] = False
                     self._endpoint_checked_at[cache_key] = now
                     return False
@@ -254,13 +257,16 @@ class ClientEndpointMixin:
                         url,
                     )
                     if self._throw_errors:
+                        self._endpoint_permission_denied.discard(cache_key)
                         self._endpoint_availability.pop(cache_key, None)
                         self._endpoint_checked_at.pop(cache_key, None)
                         raise _opnsense_http_error(response.status, response.reason)
+                    self._endpoint_permission_denied.add(cache_key)
                     self._endpoint_availability[cache_key] = False
                     self._endpoint_checked_at[cache_key] = now
                     return False
 
+                self._endpoint_permission_denied.discard(cache_key)
                 self._endpoint_availability.pop(cache_key, None)
                 self._endpoint_checked_at.pop(cache_key, None)
                 _LOGGER.warning(
@@ -274,6 +280,7 @@ class ClientEndpointMixin:
                     raise _opnsense_http_error(response.status, response.reason)
                 return False
         except (aiohttp.ClientError, TimeoutError) as e:
+            self._endpoint_permission_denied.discard(cache_key)
             self._endpoint_availability.pop(cache_key, None)
             self._endpoint_checked_at.pop(cache_key, None)
             _LOGGER.warning(
