@@ -24,4 +24,4 @@ jobs:
           persist-credentials: false
 
       - id: review
-        uses: Snuffy2/prek-autofix/review@v1
+        uses: Snuffy2/prek-autofix/review@v1.0.2
