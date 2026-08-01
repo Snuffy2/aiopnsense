@@ -361,19 +361,21 @@ async def test_is_get_endpoint_available_caches_403_permission_error(
     calls = 0
 
     def _get(*args: object, **kwargs: object) -> FakeResponse:
-        """Return a permission-denied endpoint response.
+        """Return a permission denial followed by a successful endpoint response.
 
         Args:
             *args (object): Positional arguments forwarded to the wrapped callable.
             **kwargs (object): Keyword arguments forwarded to the wrapped callable.
 
         Returns:
-            FakeResponse: Synthetic permission-denied response returned by the GET request.
+            FakeResponse: Synthetic response returned by the GET request.
         """
         del args, kwargs
         nonlocal calls
         calls += 1
-        return FakeResponse(status=403, reason="Forbidden", ok=False)
+        if calls == 1:
+            return FakeResponse(status=403, reason="Forbidden", ok=False)
+        return FakeResponse(status=200, ok=True)
 
     session.get = _get
     try:
@@ -384,6 +386,18 @@ async def test_is_get_endpoint_available_caches_403_permission_error(
         assert client._endpoint_availability[path] is False
         assert path in client._endpoint_checked_at
         assert path in client._endpoint_permission_denied
+        assert sum("Permission Error" in record.message for record in caplog.records) == 1
+
+        expired_at = datetime.now().astimezone() - timedelta(
+            seconds=client._endpoint_cache_ttl_seconds + 1
+        )
+        client._endpoint_checked_at[path] = expired_at
+
+        assert await client._is_get_endpoint_available(path) is True
+        assert calls == 2
+        assert client._endpoint_availability[path] is True
+        assert client._endpoint_checked_at[path] > expired_at
+        assert path not in client._endpoint_permission_denied
         assert sum("Permission Error" in record.message for record in caplog.records) == 1
     finally:
         await client.async_close()
