@@ -127,18 +127,26 @@ class VnstatMixin(AiopnsenseClientProtocol):
             rows_hourly = self._interface_rows(hourly, interface)
             rows_daily = self._interface_rows(daily, interface)
             rows_monthly = self._interface_rows(monthly, interface)
+            parsed_days = [self._parse_daily_label(row.get("label")) for row in rows_daily]
+            parsed_months = [self._parse_month_label(row.get("label")) for row in rows_monthly]
             selected_rows = {
                 "vnstat_today": self._pick_daily_row(
-                    rows_daily, days_ago=0, current_tz=opnsense_tz
+                    rows_daily, days_ago=0, current_tz=opnsense_tz, parsed_days=parsed_days
                 ),
                 "vnstat_this_month": self._pick_monthly_row(
-                    rows_monthly, months_ago=0, current_tz=opnsense_tz
+                    rows_monthly,
+                    months_ago=0,
+                    current_tz=opnsense_tz,
+                    parsed_months=parsed_months,
                 ),
                 "vnstat_yesterday": self._pick_daily_row(
-                    rows_daily, days_ago=1, current_tz=opnsense_tz
+                    rows_daily, days_ago=1, current_tz=opnsense_tz, parsed_days=parsed_days
                 ),
                 "vnstat_last_month": self._pick_monthly_row(
-                    rows_monthly, months_ago=1, current_tz=opnsense_tz
+                    rows_monthly,
+                    months_ago=1,
+                    current_tz=opnsense_tz,
+                    parsed_months=parsed_months,
                 ),
                 "vnstat_last_hour": self._pick_last_hour_row(rows_hourly, current_tz=opnsense_tz),
             }
@@ -304,7 +312,11 @@ class VnstatMixin(AiopnsenseClientProtocol):
         return int(round(parsed_value * factor))
 
     def _pick_daily_row(
-        self, rows: Sequence[dict[str, Any]], days_ago: int, current_tz: tzinfo
+        self,
+        rows: Sequence[dict[str, Any]],
+        days_ago: int,
+        current_tz: tzinfo,
+        parsed_days: Sequence[date | None] | None = None,
     ) -> dict[str, Any] | None:
         """Select a daily row by matching day label or falling back by position.
 
@@ -312,6 +324,8 @@ class VnstatMixin(AiopnsenseClientProtocol):
             rows (Sequence[dict[str, Any]]): Collection of parsed table rows.
             days_ago (int): Day offset used for fallback selection.
             current_tz (tzinfo): Timezone used to determine the current date.
+            parsed_days (Sequence[date | None] | None): Pre-parsed row labels,
+                when available for reuse across selections.
 
         Returns:
             dict[str, Any] | None: Daily row matching ``days_ago`` in
@@ -319,8 +333,8 @@ class VnstatMixin(AiopnsenseClientProtocol):
                 second-latest row for yesterday when labels cannot be parsed.
         """
         target_day = datetime.now(tz=current_tz).date() - timedelta(days=days_ago)
-        for row in rows:
-            parsed_day = self._parse_daily_label(row.get("label"))
+        days = parsed_days or [self._parse_daily_label(row.get("label")) for row in rows]
+        for row, parsed_day in zip(rows, days, strict=False):
             if parsed_day == target_day:
                 return row
         if days_ago == 0 and rows:
@@ -330,7 +344,11 @@ class VnstatMixin(AiopnsenseClientProtocol):
         return None
 
     def _pick_monthly_row(
-        self, rows: Sequence[dict[str, Any]], months_ago: int, current_tz: tzinfo
+        self,
+        rows: Sequence[dict[str, Any]],
+        months_ago: int,
+        current_tz: tzinfo,
+        parsed_months: Sequence[tuple[int, int] | None] | None = None,
     ) -> dict[str, Any] | None:
         """Select a monthly row by matching month label or fallback position.
 
@@ -338,6 +356,9 @@ class VnstatMixin(AiopnsenseClientProtocol):
             rows (Sequence[dict[str, Any]]): Collection of parsed table rows.
             months_ago (int): Month offset used for fallback selection.
             current_tz (tzinfo): Timezone used to determine the current month.
+            parsed_months (Sequence[tuple[int, int] | None] | None):
+                Pre-parsed row labels, when available for reuse across
+                selections.
 
         Returns:
             dict[str, Any] | None: Monthly row matching ``months_ago`` in
@@ -352,8 +373,8 @@ class VnstatMixin(AiopnsenseClientProtocol):
             target_month += 12
             target_year -= 1
 
-        for row in rows:
-            parsed_month = self._parse_month_label(row.get("label"))
+        months = parsed_months or [self._parse_month_label(row.get("label")) for row in rows]
+        for row, parsed_month in zip(rows, months, strict=False):
             if parsed_month == (target_year, target_month):
                 return row
         if months_ago == 0 and rows:
