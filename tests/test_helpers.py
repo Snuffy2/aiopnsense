@@ -309,6 +309,60 @@ async def test_log_errors_decorator_re_raise_and_suppress() -> None:
         await d2.boom()
 
 
+@pytest.mark.asyncio
+async def test_log_errors_defers_exception_rendering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defer traceback and message work until a formatter consumes the log argument.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing logging and traceback calls.
+    """
+
+    rendered_messages = 0
+
+    class LazyMessageError(Exception):
+        """Exception that records when its message is rendered."""
+
+        def __str__(self) -> str:
+            """Record message rendering for lazy logging assertions.
+
+            Returns:
+                str: Stable exception message.
+            """
+            nonlocal rendered_messages
+            rendered_messages += 1
+            return "deferred message"
+
+    class Dummy:
+        """Small wrapper for exercising lazy exception logging."""
+
+        _throw_errors = False
+
+        @aiopnsense_helpers._log_errors
+        async def boom(self) -> None:
+            """Raise an exception whose message must remain lazy.
+
+            Raises:
+                LazyMessageError: Always raised to exercise lazy logging.
+            """
+            raise LazyMessageError
+
+    error_log = MagicMock()
+    format_traceback = MagicMock(return_value=[])
+    monkeypatch.setattr(aiopnsense_helpers._LOGGER, "error", error_log)
+    monkeypatch.setattr(aiopnsense_helpers.traceback, "format_tb", format_traceback)
+
+    assert await Dummy().boom() is None
+    assert rendered_messages == 0
+    format_traceback.assert_not_called()
+    log_details = error_log.call_args.args[2]
+
+    assert str(log_details) == "LazyMessageError: deferred message\n"
+    assert rendered_messages == 1
+    format_traceback.assert_called_once()
+
+
 def test_log_errors_preserves_wrapped_metadata() -> None:
     """Verify ``_log_errors`` preserves wrapped method metadata for autodoc."""
 

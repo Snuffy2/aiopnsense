@@ -24,6 +24,38 @@ from .exceptions import (
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
+class _ExceptionLogDetails:
+    """Lazily render redacted exception details for an emitted log record."""
+
+    def __init__(self, error: Exception) -> None:
+        """Store an exception until a logging formatter requests its details.
+
+        Args:
+            error (Exception): Caught exception to redact and render.
+        """
+        self._error = error
+
+    def __str__(self) -> str:
+        """Render the redacted message and traceback.
+
+        Returns:
+            str: Exception type, redacted message, and formatted traceback.
+        """
+        logged_message = (
+            _INVALID_URL_ERROR_MESSAGE
+            if isinstance(self._error, aiohttp.InvalidURL)
+            else re.sub(
+                r"(://)([^:/@\s]+):([^@\s]+)@",
+                r"\1<redacted>:<redacted>@",
+                str(self._error),
+            )
+        )
+        return (
+            f"{type(self._error).__name__}: {logged_message}\n"
+            f"{''.join(traceback.format_tb(self._error.__traceback__))}"
+        )
+
+
 def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap coroutine methods with shared timeout/error logging behavior.
 
@@ -76,21 +108,10 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
                     raise
                 raise _map_opnsense_exception(e) from e
         except Exception as e:
-            logged_message = (
-                _INVALID_URL_ERROR_MESSAGE
-                if isinstance(e, aiohttp.InvalidURL)
-                else re.sub(
-                    r"(://)([^:/@\s]+):([^@\s]+)@",
-                    r"\1<redacted>:<redacted>@",
-                    str(e),
-                )
-            )
             _LOGGER.error(
-                "Error in %s. %s: %s\n%s",
+                "Error in %s. %s",
                 func.__name__.strip("_"),
-                type(e).__name__,
-                logged_message,
-                "".join(traceback.format_tb(e.__traceback__)),
+                _ExceptionLogDetails(e),
             )
             if self._throw_errors:
                 if isinstance(e, OPNsenseError):
