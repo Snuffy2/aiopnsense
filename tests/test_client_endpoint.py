@@ -963,49 +963,40 @@ async def test_set_use_snake_case_selects_expected_endpoint_style(
         await client.async_close()
 
 
+@pytest.mark.parametrize(
+    ("firmware_version", "expected_use_snake_case"),
+    [
+        pytest.param("invalid-version", True, id="invalid-version"),
+        pytest.param(None, None, id="missing-version"),
+    ],
+)
 @pytest.mark.asyncio
 async def test_set_use_snake_case_initial_raises_unknown_firmware(
     make_client: MakeClientFactory,
+    firmware_version: str | None,
+    expected_use_snake_case: bool | None,
 ) -> None:
-    """Verify legacy initial setup still raises for invalid firmware versions.
+    """Verify legacy initial setup raises when firmware cannot be identified.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        firmware_version (str | None): Invalid or missing firmware version returned by the client.
+        expected_use_snake_case (bool | None): Expected state to assert, when covered by the
+            original case.
 
     Returns:
         None: This test asserts the preserved compatibility path.
     """
     client = make_client()
     try:
-        client.get_host_firmware_version = AsyncMock(return_value="invalid-version")
+        client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
 
         with pytest.raises(OPNsenseUnknownFirmware):
             await client._set_use_snake_case(initial=True)
 
         client.get_host_firmware_version.assert_awaited_once_with()
-        assert client._use_snake_case is True
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_set_use_snake_case_initial_raises_unknown_firmware_when_version_missing(
-    make_client: MakeClientFactory,
-) -> None:
-    """Verify missing firmware version still raises unknown-firmware in legacy init mode.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory used to simulate a client without firmware data.
-    """
-
-    client = make_client()
-    try:
-        client.get_host_firmware_version = AsyncMock(return_value=None)
-
-        with pytest.raises(OPNsenseUnknownFirmware):
-            await client._set_use_snake_case(initial=True)
-
-        client.get_host_firmware_version.assert_awaited_once_with()
+        if expected_use_snake_case is not None:
+            assert client._use_snake_case is expected_use_snake_case
     finally:
         await client.async_close()
 
