@@ -3,31 +3,39 @@
 from unittest.mock import MagicMock
 
 import aiohttp
-import pytest
 from aiohttp.client_reqrep import ConnectionKey
+import pytest
 
 import aiopnsense as aiopnsense_module
 from aiopnsense.exceptions import _map_opnsense_exception, _opnsense_http_error
 
 
-def test_voucher_server_error() -> None:
-    """Raise OPNsenseVoucherServerError to ensure the exception class exists.
+@pytest.mark.parametrize(
+    "exception_type",
+    [
+        pytest.param(
+            aiopnsense_module.OPNsenseVoucherServerError,
+            id="voucher-server-error",
+        ),
+        pytest.param(
+            aiopnsense_module.OPNsenseMissingDeviceUniqueID,
+            id="missing-device-unique-id",
+        ),
+    ],
+)
+def test_public_specific_exceptions_can_be_raised_and_caught(
+    exception_type: type[aiopnsense_module.OPNsenseError],
+) -> None:
+    """Raise and catch each specific exception exported by the public API.
+
+    Args:
+        exception_type (type[aiopnsense_module.OPNsenseError]): Public exception class to verify.
 
     Raises:
-        aiopnsense_module.OPNsenseVoucherServerError: Raised to verify the public exception exists.
+        exception_type: Raised to verify the public exception class.
     """
-    with pytest.raises(aiopnsense_module.OPNsenseVoucherServerError):
-        raise aiopnsense_module.OPNsenseVoucherServerError
-
-
-def test_missing_device_unique_id_error() -> None:
-    """Raise OPNsenseMissingDeviceUniqueID to ensure the exception class exists.
-
-    Raises:
-        aiopnsense_module.OPNsenseMissingDeviceUniqueID: Raised to verify the public exception exists.
-    """
-    with pytest.raises(aiopnsense_module.OPNsenseMissingDeviceUniqueID):
-        raise aiopnsense_module.OPNsenseMissingDeviceUniqueID
+    with pytest.raises(exception_type):
+        raise exception_type
 
 
 def test_invalid_argument_is_public_opnsense_type_error() -> None:
