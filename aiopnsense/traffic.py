@@ -200,10 +200,12 @@ class TrafficMixin(AiopnsenseClientProtocol):
         """Yield normalized diagnostics traffic stream samples.
 
         Args:
-            poll_interval (int): Value used by `stream_interface_traffic`.
+            poll_interval (int): Selects the stream interval and endpoint. Values below
+                1 are clamped to 1.
 
         Yields:
-            dict[str, Any]: Value yielded by `stream_interface_traffic`.
+            dict[str, Any]: Normalized traffic samples after the initial valid timing
+                event is discarded because it cannot represent an interval delta.
         """
         interval = max(poll_interval, 1)
         endpoint = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/{interval}"
