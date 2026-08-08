@@ -33,11 +33,11 @@ def toggle_alias_client(make_client: ClientType) -> tuple[OPNsenseClient, Any]:
 
 
 @pytest.mark.asyncio
-async def test_get_firewall_aggregates_rest_payload(make_client: Any) -> None:
+async def test_get_firewall_aggregates_rest_payload(make_client: ClientType) -> None:
     """`get_firewall` should aggregate all REST-native rule collections.
 
     Args:
-        make_client (Any): Value used by `test_get_firewall_aggregates_rest_payload`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client = make_client()
     try:
@@ -69,12 +69,12 @@ async def test_get_firewall_aggregates_rest_payload(make_client: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_get_firewall_rules_skips_invalid_rows(
-    make_client: Any, caplog: pytest.LogCaptureFixture
+    make_client: ClientType, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Firewall rule downloads should parse editable rows and skip invalid rows.
 
     Args:
-        make_client (Any): Value used by `test_get_firewall_rules_skips_invalid_rows`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         caplog (pytest.LogCaptureFixture): Value used by `test_get_firewall_rules_skips_invalid_rows`.
     """
     client = make_client()
@@ -283,22 +283,22 @@ async def test_get_nat_source_rules_labels_empty_interface_address_target(
     ],
 )
 async def test_nat_rule_helpers_parse_rows(
-    make_client: Any,
-    method_name: Any,
-    api_endpoint: Any,
-    rows: Any,
-    expected: Any,
-    firmware_version: Any,
+    make_client: ClientType,
+    method_name: str,
+    api_endpoint: str,
+    rows: list[dict[str, object]],
+    expected: dict[str, dict[str, str]],
+    firmware_version: str | None,
 ) -> None:
     """NAT rule helpers should return UUID-keyed mappings from REST search rows.
 
     Args:
-        make_client (Any): Value used by `test_nat_rule_helpers_parse_rows`.
-        method_name (Any): Value used by `test_nat_rule_helpers_parse_rows`.
-        api_endpoint (Any): Value used by `test_nat_rule_helpers_parse_rows`.
-        rows (Any): Value used by `test_nat_rule_helpers_parse_rows`.
-        expected (Any): Value used by `test_nat_rule_helpers_parse_rows`.
-        firmware_version (Any): Value used by `test_nat_rule_helpers_parse_rows`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        method_name (str): Client helper method name.
+        api_endpoint (str): REST endpoint expected from the helper.
+        rows (list[dict[str, object]]): REST search rows to normalize.
+        expected (dict[str, dict[str, str]]): Expected UUID-keyed rule mapping.
+        firmware_version (str | None): Optional mocked firmware version.
     """
     client = make_client()
     try:
@@ -318,12 +318,12 @@ async def test_nat_rule_helpers_parse_rows(
 
 @pytest.mark.asyncio
 async def test_uses_unified_nat_template_handles_invalid_firmware_string(
-    make_client: Callable[..., Any], caplog: pytest.LogCaptureFixture
+    make_client: ClientType, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Legacy normalization fallback should be used when version comparison raises.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_uses_unified_nat_template_handles_invalid_firmware_string`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         caplog (pytest.LogCaptureFixture): Value used by `test_uses_unified_nat_template_handles_invalid_firmware_string`.
     """
     client = make_client()
@@ -341,12 +341,12 @@ async def test_uses_unified_nat_template_handles_invalid_firmware_string(
 
 @pytest.mark.asyncio
 async def test_filters_automatic_source_nat_rules_handles_invalid_firmware_string(
-    make_client: Callable[..., Any], caplog: pytest.LogCaptureFixture
+    make_client: ClientType, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Verify source NAT filtering is disabled when version comparison fails.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory returning OPNsense clients.
+        make_client (ClientType): Fixture factory returning OPNsense clients.
         caplog (pytest.LogCaptureFixture): Fixture capturing log output.
 
     Returns:
@@ -378,22 +378,26 @@ async def test_filters_automatic_source_nat_rules_handles_invalid_firmware_strin
     ],
 )
 async def test_rule_helpers_return_empty_when_endpoint_unavailable(
-    make_client: Callable[..., Any], method_name: str, api_endpoint: str, expected: Any
+    make_client: ClientType,
+    method_name: str,
+    api_endpoint: str,
+    expected: dict[str, object],
 ) -> None:
     """Rule helpers should short-circuit when the related endpoint is unavailable.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_rule_helpers_return_empty_when_endpoint_unavailable`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         method_name (str): Value used by `test_rule_helpers_return_empty_when_endpoint_unavailable`.
         api_endpoint (str): Value used by `test_rule_helpers_return_empty_when_endpoint_unavailable`.
-        expected (Any): Value used by `test_rule_helpers_return_empty_when_endpoint_unavailable`.
+        expected (dict[str, object]): Expected empty rule mapping.
     """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
+        firmware_version_mock = AsyncMock(return_value="26.1.4")
         if method_name == "_get_nat_destination_rules":
-            client.get_host_firmware_version = AsyncMock(return_value="26.1.4")
+            client.get_host_firmware_version = firmware_version_mock
 
         result = await getattr(client, method_name)()
 
@@ -401,7 +405,7 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
         client._is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
         client._safe_dict_get.assert_not_awaited()
         if method_name == "_get_nat_destination_rules":
-            client.get_host_firmware_version.assert_awaited_once()
+            firmware_version_mock.assert_awaited_once()
     finally:
         await client.async_close()
 
@@ -533,22 +537,22 @@ async def test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11(
     ],
 )
 async def test_toggle_firewall_rule(
-    make_client: Any,
-    toggle_value: Any,
-    toggle_response: Any,
-    apply_response: Any,
-    expected_url: Any,
-    expected: Any,
+    make_client: ClientType,
+    toggle_value: str | None,
+    toggle_response: dict[str, str],
+    apply_response: dict[str, str],
+    expected_url: str,
+    expected: bool,
 ) -> None:
     """Firewall rule toggles should use the right endpoint and require a successful apply.
 
     Args:
-        make_client (Any): Value used by `test_toggle_firewall_rule`.
-        toggle_value (Any): Value used by `test_toggle_firewall_rule`.
-        toggle_response (Any): Value used by `test_toggle_firewall_rule`.
-        apply_response (Any): Value used by `test_toggle_firewall_rule`.
-        expected_url (Any): Value used by `test_toggle_firewall_rule`.
-        expected (Any): Value used by `test_toggle_firewall_rule`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        toggle_value (str | None): Requested toggle state.
+        toggle_response (dict[str, str]): Mock toggle response.
+        apply_response (dict[str, str]): Mock apply response.
+        expected_url (str): Expected toggle endpoint URL.
+        expected (bool): Expected operation result.
     """
     client = make_client()
     try:
@@ -578,15 +582,18 @@ async def test_toggle_firewall_rule(
     ],
 )
 async def test_toggle_nat_rule_uses_expected_url(
-    make_client: Any, nat_rule_type: Any, toggle_value: Any, expected_url: Any
+    make_client: ClientType,
+    nat_rule_type: str,
+    toggle_value: str | None,
+    expected_url: str,
 ) -> None:
     """NAT toggles should target the correct REST endpoints, including d_nat inversion.
 
     Args:
-        make_client (Any): Value used by `test_toggle_nat_rule_uses_expected_url`.
-        nat_rule_type (Any): Value used by `test_toggle_nat_rule_uses_expected_url`.
-        toggle_value (Any): Value used by `test_toggle_nat_rule_uses_expected_url`.
-        expected_url (Any): Value used by `test_toggle_nat_rule_uses_expected_url`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        nat_rule_type (str): NAT rule family used in the endpoint.
+        toggle_value (str | None): Requested toggle state.
+        expected_url (str): Expected toggle endpoint URL.
     """
     client = make_client()
     try:
@@ -605,11 +612,11 @@ async def test_toggle_nat_rule_uses_expected_url(
 
 
 @pytest.mark.asyncio
-async def test_kill_states_returns_normalized_result(make_client: Any) -> None:
+async def test_kill_states_returns_normalized_result(make_client: ClientType) -> None:
     """`kill_states` should normalize the diagnostics response.
 
     Args:
-        make_client (Any): Value used by `test_kill_states_returns_normalized_result`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client = make_client()
     try:

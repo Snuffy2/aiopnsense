@@ -15,12 +15,14 @@ ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
-async def test_get_openvpn_and_fetch_details(monkeypatch: Any, make_client: Any) -> None:
+async def test_get_openvpn_and_fetch_details(
+    monkeypatch: pytest.MonkeyPatch, make_client: ClientType
+) -> None:
     """Validate openvpn server/client discovery and fetch details flow.
 
     Args:
-        monkeypatch (Any): Value used by `test_get_openvpn_and_fetch_details`.
-        make_client (Any): Value used by `test_get_openvpn_and_fetch_details`.
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing client getters.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -56,14 +58,14 @@ async def test_get_openvpn_and_fetch_details(monkeypatch: Any, make_client: Any)
             ]
         }
 
-        async def fake_safe_dict_get(path: Any):
+        async def fake_safe_dict_get(path: str) -> dict[str, Any]:
             """Fake safe dict get.
 
             Args:
-                path (Any): API endpoint path string to request.
+                path (str): API endpoint path string to request.
 
             Returns:
-                Any: Response payload coerced to a dictionary.
+                dict[str, Any]: Canned response for the requested endpoint.
             """
             if "search_sessions" in path:
                 return sessions_info
@@ -82,14 +84,14 @@ async def test_get_openvpn_and_fetch_details(monkeypatch: Any, make_client: Any)
                 }
             return {}
 
-        async def fake_safe_list_get(path: Any):
+        async def fake_safe_list_get(_path: str) -> list[object]:
             """Fake safe list get.
 
             Args:
-                path (Any): API endpoint path to request.
+                _path (str): API endpoint path ignored by this empty-response stub.
 
             Returns:
-                Any: Response payload coerced to a list.
+                list[object]: Empty endpoint response.
             """
             return []
 
@@ -111,12 +113,8 @@ async def test_get_openvpn_and_fetch_details(monkeypatch: Any, make_client: Any)
 
 
 @pytest.mark.asyncio
-async def test_wireguard_processing_and_updates(make_client: Any) -> None:
-    """Exercise static wireguard status update helpers and peer linking.
-
-    Args:
-        make_client (Any): Value used by `test_wireguard_processing_and_updates`.
-    """
+async def test_wireguard_processing_and_updates() -> None:
+    """Exercise static wireguard status update helpers and peer linking."""
     # Test static methods for wireguard processing and updates
     server = {
         "uuid": "s1",
@@ -206,12 +204,14 @@ async def test_toggle_vpn_instance_variants(
 
 
 @pytest.mark.asyncio
-async def test_openvpn_more_detail_parsing(monkeypatch: Any, make_client: Any) -> None:
+async def test_openvpn_more_detail_parsing(
+    monkeypatch: pytest.MonkeyPatch, make_client: ClientType
+) -> None:
     """Exercise additional OpenVPN parsing branches (no sessions, missing fields).
 
     Args:
-        monkeypatch (Any): Value used by `test_openvpn_more_detail_parsing`.
-        make_client (Any): Value used by `test_openvpn_more_detail_parsing`.
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing the client getter.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     client._use_snake_case = True
@@ -223,14 +223,14 @@ async def test_openvpn_more_detail_parsing(monkeypatch: Any, make_client: Any) -
     providers_info: dict[str, dict] = {}
     instances_info = {"rows": [{"role": "client", "uuid": "c1", "enabled": "0"}]}
 
-    async def fake_safe_dict_get(path: Any):
+    async def fake_safe_dict_get(path: str) -> dict[str, Any]:
         """Fake safe dict get.
 
         Args:
-            path (Any): API endpoint path to request.
+            path (str): API endpoint path to request.
 
         Returns:
-            Any: Response payload coerced to a dictionary.
+            dict[str, Any]: Canned response for the requested endpoint.
         """
         if "search_sessions" in path:
             return sessions_info
@@ -253,11 +253,11 @@ async def test_openvpn_more_detail_parsing(monkeypatch: Any, make_client: Any) -
 
 
 @pytest.mark.asyncio
-async def test_openvpn_processing_and_fetch_details(make_client: Any) -> None:
+async def test_openvpn_processing_and_fetch_details(make_client: ClientType) -> None:
     """Test processing of OpenVPN instances/providers/sessions/routes and fetching details.
 
     Args:
-        make_client (Any): Value used by `test_openvpn_processing_and_fetch_details`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _ = make_mock_session_client(make_client)
     try:
@@ -265,14 +265,14 @@ async def test_openvpn_processing_and_fetch_details(make_client: Any) -> None:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
 
         # prepare fake responses for _safe_dict_get based on path
-        def fake_safe_dict_get(path: Any):
+        def fake_safe_dict_get(path: str) -> dict[str, Any]:
             """Fake safe dict get.
 
             Args:
-                path (Any): API endpoint path to request.
+                path (str): API endpoint path to request.
 
             Returns:
-                Any: Response payload coerced to a dictionary.
+                dict[str, Any]: Canned response for the requested endpoint.
             """
             if "search_sessions" in path:
                 return {
@@ -433,26 +433,28 @@ async def test_openvpn_processing_helpers_skip_invalid_rows_and_unknown_servers(
 
 
 @pytest.mark.asyncio
-async def test_fetch_openvpn_server_details_missing_server_field(make_client: Any) -> None:
+async def test_fetch_openvpn_server_details_missing_server_field(
+    make_client: ClientType,
+) -> None:
     """When instance details lack 'server' key, no tunnel_addresses should be set.
 
     Args:
-        make_client (Any): Value used by `test_fetch_openvpn_server_details_missing_server_field`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _ = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         openvpn: dict[str, Any] = {"servers": {"srv1": {"uuid": "srv1"}}}
 
-        async def fake_safe_dict_get(path: Any):
+        async def fake_safe_dict_get(path: str) -> dict[str, Any]:
             # return instance details with no 'server' key
             """Fake safe dict get.
 
             Args:
-                path (Any): API endpoint path to request.
+                path (str): API endpoint path to request.
 
             Returns:
-                Any: Response payload coerced to a dictionary.
+                dict[str, Any]: Instance details without a server field.
             """
             if "/instances/get/" in path:
                 return {"instance": {}}
@@ -535,7 +537,7 @@ async def test_get_wireguard_full_processing_and_peer_details() -> None:
     ],
 )
 def test__wireguard_is_connected_variants(
-    monkeypatch: Any, delta_minutes: int, expected: bool
+    monkeypatch: pytest.MonkeyPatch, delta_minutes: int, expected: bool
 ) -> None:
     """WireGuard connection considered active when last handshake within threshold.
 
@@ -543,7 +545,7 @@ def test__wireguard_is_connected_variants(
     microseconds so comparisons at the 3-minute boundary are deterministic.
 
     Args:
-        monkeypatch (Any): Value used by `test__wireguard_is_connected_variants`.
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing the module datetime provider.
         delta_minutes (int): Value used by `test__wireguard_is_connected_variants`.
         expected (bool): Value used by `test__wireguard_is_connected_variants`.
     """
@@ -563,11 +565,11 @@ def test__wireguard_is_connected_variants(
 
 
 @pytest.mark.asyncio
-async def test_get_wireguard_success_and_invalid(make_client: Any) -> None:
+async def test_get_wireguard_success_and_invalid(make_client: ClientType) -> None:
     """Exercise get_wireguard success path and invalid structure early return.
 
     Args:
-        make_client (Any): Value used by `test_get_wireguard_success_and_invalid`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
 

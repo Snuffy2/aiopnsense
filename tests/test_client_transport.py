@@ -998,15 +998,15 @@ async def test_stream_json_events_appends_final_decoder_tail_text_at_eof(
     class _FakeIncrementalDecoder:
         """Minimal decoder stub that defers completion until EOF."""
 
-        def decode(self, data: bytes, final: bool = False) -> str:
+        def decode(self, _data: bytes, final: bool = False) -> str:
             """Return the partial frame on chunk decode and the tail on EOF.
 
             Args:
-                data (bytes): Value used by `decode`.
-                final (bool): Value used by `decode`.
+                _data (bytes): Encoded input ignored by this deterministic stub.
+                final (bool): Whether the caller is flushing the decoder at EOF.
 
             Returns:
-                str: Result returned by `decode`.
+                str: An incomplete event chunk, or its closing tail at EOF.
             """
             if final:
                 return "}\n\n"

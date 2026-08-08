@@ -44,11 +44,11 @@ async def test_uses_legacy_unbound_blocklist_returns_none_without_error_on_missi
 
 
 @pytest.mark.asyncio
-async def test_get_unbound_blocklist_returns_uuid_mapping(make_client: Any) -> None:
+async def test_get_unbound_blocklist_returns_uuid_mapping(make_client: ClientType) -> None:
     """The DNSBL search response should be normalized into a UUID-keyed mapping.
 
     Args:
-        make_client (Any): Value used by `test_get_unbound_blocklist_returns_uuid_mapping`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -82,13 +82,13 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client: Any) -> N
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api_response", [{}, {"rows": []}, {"rows": "not-a-list"}, []])
 async def test_get_unbound_blocklist_handles_empty_or_invalid_responses(
-    make_client: Any, api_response: Any
+    make_client: ClientType, api_response: object
 ) -> None:
     """Malformed or empty DNSBL responses should normalize to an empty mapping.
 
     Args:
-        make_client (Any): Value used by `test_get_unbound_blocklist_handles_empty_or_invalid_responses`.
-        api_response (Any): Value used by `test_get_unbound_blocklist_handles_empty_or_invalid_responses`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        api_response (object): Opaque malformed or empty API response.
     """
     client = make_client()
     try:
@@ -367,22 +367,22 @@ async def test_get_unbound_blocklist_falls_back_to_legacy_endpoint_on_invalid_fi
     ],
 )
 async def test_enable_disable_unbound_blocklist(
-    make_client: Any,
-    method_name: Any,
-    uuid: Any,
-    toggle_result: Any,
-    dnsbl_result: Any,
-    expected: Any,
+    make_client: ClientType,
+    method_name: str,
+    uuid: str | None,
+    toggle_result: object,
+    dnsbl_result: object,
+    expected: bool,
 ) -> None:
     """DNSBL toggles should require a UUID, a successful toggle response, and an OK apply status.
 
     Args:
-        make_client (Any): Value used by `test_enable_disable_unbound_blocklist`.
-        method_name (Any): Value used by `test_enable_disable_unbound_blocklist`.
-        uuid (Any): Value used by `test_enable_disable_unbound_blocklist`.
-        toggle_result (Any): Value used by `test_enable_disable_unbound_blocklist`.
-        dnsbl_result (Any): Value used by `test_enable_disable_unbound_blocklist`.
-        expected (Any): Value used by `test_enable_disable_unbound_blocklist`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        method_name (str): Client toggle method name.
+        uuid (str | None): Optional DNSBL row UUID.
+        toggle_result (object): Opaque toggle API result.
+        dnsbl_result (object): Opaque DNSBL apply result.
+        expected (bool): Expected operation result.
     """
     client = make_client()
     try:

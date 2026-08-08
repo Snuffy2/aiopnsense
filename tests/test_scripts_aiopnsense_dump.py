@@ -664,12 +664,12 @@ async def test_async_main_wires_options_into_dependencies(
         return client
 
     async def fake_run_endpoint(
-        client_arg: Any, endpoint_name: str, stream_seconds: float
+        client_arg: FakeClient, endpoint_name: str, stream_seconds: float
     ) -> dict[str, Any]:
         """Record the endpoint wiring and return the canned result.
 
         Args:
-            client_arg (Any): Value used by `fake_run_endpoint`.
+            client_arg (FakeClient): Client created by the async entry point.
             endpoint_name (str): Value used by `fake_run_endpoint`.
             stream_seconds (float): Value used by `fake_run_endpoint`.
 

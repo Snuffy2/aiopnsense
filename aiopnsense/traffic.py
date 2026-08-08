@@ -94,12 +94,15 @@ def normalize_traffic_payload(
     interval: float,
     include_per_second_rates: bool = True,
 ) -> dict[str, Any]:
-    """Normalize OPNsense diagnostics traffic payloads.
+    """Normalize a raw OPNsense diagnostics traffic payload.
 
     Args:
-        payload (Mapping[str, Any]): Value used by `normalize_traffic_payload`.
-        interval (float): Value used by `normalize_traffic_payload`.
-        include_per_second_rates (bool): Value used by `normalize_traffic_payload`.
+        payload (Mapping[str, Any]): Raw diagnostics payload containing interface
+            traffic counters.
+        interval (float): Elapsed sample interval used to calculate per-second
+            rates; non-positive values use one second.
+        include_per_second_rates (bool): Whether to add derived per-second rate
+            fields. When ``False``, only normalized counters are returned.
 
     Returns:
         dict[str, Any]: Normalized traffic sample with an ``interfaces`` mapping keyed by interface name.
@@ -200,12 +203,15 @@ class TrafficMixin(AiopnsenseClientProtocol):
         """Yield normalized diagnostics traffic stream samples.
 
         Args:
-            poll_interval (int): Selects the stream interval and endpoint. Values below
-                1 are clamped to 1.
+            poll_interval (int): Requested stream interval in seconds. Values below
+                1 are clamped to 1, and the clamped value selects the stream endpoint.
 
         Yields:
             dict[str, Any]: Normalized traffic samples after the initial valid timing
                 event is discarded because it cannot represent an interval delta.
+                Later samples use elapsed time between strictly increasing server
+                timestamps; after a timing reset, the next valid sample uses the
+                selected stream interval.
         """
         interval = max(poll_interval, 1)
         endpoint = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/{interval}"

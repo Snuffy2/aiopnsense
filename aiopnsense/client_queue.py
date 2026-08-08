@@ -26,16 +26,17 @@ class ClientQueueMixin:
             *,
             response_format: Literal["json", "text"] = "json",
         ) -> MutableMapping[str, Any] | list | str | None:
-            """Execute a queued GET request.
+            """Execute an immediate GET transport request after it is dequeued.
 
             Args:
-                path (str): Value used by `_do_get`.
-                caller (str): Value used by `_do_get`.
-                timeout_seconds (float | None): Value used by `_do_get`.
-                response_format (Literal['json', 'text']): Value used by `_do_get`.
+                path (str): API endpoint path to request.
+                caller (str): Calling method name used for diagnostics.
+                timeout_seconds (float | None): Optional transport request timeout.
+                response_format (Literal['json', 'text']): Expected response body format.
 
             Returns:
-                MutableMapping[str, Any] | list | str | None: Result returned by `_do_get`.
+                MutableMapping[str, Any] | list | str | None: Decoded transport
+                    response, if available.
             """
             ...
 
@@ -44,14 +45,14 @@ class ClientQueueMixin:
             path: str,
             caller: str = "Unknown",
         ) -> dict[str, Any]:
-            """Execute a queued streaming GET request.
+            """Execute an immediate streaming GET transport request after dequeuing it.
 
             Args:
-                path (str): Value used by `_do_get_from_stream`.
-                caller (str): Value used by `_do_get_from_stream`.
+                path (str): Streaming API endpoint path to request.
+                caller (str): Calling method name used for diagnostics.
 
             Returns:
-                dict[str, Any]: Result returned by `_do_get_from_stream`.
+                dict[str, Any]: Decoded payload extracted from the stream response.
             """
             ...
 
@@ -61,15 +62,16 @@ class ClientQueueMixin:
             payload: MutableMapping[str, Any] | None = None,
             caller: str = "Unknown",
         ) -> MutableMapping[str, Any] | list | None:
-            """Execute a queued POST request.
+            """Execute an immediate POST transport request after it is dequeued.
 
             Args:
-                path (str): Value used by `_do_post`.
-                payload (MutableMapping[str, Any] | None): Value used by `_do_post`.
-                caller (str): Value used by `_do_post`.
+                path (str): API endpoint path to request.
+                payload (MutableMapping[str, Any] | None): Optional request body.
+                caller (str): Calling method name used for diagnostics.
 
             Returns:
-                MutableMapping[str, Any] | list | None: Result returned by `_do_post`.
+                MutableMapping[str, Any] | list | None: Decoded transport response,
+                    if available.
             """
             ...
 

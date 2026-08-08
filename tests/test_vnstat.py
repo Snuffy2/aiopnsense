@@ -1,20 +1,24 @@
 """Tests for `aiopnsense.vnstat`."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
+from aiopnsense import OPNsenseClient
 from tests.conftest import make_mock_session_client
+
+ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
-async def test_parse_vnstat_payload_hourly_with_split_day_rows(make_client: Any) -> None:
+async def test_parse_vnstat_payload_hourly_with_split_day_rows(make_client: ClientType) -> None:
     """Hourly vnStat payloads should combine date rows with time rows.
 
     Args:
-        make_client (Any): Value used by `test_parse_vnstat_payload_hourly_with_split_day_rows`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -40,11 +44,11 @@ async def test_parse_vnstat_payload_hourly_with_split_day_rows(make_client: Any)
 
 
 @pytest.mark.asyncio
-async def test_parse_vnstat_month_label_apostrophe_format(make_client: Any) -> None:
+async def test_parse_vnstat_month_label_apostrophe_format(make_client: ClientType) -> None:
     """Monthly vnStat labels like ``Apr '25`` should parse as year/month.
 
     Args:
-        make_client (Any): Value used by `test_parse_vnstat_month_label_apostrophe_format`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -56,11 +60,11 @@ async def test_parse_vnstat_month_label_apostrophe_format(make_client: Any) -> N
 
 
 @pytest.mark.asyncio
-async def test_get_vnstat_metrics_yearly_parsing(make_client: Any) -> None:
+async def test_get_vnstat_metrics_yearly_parsing(make_client: ClientType) -> None:
     """get_vnstat_metrics should parse yearly vnStat payload rows.
 
     Args:
-        make_client (Any): Value used by `test_get_vnstat_metrics_yearly_parsing`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -98,11 +102,13 @@ async def test_get_vnstat_metrics_yearly_parsing(make_client: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_vnstat_metrics_unsupported_period_or_endpoint_missing(make_client: Any) -> None:
+async def test_get_vnstat_metrics_unsupported_period_or_endpoint_missing(
+    make_client: ClientType,
+) -> None:
     """get_vnstat_metrics should return empty data for unsupported/missing endpoints.
 
     Args:
-        make_client (Any): Value used by `test_get_vnstat_metrics_unsupported_period_or_endpoint_missing`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -121,11 +127,11 @@ async def test_get_vnstat_metrics_unsupported_period_or_endpoint_missing(make_cl
 
 
 @pytest.mark.asyncio
-async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: Any) -> None:
+async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientType) -> None:
     """get_vnstat should produce per-interface summary fields used by sensors.
 
     Args:
-        make_client (Any): Value used by `test_get_vnstat_summary_from_hourly_daily_monthly`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -233,11 +239,11 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: Any) ->
 
 
 @pytest.mark.asyncio
-async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: Any) -> None:
+async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: ClientType) -> None:
     """get_vnstat should query the supported system-time endpoint.
 
     Args:
-        make_client (Any): Value used by `test_get_vnstat_uses_systemtime_endpoint_path`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -267,11 +273,11 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: Any) -> Non
 
 
 @pytest.mark.asyncio
-async def test_get_vnstat_skips_calls_when_endpoint_missing(make_client: Any) -> None:
+async def test_get_vnstat_skips_calls_when_endpoint_missing(make_client: ClientType) -> None:
     """get_vnstat should return empty payload and skip API calls when endpoint is absent.
 
     Args:
-        make_client (Any): Value used by `test_get_vnstat_skips_calls_when_endpoint_missing`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -287,11 +293,11 @@ async def test_get_vnstat_skips_calls_when_endpoint_missing(make_client: Any) ->
 
 
 @pytest.mark.asyncio
-async def test_parse_vnstat_payload_and_helpers_edge_cases(make_client: Any) -> None:
+async def test_parse_vnstat_payload_and_helpers_edge_cases(make_client: ClientType) -> None:
     """VnStat payload/helper methods should handle malformed and fallback scenarios.
 
     Args:
-        make_client (Any): Value used by `test_parse_vnstat_payload_and_helpers_edge_cases`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -357,11 +363,11 @@ async def test_parse_vnstat_payload_and_helpers_edge_cases(make_client: Any) -> 
 
 
 @pytest.mark.asyncio
-async def test_vnstat_metric_values_none_and_valid(make_client: Any) -> None:
+async def test_vnstat_metric_values_none_and_valid(make_client: ClientType) -> None:
     """_metric_values should return valid mapping only when all fields are ints.
 
     Args:
-        make_client (Any): Value used by `test_vnstat_metric_values_none_and_valid`.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     try:

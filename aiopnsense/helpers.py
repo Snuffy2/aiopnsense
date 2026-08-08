@@ -41,7 +41,9 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
         """Execute wrapped coroutine with shared timeout/exception logging.
 
         Args:
-            self (Any): Value used by `inner`.
+            self (Any): Client instance whose ``_throw_errors`` setting controls
+                whether caught errors are mapped and propagated or logged and
+                suppressed.
             args (Any): Positional arguments forwarded to the wrapped coroutine.
             kwargs (Any): Keyword arguments forwarded to the wrapped coroutine.
 
@@ -393,14 +395,16 @@ def normalize_lookup_token(value: Any) -> str:
 
 
 def api_value_matches(value: object, expected: str) -> bool:
-    """Compare OPNsense API values across string, numeric, and boolean forms.
+    """Compare a normalized OPNsense API value with its expected string.
 
     Args:
-        value (object): Value used by `api_value_matches`.
-        expected (str): Value used by `api_value_matches`.
+        value (object): API value to normalize; booleans become integer strings and
+            all other values are converted directly to strings.
+        expected (str): Expected normalized string value.
 
     Returns:
-        ``True`` when the normalized API value matches ``expected``.
+        ``True`` when the normalized API value has the same string representation
+        as ``expected``.
     """
     if isinstance(value, bool):
         value = int(value)

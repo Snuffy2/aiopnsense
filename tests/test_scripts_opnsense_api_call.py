@@ -133,12 +133,12 @@ class FakeSession:
         self.exit_count += 1
         return None
 
-    def get(self, url: str, **kwargs: Any) -> FakeResponse:
+    def get(self, url: str, **kwargs: object) -> FakeResponse:
         """Record GET call and return response context.
 
         Args:
             url (str): Value used by `get`.
-            kwargs (Any): Keyword arguments accepted by `get`.
+            kwargs (object): Keyword arguments accepted by `get`.
 
         Returns:
             FakeResponse: Result returned by `get`.
@@ -146,12 +146,12 @@ class FakeSession:
         self.get_calls.append((url, kwargs))
         return self.get_response
 
-    def post(self, url: str, **kwargs: Any) -> FakeResponse:
+    def post(self, url: str, **kwargs: object) -> FakeResponse:
         """Record POST call and return response context.
 
         Args:
             url (str): Value used by `post`.
-            kwargs (Any): Keyword arguments accepted by `post`.
+            kwargs (object): Keyword arguments accepted by `post`.
 
         Returns:
             FakeResponse: Result returned by `post`.
