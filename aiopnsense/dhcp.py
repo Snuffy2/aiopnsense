@@ -258,7 +258,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
             lease_endpoint=KEA_LEASES6_SEARCH_ENDPOINT,
             require_hardware_address=False,
             service_name="Kea DHCPv6",
-            dynamic_when_reservation_lookup_unavailable=True,
         )
 
     async def _get_kea_dhcp_leases(
@@ -268,7 +267,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
         reservation_endpoint: str | None = None,
         reservation_camelcase_endpoint: str | None = None,
         require_hardware_address: bool = True,
-        dynamic_when_reservation_lookup_unavailable: bool = False,
     ) -> list:
         """Return active DHCP leases reported by a Kea lease endpoint.
 
@@ -278,9 +276,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
             reservation_endpoint (str | None, optional): Kea reservation endpoint path.
             reservation_camelcase_endpoint (str | None, optional): CamelCase reservation endpoint path.
             require_hardware_address (bool, optional): Whether to skip rows without ``hwaddr``.
-            dynamic_when_reservation_lookup_unavailable (bool, optional): Whether lease rows with
-                explicit ``is_reserved`` set to false should be treated as ``dynamic`` when
-                reservation metadata is unavailable.
 
         Returns:
             list: Normalized Kea lease entries for the supplied endpoint.
@@ -354,10 +349,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             if self._has_authoritative_reservation_metadata(raw_reserved):
                 lease["type"] = "static" if self._is_reserved_lease(raw_reserved) else "dynamic"
             elif res_info is None:
-                if dynamic_when_reservation_lookup_unavailable:
-                    lease["type"] = "dynamic"
-                else:
-                    lease["type"] = "unknown"
+                lease["type"] = "unknown"
             elif (
                 lease_info.get("hwaddr", None)
                 and lease_info.get("hwaddr") in reservations

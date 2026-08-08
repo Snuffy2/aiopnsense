@@ -926,6 +926,60 @@ async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientT
 
 
 @pytest.mark.asyncio
+async def test_get_kea_dhcpv6_leases_preserves_unknown_reservation_metadata(
+    make_client: ClientType,
+) -> None:
+    """Keep unsupported Kea DHCPv6 reservation metadata unclassified.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test verifies unsupported values remain unknown while false is dynamic.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {"address": "2001:db8::10", "duid": "missing", "state": 0},
+                    {
+                        "address": "2001:db8::11",
+                        "duid": "none",
+                        "state": 0,
+                        "is_reserved": None,
+                    },
+                    {
+                        "address": "2001:db8::12",
+                        "duid": "mapping",
+                        "state": 0,
+                        "is_reserved": {"unexpected": "value"},
+                    },
+                    {
+                        "address": "2001:db8::13",
+                        "duid": "false",
+                        "state": 0,
+                        "is_reserved": False,
+                    },
+                ]
+            }
+        )
+
+        leases = await client._get_kea_dhcpv6_leases()
+
+        assert [lease["type"] for lease in leases] == [
+            "unknown",
+            "unknown",
+            "unknown",
+            "dynamic",
+        ]
+        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases6/search")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: ClientType) -> None:
     """Verify dnsmasq lease parsing handles malformed and expired rows safely.
 
