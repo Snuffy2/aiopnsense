@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import MutableMapping
 import contextlib
-from typing import Any
+from typing import Any, Never
 from unittest.mock import AsyncMock
 
 import pytest
@@ -265,8 +265,8 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
         res = await client._get("/testpath")
 
         assert res == returned
-        # caller should be the test function name when inspect.stack works
-        assert called.get("caller") is not None
+        # Lock the direct-call caller label derived from the fixed frame depth.
+        assert called.get("caller") == "test_get_enqueues_and_processes"
     finally:
         if task is not None and not task.done():
             task.cancel()
@@ -306,15 +306,18 @@ async def test_get_text_rejects_unexpected_type(make_client: MakeClientFactory) 
 
 
 @pytest.mark.asyncio
-async def test_get_uses_unknown_when_inspect_stack_raises(
+@pytest.mark.parametrize("error_type", [ValueError, AttributeError])
+async def test_get_uses_unknown_when_caller_frame_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,
+    error_type: type[ValueError] | type[AttributeError],
 ) -> None:
-    """Verify ``_get`` uses ``Unknown`` caller when stack inspection fails.
+    """Verify ``_get`` uses ``Unknown`` caller when frame lookup fails.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture for patching ``inspect`` helpers.
+        monkeypatch (pytest.MonkeyPatch): Fixture for patching frame lookup.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        error_type (type[ValueError] | type[AttributeError]): Frame lookup error to raise.
 
     Returns:
         None: This test asserts caller fallback behavior.
@@ -322,21 +325,26 @@ async def test_get_uses_unknown_when_inspect_stack_raises(
     client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
-        # Replace the queue helper's inspect.stack to raise an IndexError
-        class _BadInspect:
+
+        class _BadSys:
+            """Provide a ``sys`` substitute whose frame lookup always fails."""
+
             @staticmethod
-            def stack() -> Any:
-                """Stack.
+            def _getframe(_depth: int) -> Never:
+                """Raise an error because no caller frame is available.
+
+                Args:
+                    _depth (int): Requested frame depth.
 
                 Returns:
-                    Any: No stack details; this method always raises instead.
+                    Never: This method always raises the parameterized error.
 
                 Raises:
-                    IndexError: Always raised to simulate unavailable stack details.
+                    error_type: The parameterized frame lookup error.
                 """
-                raise IndexError("no stack")
+                raise error_type("no frame")
 
-        monkeypatch.setattr(aiopnsense_client_queue, "inspect", _BadInspect)
+        monkeypatch.setattr(aiopnsense_client_queue, "sys", _BadSys)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
@@ -415,7 +423,8 @@ async def test_post_enqueues_and_processes(returned: Any, make_client: MakeClien
 
         assert res == returned
         assert captured.get("payload") == payload
-        assert captured.get("caller") is not None
+        # Lock the direct-call caller label derived from the fixed frame depth.
+        assert captured.get("caller") == "test_post_enqueues_and_processes"
     finally:
         if task is not None and not task.done():
             task.cancel()
@@ -425,15 +434,18 @@ async def test_post_enqueues_and_processes(returned: Any, make_client: MakeClien
 
 
 @pytest.mark.asyncio
-async def test_post_uses_unknown_when_inspect_stack_raises(
+@pytest.mark.parametrize("error_type", [ValueError, AttributeError])
+async def test_post_uses_unknown_when_caller_frame_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,
+    error_type: type[ValueError] | type[AttributeError],
 ) -> None:
-    """Verify ``_post`` uses ``Unknown`` caller when stack inspection fails.
+    """Verify ``_post`` uses ``Unknown`` caller when frame lookup fails.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture for patching ``inspect`` helpers.
+        monkeypatch (pytest.MonkeyPatch): Fixture for patching frame lookup.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        error_type (type[ValueError] | type[AttributeError]): Frame lookup error to raise.
 
     Returns:
         None: This test asserts caller fallback behavior for ``_post``.
@@ -442,20 +454,25 @@ async def test_post_uses_unknown_when_inspect_stack_raises(
     task: asyncio.Task | None = None
     try:
 
-        class _BadInspect:
+        class _BadSys:
+            """Provide a ``sys`` substitute whose frame lookup always fails."""
+
             @staticmethod
-            def stack() -> Any:
-                """Stack.
+            def _getframe(_depth: int) -> Never:
+                """Raise an error because no caller frame is available.
+
+                Args:
+                    _depth (int): Requested frame depth.
 
                 Returns:
-                    Any: No stack details; this method always raises instead.
+                    Never: This method always raises the parameterized error.
 
                 Raises:
-                    IndexError: Always raised to simulate unavailable stack details.
+                    error_type: The parameterized frame lookup error.
                 """
-                raise IndexError("no stack")
+                raise error_type("no frame")
 
-        monkeypatch.setattr(aiopnsense_client_queue, "inspect", _BadInspect)
+        monkeypatch.setattr(aiopnsense_client_queue, "sys", _BadSys)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q

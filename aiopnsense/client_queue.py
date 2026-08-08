@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import MutableMapping
-import inspect
+import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .exceptions import OPNsenseError, _map_opnsense_exception
@@ -104,12 +104,12 @@ class ClientQueueMixin:
         """Return the public caller above the queue wrapper.
 
         Returns:
-            str: Function name used for diagnostics, or ``"Unknown"`` when stack
+            str: Function name used for diagnostics, or ``"Unknown"`` when frame
             inspection is unavailable.
         """
         try:
-            return inspect.stack()[3].function
-        except IndexError, AttributeError:
+            return sys._getframe(3).f_code.co_name
+        except ValueError, AttributeError:
             return "Unknown"
 
     async def _queue_request(
