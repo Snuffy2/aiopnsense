@@ -262,8 +262,20 @@ class DHCPMixin(AiopnsenseClientProtocol):
         response = await self._safe_dict_get(lease_endpoint)
         if not isinstance(response.get("rows", None), list):
             return []
+        leases_info: list = response.get("rows", [])
         res_info: list[Any] | None
-        if reservation_endpoint is None or reservation_camelcase_endpoint is None:
+        needs_reservation_lookup = any(
+            isinstance(lease_info, MutableMapping)
+            and api_value_matches(lease_info.get("state"), "0")
+            and (not require_hardware_address or bool(lease_info.get("hwaddr")))
+            and "is_reserved" not in lease_info
+            for lease_info in leases_info
+        )
+        if (
+            reservation_endpoint is None
+            or reservation_camelcase_endpoint is None
+            or not needs_reservation_lookup
+        ):
             res_info = None
         else:
             selected_reservation_endpoint = await self._get_endpoint_path(
@@ -289,7 +301,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
                     continue
                 if res.get("hw_address", None):
                     reservations.update({res.get("hw_address"): res.get("ip_address", "")})
-        leases_info: list = response.get("rows", [])
         leases: list = []
         for lease_info in leases_info:
             if (
@@ -311,12 +322,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
             lease["if_name"] = lease_info.get("if_name", None)
             if self._is_reserved_lease(lease_info.get("is_reserved")):
                 lease["type"] = "static"
+            elif "is_reserved" in lease_info:
+                lease["type"] = "dynamic"
             elif res_info is None:
-                if (
-                    dynamic_when_reservation_lookup_unavailable
-                    and "is_reserved" in lease_info
-                    and not self._is_reserved_lease(lease_info.get("is_reserved"))
-                ):
+                if dynamic_when_reservation_lookup_unavailable:
                     lease["type"] = "dynamic"
                 else:
                     lease["type"] = "unknown"
