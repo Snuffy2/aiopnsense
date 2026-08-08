@@ -22,10 +22,8 @@ KEA_LEASES6_SEARCH_ENDPOINT = "/api/kea/leases6/search"
 KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT = "/api/kea/dhcpv4/search_reservation"
 KEA_DHCPV4_SEARCH_RESERVATION_CAMELCASE_ENDPOINT = "/api/kea/dhcpv4/searchReservation"
 DNSMASQ_LEASES_SEARCH_ENDPOINT = "/api/dnsmasq/leases/search"
-ISC_DHCPV4_SERVICE_STATUS_ENDPOINT = "/api/dhcpv4/service/status"
 ISC_DHCPV4_LEASES_SEARCH_ENDPOINT = "/api/dhcpv4/leases/search_lease"
 ISC_DHCPV4_LEASES_SEARCH_CAMELCASE_ENDPOINT = "/api/dhcpv4/leases/searchLease"
-ISC_DHCPV6_SERVICE_STATUS_ENDPOINT = "/api/dhcpv6/service/status"
 ISC_DHCPV6_LEASES_SEARCH_ENDPOINT = "/api/dhcpv6/leases/search_lease"
 ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT = "/api/dhcpv6/leases/searchLease"
 
@@ -66,6 +64,52 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if isinstance(raw_reserved, list):
             return len(raw_reserved) > 0
         return bool(raw_reserved)
+
+    @staticmethod
+    def _has_authoritative_reservation_metadata(raw_reserved: object) -> bool:
+        """Return whether a Kea reservation flag has a supported representation.
+
+        Args:
+            raw_reserved (object): Raw ``is_reserved`` field returned by Kea.
+
+        Returns:
+            bool: Whether the value can authoritatively classify the lease.
+        """
+        return isinstance(raw_reserved, list) or (
+            type(raw_reserved) in (str, int, bool)
+            and (api_value_matches(raw_reserved, "0") or api_value_matches(raw_reserved, "1"))
+        )
+
+    @staticmethod
+    def _expiration_to_datetime(expiration: int | None) -> datetime | None:
+        """Convert a DHCP expiration timestamp without propagating platform overflow.
+
+        Args:
+            expiration (int | None): Parsed DHCP expiration timestamp.
+
+        Returns:
+            datetime | None: Converted expiration, or ``None`` when the
+                timestamp is outside the platform-supported range.
+        """
+        try:
+            return timestamp_to_datetime(expiration)
+        except OverflowError, OSError:
+            return None
+
+    @staticmethod
+    def _is_expired_kea_lease(lease_info: MutableMapping[str, Any], current_time: datetime) -> bool:
+        """Return whether a Kea lease has an expiration in the past.
+
+        Args:
+            lease_info (MutableMapping[str, Any]): Raw Kea lease row.
+            current_time (datetime): Point-in-time reference used for expiration.
+
+        Returns:
+            bool: Whether the row has a parseable expiration that has passed.
+        """
+        expiration = try_to_int(lease_info.get("expire"))
+        expiration_datetime = DHCPMixin._expiration_to_datetime(expiration) if expiration else None
+        return bool(expiration_datetime and expiration_datetime < current_time)
 
     @staticmethod
     def _copy_lease_identity_fields(
@@ -229,7 +273,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
             lease_endpoint=KEA_LEASES6_SEARCH_ENDPOINT,
             require_hardware_address=False,
             service_name="Kea DHCPv6",
-            dynamic_when_reservation_lookup_unavailable=True,
         )
 
     async def _get_kea_dhcp_leases(
@@ -239,7 +282,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
         reservation_endpoint: str | None = None,
         reservation_camelcase_endpoint: str | None = None,
         require_hardware_address: bool = True,
-        dynamic_when_reservation_lookup_unavailable: bool = False,
     ) -> list:
         """Return active DHCP leases reported by a Kea lease endpoint.
 
@@ -249,9 +291,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
             reservation_endpoint (str | None, optional): Kea reservation endpoint path.
             reservation_camelcase_endpoint (str | None, optional): CamelCase reservation endpoint path.
             require_hardware_address (bool, optional): Whether to skip rows without ``hwaddr``.
-            dynamic_when_reservation_lookup_unavailable (bool, optional): Whether lease rows with
-                explicit ``is_reserved`` set to false should be treated as ``dynamic`` when
-                reservation metadata is unavailable.
 
         Returns:
             list: Normalized Kea lease entries for the supplied endpoint.
@@ -262,8 +301,22 @@ class DHCPMixin(AiopnsenseClientProtocol):
         response = await self._safe_dict_get(lease_endpoint)
         if not isinstance(response.get("rows", None), list):
             return []
+        leases_info: list = response.get("rows", [])
+        current_time = datetime.now().astimezone()
         res_info: list[Any] | None
-        if reservation_endpoint is None or reservation_camelcase_endpoint is None:
+        needs_reservation_lookup = any(
+            isinstance(lease_info, MutableMapping)
+            and api_value_matches(lease_info.get("state"), "0")
+            and (not require_hardware_address or bool(lease_info.get("hwaddr")))
+            and not self._is_expired_kea_lease(lease_info, current_time)
+            and not self._has_authoritative_reservation_metadata(lease_info.get("is_reserved"))
+            for lease_info in leases_info
+        )
+        if (
+            reservation_endpoint is None
+            or reservation_camelcase_endpoint is None
+            or not needs_reservation_lookup
+        ):
             res_info = None
         else:
             selected_reservation_endpoint = await self._get_endpoint_path(
@@ -289,7 +342,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
                     continue
                 if res.get("hw_address", None):
                     reservations.update({res.get("hw_address"): res.get("ip_address", "")})
-        leases_info: list = response.get("rows", [])
         leases: list = []
         for lease_info in leases_info:
             if (
@@ -309,17 +361,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             )
             lease["if_descr"] = lease_info.get("if_descr", None)
             lease["if_name"] = lease_info.get("if_name", None)
-            if self._is_reserved_lease(lease_info.get("is_reserved")):
-                lease["type"] = "static"
+            raw_reserved = lease_info.get("is_reserved")
+            if self._has_authoritative_reservation_metadata(raw_reserved):
+                lease["type"] = "static" if self._is_reserved_lease(raw_reserved) else "dynamic"
             elif res_info is None:
-                if (
-                    dynamic_when_reservation_lookup_unavailable
-                    and "is_reserved" in lease_info
-                    and not self._is_reserved_lease(lease_info.get("is_reserved"))
-                ):
-                    lease["type"] = "dynamic"
-                else:
-                    lease["type"] = "unknown"
+                lease["type"] = "unknown"
             elif (
                 lease_info.get("hwaddr", None)
                 and lease_info.get("hwaddr") in reservations
@@ -332,11 +378,15 @@ class DHCPMixin(AiopnsenseClientProtocol):
             if "duid" in lease_info:
                 lease["duid"] = lease_info.get("duid")
             self._copy_lease_identity_fields(lease, lease_info)
-            if try_to_int(lease_info.get("expire", None)):
-                lease["expires"] = timestamp_to_datetime(
-                    try_to_int(lease_info.get("expire", None)) or 0
+            expiration = try_to_int(lease_info.get("expire", None))
+            if expiration:
+                expiration_datetime = self._expiration_to_datetime(expiration)
+                lease["expires"] = (
+                    expiration_datetime
+                    if expiration_datetime is not None
+                    else lease_info.get("expire", None)
                 )
-                if lease["expires"] < datetime.now().astimezone():
+                if expiration_datetime is not None and expiration_datetime < current_time:
                     continue
             else:
                 lease["expires"] = lease_info.get("expire", None)
@@ -354,7 +404,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             list[dict]: Deduplicated rows where all fields except ``expire``
                 define identity and the highest expiration value is retained.
         """
-        seen: dict[tuple, dict] = {}
+        seen: dict[tuple, tuple[int, dict]] = {}
 
         for entry in reservations:
             if not isinstance(entry, MutableMapping):
@@ -372,13 +422,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             )
 
             # Keep the entry with the latest expiration time
-            seen_expire = try_to_int(seen.get(key, {}).get("expire"), -1)
-            if seen_expire is None:
-                seen_expire = -1
-            if key not in seen or expire > seen_expire:
-                seen[key] = dict(entry)
+            previous_entry = seen.get(key)
+            if previous_entry is None or expire > previous_entry[0]:
+                seen[key] = (expire, dict(entry))
 
-        return list(seen.values())
+        return [entry for _, entry in seen.values()]
 
     async def _get_dnsmasq_leases(self, opnsense_tz: tzinfo | None = None) -> list:
         """Return active IPv4 and IPv6 DHCP leases reported by dnsmasq.
@@ -402,6 +450,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         cleaned_leases = self._keep_latest_leases(leases_info)
 
         leases: list = []
+        current_time = datetime.now().astimezone()
         for lease_info in cleaned_leases:
             if not isinstance(lease_info, MutableMapping):
                 continue
@@ -431,11 +480,15 @@ class DHCPMixin(AiopnsenseClientProtocol):
             )
             self._copy_lease_identity_fields(lease, lease_info)
 
-            if try_to_int(lease_info.get("expire", None)):
-                lease["expires"] = timestamp_to_datetime(
-                    try_to_int(lease_info.get("expire", None)) or 0
+            expiration = try_to_int(lease_info.get("expire", None))
+            if expiration:
+                expiration_datetime = self._expiration_to_datetime(expiration)
+                lease["expires"] = (
+                    expiration_datetime
+                    if expiration_datetime is not None
+                    else lease_info.get("expire", None)
                 )
-                if lease["expires"] < datetime.now().astimezone():
+                if expiration_datetime is not None and expiration_datetime < current_time:
                     continue
             else:
                 lease["expires"] = lease_info.get("expire", None)
@@ -453,9 +506,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
             list: Normalized ISC DHCPv4 lease entries. Non-active, expired,
                 malformed, and MAC-less rows are omitted.
         """
-        if not await self._is_get_endpoint_available(ISC_DHCPV4_SERVICE_STATUS_ENDPOINT):
-            _LOGGER.debug("ISC DHCP not installed")
-            return []
         lease_endpoint = await self._get_endpoint_path(
             snake_case_path=ISC_DHCPV4_LEASES_SEARCH_ENDPOINT,
             camel_case_path=ISC_DHCPV4_LEASES_SEARCH_CAMELCASE_ENDPOINT,
@@ -470,6 +520,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
         leases: list = []
+        current_time = datetime.now().astimezone()
         for lease_info in leases_info:
             if (
                 not isinstance(lease_info, MutableMapping)
@@ -497,7 +548,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 except TypeError, ValueError:
                     continue
                 lease["expires"] = dt.replace(tzinfo=opnsense_tz)
-                if lease["expires"] < datetime.now().astimezone():
+                if lease["expires"] < current_time:
                     continue
             else:
                 lease["expires"] = lease_info.get("ends", None)
@@ -515,9 +566,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
             list: Normalized ISC DHCPv6 lease entries. Non-active, expired,
                 malformed, and MAC-less rows are omitted.
         """
-        if not await self._is_get_endpoint_available(ISC_DHCPV6_SERVICE_STATUS_ENDPOINT):
-            _LOGGER.debug("ISC DHCP not installed")
-            return []
         lease_endpoint = await self._get_endpoint_path(
             snake_case_path=ISC_DHCPV6_LEASES_SEARCH_ENDPOINT,
             camel_case_path=ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT,
@@ -532,6 +580,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
         leases: list = []
+        current_time = datetime.now().astimezone()
         for lease_info in leases_info:
             if (
                 not isinstance(lease_info, MutableMapping)
@@ -559,7 +608,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 except TypeError, ValueError:
                     continue
                 lease["expires"] = dt.replace(tzinfo=opnsense_tz)
-                if lease["expires"] < datetime.now().astimezone():
+                if lease["expires"] < current_time:
                     continue
             else:
                 lease["expires"] = lease_info.get("ends", None)

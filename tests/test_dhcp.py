@@ -186,8 +186,8 @@ async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> No
         ("_get_kea_dhcpv4_leases", "/api/kea/leases4/search"),
         ("_get_kea_dhcpv6_leases", "/api/kea/leases6/search"),
         ("_get_dnsmasq_leases", "/api/dnsmasq/leases/search"),
-        ("_get_isc_dhcpv4_leases", "/api/dhcpv4/service/status"),
-        ("_get_isc_dhcpv6_leases", "/api/dhcpv6/service/status"),
+        ("_get_isc_dhcpv4_leases", "/api/dhcpv4/leases/search_lease"),
+        ("_get_isc_dhcpv6_leases", "/api/dhcpv6/leases/search_lease"),
     ],
 )
 async def test_dhcp_endpoint_unavailable(
@@ -207,6 +207,7 @@ async def test_dhcp_endpoint_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         leases = await getattr(client, method_name)()
@@ -634,6 +635,215 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
 
 
 @pytest.mark.asyncio
+async def test_get_kea_dhcpv4_leases_skips_redundant_reservation_lookup(
+    make_client: ClientType,
+) -> None:
+    """Use lease reservation metadata without collecting the reservation table.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test verifies the workload-reduction boundary and classifications.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:01",
+                        "address": "192.0.2.10",
+                        "is_reserved": [],
+                    },
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:02",
+                        "address": "192.0.2.11",
+                        "is_reserved": ["hwaddr"],
+                    },
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:03",
+                        "address": "192.0.2.12",
+                        "is_reserved": False,
+                    },
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:04",
+                        "address": "192.0.2.13",
+                        "is_reserved": True,
+                    },
+                ]
+            }
+        )
+
+        leases = await client._get_kea_dhcpv4_leases()
+
+        assert [lease["type"] for lease in leases] == [
+            "dynamic",
+            "static",
+            "dynamic",
+            "static",
+        ]
+        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/kea/leases4/search")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_reserved", [None, {"unexpected": "value"}])
+async def test_get_kea_dhcpv4_leases_falls_back_for_invalid_reservation_metadata(
+    make_client: ClientType,
+    is_reserved: object,
+) -> None:
+    """Use reservation-table fallback for unsupported Kea metadata values.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        is_reserved (object): Unsupported reservation metadata value to exercise.
+
+    Returns:
+        None: This test verifies matching legacy reservations remain static.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {
+                    "rows": [
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:01",
+                            "address": "192.0.2.10",
+                            "is_reserved": is_reserved,
+                        }
+                    ]
+                },
+                {
+                    "rows": [
+                        {
+                            "hw_address": "aa:bb:cc:dd:ee:01",
+                            "ip_address": "192.0.2.10",
+                        }
+                    ]
+                },
+            ]
+        )
+
+        leases = await client._get_kea_dhcpv4_leases()
+
+        assert leases[0]["type"] == "static"
+        assert client._safe_dict_get.await_count == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reservation_rows",
+    [
+        [],
+        [{"hw_address": "aa:bb:cc:dd:ee:02", "ip_address": "192.0.2.11"}],
+    ],
+)
+async def test_get_kea_dhcpv4_leases_invalid_truthy_metadata_falls_back_to_dynamic(
+    make_client: ClientType,
+    reservation_rows: list[dict[str, str]],
+) -> None:
+    """Classify invalid truthy metadata from a non-matching reservation fallback.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        reservation_rows (list[dict[str, str]]): Empty or mismatched reservation-table rows.
+
+    Returns:
+        None: This test verifies unsupported truthy metadata does not imply a static lease.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {
+                    "rows": [
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:01",
+                            "address": "192.0.2.10",
+                            "is_reserved": {"unexpected": "truthy"},
+                        }
+                    ]
+                },
+                {"rows": reservation_rows},
+            ]
+        )
+
+        leases = await client._get_kea_dhcpv4_leases()
+
+        assert leases[0]["type"] == "dynamic"
+        assert client._safe_dict_get.await_count == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_kea_dhcpv4_leases_ignores_expired_rows_for_reservation_lookup(
+    make_client: ClientType,
+) -> None:
+    """Avoid reservation lookup when only an expired row lacks metadata.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test verifies expired rows do not create reservation-table I/O.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        past_ts = int(datetime.now(tz=UTC).timestamp()) - 3600
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:01",
+                        "address": "192.0.2.10",
+                        "expire": past_ts,
+                    },
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:02",
+                        "address": "192.0.2.11",
+                        "is_reserved": 0,
+                    },
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:03",
+                        "address": "192.0.2.12",
+                        "is_reserved": ["hwaddr"],
+                    },
+                ]
+            }
+        )
+
+        leases = await client._get_kea_dhcpv4_leases()
+
+        assert [lease["type"] for lease in leases] == ["dynamic", "static"]
+        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/kea/leases4/search")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientType) -> None:
     """Verify Kea DHCPv6 leases parse the OPNsense DUID-oriented row shape.
 
@@ -711,6 +921,60 @@ async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientT
             and lease["mac"] is None
             for lease in leases
         )
+        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases6/search")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_kea_dhcpv6_leases_preserves_unknown_reservation_metadata(
+    make_client: ClientType,
+) -> None:
+    """Keep unsupported Kea DHCPv6 reservation metadata unclassified.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test verifies unsupported values remain unknown while false is dynamic.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {"address": "2001:db8::10", "duid": "missing", "state": 0},
+                    {
+                        "address": "2001:db8::11",
+                        "duid": "none",
+                        "state": 0,
+                        "is_reserved": None,
+                    },
+                    {
+                        "address": "2001:db8::12",
+                        "duid": "mapping",
+                        "state": 0,
+                        "is_reserved": {"unexpected": "value"},
+                    },
+                    {
+                        "address": "2001:db8::13",
+                        "duid": "false",
+                        "state": 0,
+                        "is_reserved": False,
+                    },
+                ]
+            }
+        )
+
+        leases = await client._get_kea_dhcpv6_leases()
+
+        assert [lease["type"] for lease in leases] == [
+            "unknown",
+            "unknown",
+            "unknown",
+            "dynamic",
+        ]
         client._safe_dict_get.assert_awaited_once_with("/api/kea/leases6/search")
     finally:
         await client.async_close()
@@ -807,6 +1071,64 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
 
 
 @pytest.mark.asyncio
+async def test_kea_and_dnsmasq_preserve_overflowing_expiration(
+    make_client: ClientType,
+) -> None:
+    """Keep leases whose numeric expiration exceeds the platform datetime range.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates overflow-safe Kea and dnsmasq expiration parsing.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        overflowing_expiration = 10**40
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "address": "192.0.2.30",
+                        "hostname": "kea-overflow",
+                        "hwaddr": "aa:bb:cc:dd:ee:30",
+                        "if_name": "lan",
+                        "is_reserved": "0",
+                        "state": "0",
+                        "expire": overflowing_expiration,
+                    }
+                ]
+            }
+        )
+
+        kea_leases = await client._get_kea_dhcpv4_leases()
+        assert len(kea_leases) == 1
+        assert kea_leases[0]["expires"] == overflowing_expiration
+
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "address": "192.0.2.31",
+                        "hostname": "dnsmasq-overflow",
+                        "hwaddr": "aa:bb:cc:dd:ee:31",
+                        "if_name": "lan",
+                        "is_reserved": "0",
+                        "expire": overflowing_expiration,
+                    }
+                ]
+            }
+        )
+
+        dnsmasq_leases = await client._get_dnsmasq_leases()
+        assert len(dnsmasq_leases) == 1
+        assert dnsmasq_leases[0]["expires"] == overflowing_expiration
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
     make_client: ClientType,
 ) -> None:
@@ -870,10 +1192,10 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
 
 
 @pytest.mark.asyncio
-async def test_version_switched_dhcp_endpoints_rows_empty_when_reservation_unavailable(
+async def test_version_switched_dhcp_endpoints_skip_unneeded_kea_reservations(
     make_client: ClientType,
 ) -> None:
-    """Verify lease endpoints return empty rows when reservation endpoint is unavailable.
+    """Skip Kea reservations for empty rows and gate unavailable ISC endpoints.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -884,46 +1206,26 @@ async def test_version_switched_dhcp_endpoints_rows_empty_when_reservation_unava
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
 
         assert await client._get_kea_dhcpv4_leases() == []
         client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
-        assert client._is_get_endpoint_available.await_count == 2
-        assert (
-            client._is_get_endpoint_available.await_args_list[0].args[0]
-            == "/api/kea/leases4/search"
-        )
-        assert (
-            client._is_get_endpoint_available.await_args_list[1].args[0]
-            == "/api/kea/dhcpv4/search_reservation"
-        )
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/kea/leases4/search")
 
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         assert await client._get_isc_dhcpv4_leases() == []
-        assert client._is_get_endpoint_available.await_count == 2
-        assert (
-            client._is_get_endpoint_available.await_args_list[0].args[0]
-            == "/api/dhcpv4/service/status"
-        )
-        assert (
-            client._is_get_endpoint_available.await_args_list[1].args[0]
-            == "/api/dhcpv4/leases/search_lease"
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            "/api/dhcpv4/leases/search_lease"
         )
         client._safe_dict_get.assert_not_awaited()
 
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         assert await client._get_isc_dhcpv6_leases() == []
-        assert client._is_get_endpoint_available.await_count == 2
-        assert (
-            client._is_get_endpoint_available.await_args_list[0].args[0]
-            == "/api/dhcpv6/service/status"
-        )
-        assert (
-            client._is_get_endpoint_available.await_args_list[1].args[0]
-            == "/api/dhcpv6/leases/search_lease"
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            "/api/dhcpv6/leases/search_lease"
         )
         client._safe_dict_get.assert_not_awaited()
     finally:
@@ -1023,7 +1325,20 @@ async def test_dhcp_switched_endpoints_follow_selected_case(
         client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
         client._is_get_endpoint_available = AsyncMock(return_value=True)
 
-        client._safe_dict_get = AsyncMock(side_effect=[{"rows": []}, {"rows": []}])
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {
+                    "rows": [
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:ff",
+                            "address": "192.0.2.10",
+                        }
+                    ]
+                },
+                {"rows": []},
+            ]
+        )
         await client._get_kea_dhcpv4_leases()
         assert client._safe_dict_get.await_args_list[1].args[0] == expected_kea
 
