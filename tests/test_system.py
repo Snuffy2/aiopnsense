@@ -305,14 +305,46 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_malformed_datetime
 @pytest.mark.parametrize(
     ("datetime_str", "expected_dt", "expected_offset"),
     [
-        ("2026-06-07 12:00:00 ADT", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=-3)),
-        ("2026-01-07 12:00:00 AEDT", datetime(2026, 1, 7, 12, 0, 0), timedelta(hours=11)),
-        ("2026-06-07 12:00:00 CEST", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=2)),
-        ("2026-06-07 12:00:00 CDT", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=-5)),
-        ("2026-06-07 12:00:00 EEST", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=3)),
-        ("2026-06-07 12:00:00 MDT", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=-6)),
-        ("2026-01-07 12:00:00 NZDT", datetime(2026, 1, 7, 12, 0, 0), timedelta(hours=13)),
-        ("2026-06-07 12:00:00 PDT", datetime(2026, 6, 7, 12, 0, 0), timedelta(hours=-7)),
+        (
+            "2026-06-07 12:00:00 ADT",
+            datetime(2026, 6, 7, 12, 0, 0, tzinfo=UTC),
+            timedelta(hours=-3),
+        ),
+        (
+            "2026-01-07 12:00:00 AEDT",
+            datetime(2026, 1, 7, 12, 0, 0, tzinfo=UTC),
+            timedelta(hours=11),
+        ),
+        (
+            "2026-06-07 12:00:00 CEST",
+            datetime(2026, 6, 7, 12, 0, 0, tzinfo=UTC),
+            timedelta(hours=2),
+        ),
+        (
+            "2026-06-07 12:00:00 CDT",
+            datetime(2026, 6, 7, 12, 0, 0, tzinfo=UTC),
+            timedelta(hours=-5),
+        ),
+        (
+            "2026-06-07 12:00:00 EEST",
+            datetime(2026, 6, 7, 12, 0, 0, tzinfo=UTC),
+            timedelta(hours=3),
+        ),
+        (
+            "2026-06-07 12:00:00 MDT",
+            datetime(2026, 6, 7, 12, 0, 0, tzinfo=UTC),
+            timedelta(hours=-6),
+        ),
+        (
+            "2026-01-07 12:00:00 NZDT",
+            datetime(2026, 1, 7, 12, 0, 0, tzinfo=UTC),
+            timedelta(hours=13),
+        ),
+        (
+            "2026-06-07 12:00:00 PDT",
+            datetime(2026, 6, 7, 12, 0, 0, tzinfo=UTC),
+            timedelta(hours=-7),
+        ),
     ],
 )
 async def test_get_opnsense_timezone_supports_known_daylight_abbreviations(
@@ -326,7 +358,8 @@ async def test_get_opnsense_timezone_supports_known_daylight_abbreviations(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         datetime_str (str): Datetime string parsed from mocked API output.
-        expected_dt (datetime): Naive datetime used to evaluate the resolved timezone offset.
+        expected_dt (datetime): Datetime whose wall time is used to evaluate the
+            resolved timezone offset.
         expected_offset (timedelta): Expected UTC offset for the parsed timezone.
 
     Returns:

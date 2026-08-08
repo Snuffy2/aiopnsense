@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 import inspect
 import logging
 from pathlib import Path
@@ -21,7 +21,7 @@ _LOGGER = logging.getLogger(__name__)
 
 project: str = "aiopnsense"
 author: str = "Snuffy2"
-copyright: str = f"{datetime.now():%Y}, {author}"
+copyright: str = f"{datetime.now(UTC):%Y}, {author}"
 
 extensions: list[str] = [
     "sphinx.ext.autodoc",

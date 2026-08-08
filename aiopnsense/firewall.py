@@ -375,10 +375,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             return False
 
         apply_resp = await self._safe_dict_post(FIREWALL_FILTER_APPLY_ENDPOINT)
-        if apply_resp.get("status", "").strip() != "OK":
-            return False
-
-        return True
+        return apply_resp.get("status", "").strip() == "OK"
 
     async def toggle_nat_rule(
         self, nat_rule_type: str, uuid: str, toggle_on_off: str | None = None
@@ -425,10 +422,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         apply_resp = await self._safe_dict_post(
             f"{FIREWALL_NAT_TOGGLE_RULE_ENDPOINT_PREFIX}{nat_rule_type}{FIREWALL_NAT_APPLY_ENDPOINT_SUFFIX}"
         )
-        if apply_resp.get("status", "").strip() != "OK":
-            return False
-
-        return True
+        return apply_resp.get("status", "").strip() == "OK"
 
     async def kill_states(self, ip_addr: str) -> MutableMapping[str, Any]:
         """Kill the active states of the IP address.
@@ -513,7 +507,4 @@ class FirewallMixin(AiopnsenseClientProtocol):
             return False
 
         reconfigure_resp = await self._safe_dict_post(FIREWALL_ALIAS_RECONFIGURE_ENDPOINT)
-        if reconfigure_resp.get("status") != "ok":
-            return False
-
-        return True
+        return reconfigure_resp.get("status") == "ok"

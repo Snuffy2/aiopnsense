@@ -544,10 +544,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 try:
                     dt: datetime = datetime.strptime(
                         lease_info.get("ends", None), "%Y/%m/%d %H:%M:%S"
-                    )
+                    ).replace(tzinfo=opnsense_tz)
                 except TypeError, ValueError:
                     continue
-                lease["expires"] = dt.replace(tzinfo=opnsense_tz)
+                lease["expires"] = dt
                 if lease["expires"] < current_time:
                     continue
             else:
@@ -604,10 +604,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 try:
                     dt: datetime = datetime.strptime(
                         lease_info.get("ends", None), "%Y/%m/%d %H:%M:%S"
-                    )
+                    ).replace(tzinfo=opnsense_tz)
                 except TypeError, ValueError:
                     continue
-                lease["expires"] = dt.replace(tzinfo=opnsense_tz)
+                lease["expires"] = dt
                 if lease["expires"] < current_time:
                     continue
             else:

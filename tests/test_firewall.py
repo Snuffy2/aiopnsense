@@ -123,8 +123,10 @@ async def test_get_firewall_rules_skips_invalid_rows(
             },
         ),
         (
-            "@uuid;enabled;tcpflags2;tcpflags_any;categories;description\n"
-            'rule-2612;1;SA;1;web;"Allow; web"\n',
+            (
+                "@uuid;enabled;tcpflags2;tcpflags_any;categories;description\n"
+                'rule-2612;1;SA;1;web;"Allow; web"\n'
+            ),
             {
                 "uuid": "rule-2612",
                 "enabled": "1",

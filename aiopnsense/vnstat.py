@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, MutableMapping, Sequence
-from datetime import date, datetime, timedelta, tzinfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 import re
 from typing import Any
 
@@ -291,7 +291,7 @@ class VnstatMixin(AiopnsenseClientProtocol):
         factor = _BYTE_FACTORS.get(unit.upper())
         if parsed_value is None or factor is None:
             return None
-        return int(round(parsed_value * factor))
+        return round(parsed_value * factor)
 
     def _to_bits_per_second(self, value: str, unit: str) -> int | None:
         """Convert vnStat rate strings into integer bits-per-second.
@@ -309,7 +309,7 @@ class VnstatMixin(AiopnsenseClientProtocol):
         factor = _RATE_FACTORS.get(unit.upper())
         if parsed_value is None or factor is None:
             return None
-        return int(round(parsed_value * factor))
+        return round(parsed_value * factor)
 
     def _pick_daily_row(
         self,
@@ -488,7 +488,7 @@ class VnstatMixin(AiopnsenseClientProtocol):
             return None
         for fmt in ("%m/%d/%y", "%Y-%m-%d"):
             try:
-                return datetime.strptime(label, fmt).date()
+                return datetime.strptime(label, fmt).replace(tzinfo=UTC).date()
             except ValueError:
                 continue
         return None
@@ -508,7 +508,7 @@ class VnstatMixin(AiopnsenseClientProtocol):
             return None
         for fmt in ("%Y-%m", "%b '%y", "%B '%y"):
             try:
-                parsed = datetime.strptime(label, fmt)
+                parsed = datetime.strptime(label, fmt).replace(tzinfo=UTC)
             except ValueError:
                 continue
             else:

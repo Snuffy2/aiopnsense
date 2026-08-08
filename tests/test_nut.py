@@ -178,35 +178,20 @@ async def test_get_nut_ups_status_parses_colon_in_value_and_ignores_invalid_line
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        raw_response = """\
+battery.charge: 100
+\x20\x20
+Error: UPS unavailable
+ups.message: on battery: replace battery
+this-line-is-invalid
+ups.load: 12"""
         client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "response": "\n".join(
-                    [
-                        "battery.charge: 100",
-                        "  ",
-                        "Error: UPS unavailable",
-                        "ups.message: on battery: replace battery",
-                        "this-line-is-invalid",
-                        "ups.load: 12",
-                    ]
-                )
-            }
-        )
+        client._safe_dict_get = AsyncMock(return_value={"response": raw_response})
 
         nut_status = await client.get_nut_ups_status()
 
         assert nut_status == {
-            "response": "\n".join(
-                [
-                    "battery.charge: 100",
-                    "  ",
-                    "Error: UPS unavailable",
-                    "ups.message: on battery: replace battery",
-                    "this-line-is-invalid",
-                    "ups.load: 12",
-                ]
-            ),
+            "response": raw_response,
             "status": {
                 "battery.charge": "100",
                 "ups.message": "on battery: replace battery",

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from importlib import import_module
 import inspect
-from typing import Any
+from typing import Any, ClassVar
 
 from docutils import nodes
 from docutils.parsers.rst import Directive, directives
@@ -59,7 +60,7 @@ class OPNsenseClientAPIDirective(Directive):
     required_arguments = 1
     optional_arguments = 0
     final_argument_whitespace = False
-    option_spec = {
+    option_spec: ClassVar[dict[str, Callable[[str], str]]] = {
         "client": directives.unchanged_required,
     }
 
