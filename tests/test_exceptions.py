@@ -46,7 +46,7 @@ def test_http_errors_map_to_public_exceptions(
 
     Args:
         status (int): HTTP status to map.
-        expected_exception (type[OPNsenseConnectionError]): Expected public exception type.
+        expected_exception (type[aiopnsense_module.OPNsenseConnectionError]): Expected public exception type.
     """
     error = _opnsense_http_error(status, "failure")
 
@@ -70,7 +70,7 @@ def test_arbitrary_errors_map_to_public_exceptions(
 
     Args:
         source_error (Exception): Raw exception to map.
-        expected_exception (type[OPNsenseError]): Expected public exception type.
+        expected_exception (type[aiopnsense_module.OPNsenseError]): Expected public exception type.
     """
     assert isinstance(_map_opnsense_exception(source_error), expected_exception)
 

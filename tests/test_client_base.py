@@ -433,7 +433,14 @@ async def test_client_constructor_throw_errors_configuration(
     expected_throw_errors: bool,
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify constructor error-propagation configuration and deprecation handling."""
+    """Verify constructor error-propagation configuration and deprecation handling.
+
+    Args:
+        kwargs (dict[str, bool]): Value used by `test_client_constructor_throw_errors_configuration`.
+        expect_warning (bool): Value used by `test_client_constructor_throw_errors_configuration`.
+        expected_throw_errors (bool): Value used by `test_client_constructor_throw_errors_configuration`.
+        make_client (MakeClientFactory): Value used by `test_client_constructor_throw_errors_configuration`.
+    """
     client: OPNsenseClient | None = None
     try:
         warning_context = (
@@ -453,7 +460,11 @@ async def test_client_constructor_throw_errors_configuration(
 async def test_client_constructor_invalid_throw_errors_raises_type_error(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify invalid ``throw_errors`` values raise ``TypeError``."""
+    """Verify invalid ``throw_errors`` values raise ``TypeError``.
+
+    Args:
+        make_client (MakeClientFactory): Value used by `test_client_constructor_invalid_throw_errors_raises_type_error`.
+    """
     with pytest.raises(TypeError, match="`throw_errors` must be a bool"):
         make_client(throw_errors="false")
 
@@ -462,7 +473,11 @@ async def test_client_constructor_invalid_throw_errors_raises_type_error(
 async def test_client_constructor_invalid_initial_raises_type_error(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify invalid deprecated ``initial`` values raise ``TypeError``."""
+    """Verify invalid deprecated ``initial`` values raise ``TypeError``.
+
+    Args:
+        make_client (MakeClientFactory): Value used by `test_client_constructor_invalid_initial_raises_type_error`.
+    """
     with pytest.raises(TypeError, match="`initial` must be a bool"):
         make_client(initial="false")
 
@@ -505,7 +520,11 @@ def test_client_constructor_rejects_positional_throw_errors() -> None:
 
 @pytest.mark.asyncio
 async def test_toggle_throwing_errors_updates_state(make_client: MakeClientFactory) -> None:
-    """Verify ``toggle_throwing_errors`` toggles and sets the error mode."""
+    """Verify ``toggle_throwing_errors`` toggles and sets the error mode.
+
+    Args:
+        make_client (MakeClientFactory): Value used by `test_toggle_throwing_errors_updates_state`.
+    """
     client = make_client()
     try:
         assert client.toggle_throwing_errors() is True
@@ -522,7 +541,11 @@ async def test_toggle_throwing_errors_updates_state(make_client: MakeClientFacto
 async def test_toggle_throwing_errors_invalid_value_raises_type_error(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify invalid toggle values raise ``TypeError``."""
+    """Verify invalid toggle values raise ``TypeError``.
+
+    Args:
+        make_client (MakeClientFactory): Value used by `test_toggle_throwing_errors_invalid_value_raises_type_error`.
+    """
     client = make_client()
     try:
         with pytest.raises(TypeError, match="`throw_errors` must be a bool or None"):

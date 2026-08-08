@@ -97,9 +97,9 @@ def normalize_traffic_payload(
     """Normalize OPNsense diagnostics traffic payloads.
 
     Args:
-        payload: Raw traffic payload from ``/api/diagnostics/traffic`` or a stream event.
-        interval: Seconds represented by the traffic counters in the payload.
-        include_per_second_rates: Derive per-second rates when true.
+        payload (Mapping[str, Any]): Value used by `normalize_traffic_payload`.
+        interval (float): Value used by `normalize_traffic_payload`.
+        include_per_second_rates (bool): Value used by `normalize_traffic_payload`.
 
     Returns:
         dict[str, Any]: Normalized traffic sample with an ``interfaces`` mapping keyed by interface name.
@@ -200,13 +200,10 @@ class TrafficMixin(AiopnsenseClientProtocol):
         """Yield normalized diagnostics traffic stream samples.
 
         Args:
-            poll_interval: OPNsense stream sample interval in seconds. Values
-                less than 1 are clamped to 1.
+            poll_interval (int): Value used by `stream_interface_traffic`.
 
         Yields:
-            Normalized traffic samples. The first stream event is discarded because
-            OPNsense stream endpoints commonly emit an initialization sample
-            before interval deltas stabilize.
+            dict[str, Any]: Value yielded by `stream_interface_traffic`.
         """
         interval = max(poll_interval, 1)
         endpoint = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/{interval}"

@@ -74,10 +74,11 @@ def parse_endpoint_name(endpoint_name: str) -> str:
     """Validate a named dump endpoint from CLI input.
 
     Args:
-        endpoint_name: Endpoint name provided by the CLI.
+        endpoint_name (str): Value used by `parse_endpoint_name`.
 
     Returns:
         The validated endpoint name.
+
 
     Raises:
         argparse.ArgumentTypeError: Raised when the endpoint is unknown.
@@ -132,7 +133,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments for the dump script.
 
     Args:
-        args: Optional argument override for testability.
+        args (list[str] | None): Value used by `parse_args`.
 
     Returns:
         Parsed arguments.
@@ -159,10 +160,11 @@ def choose_endpoint_from_menu(endpoint_names: list[str]) -> str:
     """Prompt for a 1-based endpoint selection and return the chosen name.
 
     Args:
-        endpoint_names: Stable, sorted endpoint names.
+        endpoint_names (list[str]): Value used by `choose_endpoint_from_menu`.
 
     Returns:
         Endpoint name selected by the user.
+
 
     Raises:
         SystemExit: Raised for non-integer or out-of-range selections.
@@ -185,9 +187,9 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
     """Run a single endpoint and return a normalized dump payload.
 
     Args:
-        client: Active OPNsense client instance.
-        endpoint_name: CLI endpoint key mapped in ``ENDPOINTS``.
-        stream_seconds: Stream duration for streaming endpoints.
+        client (Any): Value used by `run_endpoint`.
+        endpoint_name (str): Value used by `run_endpoint`.
+        stream_seconds (float): Value used by `run_endpoint`.
 
     Returns:
         A payload dictionary with endpoint metadata and returned data.
@@ -263,7 +265,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     """Run the dump command.
 
     Args:
-        argv: Optional argument list for testability.
+        argv (list[str] | None): Value used by `async_main`.
 
     Returns:
         Exit status code.

@@ -248,6 +248,9 @@ async def test_get_nut_ups_status_handles_invalid_payloads(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         response_payload (Any): Invalid payloads to exercise normalization safety.
+        expected (dict[str, Any]): Value used by `test_get_nut_ups_status_handles_invalid_payloads`.
+        expect_falsey (bool): Value used by `test_get_nut_ups_status_handles_invalid_payloads`.
+        expect_no_status (bool): Value used by `test_get_nut_ups_status_handles_invalid_payloads`.
 
     Returns:
         None: This test validates defensive handling of malformed responses.

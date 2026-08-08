@@ -14,7 +14,11 @@ from tests.conftest import make_mock_session_client
 async def test_get_host_firmware_version_and_fallback(
     make_client: Callable[..., Any],
 ) -> None:
-    """Firmware version lookup should prefer semver and fall back to product series."""
+    """Firmware version lookup should prefer semver and fall back to product series.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_get_host_firmware_version_and_fallback`.
+    """
     client, session = make_mock_session_client(make_client)
 
     client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -43,7 +47,11 @@ async def test_get_host_firmware_version_and_fallback(
 async def test_get_firmware_update_info_triggers_check_when_status_is_incomplete(
     make_client: Callable[..., Any],
 ) -> None:
-    """Missing firmware status details should trigger a background firmware check."""
+    """Missing firmware status details should trigger a background firmware check.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_get_firmware_update_info_triggers_check_when_status_is_incomplete`.
+    """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -65,7 +73,11 @@ async def test_get_firmware_update_info_triggers_check_when_status_is_incomplete
 async def test_get_firmware_update_info_triggers_check_when_last_check_is_stale(
     make_client: Callable[..., Any],
 ) -> None:
-    """A stale `last_check` should trigger a firmware refresh."""
+    """A stale `last_check` should trigger a firmware refresh.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_get_firmware_update_info_triggers_check_when_last_check_is_stale`.
+    """
     client, _ = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -92,7 +104,11 @@ async def test_get_firmware_update_info_triggers_check_when_last_check_is_stale(
 async def test_get_firmware_update_info_does_not_trigger_check_for_recent_healthy_status(
     make_client: Callable[..., Any],
 ) -> None:
-    """A complete, recent firmware status should not trigger a refresh."""
+    """A complete, recent firmware status should not trigger a refresh.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_get_firmware_update_info_does_not_trigger_check_for_recent_healthy_status`.
+    """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -129,7 +145,13 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
 async def test_get_firmware_update_info_triggers_check_for_newer_latest_versions(
     make_client: Callable[..., Any], product_version: str, product_latest: str
 ) -> None:
-    """Newer latest firmware revisions should trigger a details refresh."""
+    """Newer latest firmware revisions should trigger a details refresh.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_get_firmware_update_info_triggers_check_for_newer_latest_versions`.
+        product_version (str): Value used by `test_get_firmware_update_info_triggers_check_for_newer_latest_versions`.
+        product_latest (str): Value used by `test_get_firmware_update_info_triggers_check_for_newer_latest_versions`.
+    """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -158,7 +180,11 @@ async def test_get_firmware_update_info_triggers_check_for_newer_latest_versions
 async def test_get_firmware_update_info_triggers_check_when_versions_cannot_compare(
     make_client: Callable[..., Any],
 ) -> None:
-    """Uncomparable firmware versions should trigger a status refresh."""
+    """Uncomparable firmware versions should trigger a status refresh.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_get_firmware_update_info_triggers_check_when_versions_cannot_compare`.
+    """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -191,7 +217,13 @@ async def test_get_firmware_update_info_triggers_check_when_versions_cannot_comp
 async def test_upgrade_firmware_calls_expected_endpoint(
     make_client: Callable[..., Any], upgrade_type: str, expected_path: str
 ) -> None:
-    """Supported upgrade types should call the matching firmware endpoint."""
+    """Supported upgrade types should call the matching firmware endpoint.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_upgrade_firmware_calls_expected_endpoint`.
+        upgrade_type (str): Value used by `test_upgrade_firmware_calls_expected_endpoint`.
+        expected_path (str): Value used by `test_upgrade_firmware_calls_expected_endpoint`.
+    """
     client = make_client()
     try:
         client._firmware_version = "26.1.1"
@@ -208,7 +240,11 @@ async def test_upgrade_firmware_calls_expected_endpoint(
 
 @pytest.mark.asyncio
 async def test_upgrade_firmware_rejects_unknown_type(make_client: Callable[..., Any]) -> None:
-    """Unknown firmware upgrade types should return `None` without calling the API."""
+    """Unknown firmware upgrade types should return `None` without calling the API.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_upgrade_firmware_rejects_unknown_type`.
+    """
     client = make_client()
     try:
         client._safe_dict_post = AsyncMock()
@@ -223,7 +259,11 @@ async def test_upgrade_firmware_rejects_unknown_type(make_client: Callable[..., 
 
 @pytest.mark.asyncio
 async def test_upgrade_status_and_changelog(make_client: Callable[..., Any]) -> None:
-    """Upgrade status and changelog helpers should proxy the expected endpoints."""
+    """Upgrade status and changelog helpers should proxy the expected endpoints.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_upgrade_status_and_changelog`.
+    """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)

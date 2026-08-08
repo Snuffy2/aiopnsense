@@ -145,7 +145,11 @@ def test_normalize_traffic_payload_skips_negative_byte_packet_rates() -> None:
 async def test_get_interface_traffic_probes_and_normalizes(
     make_client: Callable[..., Any],
 ) -> None:
-    """`OPNsenseClient.get_interface_traffic()` should probe, fetch, and normalize."""
+    """`OPNsenseClient.get_interface_traffic()` should probe, fetch, and normalize.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_get_interface_traffic_probes_and_normalizes`.
+    """
     client = make_client()
     try:
         assert isinstance(client, OPNsenseClient)
@@ -202,7 +206,11 @@ def test_normalize_traffic_payload_without_rates_for_snapshots() -> None:
 async def test_get_interface_traffic_handles_unavailable_endpoint(
     make_client: Callable[..., Any],
 ) -> None:
-    """Unavailable traffic endpoint should return an empty sample and avoid GET calls."""
+    """Unavailable traffic endpoint should return an empty sample and avoid GET calls.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_get_interface_traffic_handles_unavailable_endpoint`.
+    """
     client = make_client()
     try:
         assert isinstance(client, OPNsenseClient)
@@ -222,7 +230,11 @@ async def test_get_interface_traffic_handles_unavailable_endpoint(
 async def test_get_interface_traffic_returns_empty_sample_on_probe_timeout(
     make_client: Callable[..., Any],
 ) -> None:
-    """Probe timeout should return an empty sample when throw_errors is disabled."""
+    """Probe timeout should return an empty sample when throw_errors is disabled.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_get_interface_traffic_returns_empty_sample_on_probe_timeout`.
+    """
     client = make_client()
     try:
         assert isinstance(client, OPNsenseClient)
@@ -242,7 +254,11 @@ async def test_get_interface_traffic_returns_empty_sample_on_probe_timeout(
 async def test_get_interface_traffic_returns_empty_sample_on_probed_opnsense_error(
     make_client: MakeClientFactory,
 ) -> None:
-    """Mapped OPNsense errors from endpoint probing should fallback when throw_errors is disabled."""
+    """Mapped OPNsense errors from endpoint probing should fallback when throw_errors is disabled.
+
+    Args:
+        make_client (MakeClientFactory): Value used by `test_get_interface_traffic_returns_empty_sample_on_probed_opnsense_error`.
+    """
     client = make_client()
     try:
         assert isinstance(client, OPNsenseClient)
@@ -262,7 +278,11 @@ async def test_get_interface_traffic_returns_empty_sample_on_probed_opnsense_err
 async def test_get_interface_traffic_raises_when_throw_errors_is_enabled(
     make_client: Callable[..., Any],
 ) -> None:
-    """Probe timeout should propagate when throw_errors is enabled."""
+    """Probe timeout should propagate when throw_errors is enabled.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_get_interface_traffic_raises_when_throw_errors_is_enabled`.
+    """
     client = make_client(throw_errors=True)
     try:
         assert isinstance(client, OPNsenseClient)
@@ -279,7 +299,11 @@ async def test_get_interface_traffic_raises_when_throw_errors_is_enabled(
 async def test_get_interface_traffic_raises_same_opnsense_error_when_throw_errors_is_enabled(
     make_client: MakeClientFactory,
 ) -> None:
-    """Mapped OPNsense errors from endpoint probing should be re-raised when throw_errors is enabled."""
+    """Mapped OPNsense errors from endpoint probing should be re-raised when throw_errors is enabled.
+
+    Args:
+        make_client (MakeClientFactory): Value used by `test_get_interface_traffic_raises_same_opnsense_error_when_throw_errors_is_enabled`.
+    """
     client = make_client(throw_errors=True)
     try:
         assert isinstance(client, OPNsenseClient)
@@ -357,7 +381,11 @@ def test_normalize_traffic_payload_strips_identity_whitespace() -> None:
 async def test_stream_interface_traffic_yields_normalized_samples(
     make_client: Callable[..., Any],
 ) -> None:
-    """Stream method should normalize each valid stream event."""
+    """Stream method should normalize each valid stream event.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_yields_normalized_samples`.
+    """
 
     async def fake_stream(_path: str, **_: Any) -> AsyncIterator[dict[str, Any]]:
         yield {
@@ -411,7 +439,12 @@ async def test_stream_interface_traffic_real_stream_path_keeps_non_ascii_name(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Stream traffic should parse non-ASCII interface identity from real SSE decoding."""
+    """Stream traffic should parse non-ASCII interface identity from real SSE decoding.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_real_stream_path_keeps_non_ascii_name`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_interface_traffic_real_stream_path_keeps_non_ascii_name`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -440,7 +473,11 @@ async def test_stream_interface_traffic_real_stream_path_keeps_non_ascii_name(
 async def test_stream_interface_traffic_closes_inner_iterator(
     make_client: Callable[..., Any],
 ) -> None:
-    """Stream should close its inner SSE iterator when consumer exits early."""
+    """Stream should close its inner SSE iterator when consumer exits early.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_closes_inner_iterator`.
+    """
 
     events_closed = False
 
@@ -479,7 +516,11 @@ async def test_stream_interface_traffic_closes_inner_iterator(
 async def test_stream_interface_traffic_clamps_poll_interval(
     make_client: Callable[..., Any],
 ) -> None:
-    """poll_interval below 1 should clamp to 1 for endpoint probing and interval."""
+    """poll_interval below 1 should clamp to 1 for endpoint probing and interval.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_clamps_poll_interval`.
+    """
 
     async def fake_stream(_path: str, **_: Any) -> AsyncIterator[dict[str, Any]]:
         yield {
@@ -511,7 +552,11 @@ async def test_stream_interface_traffic_clamps_poll_interval(
 async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_backward_timestamps(
     make_client: Callable[..., Any],
 ) -> None:
-    """Bad timestamp should reseed and then recover interval with following valid timestamp."""
+    """Bad timestamp should reseed and then recover interval with following valid timestamp.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_backward_timestamps`.
+    """
 
     async def fake_stream(_path: str, **_: Any) -> AsyncIterator[dict[str, Any]]:
         yield {
@@ -568,7 +613,12 @@ async def test_stream_interface_traffic_passes_read_timeout_from_clamped_poll_in
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Stream poll interval should influence stream read timeout for delayed SSE frames."""
+    """Stream poll interval should influence stream read timeout for delayed SSE frames.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_passes_read_timeout_from_clamped_poll_interval`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_interface_traffic_passes_read_timeout_from_clamped_poll_interval`.
+    """
     captured_timeout: aiohttp.ClientTimeout | None = None
 
     def fake_get(*_args: Any, **kwargs: Any) -> Any:
@@ -602,7 +652,12 @@ async def test_stream_interface_traffic_reseeds_interval_after_malformed_json_ev
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Malformed JSON frame should reseed timing so next delta uses poll_interval."""
+    """Malformed JSON frame should reseed timing so next delta uses poll_interval.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_reseeds_interval_after_malformed_json_event`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_interface_traffic_reseeds_interval_after_malformed_json_event`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -628,7 +683,12 @@ async def test_stream_interface_traffic_reseeds_interval_after_non_mapping_json_
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Non-mapping JSON frames should reseed timing like malformed JSON."""
+    """Non-mapping JSON frames should reseed timing like malformed JSON.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_reseeds_interval_after_non_mapping_json_event`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_interface_traffic_reseeds_interval_after_non_mapping_json_event`.
+    """
 
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -656,7 +716,12 @@ async def test_stream_interface_traffic_resets_interval_after_stream_json_reset(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """A dropped invalid UTF-8 frame should force fallback interval on next sample."""
+    """A dropped invalid UTF-8 frame should force fallback interval on next sample.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_resets_interval_after_stream_json_reset`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_interface_traffic_resets_interval_after_stream_json_reset`.
+    """
 
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -687,7 +752,11 @@ async def test_stream_interface_traffic_resets_interval_after_stream_json_reset(
 async def test_stream_interface_traffic_returns_when_endpoint_unavailable(
     make_client: Callable[..., Any],
 ) -> None:
-    """Stream method should end without yielding when the endpoint is unavailable."""
+    """Stream method should end without yielding when the endpoint is unavailable.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_returns_when_endpoint_unavailable`.
+    """
     client = make_client()
     try:
         assert isinstance(client, OPNsenseClient)
@@ -707,7 +776,11 @@ async def test_stream_interface_traffic_returns_when_endpoint_unavailable(
 async def test_stream_interface_traffic_returns_empty_iteration_on_probe_timeout(
     make_client: Callable[..., Any],
 ) -> None:
-    """Probe timeout should return an empty stream when throw_errors is disabled."""
+    """Probe timeout should return an empty stream when throw_errors is disabled.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_returns_empty_iteration_on_probe_timeout`.
+    """
     client = make_client()
     try:
         assert isinstance(client, OPNsenseClient)
@@ -727,7 +800,11 @@ async def test_stream_interface_traffic_returns_empty_iteration_on_probe_timeout
 async def test_stream_interface_traffic_returns_empty_iteration_on_opnsense_error(
     make_client: MakeClientFactory,
 ) -> None:
-    """Mapped OPNsense errors from endpoint probing should fallback when throw_errors is disabled."""
+    """Mapped OPNsense errors from endpoint probing should fallback when throw_errors is disabled.
+
+    Args:
+        make_client (MakeClientFactory): Value used by `test_stream_interface_traffic_returns_empty_iteration_on_opnsense_error`.
+    """
     client = make_client()
     try:
         assert isinstance(client, OPNsenseClient)
@@ -747,7 +824,11 @@ async def test_stream_interface_traffic_returns_empty_iteration_on_opnsense_erro
 async def test_stream_interface_traffic_raises_same_opnsense_error_when_throw_errors_enabled(
     make_client: MakeClientFactory,
 ) -> None:
-    """Mapped OPNsense errors from endpoint probing should be re-raised when throw_errors is enabled."""
+    """Mapped OPNsense errors from endpoint probing should be re-raised when throw_errors is enabled.
+
+    Args:
+        make_client (MakeClientFactory): Value used by `test_stream_interface_traffic_raises_same_opnsense_error_when_throw_errors_enabled`.
+    """
     client = make_client(throw_errors=True)
     try:
         assert isinstance(client, OPNsenseClient)
@@ -766,7 +847,11 @@ async def test_stream_interface_traffic_raises_same_opnsense_error_when_throw_er
 async def test_stream_interface_traffic_raises_when_probe_timeout_and_throw_errors_enabled(
     make_client: Callable[..., Any],
 ) -> None:
-    """Probe timeout should propagate when throw_errors is enabled."""
+    """Probe timeout should propagate when throw_errors is enabled.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_interface_traffic_raises_when_probe_timeout_and_throw_errors_enabled`.
+    """
     client = make_client(throw_errors=True)
     try:
         assert isinstance(client, OPNsenseClient)

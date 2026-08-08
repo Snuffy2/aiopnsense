@@ -211,7 +211,11 @@ async def test_get_opnsense_timezone_fallback_for_mapped_error(make_client: Clie
 async def test_get_resolved_opnsense_timezone_returns_none_on_endpoint_unavailable(
     make_client: ClientType,
 ) -> None:
-    """Verify resolved-only timezone lookup returns ``None`` when endpoint is unavailable."""
+    """Verify resolved-only timezone lookup returns ``None`` when endpoint is unavailable.
+
+    Args:
+        make_client (ClientType): Value used by `test_get_resolved_opnsense_timezone_returns_none_on_endpoint_unavailable`.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=False)
@@ -230,7 +234,11 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_endpoint_unavailab
 async def test_get_resolved_opnsense_timezone_returns_none_on_probe_error(
     make_client: ClientType,
 ) -> None:
-    """Verify a mapped endpoint probe error does not abort timezone enrichment."""
+    """Verify a mapped endpoint probe error does not abort timezone enrichment.
+
+    Args:
+        make_client (ClientType): Value used by `test_get_resolved_opnsense_timezone_returns_none_on_probe_error`.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client.toggle_throwing_errors(True)
@@ -254,7 +262,11 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_probe_error(
 async def test_get_resolved_opnsense_timezone_returns_none_on_fetch_error(
     make_client: ClientType,
 ) -> None:
-    """Verify resolved-only timezone lookup returns ``None`` when fetch fails."""
+    """Verify resolved-only timezone lookup returns ``None`` when fetch fails.
+
+    Args:
+        make_client (ClientType): Value used by `test_get_resolved_opnsense_timezone_returns_none_on_fetch_error`.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -272,7 +284,11 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_fetch_error(
 async def test_get_resolved_opnsense_timezone_returns_none_on_malformed_datetime(
     make_client: ClientType,
 ) -> None:
-    """Verify resolved-only timezone lookup returns ``None`` for malformed data."""
+    """Verify resolved-only timezone lookup returns ``None`` for malformed data.
+
+    Args:
+        make_client (ClientType): Value used by `test_get_resolved_opnsense_timezone_returns_none_on_malformed_datetime`.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)

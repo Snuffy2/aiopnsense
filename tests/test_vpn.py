@@ -15,8 +15,13 @@ ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
-async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
-    """Validate openvpn server/client discovery and fetch details flow."""
+async def test_get_openvpn_and_fetch_details(monkeypatch: Any, make_client: Any) -> None:
+    """Validate openvpn server/client discovery and fetch details flow.
+
+    Args:
+        monkeypatch (Any): Value used by `test_get_openvpn_and_fetch_details`.
+        make_client (Any): Value used by `test_get_openvpn_and_fetch_details`.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
@@ -51,11 +56,11 @@ async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
             ]
         }
 
-        async def fake_safe_dict_get(path):
+        async def fake_safe_dict_get(path: Any):
             """Fake safe dict get.
 
             Args:
-                path (str): API endpoint path string to request.
+                path (Any): API endpoint path string to request.
 
             Returns:
                 Any: Response payload coerced to a dictionary.
@@ -77,11 +82,11 @@ async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
                 }
             return {}
 
-        async def fake_safe_list_get(path):
+        async def fake_safe_list_get(path: Any):
             """Fake safe list get.
 
             Args:
-                path (str): API endpoint path to request.
+                path (Any): API endpoint path to request.
 
             Returns:
                 Any: Response payload coerced to a list.
@@ -106,8 +111,12 @@ async def test_get_openvpn_and_fetch_details(monkeypatch, make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_wireguard_processing_and_updates(make_client) -> None:
-    """Exercise static wireguard status update helpers and peer linking."""
+async def test_wireguard_processing_and_updates(make_client: Any) -> None:
+    """Exercise static wireguard status update helpers and peer linking.
+
+    Args:
+        make_client (Any): Value used by `test_wireguard_processing_and_updates`.
+    """
     # Test static methods for wireguard processing and updates
     server = {
         "uuid": "s1",
@@ -173,7 +182,15 @@ async def test_toggle_vpn_instance_variants(
     post_resp: dict[str, Any] | list[dict[str, Any]],
     expected: bool,
 ) -> None:
-    """Parametrized toggle_vpn_instance covering OpenVPN and WireGuard variants."""
+    """Parametrized toggle_vpn_instance covering OpenVPN and WireGuard variants.
+
+    Args:
+        make_client (ClientType): Value used by `test_toggle_vpn_instance_variants`.
+        vpn_type (str): Value used by `test_toggle_vpn_instance_variants`.
+        path (str): Value used by `test_toggle_vpn_instance_variants`.
+        post_resp (dict[str, Any] | list[dict[str, Any]]): Value used by `test_toggle_vpn_instance_variants`.
+        expected (bool): Value used by `test_toggle_vpn_instance_variants`.
+    """
     client, _session = make_mock_session_client(make_client)
     client._use_snake_case = True
     client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -189,8 +206,13 @@ async def test_toggle_vpn_instance_variants(
 
 
 @pytest.mark.asyncio
-async def test_openvpn_more_detail_parsing(monkeypatch, make_client) -> None:
-    """Exercise additional OpenVPN parsing branches (no sessions, missing fields)."""
+async def test_openvpn_more_detail_parsing(monkeypatch: Any, make_client: Any) -> None:
+    """Exercise additional OpenVPN parsing branches (no sessions, missing fields).
+
+    Args:
+        monkeypatch (Any): Value used by `test_openvpn_more_detail_parsing`.
+        make_client (Any): Value used by `test_openvpn_more_detail_parsing`.
+    """
     client, _session = make_mock_session_client(make_client)
     client._use_snake_case = True
     client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -201,11 +223,11 @@ async def test_openvpn_more_detail_parsing(monkeypatch, make_client) -> None:
     providers_info: dict[str, dict] = {}
     instances_info = {"rows": [{"role": "client", "uuid": "c1", "enabled": "0"}]}
 
-    async def fake_safe_dict_get(path):
+    async def fake_safe_dict_get(path: Any):
         """Fake safe dict get.
 
         Args:
-            path (str): API endpoint path to request.
+            path (Any): API endpoint path to request.
 
         Returns:
             Any: Response payload coerced to a dictionary.
@@ -231,19 +253,23 @@ async def test_openvpn_more_detail_parsing(monkeypatch, make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_openvpn_processing_and_fetch_details(make_client) -> None:
-    """Test processing of OpenVPN instances/providers/sessions/routes and fetching details."""
+async def test_openvpn_processing_and_fetch_details(make_client: Any) -> None:
+    """Test processing of OpenVPN instances/providers/sessions/routes and fetching details.
+
+    Args:
+        make_client (Any): Value used by `test_openvpn_processing_and_fetch_details`.
+    """
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
         client._is_get_endpoint_available = AsyncMock(return_value=True)
 
         # prepare fake responses for _safe_dict_get based on path
-        def fake_safe_dict_get(path):
+        def fake_safe_dict_get(path: Any):
             """Fake safe dict get.
 
             Args:
-                path (str): API endpoint path to request.
+                path (Any): API endpoint path to request.
 
             Returns:
                 Any: Response payload coerced to a dictionary.
@@ -348,9 +374,6 @@ async def test_openvpn_client_session_updates_server_stats() -> None:
 async def test_openvpn_processing_helpers_skip_invalid_rows_and_unknown_servers() -> None:
     """OpenVPN processing helpers should ignore malformed rows and unknown route servers.
 
-    Args:
-        None: This test takes no arguments.
-
     Returns:
         None: This test validates helper-level filtering and route association behavior.
     """
@@ -410,19 +433,23 @@ async def test_openvpn_processing_helpers_skip_invalid_rows_and_unknown_servers(
 
 
 @pytest.mark.asyncio
-async def test_fetch_openvpn_server_details_missing_server_field(make_client) -> None:
-    """When instance details lack 'server' key, no tunnel_addresses should be set."""
+async def test_fetch_openvpn_server_details_missing_server_field(make_client: Any) -> None:
+    """When instance details lack 'server' key, no tunnel_addresses should be set.
+
+    Args:
+        make_client (Any): Value used by `test_fetch_openvpn_server_details_missing_server_field`.
+    """
     client, _ = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         openvpn: dict[str, Any] = {"servers": {"srv1": {"uuid": "srv1"}}}
 
-        async def fake_safe_dict_get(path):
+        async def fake_safe_dict_get(path: Any):
             # return instance details with no 'server' key
             """Fake safe dict get.
 
             Args:
-                path (str): API endpoint path to request.
+                path (Any): API endpoint path to request.
 
             Returns:
                 Any: Response payload coerced to a dictionary.
@@ -507,11 +534,18 @@ async def test_get_wireguard_full_processing_and_peer_details() -> None:
         (5, False),  # beyond threshold => not connected
     ],
 )
-def test__wireguard_is_connected_variants(monkeypatch, delta_minutes: int, expected: bool) -> None:
+def test__wireguard_is_connected_variants(
+    monkeypatch: Any, delta_minutes: int, expected: bool
+) -> None:
     """WireGuard connection considered active when last handshake within threshold.
 
     Monkeypatch `datetime.now` in the module under test to a fixed value with no
     microseconds so comparisons at the 3-minute boundary are deterministic.
+
+    Args:
+        monkeypatch (Any): Value used by `test__wireguard_is_connected_variants`.
+        delta_minutes (int): Value used by `test__wireguard_is_connected_variants`.
+        expected (bool): Value used by `test__wireguard_is_connected_variants`.
     """
     fixed_now = datetime.now().astimezone().replace(microsecond=0)
     # create a minimal fake datetime provider with a static now() returning fixed_now
@@ -529,8 +563,12 @@ def test__wireguard_is_connected_variants(monkeypatch, delta_minutes: int, expec
 
 
 @pytest.mark.asyncio
-async def test_get_wireguard_success_and_invalid(make_client) -> None:
-    """Exercise get_wireguard success path and invalid structure early return."""
+async def test_get_wireguard_success_and_invalid(make_client: Any) -> None:
+    """Exercise get_wireguard success path and invalid structure early return.
+
+    Args:
+        make_client (Any): Value used by `test_get_wireguard_success_and_invalid`.
+    """
     client, _session = make_mock_session_client(make_client)
 
     now = datetime.now().astimezone()

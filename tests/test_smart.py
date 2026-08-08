@@ -337,10 +337,6 @@ async def test_smart_post_endpoint_availability_caches_missing_plugin(
     def _post(*_args: object, **_kwargs: object) -> FakeResponse:
         """Return a repeated 404 response to emulate a missing plugin probe result.
 
-        Args:
-            *_args (object): Positional arguments ignored by this test stub.
-            **_kwargs (object): Keyword arguments ignored by this test stub.
-
         Returns:
             FakeResponse: A fixed 404 response object used by availability checks.
         """

@@ -33,8 +33,12 @@ def toggle_alias_client(make_client: ClientType) -> tuple[OPNsenseClient, Any]:
 
 
 @pytest.mark.asyncio
-async def test_get_firewall_aggregates_rest_payload(make_client) -> None:
-    """`get_firewall` should aggregate all REST-native rule collections."""
+async def test_get_firewall_aggregates_rest_payload(make_client: Any) -> None:
+    """`get_firewall` should aggregate all REST-native rule collections.
+
+    Args:
+        make_client (Any): Value used by `test_get_firewall_aggregates_rest_payload`.
+    """
     client = make_client()
     try:
         client._get_firewall_rules = AsyncMock(return_value={"rule1": {"uuid": "rule1"}})
@@ -65,9 +69,14 @@ async def test_get_firewall_aggregates_rest_payload(make_client) -> None:
 
 @pytest.mark.asyncio
 async def test_get_firewall_rules_skips_invalid_rows(
-    make_client, caplog: pytest.LogCaptureFixture
+    make_client: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Firewall rule downloads should parse editable rows and skip invalid rows."""
+    """Firewall rule downloads should parse editable rows and skip invalid rows.
+
+    Args:
+        make_client (Any): Value used by `test_get_firewall_rules_skips_invalid_rows`.
+        caplog (pytest.LogCaptureFixture): Value used by `test_get_firewall_rules_skips_invalid_rows`.
+    """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -134,7 +143,13 @@ async def test_get_firewall_rules_supports_opnsense_csv_versions(
     response: str,
     expected: dict[str, str],
 ) -> None:
-    """Firewall rule downloads should support all released CSV formats."""
+    """Firewall rule downloads should support all released CSV formats.
+
+    Args:
+        make_client (ClientType): Value used by `test_get_firewall_rules_supports_opnsense_csv_versions`.
+        response (str): Value used by `test_get_firewall_rules_supports_opnsense_csv_versions`.
+        expected (dict[str, str]): Value used by `test_get_firewall_rules_supports_opnsense_csv_versions`.
+    """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -151,7 +166,11 @@ async def test_get_firewall_rules_supports_opnsense_csv_versions(
 async def test_get_nat_source_rules_labels_empty_interface_address_target(
     make_client: ClientType,
 ) -> None:
-    """Source NAT rows with an empty target should expose an interface-address label."""
+    """Source NAT rows with an empty target should expose an interface-address label.
+
+    Args:
+        make_client (ClientType): Value used by `test_get_nat_source_rules_labels_empty_interface_address_target`.
+    """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -264,9 +283,23 @@ async def test_get_nat_source_rules_labels_empty_interface_address_target(
     ],
 )
 async def test_nat_rule_helpers_parse_rows(
-    make_client, method_name, api_endpoint, rows, expected, firmware_version
+    make_client: Any,
+    method_name: Any,
+    api_endpoint: Any,
+    rows: Any,
+    expected: Any,
+    firmware_version: Any,
 ) -> None:
-    """NAT rule helpers should return UUID-keyed mappings from REST search rows."""
+    """NAT rule helpers should return UUID-keyed mappings from REST search rows.
+
+    Args:
+        make_client (Any): Value used by `test_nat_rule_helpers_parse_rows`.
+        method_name (Any): Value used by `test_nat_rule_helpers_parse_rows`.
+        api_endpoint (Any): Value used by `test_nat_rule_helpers_parse_rows`.
+        rows (Any): Value used by `test_nat_rule_helpers_parse_rows`.
+        expected (Any): Value used by `test_nat_rule_helpers_parse_rows`.
+        firmware_version (Any): Value used by `test_nat_rule_helpers_parse_rows`.
+    """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -287,7 +320,12 @@ async def test_nat_rule_helpers_parse_rows(
 async def test_uses_unified_nat_template_handles_invalid_firmware_string(
     make_client: Callable[..., Any], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Legacy normalization fallback should be used when version comparison raises."""
+    """Legacy normalization fallback should be used when version comparison raises.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_uses_unified_nat_template_handles_invalid_firmware_string`.
+        caplog (pytest.LogCaptureFixture): Value used by `test_uses_unified_nat_template_handles_invalid_firmware_string`.
+    """
     client = make_client()
     try:
         with caplog.at_level(logging.DEBUG):
@@ -342,7 +380,14 @@ async def test_filters_automatic_source_nat_rules_handles_invalid_firmware_strin
 async def test_rule_helpers_return_empty_when_endpoint_unavailable(
     make_client: Callable[..., Any], method_name: str, api_endpoint: str, expected: Any
 ) -> None:
-    """Rule helpers should short-circuit when the related endpoint is unavailable."""
+    """Rule helpers should short-circuit when the related endpoint is unavailable.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_rule_helpers_return_empty_when_endpoint_unavailable`.
+        method_name (str): Value used by `test_rule_helpers_return_empty_when_endpoint_unavailable`.
+        api_endpoint (str): Value used by `test_rule_helpers_return_empty_when_endpoint_unavailable`.
+        expected (Any): Value used by `test_rule_helpers_return_empty_when_endpoint_unavailable`.
+    """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=False)
@@ -422,7 +467,13 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
 async def test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11(
     make_client: ClientType, firmware_version: str, expected: dict[str, Any]
 ) -> None:
-    """Source NAT should hide OPNsense 26.1.11 generated automatic rows only."""
+    """Source NAT should hide OPNsense 26.1.11 generated automatic rows only.
+
+    Args:
+        make_client (ClientType): Value used by `test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11`.
+        firmware_version (str): Value used by `test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11`.
+        expected (dict[str, Any]): Value used by `test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11`.
+    """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -482,9 +533,23 @@ async def test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11(
     ],
 )
 async def test_toggle_firewall_rule(
-    make_client, toggle_value, toggle_response, apply_response, expected_url, expected
+    make_client: Any,
+    toggle_value: Any,
+    toggle_response: Any,
+    apply_response: Any,
+    expected_url: Any,
+    expected: Any,
 ) -> None:
-    """Firewall rule toggles should use the right endpoint and require a successful apply."""
+    """Firewall rule toggles should use the right endpoint and require a successful apply.
+
+    Args:
+        make_client (Any): Value used by `test_toggle_firewall_rule`.
+        toggle_value (Any): Value used by `test_toggle_firewall_rule`.
+        toggle_response (Any): Value used by `test_toggle_firewall_rule`.
+        apply_response (Any): Value used by `test_toggle_firewall_rule`.
+        expected_url (Any): Value used by `test_toggle_firewall_rule`.
+        expected (Any): Value used by `test_toggle_firewall_rule`.
+    """
     client = make_client()
     try:
         client._safe_dict_post = AsyncMock(side_effect=[toggle_response, apply_response])
@@ -513,9 +578,16 @@ async def test_toggle_firewall_rule(
     ],
 )
 async def test_toggle_nat_rule_uses_expected_url(
-    make_client, nat_rule_type, toggle_value, expected_url
+    make_client: Any, nat_rule_type: Any, toggle_value: Any, expected_url: Any
 ) -> None:
-    """NAT toggles should target the correct REST endpoints, including d_nat inversion."""
+    """NAT toggles should target the correct REST endpoints, including d_nat inversion.
+
+    Args:
+        make_client (Any): Value used by `test_toggle_nat_rule_uses_expected_url`.
+        nat_rule_type (Any): Value used by `test_toggle_nat_rule_uses_expected_url`.
+        toggle_value (Any): Value used by `test_toggle_nat_rule_uses_expected_url`.
+        expected_url (Any): Value used by `test_toggle_nat_rule_uses_expected_url`.
+    """
     client = make_client()
     try:
         client._safe_dict_post = AsyncMock(side_effect=[{"result": "ok"}, {"status": "OK"}])
@@ -533,8 +605,12 @@ async def test_toggle_nat_rule_uses_expected_url(
 
 
 @pytest.mark.asyncio
-async def test_kill_states_returns_normalized_result(make_client) -> None:
-    """`kill_states` should normalize the diagnostics response."""
+async def test_kill_states_returns_normalized_result(make_client: Any) -> None:
+    """`kill_states` should normalize the diagnostics response.
+
+    Args:
+        make_client (Any): Value used by `test_kill_states_returns_normalized_result`.
+    """
     client = make_client()
     try:
         client._safe_dict_post = AsyncMock(return_value={"result": "ok", "dropped_states": 7})

@@ -27,13 +27,28 @@ class ClientTransportMixin:
         _verify_ssl: bool
 
         async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
-            """Queue a GET request and return the decoded payload."""
+            """Queue a GET request and return the decoded payload.
+
+            Args:
+                path (str): Value used by `_get`.
+
+            Returns:
+                MutableMapping[str, Any] | list | None: Result returned by `_get`.
+            """
             ...
 
         async def _post(
             self, path: str, payload: MutableMapping[str, Any] | None = None
         ) -> MutableMapping[str, Any] | list | None:
-            """Queue a POST request and return the decoded payload."""
+            """Queue a POST request and return the decoded payload.
+
+            Args:
+                path (str): Value used by `_post`.
+                payload (MutableMapping[str, Any] | None): Value used by `_post`.
+
+            Returns:
+                MutableMapping[str, Any] | list | None: Result returned by `_post`.
+            """
             ...
 
     async def _do_get_from_stream(self, path: str, caller: str = "Unknown") -> dict[str, Any]:

@@ -15,7 +15,11 @@ import pytest
 
 
 def load_common_module() -> ModuleType:
-    """Load the shared script helper as a module for direct unit testing."""
+    """Load the shared script helper as a module for direct unit testing.
+
+    Returns:
+        ModuleType: Result returned by `load_common_module`.
+    """
     module_path = Path(__file__).parents[1] / "scripts" / "_opnsense_live_common.py"
     spec = importlib.util.spec_from_file_location("_opnsense_live_common", module_path)
     assert spec is not None
@@ -48,7 +52,12 @@ def test_resolve_env_file_argument_maps_documented_default() -> None:
 def test_reexec_with_repo_venv_uses_local_python(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Bootstrap re-exec uses the repo venv when launched outside it."""
+    """Bootstrap re-exec uses the repo venv when launched outside it.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Value used by `test_reexec_with_repo_venv_uses_local_python`.
+        tmp_path (Path): Value used by `test_reexec_with_repo_venv_uses_local_python`.
+    """
     common = load_common_module()
     calls: list[tuple[str, list[str]]] = []
     script_path = tmp_path / "scripts" / "aiopnsense_dump.py"
@@ -79,7 +88,12 @@ def test_reexec_with_repo_venv_skips_when_already_in_venv(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Bootstrap does nothing when the repo venv is already active."""
+    """Bootstrap does nothing when the repo venv is already active.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Value used by `test_reexec_with_repo_venv_skips_when_already_in_venv`.
+        tmp_path (Path): Value used by `test_reexec_with_repo_venv_skips_when_already_in_venv`.
+    """
     common = load_common_module()
     script_path = tmp_path / "scripts" / "aiopnsense_dump.py"
     script_path.parent.mkdir()
@@ -100,7 +114,11 @@ def test_reexec_with_repo_venv_skips_when_already_in_venv(
 
 
 def test_load_env_file_parses_simple_shell_style_values(tmp_path: Path) -> None:
-    """Env files support blank lines, comments, quoted values, and inline comments."""
+    """Env files support blank lines, comments, quoted values, and inline comments.
+
+    Args:
+        tmp_path (Path): Value used by `test_load_env_file_parses_simple_shell_style_values`.
+    """
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text(
@@ -138,7 +156,11 @@ def test_strip_inline_comment_preserves_hashes_inside_values() -> None:
 
 
 def test_load_env_file_rejects_malformed_line(tmp_path: Path) -> None:
-    """Malformed env file lines raise a clear configuration error."""
+    """Malformed env file lines raise a clear configuration error.
+
+    Args:
+        tmp_path (Path): Value used by `test_load_env_file_rejects_malformed_line`.
+    """
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text("AIOPNSENSE_URL\n", encoding="utf-8")
@@ -148,7 +170,11 @@ def test_load_env_file_rejects_malformed_line(tmp_path: Path) -> None:
 
 
 def test_load_env_file_rejects_non_file_path(tmp_path: Path) -> None:
-    """Passing a directory raises a configuration error with clear path context."""
+    """Passing a directory raises a configuration error with clear path context.
+
+    Args:
+        tmp_path (Path): Value used by `test_load_env_file_rejects_non_file_path`.
+    """
     common = load_common_module()
     env_dir = tmp_path / "not-a-file"
     env_dir.mkdir()
@@ -160,7 +186,11 @@ def test_load_env_file_rejects_non_file_path(tmp_path: Path) -> None:
 
 
 def test_load_env_file_rejects_malformed_line_without_leaking_secret(tmp_path: Path) -> None:
-    """Malformed env lines should not leak secret text in error messages."""
+    """Malformed env lines should not leak secret text in error messages.
+
+    Args:
+        tmp_path (Path): Value used by `test_load_env_file_rejects_malformed_line_without_leaking_secret`.
+    """
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text("AIOPNSENSE_API_SECRET abc123TOPSECRET\n", encoding="utf-8")
@@ -174,7 +204,11 @@ def test_load_env_file_rejects_malformed_line_without_leaking_secret(tmp_path: P
 def test_load_env_file_rejects_invalid_key_characters_without_leaking_secret(
     tmp_path: Path,
 ) -> None:
-    """Malformed env keys are rejected without exposing secret values."""
+    """Malformed env keys are rejected without exposing secret values.
+
+    Args:
+        tmp_path (Path): Value used by `test_load_env_file_rejects_invalid_key_characters_without_leaking_secret`.
+    """
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text("AIOPNSENSE_API_SECRET abc=123TOPSECRET\n", encoding="utf-8")
@@ -230,7 +264,12 @@ def test_get_env_value_prefers_canonical_key_even_when_blank() -> None:
     ],
 )
 def test_parse_bool_accepts_documented_values(raw_value: str, expected: bool) -> None:
-    """Documented boolean spellings parse consistently."""
+    """Documented boolean spellings parse consistently.
+
+    Args:
+        raw_value (str): Value used by `test_parse_bool_accepts_documented_values`.
+        expected (bool): Value used by `test_parse_bool_accepts_documented_values`.
+    """
     common = load_common_module()
 
     assert common.parse_bool(raw_value, "AIOPNSENSE_VERIFY_SSL") is expected
@@ -245,7 +284,11 @@ def test_parse_bool_rejects_unknown_value() -> None:
 
 
 def test_load_config_requires_url_key_and_secret(tmp_path: Path) -> None:
-    """All connection fields are required."""
+    """All connection fields are required.
+
+    Args:
+        tmp_path (Path): Value used by `test_load_config_requires_url_key_and_secret`.
+    """
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text("AIOPNSENSE_URL=https://firewall.example.test\n", encoding="utf-8")
@@ -255,7 +298,11 @@ def test_load_config_requires_url_key_and_secret(tmp_path: Path) -> None:
 
 
 def test_load_config_builds_config_from_fallback_names(tmp_path: Path) -> None:
-    """Fallback OPNSENSE variable names populate the live config."""
+    """Fallback OPNSENSE variable names populate the live config.
+
+    Args:
+        tmp_path (Path): Value used by `test_load_config_builds_config_from_fallback_names`.
+    """
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text(
@@ -280,7 +327,11 @@ def test_load_config_builds_config_from_fallback_names(tmp_path: Path) -> None:
 
 
 def test_load_config_defaults_verify_ssl_true(tmp_path: Path) -> None:
-    """Missing VERIFY_SSL defaults to True."""
+    """Missing VERIFY_SSL defaults to True.
+
+    Args:
+        tmp_path (Path): Value used by `test_load_config_defaults_verify_ssl_true`.
+    """
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text(
@@ -301,7 +352,11 @@ def test_load_config_defaults_verify_ssl_true(tmp_path: Path) -> None:
 
 
 def test_load_config_empty_canonical_verify_ssl_is_invalid(tmp_path: Path) -> None:
-    """Empty canonical verify flag must be rejected, not defaulted or treated as fallback."""
+    """Empty canonical verify flag must be rejected, not defaulted or treated as fallback.
+
+    Args:
+        tmp_path (Path): Value used by `test_load_config_empty_canonical_verify_ssl_is_invalid`.
+    """
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text(
@@ -336,7 +391,11 @@ def test_live_config_is_frozen() -> None:
 
 
 def test_create_client_uses_live_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    """create_client passes all required constructor arguments to OPNsenseClient."""
+    """create_client passes all required constructor arguments to OPNsenseClient.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Value used by `test_create_client_uses_live_config`.
+    """
     common = load_common_module()
 
     class FakeOPNsenseClient:
@@ -384,7 +443,12 @@ def test_format_json_sorts_keys_and_indents() -> None:
 def test_write_output_prints_and_writes_file(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Output is mirrored to stdout and an optional file."""
+    """Output is mirrored to stdout and an optional file.
+
+    Args:
+        tmp_path (Path): Value used by `test_write_output_prints_and_writes_file`.
+        capsys (pytest.CaptureFixture[str]): Value used by `test_write_output_prints_and_writes_file`.
+    """
     common = load_common_module()
     output_file = tmp_path / "dump.json"
 

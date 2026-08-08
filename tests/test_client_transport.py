@@ -274,7 +274,11 @@ async def test_transport_errors_map_when_throwing(
     session = MagicMock()
 
     def raise_transport_error(*_args: Any, **_kwargs: Any) -> Any:
-        """Raise the configured transport failure when the request starts."""
+        """Raise the configured transport failure when the request starts.
+
+        Returns:
+            Any: Result returned by `raise_transport_error`.
+        """
         raise transport_error
 
     setattr(session, session_method, raise_transport_error)
@@ -399,10 +403,6 @@ async def test_do_get_from_stream_error_initial_raises(
     def fake_get(*args: Any, **kwargs: Any) -> Any:
         """Fake get.
 
-        Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
-
         Returns:
             Any: Mock value returned to support test behavior.
         """
@@ -440,10 +440,6 @@ async def test_do_get_with_response_format_text_and_post_success_paths(
     def fake_get(*args: Any, **kwargs: Any) -> Any:
         """Fake get.
 
-        Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
-
         Returns:
             Any: Mock value returned to support test behavior.
         """
@@ -458,10 +454,6 @@ async def test_do_get_with_response_format_text_and_post_success_paths(
 
     def fake_post(*args: Any, **kwargs: Any) -> Any:
         """Fake post.
-
-        Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
 
         Returns:
             Any: Mock value returned to support test behavior.
@@ -533,7 +525,12 @@ async def test_stream_json_events_yields_each_valid_data_message(
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],
 ) -> None:
-    """Direct stream iterator should yield every JSON SSE data message."""
+    """Direct stream iterator should yield every JSON SSE data message.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_yields_each_valid_data_message`.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_yields_each_valid_data_message`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         chunks=[
@@ -560,7 +557,11 @@ async def test_stream_json_events_yields_each_valid_data_message(
 async def test_stream_json_events_returns_empty_sequence_for_non_ok_response_when_not_throwing(
     make_client: Callable[..., Any],
 ) -> None:
-    """Non-OK stream responses should yield no events when errors are disabled."""
+    """Non-OK stream responses should yield no events when errors are disabled.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_returns_empty_sequence_for_non_ok_response_when_not_throwing`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: FakeResponse(
         stream_chunks=[b'data: {"time": 1}\n\n'],
@@ -585,7 +586,12 @@ async def test_stream_json_events_skips_non_data_lines_before_valid_data_message
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Comment and event metadata lines should be ignored until a data line arrives."""
+    """Comment and event metadata lines should be ignored until a data line arrives.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_skips_non_data_lines_before_valid_data_message`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_skips_non_data_lines_before_valid_data_message`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -608,7 +614,12 @@ async def test_stream_json_events_skips_comment_only_frame_before_later_data_mes
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Frames without any data lines should be skipped without suppressing later events."""
+    """Frames without any data lines should be skipped without suppressing later events.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_skips_comment_only_frame_before_later_data_message`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_skips_comment_only_frame_before_later_data_message`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -632,7 +643,12 @@ async def test_stream_json_events_sets_connect_and_read_timeouts(
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],
 ) -> None:
-    """Direct stream iterator should not wait forever for silent connections."""
+    """Direct stream iterator should not wait forever for silent connections.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_sets_connect_and_read_timeouts`.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_sets_connect_and_read_timeouts`.
+    """
     captured_timeout: aiohttp.ClientTimeout | None = None
 
     def fake_get(*_args: Any, **kwargs: Any) -> FakeResponse:
@@ -662,7 +678,12 @@ async def test_stream_json_events_allows_read_timeout_override(
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],
 ) -> None:
-    """Stream caller should be able to override the socket read timeout."""
+    """Stream caller should be able to override the socket read timeout.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_allows_read_timeout_override`.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_allows_read_timeout_override`.
+    """
     captured_timeout: aiohttp.ClientTimeout | None = None
 
     def fake_get(*_args: Any, **kwargs: Any) -> FakeResponse:
@@ -693,7 +714,12 @@ async def test_stream_json_events_skips_malformed_json(
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],
 ) -> None:
-    """Malformed data messages should be skipped while the stream continues."""
+    """Malformed data messages should be skipped while the stream continues.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_skips_malformed_json`.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_skips_malformed_json`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         chunks=[
@@ -718,7 +744,12 @@ async def test_stream_json_events_yields_reset_marker_for_malformed_json_when_re
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],
 ) -> None:
-    """Malformed JSON payloads can request an internal reseed marker."""
+    """Malformed JSON payloads can request an internal reseed marker.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_yields_reset_marker_for_malformed_json_when_requested`.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_yields_reset_marker_for_malformed_json_when_requested`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         chunks=[
@@ -746,7 +777,12 @@ async def test_stream_json_events_recovers_after_invalid_utf8_chunk(
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],
 ) -> None:
-    """Invalid UTF-8 chunks should be dropped while later events are still emitted."""
+    """Invalid UTF-8 chunks should be dropped while later events are still emitted.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_recovers_after_invalid_utf8_chunk`.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_recovers_after_invalid_utf8_chunk`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -774,7 +810,12 @@ async def test_stream_json_events_yields_reset_marker_when_requested(
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],
 ) -> None:
-    """Opt-in decode reset signaling should emit a private stream reset marker."""
+    """Opt-in decode reset signaling should emit a private stream reset marker.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_yields_reset_marker_when_requested`.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_yields_reset_marker_when_requested`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -807,7 +848,12 @@ async def test_stream_json_events_reassembles_split_multiline_json_event(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Split and multiline SSE data lines should reassemble into one JSON object."""
+    """Split and multiline SSE data lines should reassemble into one JSON object.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_reassembles_split_multiline_json_event`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_reassembles_split_multiline_json_event`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -832,7 +878,12 @@ async def test_stream_json_events_reassembles_split_multibyte_utf8_event(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Split UTF-8 multibyte sequences across chunks should decode without error."""
+    """Split UTF-8 multibyte sequences across chunks should decode without error.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_reassembles_split_multibyte_utf8_event`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_reassembles_split_multibyte_utf8_event`.
+    """
     event_json = json.dumps(
         {
             "time": 11,
@@ -884,7 +935,12 @@ async def test_stream_json_events_ignores_trailing_incomplete_utf8_chunk(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Trailing incomplete UTF-8 bytes should not raise and should drop only partial event."""
+    """Trailing incomplete UTF-8 bytes should not raise and should drop only partial event.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_ignores_trailing_incomplete_utf8_chunk`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_ignores_trailing_incomplete_utf8_chunk`.
+    """
     incomplete_event_json = json.dumps(
         {"time": 12, "interfaces": {"wan": {"description": "Café"}}},
         ensure_ascii=False,
@@ -916,19 +972,39 @@ async def test_stream_json_events_appends_final_decoder_tail_text_at_eof(
     make_client: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """EOF tail text from the incremental decoder should complete the final JSON event."""
+    """EOF tail text from the incremental decoder should complete the final JSON event.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_appends_final_decoder_tail_text_at_eof`.
+        monkeypatch (pytest.MonkeyPatch): Value used by `test_stream_json_events_appends_final_decoder_tail_text_at_eof`.
+    """
 
     class _FakeIncrementalDecoder:
         """Minimal decoder stub that defers completion until EOF."""
 
         def decode(self, data: bytes, final: bool = False) -> str:
-            """Return the partial frame on chunk decode and the tail on EOF."""
+            """Return the partial frame on chunk decode and the tail on EOF.
+
+            Args:
+                data (bytes): Value used by `decode`.
+                final (bool): Value used by `decode`.
+
+            Returns:
+                str: Result returned by `decode`.
+            """
             if final:
                 return "}\n\n"
             return 'data: {"time": 23'
 
     def fake_getincrementaldecoder(_encoding: str) -> Callable[[], _FakeIncrementalDecoder]:
-        """Return the fake incremental decoder factory used by this test."""
+        """Return the fake incremental decoder factory used by this test.
+
+        Args:
+            _encoding (str): Value used by `fake_getincrementaldecoder`.
+
+        Returns:
+            Callable[[], _FakeIncrementalDecoder]: Result returned by `fake_getincrementaldecoder`.
+        """
         return _FakeIncrementalDecoder
 
     monkeypatch.setattr(
@@ -959,7 +1035,12 @@ async def test_stream_json_events_reassembles_split_crlf_boundary_multiline_json
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Split CRLF frame separators across chunks should still reassemble a valid event."""
+    """Split CRLF frame separators across chunks should still reassemble a valid event.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_reassembles_split_crlf_boundary_multiline_json_event`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_reassembles_split_crlf_boundary_multiline_json_event`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -985,7 +1066,12 @@ async def test_stream_json_events_yields_eof_complete_event(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Stream parser should emit a complete SSE event when only EOF terminates it."""
+    """Stream parser should emit a complete SSE event when only EOF terminates it.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_yields_eof_complete_event`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_yields_eof_complete_event`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         [b'data: {"time": 21, "interfaces": {"wan": {"rx_bytes": 1}}}\n\r']
@@ -1007,7 +1093,13 @@ async def test_stream_json_events_preserves_leading_sse_space_after_data_prefix(
     fake_stream_response_factory: Callable[..., FakeResponse],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Parser should preserve only one leading space after `data:` when present."""
+    """Parser should preserve only one leading space after `data:` when present.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_preserves_leading_sse_space_after_data_prefix`.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_preserves_leading_sse_space_after_data_prefix`.
+        monkeypatch (pytest.MonkeyPatch): Value used by `test_stream_json_events_preserves_leading_sse_space_after_data_prefix`.
+    """
     captured_payloads: list[str] = []
     original_loads = aiopnsense.client_transport.json.loads
 
@@ -1039,7 +1131,12 @@ async def test_stream_json_events_skips_non_mapping_json_events(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Non-mapping JSON SSE events should be skipped and later mapping events yielded."""
+    """Non-mapping JSON SSE events should be skipped and later mapping events yielded.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_skips_non_mapping_json_events`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_skips_non_mapping_json_events`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -1064,7 +1161,11 @@ async def test_stream_json_events_skips_non_mapping_json_events(
 async def test_stream_json_events_close_on_iterator_break(
     make_client: Callable[..., Any],
 ) -> None:
-    """Canceling iteration early should still close the response context."""
+    """Canceling iteration early should still close the response context.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_close_on_iterator_break`.
+    """
 
     class _TrackedResponse(FakeResponse):
         """Fake response that tracks async context manager exit."""
@@ -1115,7 +1216,12 @@ async def test_stream_json_events_raises_when_throw_errors_enabled(
     make_client: Callable[..., Any],
     fake_response_factory: Callable[..., FakeResponse],
 ) -> None:
-    """Direct stream iterator should honor throw_errors for non-OK responses."""
+    """Direct stream iterator should honor throw_errors for non-OK responses.
+
+    Args:
+        make_client (Callable[..., Any]): Value used by `test_stream_json_events_raises_when_throw_errors_enabled`.
+        fake_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_raises_when_throw_errors_enabled`.
+    """
     session = MagicMock()
     session.get = lambda *a, **k: fake_response_factory(
         status=403,

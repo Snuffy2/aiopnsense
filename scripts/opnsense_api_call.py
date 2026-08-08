@@ -77,7 +77,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments for the raw API caller.
 
     Args:
-        args: Optional argument override for testability.
+        args (list[str] | None): Value used by `parse_args`.
 
     Returns:
         Parsed arguments with runtime defaults resolved.
@@ -92,10 +92,11 @@ def normalize_endpoint(endpoint: str) -> str:
     """Return endpoint with leading slash and no surrounding whitespace.
 
     Args:
-        endpoint: Raw endpoint value from CLI.
+        endpoint (str): Value used by `normalize_endpoint`.
 
     Returns:
         Normalized endpoint path.
+
 
     Raises:
         ValueError: If endpoint is blank after stripping.
@@ -112,11 +113,12 @@ def _load_json_object(payload_text: str, source: str) -> dict[str, Any]:
     """Load and validate a JSON object from a raw string.
 
     Args:
-        payload_text: Raw JSON text to parse.
-        source: Human-readable payload source used in validation messages.
+        payload_text (str): Value used by `_load_json_object`.
+        source (str): Value used by `_load_json_object`.
 
     Returns:
         Parsed JSON object.
+
 
     Raises:
         ValueError: If the payload is invalid JSON or does not decode to an object.
@@ -137,11 +139,12 @@ def load_payload(
     """Load POST payload from inline JSON or payload file.
 
     Args:
-        payload: Inline JSON body string.
-        payload_file: Path to inline JSON file.
+        payload (str | None): Value used by `load_payload`.
+        payload_file (Path | None): Value used by `load_payload`.
 
     Returns:
         Parsed JSON object payload, or ``_NO_PAYLOAD`` when absent.
+
 
     Raises:
         ValueError: If both inputs are set, JSON is invalid, or payload is not object.
@@ -169,11 +172,11 @@ async def call_api(
     """Call the configured OPNsense endpoint and return response metadata.
 
     Args:
-        session: Active aiohttp client session.
-        config: Live config with URL and credentials.
-        endpoint: Raw endpoint path.
-        method: HTTP method name (``get`` or ``post``).
-        payload: Optional POST payload dictionary or omitted-payload sentinel.
+        session (aiohttp.ClientSession): Value used by `call_api`.
+        config ('LiveConfig'): Value used by `call_api`.
+        endpoint (str): Value used by `call_api`.
+        method (str): Value used by `call_api`.
+        payload (dict[str, Any] | object): Value used by `call_api`.
 
     Returns:
         Parsed response payload with request metadata.
@@ -216,7 +219,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     """Run the CLI flow and return shell status code.
 
     Args:
-        argv: Optional argument list for testability.
+        argv (list[str] | None): Value used by `async_main`.
 
     Returns:
         Process exit status code.

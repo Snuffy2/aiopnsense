@@ -44,8 +44,12 @@ async def test_uses_legacy_unbound_blocklist_returns_none_without_error_on_missi
 
 
 @pytest.mark.asyncio
-async def test_get_unbound_blocklist_returns_uuid_mapping(make_client) -> None:
-    """The DNSBL search response should be normalized into a UUID-keyed mapping."""
+async def test_get_unbound_blocklist_returns_uuid_mapping(make_client: Any) -> None:
+    """The DNSBL search response should be normalized into a UUID-keyed mapping.
+
+    Args:
+        make_client (Any): Value used by `test_get_unbound_blocklist_returns_uuid_mapping`.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
@@ -78,9 +82,14 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api_response", [{}, {"rows": []}, {"rows": "not-a-list"}, []])
 async def test_get_unbound_blocklist_handles_empty_or_invalid_responses(
-    make_client, api_response
+    make_client: Any, api_response: Any
 ) -> None:
-    """Malformed or empty DNSBL responses should normalize to an empty mapping."""
+    """Malformed or empty DNSBL responses should normalize to an empty mapping.
+
+    Args:
+        make_client (Any): Value used by `test_get_unbound_blocklist_handles_empty_or_invalid_responses`.
+        api_response (Any): Value used by `test_get_unbound_blocklist_handles_empty_or_invalid_responses`.
+    """
     client = make_client()
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
@@ -133,6 +142,7 @@ async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        firmware_version (str): Value used by `test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware`.
 
     Returns:
         None: This test validates legacy DNSBL payload normalization.
@@ -357,9 +367,23 @@ async def test_get_unbound_blocklist_falls_back_to_legacy_endpoint_on_invalid_fi
     ],
 )
 async def test_enable_disable_unbound_blocklist(
-    make_client, method_name, uuid, toggle_result, dnsbl_result, expected
+    make_client: Any,
+    method_name: Any,
+    uuid: Any,
+    toggle_result: Any,
+    dnsbl_result: Any,
+    expected: Any,
 ) -> None:
-    """DNSBL toggles should require a UUID, a successful toggle response, and an OK apply status."""
+    """DNSBL toggles should require a UUID, a successful toggle response, and an OK apply status.
+
+    Args:
+        make_client (Any): Value used by `test_enable_disable_unbound_blocklist`.
+        method_name (Any): Value used by `test_enable_disable_unbound_blocklist`.
+        uuid (Any): Value used by `test_enable_disable_unbound_blocklist`.
+        toggle_result (Any): Value used by `test_enable_disable_unbound_blocklist`.
+        dnsbl_result (Any): Value used by `test_enable_disable_unbound_blocklist`.
+        expected (Any): Value used by `test_enable_disable_unbound_blocklist`.
+    """
     client = make_client()
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
@@ -401,6 +425,7 @@ async def test_enable_disable_unbound_blocklist_legacy_for_older_firmware(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         method_name (str): Client method under test.
         expected_enabled (str): Expected enabled value in the saved payload.
+        legacy_dnsbl_payload (dict[str, Any]): Value used by `test_enable_disable_unbound_blocklist_legacy_for_older_firmware`.
 
     Returns:
         None: This test validates the legacy DNSBL enable and disable workflow.
@@ -509,7 +534,12 @@ async def test_enable_unbound_blocklist_legacy_returns_false_when_save_raises_op
     make_client: ClientType,
     legacy_dnsbl_payload: dict[str, Any],
 ) -> None:
-    """Verify legacy DNSBL saves fail closed on mapped OPNsense errors."""
+    """Verify legacy DNSBL saves fail closed on mapped OPNsense errors.
+
+    Args:
+        make_client (ClientType): Value used by `test_enable_unbound_blocklist_legacy_returns_false_when_save_raises_opnsense_error`.
+        legacy_dnsbl_payload (dict[str, Any]): Value used by `test_enable_unbound_blocklist_legacy_returns_false_when_save_raises_opnsense_error`.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
@@ -592,6 +622,7 @@ async def test_enable_unbound_blocklist_legacy_does_not_apply_or_restart_after_f
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         save_response (dict[str, Any] | list[Any]): Mock response returned by the legacy save request.
+        legacy_dnsbl_payload (dict[str, Any]): Value used by `test_enable_unbound_blocklist_legacy_does_not_apply_or_restart_after_failed_save`.
 
     Returns:
         None: This test validates that failed legacy saves do not trigger apply or restart calls.
@@ -642,6 +673,7 @@ async def test_enable_unbound_blocklist_legacy_returns_false_for_malformed_apply
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         dnsbl_response (dict[str, Any] | list[Any]): Mock response returned by the DNSBL apply request.
+        legacy_dnsbl_payload (dict[str, Any]): Value used by `test_enable_unbound_blocklist_legacy_returns_false_for_malformed_apply_status`.
 
     Returns:
         None: This test validates malformed apply-response handling for legacy DNSBL writes.
@@ -694,6 +726,7 @@ async def test_enable_unbound_blocklist_uses_legacy_fallback_when_firmware_is_in
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         firmware_version (str | None): Firmware version returned by the mocked client.
+        legacy_dnsbl_payload (dict[str, Any]): Value used by `test_enable_unbound_blocklist_uses_legacy_fallback_when_firmware_is_invalid`.
 
     Returns:
         None: This test validates the invalid-firmware legacy fallback.
@@ -779,6 +812,7 @@ async def test_disable_unbound_blocklist_uses_expected_invalid_firmware_fallback
         expected_enabled (str | None): Expected legacy ``enabled`` value when the legacy path is used.
         expected_toggle_calls (int): Expected number of calls to the extended toggle endpoint.
         expected_result (bool): Expected method result for the supplied fallback case.
+        legacy_dnsbl_payload (dict[str, Any]): Value used by `test_disable_unbound_blocklist_uses_expected_invalid_firmware_fallback`.
 
     Returns:
         None: This test validates invalid-firmware fallback selection for disable.
@@ -848,6 +882,7 @@ async def test_toggle_unbound_blocklist_handles_apply_exception(
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        apply_error (Exception): Value used by `test_toggle_unbound_blocklist_handles_apply_exception`.
 
     Returns:
         None: This test validates exception handling for DNSBL apply requests.

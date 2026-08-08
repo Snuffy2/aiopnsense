@@ -41,8 +41,7 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
         """Execute wrapped coroutine with shared timeout/exception logging.
 
         Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+            self (Any): Value used by `inner`.
 
         Returns:
             Any: Value produced by the wrapped callable, or ``None`` when an
@@ -395,8 +394,8 @@ def api_value_matches(value: object, expected: str) -> bool:
     """Compare OPNsense API values across string, numeric, and boolean forms.
 
     Args:
-        value: Raw value returned by OPNsense APIs.
-        expected: Normalized expected value.
+        value (object): Value used by `api_value_matches`.
+        expected (str): Value used by `api_value_matches`.
 
     Returns:
         ``True`` when the normalized API value matches ``expected``.

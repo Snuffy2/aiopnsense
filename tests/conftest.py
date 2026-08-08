@@ -244,7 +244,12 @@ def make_mock_session_client(
 def _patch_asyncio_create_task(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
-    """Prevent background worker tasks from running in tests."""
+    """Prevent background worker tasks from running in tests.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Value used by `_patch_asyncio_create_task`.
+        request (pytest.FixtureRequest): Value used by `_patch_asyncio_create_task`.
+    """
 
     if request.node.fspath and request.node.fspath.basename in {
         "test_client_base.py",
@@ -289,8 +294,6 @@ def _patch_asyncio_create_task(
         Args:
             coro (Coroutine[Any, Any, Any]): Coroutine wrapped by the logging
                 decorator.
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
 
         Returns:
             asyncio.Task[Any] | _DummyTask: Real task for non-aiopnsense
@@ -309,7 +312,11 @@ def _patch_asyncio_create_task(
 
 @pytest.fixture
 def fake_response_factory() -> Callable[..., FakeResponse]:
-    """Return a factory that constructs reusable fake HTTP responses."""
+    """Return a factory that constructs reusable fake HTTP responses.
+
+    Returns:
+        Callable[..., FakeResponse]: Result returned by `fake_response_factory`.
+    """
 
     def _make(
         *,
@@ -352,7 +359,14 @@ def fake_response_factory() -> Callable[..., FakeResponse]:
 def fake_stream_response_factory(
     fake_response_factory: Callable[..., FakeResponse],
 ) -> Callable[..., FakeResponse]:
-    """Return a factory that constructs fake streaming responses."""
+    """Return a factory that constructs fake streaming responses.
+
+    Args:
+        fake_response_factory (Callable[..., FakeResponse]): Value used by `fake_stream_response_factory`.
+
+    Returns:
+        Callable[..., FakeResponse]: Result returned by `fake_stream_response_factory`.
+    """
 
     def _make(
         chunks: list[bytes],
@@ -379,7 +393,11 @@ def fake_stream_response_factory(
 
 @pytest.fixture
 async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClient], None]:
-    """Return a factory that constructs an OPNsenseClient for tests."""
+    """Return a factory that constructs an OPNsenseClient for tests.
+
+    Yields:
+        Callable[..., aiopnsense.OPNsenseClient]: Value yielded by `make_client`.
+    """
 
     clients: list[aiopnsense.OPNsenseClient] = []
 
@@ -393,12 +411,10 @@ async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClien
         """Create an OPNsense test client with a fake session by default.
 
         Args:
-            session (aiohttp.ClientSession | None, optional): HTTP client session used for API requests.
+            session (aiohttp.ClientSession | None): HTTP client session used for API requests.
             username (str): Username for API authentication.
             password (str): Password for API authentication.
             url (str): Base URL of the OPNsense instance.
-            **client_kwargs (Any): Additional keyword arguments passed to
-                ``OPNsenseClient``.
 
         Returns:
             aiopnsense.OPNsenseClient: Configured client instance using the

@@ -49,10 +49,6 @@ async def test_is_get_endpoint_available_caches_success(make_client: MakeClientF
     def _get(*args: Any, **kwargs: Any) -> Any:
         """Get.
 
-        Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
-
         Returns:
             Any: Decoded response payload returned by the GET request.
         """
@@ -86,10 +82,6 @@ async def test_is_get_endpoint_available_cache_false_by_ttl_and_force_refresh(
 
     def _get(*args: Any, **kwargs: Any) -> Any:
         """Get.
-
-        Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
 
         Returns:
             Any: Decoded response payload returned by the GET request.
@@ -138,10 +130,6 @@ async def test_is_get_endpoint_available_uses_cached_404_in_throw_mode(
     def _get(*args: object, **kwargs: object) -> FakeResponse:
         """Return a missing-endpoint response.
 
-        Args:
-            *args (object): Positional arguments forwarded to the wrapped callable.
-            **kwargs (object): Keyword arguments forwarded to the wrapped callable.
-
         Returns:
             FakeResponse: Synthetic missing-endpoint response returned by the GET request.
         """
@@ -181,10 +169,6 @@ async def test_is_get_endpoint_available_handles_timeout(make_client: MakeClient
 
     def _get(*args: Any, **kwargs: Any) -> Any:
         """Get.
-
-        Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
 
         Returns:
             Any: Decoded response payload returned by the GET request.
@@ -320,10 +304,6 @@ async def test_is_get_endpoint_available_does_not_cache_non_404_http_errors(
     def _get(*args: Any, **kwargs: Any) -> Any:
         """Get.
 
-        Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
-
         Returns:
             Any: Decoded response payload returned by the GET request.
         """
@@ -362,10 +342,6 @@ async def test_is_get_endpoint_available_caches_403_permission_error(
 
     def _get(*args: object, **kwargs: object) -> FakeResponse:
         """Return a permission denial followed by a successful endpoint response.
-
-        Args:
-            *args (object): Positional arguments forwarded to the wrapped callable.
-            **kwargs (object): Keyword arguments forwarded to the wrapped callable.
 
         Returns:
             FakeResponse: Synthetic response returned by the GET request.
@@ -421,10 +397,6 @@ async def test_validate_reprobes_cached_403_in_throw_mode(
     def _get(*args: object, **kwargs: object) -> FakeResponse:
         """Return a permission-denied endpoint response.
 
-        Args:
-            *args (object): Positional arguments forwarded to the wrapped callable.
-            **kwargs (object): Keyword arguments forwarded to the wrapped callable.
-
         Returns:
             FakeResponse: Synthetic permission-denied response returned by the GET request.
         """
@@ -476,10 +448,6 @@ async def test_is_get_endpoint_available_raises_non_404_http_errors_when_throw_e
     def _get(*args: Any, **kwargs: Any) -> Any:
         """Get.
 
-        Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
-
         Returns:
             Any: Decoded response payload returned by the GET request.
         """
@@ -523,10 +491,6 @@ async def test_is_endpoint_available_is_deprecated_get_alias(
     def _get(*args: object, **kwargs: object) -> FakeResponse:
         """Return a fake GET response.
 
-        Args:
-            *args (object): Positional arguments forwarded to the stub.
-            **kwargs (object): Keyword arguments forwarded to the stub.
-
         Returns:
             FakeResponse: Synthetic HTTP response used by the test.
         """
@@ -565,10 +529,6 @@ async def test_is_post_endpoint_available_caches_success(make_client: MakeClient
     def _post(*args: object, **kwargs: object) -> FakeResponse:
         """Return a fake POST response.
 
-        Args:
-            *args (object): Positional arguments forwarded to the stub.
-            **kwargs (object): Keyword arguments forwarded to the stub.
-
         Returns:
             FakeResponse: Synthetic HTTP response used by the test.
         """
@@ -604,10 +564,6 @@ async def test_is_post_endpoint_available_caches_404_missing_plugin(
 
     def _post(*args: object, **kwargs: object) -> FakeResponse:
         """Return a fake POST response.
-
-        Args:
-            *args (object): Positional arguments forwarded to the stub.
-            **kwargs (object): Keyword arguments forwarded to the stub.
 
         Returns:
             FakeResponse: Synthetic HTTP response used by the test.
@@ -707,6 +663,7 @@ async def test_is_post_endpoint_available_returns_none_for_unsafe_path_without_h
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        path (str): Value used by `test_is_post_endpoint_available_returns_none_for_unsafe_path_without_http_request`.
 
     Returns:
         None: This test validates unknown availability behavior for unsafe POST paths.
@@ -716,10 +673,6 @@ async def test_is_post_endpoint_available_returns_none_for_unsafe_path_without_h
 
     def _post(*_args: object, **_kwargs: object) -> FakeResponse:
         """Return a fake POST response.
-
-        Args:
-            *_args (object): Positional arguments forwarded to the stub.
-            **_kwargs (object): Keyword arguments forwarded to the stub.
 
         Returns:
             FakeResponse: Synthetic HTTP response used by the test.
@@ -800,10 +753,6 @@ async def test_is_post_endpoint_available_allows_read_only_post_path(
     def _post(*args: object, **kwargs: object) -> FakeResponse:
         """Return a fake POST response.
 
-        Args:
-            *args (object): Positional arguments forwarded to the stub.
-            **kwargs (object): Keyword arguments forwarded to the stub.
-
         Returns:
             FakeResponse: Synthetic HTTP response used by the test.
         """
@@ -852,10 +801,6 @@ async def test_validate_maps_endpoint_probe_http_errors_to_public_exceptions(
 
     def _get(*args: Any, **kwargs: Any) -> Any:
         """Get.
-
-        Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
 
         Returns:
             Any: Decoded response payload returned by the GET request.
@@ -982,7 +927,11 @@ async def test_set_use_snake_case_initial_raises_unknown_firmware(
 async def test_set_use_snake_case_initial_raises_unknown_firmware_when_version_missing(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify missing firmware version still raises unknown-firmware in legacy init mode."""
+    """Verify missing firmware version still raises unknown-firmware in legacy init mode.
+
+    Args:
+        make_client (MakeClientFactory): Value used by `test_set_use_snake_case_initial_raises_unknown_firmware_when_version_missing`.
+    """
 
     client = make_client()
     try:

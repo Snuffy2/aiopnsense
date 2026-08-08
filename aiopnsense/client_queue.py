@@ -26,7 +26,17 @@ class ClientQueueMixin:
             *,
             response_format: Literal["json", "text"] = "json",
         ) -> MutableMapping[str, Any] | list | str | None:
-            """Execute a queued GET request."""
+            """Execute a queued GET request.
+
+            Args:
+                path (str): Value used by `_do_get`.
+                caller (str): Value used by `_do_get`.
+                timeout_seconds (float | None): Value used by `_do_get`.
+                response_format (Literal['json', 'text']): Value used by `_do_get`.
+
+            Returns:
+                MutableMapping[str, Any] | list | str | None: Result returned by `_do_get`.
+            """
             ...
 
         async def _do_get_from_stream(
@@ -34,7 +44,15 @@ class ClientQueueMixin:
             path: str,
             caller: str = "Unknown",
         ) -> dict[str, Any]:
-            """Execute a queued streaming GET request."""
+            """Execute a queued streaming GET request.
+
+            Args:
+                path (str): Value used by `_do_get_from_stream`.
+                caller (str): Value used by `_do_get_from_stream`.
+
+            Returns:
+                dict[str, Any]: Result returned by `_do_get_from_stream`.
+            """
             ...
 
         async def _do_post(
@@ -43,7 +61,16 @@ class ClientQueueMixin:
             payload: MutableMapping[str, Any] | None = None,
             caller: str = "Unknown",
         ) -> MutableMapping[str, Any] | list | None:
-            """Execute a queued POST request."""
+            """Execute a queued POST request.
+
+            Args:
+                path (str): Value used by `_do_post`.
+                payload (MutableMapping[str, Any] | None): Value used by `_do_post`.
+                caller (str): Value used by `_do_post`.
+
+            Returns:
+                MutableMapping[str, Any] | list | None: Result returned by `_do_post`.
+            """
             ...
 
     async def _ensure_workers_started(self) -> None:

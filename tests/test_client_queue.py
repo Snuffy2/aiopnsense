@@ -248,7 +248,7 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
 
             Args:
                 path (Any): API endpoint path to request.
-                caller (Any): Caller name used for diagnostics and logging.
+                caller (str): Caller name used for diagnostics and logging.
 
             Returns:
                 Any: Mock value returned to support test behavior.
@@ -345,7 +345,7 @@ async def test_get_uses_unknown_when_inspect_stack_raises(
 
             Args:
                 path (Any): API endpoint path to request.
-                caller (Any): Caller name used for diagnostics and logging.
+                caller (str): Caller name used for diagnostics and logging.
 
             Returns:
                 Any: Mock value returned to support test behavior.
@@ -393,8 +393,8 @@ async def test_post_enqueues_and_processes(returned: Any, make_client: MakeClien
 
             Args:
                 path (Any): API endpoint path to request.
-                payload (Any, optional): Request payload sent to the API endpoint.
-                caller (Any): Caller name used for diagnostics and logging.
+                payload (Any): Request payload sent to the API endpoint.
+                caller (str): Caller name used for diagnostics and logging.
 
             Returns:
                 Any: Mock value returned to support test behavior.
@@ -461,8 +461,8 @@ async def test_post_uses_unknown_when_inspect_stack_raises(
 
             Args:
                 path (Any): API endpoint path to request.
-                payload (Any, optional): Request payload sent to the API endpoint.
-                caller (Any): Caller name used for diagnostics and logging.
+                payload (Any): Request payload sent to the API endpoint.
+                caller (str): Caller name used for diagnostics and logging.
 
             Returns:
                 Any: Mock value returned to support test behavior.
@@ -644,7 +644,12 @@ async def test_stream_interface_traffic_does_not_enqueue_request(
     make_client: MakeClientFactory,
     fake_stream_response_factory: FakeStreamResponseFactory,
 ) -> None:
-    """Live traffic stream should bypass the queued request worker."""
+    """Live traffic stream should bypass the queued request worker.
+
+    Args:
+        make_client (MakeClientFactory): Value used by `test_stream_interface_traffic_does_not_enqueue_request`.
+        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_interface_traffic_does_not_enqueue_request`.
+    """
 
     client, session = make_mock_session_client(make_client)
     client._is_get_endpoint_available = AsyncMock(return_value=True)
