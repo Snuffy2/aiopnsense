@@ -11,13 +11,21 @@ from aiopnsense.exceptions import _map_opnsense_exception, _opnsense_http_error
 
 
 def test_voucher_server_error() -> None:
-    """Raise OPNsenseVoucherServerError to ensure the exception class exists."""
+    """Raise OPNsenseVoucherServerError to ensure the exception class exists.
+
+    Raises:
+        aiopnsense_module.OPNsenseVoucherServerError: Raised to verify the public exception exists.
+    """
     with pytest.raises(aiopnsense_module.OPNsenseVoucherServerError):
         raise aiopnsense_module.OPNsenseVoucherServerError
 
 
 def test_missing_device_unique_id_error() -> None:
-    """Raise OPNsenseMissingDeviceUniqueID to ensure the exception class exists."""
+    """Raise OPNsenseMissingDeviceUniqueID to ensure the exception class exists.
+
+    Raises:
+        aiopnsense_module.OPNsenseMissingDeviceUniqueID: Raised to verify the public exception exists.
+    """
     with pytest.raises(aiopnsense_module.OPNsenseMissingDeviceUniqueID):
         raise aiopnsense_module.OPNsenseMissingDeviceUniqueID
 

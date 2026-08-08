@@ -23,7 +23,6 @@ def _import_object(dotted_path: str) -> Any:
 
     Raises:
         ImportError: Raised when the module path is invalid.
-        AttributeError: Raised when the target attribute does not exist.
     """
     module_name, _, attr_name = dotted_path.rpartition(".")
     if not module_name or not attr_name:
@@ -69,6 +68,9 @@ class OPNsenseClientAPIDirective(Directive):
 
         Returns:
             list[nodes.Node]: Parsed docutils nodes for the generated method docs.
+
+        Raises:
+            self.error: Raised when the directive target is invalid.
         """
         mixin_path = self.arguments[0]
         client_path = self.options.get("client", "aiopnsense.OPNsenseClient")

@@ -31,7 +31,7 @@ def _append_deprecation(obj: object) -> list[str]:
         obj (object): Value used by `_append_deprecation`.
 
     Returns:
-        The docstring lines mutated by the hook.
+        list[str]: The docstring lines mutated by the hook.
     """
     namespace = _load_conf_namespace()
     lines = EXISTING_DOCS.copy()
@@ -69,7 +69,7 @@ def _deprecated_property() -> object:
             """Return the old value.
 
             Returns:
-                The old value.
+                str: The old value.
             """
             return "old"
 

@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser for the raw API caller.
 
     Returns:
-        A configured ``ArgumentParser`` for the script CLI.
+        argparse.ArgumentParser: A configured ``ArgumentParser`` for the script CLI.
     """
     parser = argparse.ArgumentParser(description="Call a raw OPNsense API endpoint.")
     parser.add_argument(
@@ -80,7 +80,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         args (list[str] | None): Value used by `parse_args`.
 
     Returns:
-        Parsed arguments with runtime defaults resolved.
+        argparse.Namespace: Parsed arguments with runtime defaults resolved.
     """
     parser = build_parser()
     parsed_args = parser.parse_args(args=args)
@@ -95,7 +95,7 @@ def normalize_endpoint(endpoint: str) -> str:
         endpoint (str): Value used by `normalize_endpoint`.
 
     Returns:
-        Normalized endpoint path.
+        str: Normalized endpoint path.
 
 
     Raises:
@@ -117,7 +117,7 @@ def _load_json_object(payload_text: str, source: str) -> dict[str, Any]:
         source (str): Value used by `_load_json_object`.
 
     Returns:
-        Parsed JSON object.
+        dict[str, Any]: Parsed JSON object.
 
 
     Raises:
@@ -143,7 +143,7 @@ def load_payload(
         payload_file (Path | None): Value used by `load_payload`.
 
     Returns:
-        Parsed JSON object payload, or ``_NO_PAYLOAD`` when absent.
+        dict[str, Any] | object: Parsed JSON object payload, or ``_NO_PAYLOAD`` when absent.
 
 
     Raises:
@@ -179,7 +179,7 @@ async def call_api(
         payload (dict[str, Any] | object): Value used by `call_api`.
 
     Returns:
-        Parsed response payload with request metadata.
+        dict[str, Any]: Parsed response payload with request metadata.
     """
     normalized_endpoint = normalize_endpoint(endpoint)
     url = f"{config.url.rstrip('/')}{normalized_endpoint}"
@@ -222,7 +222,7 @@ async def async_main(argv: list[str] | None = None) -> int:
         argv (list[str] | None): Value used by `async_main`.
 
     Returns:
-        Process exit status code.
+        int: Process exit status code.
     """
     parser = build_parser()
     args = parse_args(argv)
@@ -245,7 +245,7 @@ def main() -> int:
     """Run CLI entrypoint and map config errors into CLI exits.
 
     Returns:
-        Process exit status code.
+        int: Process exit status code.
 
     Raises:
         SystemExit: Raised when configuration, HTTP, timeout, or OS errors occur.

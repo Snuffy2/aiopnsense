@@ -111,7 +111,7 @@ def setup(app: Sphinx) -> dict[str, bool]:
             hook.
 
     Returns:
-        Sphinx extension metadata.
+        dict[str, bool]: Sphinx extension metadata.
     """
     app.connect("autodoc-process-docstring", append_pep702_deprecation)
     return {"parallel_read_safe": True, "parallel_write_safe": True}

@@ -330,6 +330,9 @@ async def test_get_uses_unknown_when_inspect_stack_raises(
 
                 Returns:
                     Any: Value produced by this helper method.
+
+                Raises:
+                    IndexError: Always raised to simulate unavailable stack details.
                 """
                 raise IndexError("no stack")
 
@@ -446,6 +449,9 @@ async def test_post_uses_unknown_when_inspect_stack_raises(
 
                 Returns:
                     Any: Value produced by this helper method.
+
+                Raises:
+                    IndexError: Always raised to simulate unavailable stack details.
                 """
                 raise IndexError("no stack")
 

@@ -168,6 +168,22 @@ class TrafficMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Normalized diagnostics traffic sample. Returns an
                 empty traffic sample when endpoint probing or response parsing
                 fails.
+
+        Raises:
+            AttributeError: Caught from endpoint probing or payload normalization
+                and mapped when error propagation is enabled.
+            OPNsenseError: Re-raised from an OPNsense client operation when error
+                propagation is enabled.
+            RuntimeError: Caught from endpoint probing or payload normalization
+                and mapped when error propagation is enabled.
+            TimeoutError: Caught from endpoint probing or payload normalization
+                and mapped when error propagation is enabled.
+            TypeError: Caught from endpoint probing or payload normalization and
+                mapped when error propagation is enabled.
+            ValueError: Caught from endpoint probing or payload normalization and
+                mapped when error propagation is enabled.
+            _map_opnsense_exception: Maps caught non-OPNsense errors to a public
+                OPNsense exception when error propagation is enabled.
         """
         empty_sample: dict[str, Any] = {"time": None, "interfaces": {}}
 
@@ -212,6 +228,22 @@ class TrafficMixin(AiopnsenseClientProtocol):
                 Later samples use elapsed time between strictly increasing server
                 timestamps; after a timing reset, the next valid sample uses the
                 selected stream interval.
+
+        Raises:
+            AttributeError: Caught while probing the stream endpoint and mapped
+                when error propagation is enabled.
+            OPNsenseError: Re-raised from an OPNsense client operation when error
+                propagation is enabled.
+            RuntimeError: Caught while probing the stream endpoint and mapped
+                when error propagation is enabled.
+            TimeoutError: Caught while probing the stream endpoint and mapped
+                when error propagation is enabled.
+            TypeError: Caught while probing the stream endpoint and mapped when
+                error propagation is enabled.
+            ValueError: Caught while probing the stream endpoint and mapped when
+                error propagation is enabled.
+            _map_opnsense_exception: Maps caught non-OPNsense errors to a public
+                OPNsense exception when error propagation is enabled.
         """
         interval = max(poll_interval, 1)
         endpoint = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/{interval}"

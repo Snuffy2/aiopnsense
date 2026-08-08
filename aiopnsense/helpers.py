@@ -50,6 +50,20 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
         Returns:
             Any: Value produced by the wrapped callable, or ``None`` when an
                 error is suppressed.
+
+        Raises:
+            asyncio.CancelledError: Re-raised when the wrapped coroutine is
+                cancelled.
+            OPNsenseTimeoutError: Re-raised when ``_throw_errors`` is true
+                and the wrapped coroutine raises this OPNsense error.
+            TimeoutError: Caught and mapped to an OPNsense error when
+                ``_throw_errors`` is true.
+            aiohttp.ServerTimeoutError: Caught and mapped to an OPNsense error
+                when ``_throw_errors`` is true.
+            Exception: Re-raised or mapped to an OPNsense error when
+                ``_throw_errors`` is true.
+            _map_opnsense_exception: Maps caught errors to an OPNsense error
+                when ``_throw_errors`` is true.
         """
         try:
             return await func(self, *args, **kwargs)
@@ -403,7 +417,7 @@ def api_value_matches(value: object, expected: str) -> bool:
         expected (str): Expected normalized string value.
 
     Returns:
-        ``True`` when the normalized API value has the same string representation
+        bool: ``True`` when the normalized API value has the same string representation
         as ``expected``.
     """
     if isinstance(value, bool):

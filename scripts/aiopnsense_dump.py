@@ -77,7 +77,7 @@ def parse_endpoint_name(endpoint_name: str) -> str:
         endpoint_name (str): Value used by `parse_endpoint_name`.
 
     Returns:
-        The validated endpoint name.
+        str: The validated endpoint name.
 
 
     Raises:
@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser for the live endpoint dumper.
 
     Returns:
-        A configured ``ArgumentParser`` for the script CLI.
+        argparse.ArgumentParser: A configured ``ArgumentParser`` for the script CLI.
     """
     parser = argparse.ArgumentParser(description="Dump live OPNsense endpoint JSON payloads.")
     parser.add_argument(
@@ -136,7 +136,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         args (list[str] | None): Value used by `parse_args`.
 
     Returns:
-        Parsed arguments.
+        argparse.Namespace: Parsed arguments.
     """
     parser = build_parser()
     parsed_args = parser.parse_args(args=args)
@@ -148,7 +148,7 @@ def list_endpoints() -> list[dict[str, Any]]:
     """Return sorted endpoint metadata entries.
 
     Returns:
-        Endpoint metadata dictionaries sorted by endpoint name.
+        list[dict[str, Any]]: Endpoint metadata dictionaries sorted by endpoint name.
     """
     return [
         {"endpoint": endpoint_name, "method": spec.method_name, "warning": spec.warning}
@@ -163,7 +163,7 @@ def choose_endpoint_from_menu(endpoint_names: list[str]) -> str:
         endpoint_names (list[str]): Value used by `choose_endpoint_from_menu`.
 
     Returns:
-        Endpoint name selected by the user.
+        str: Endpoint name selected by the user.
 
 
     Raises:
@@ -192,7 +192,19 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
         stream_seconds (float): Value used by `run_endpoint`.
 
     Returns:
-        A payload dictionary with endpoint metadata and returned data.
+        dict[str, Any]: A payload dictionary with endpoint metadata and returned data.
+
+    Raises:
+        OPNsenseError: Raised when the endpoint operation or stream cleanup
+            fails with an OPNsense error.
+        aiohttp.ClientError: Raised when the endpoint operation or stream
+            cleanup fails with an HTTP client error.
+        TimeoutError: Raised when the endpoint operation or stream cleanup
+            times out.
+        RuntimeError: Raised when the endpoint operation or stream cleanup
+            encounters a runtime error.
+        OSError: Raised when the endpoint operation or stream cleanup
+            encounters an operating system error.
     """
     spec = ENDPOINTS[endpoint_name]
     method_name = spec.method_name
@@ -268,7 +280,11 @@ async def async_main(argv: list[str] | None = None) -> int:
         argv (list[str] | None): Value used by `async_main`.
 
     Returns:
-        Exit status code.
+        int: Exit status code.
+
+    Raises:
+        BaseException: Re-raised when the command body fails, or raised when
+            closing the OPNsense client fails without a prior body failure.
     """
     args = parse_args(argv)
 
@@ -305,7 +321,11 @@ def main() -> int:
     """Run the async entrypoint and map runtime failures to ``SystemExit``.
 
     Returns:
-        Process exit code.
+        int: Process exit code.
+
+    Raises:
+        SystemExit: Raised when a handled runtime failure prevents the command
+            from completing.
     """
     try:
         return asyncio.run(async_main())

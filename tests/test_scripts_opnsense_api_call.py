@@ -81,6 +81,9 @@ class FakeResponse:
 
         Returns:
             Any: Result returned by `json`.
+
+        Raises:
+            self._json_error: Raised when the fake response is configured with a JSON error.
         """
         if self._json_error is not None:
             raise self._json_error

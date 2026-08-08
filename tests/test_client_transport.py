@@ -282,6 +282,9 @@ async def test_transport_errors_map_when_throwing(
 
         Returns:
             Any: Result returned by `raise_transport_error`.
+
+        Raises:
+            transport_error: The configured transport failure.
         """
         raise transport_error
 

@@ -192,6 +192,9 @@ def test_firmware_is_newer_returns_none_when_version_comparison_raises(
 
             Args:
                 _version (str): Version value passed by the helper.
+
+            Raises:
+                ValueError: Always raised to simulate a comparison failure.
             """
             raise ValueError("comparison failed")
 
@@ -288,7 +291,11 @@ async def test_log_errors_decorator_re_raise_and_suppress() -> None:
 
         @aiopnsense_helpers._log_errors
         async def boom(self) -> None:
-            """Raise RuntimeError for testing error handling."""
+            """Raise RuntimeError for testing error handling.
+
+            Raises:
+                RuntimeError: Always raised to exercise error handling.
+            """
             raise RuntimeError("boom")
 
     # When error throwing is disabled, errors are logged and suppressed.
@@ -348,6 +355,9 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
 
             Returns:
                 NoReturn: This helper always raises ``TimeoutError``.
+
+            Raises:
+                TimeoutError: Always raised to test timeout handling.
             """
             raise TimeoutError("boom")
 
@@ -379,7 +389,11 @@ async def test_log_errors_re_raises_existing_opnsense_timeout_instance() -> None
 
         @aiopnsense_helpers._log_errors
         async def boom(self) -> None:
-            """Raise the pre-existing timeout error instance."""
+            """Raise the pre-existing timeout error instance.
+
+            Raises:
+                timeout_error: Always raised to preserve the original instance.
+            """
             raise timeout_error
 
     with pytest.raises(OPNsenseTimeoutError) as exc_info:
@@ -410,6 +424,9 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
 
             Returns:
                 Any: Value produced by the wrapped callable.
+
+            Raises:
+                aiohttp.ServerTimeoutError: Always raised to test server-timeout handling.
             """
             raise aiohttp.ServerTimeoutError("srv")
 
@@ -470,7 +487,11 @@ async def test_log_errors_redacts_url_userinfo(raw_url: str, forbidden: tuple[st
 
         @aiopnsense_helpers._log_errors
         async def boom(self) -> None:
-            """Raise an invalid URL with credential leaks."""
+            """Raise an invalid URL with credential leaks.
+
+            Raises:
+                aiohttp.InvalidURL: Always raised to test credential redaction.
+            """
             raise aiohttp.InvalidURL(raw_url)
 
     client = Dummy()
@@ -501,7 +522,11 @@ async def test_log_errors_redacts_client_response_error_userinfo(
 
         @aiopnsense_helpers._log_errors
         async def boom(self) -> None:
-            """Raise ClientResponseError with embedded user credentials."""
+            """Raise ClientResponseError with embedded user credentials.
+
+            Raises:
+                aiohttp.ClientResponseError: Always raised to test credential redaction.
+            """
             request_info = MagicMock()
             request_info.real_url = "https://alice:secret@api.example/opn"
             raise aiohttp.ClientResponseError(

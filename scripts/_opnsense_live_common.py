@@ -72,7 +72,7 @@ def resolve_env_file_argument(env_file: Path) -> Path:
         env_file (Path): Value used by `resolve_env_file_argument`.
 
     Returns:
-        Absolute script-local default for the documented default, otherwise the
+        Path: Absolute script-local default for the documented default, otherwise the
         user-provided path unchanged.
     """
     if env_file == DOCUMENTED_DEFAULT_ENV_FILE:
@@ -87,7 +87,7 @@ def _strip_inline_comment(value: str) -> str:
         value (str): Value used by `_strip_inline_comment`.
 
     Returns:
-        Value text with an unquoted ``#`` comment removed.
+        str: Value text with an unquoted ``#`` comment removed.
     """
     quote: str | None = None
     for index, char in enumerate(value):
@@ -108,7 +108,7 @@ def _unquote(value: str) -> str:
         value (str): Value used by `_unquote`.
 
     Returns:
-        Unquoted value when quotes match, otherwise the original value.
+        str: Unquoted value when quotes match, otherwise the original value.
     """
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
@@ -122,7 +122,7 @@ def load_env_file(path: Path = DEFAULT_ENV_FILE) -> dict[str, str]:
         path (Path): Value used by `load_env_file`.
 
     Returns:
-        Mapping of env variable names to values.
+        dict[str, str]: Mapping of env variable names to values.
 
 
     Raises:
@@ -163,7 +163,7 @@ def get_env_value(values: Mapping[str, str], suffix: str, *, required: bool = Tr
         required (bool): Value used by `get_env_value`.
 
     Returns:
-        Configured value or ``None`` when missing and not required.
+        str | None: Configured value or ``None`` when missing and not required.
 
 
     Raises:
@@ -194,7 +194,7 @@ def parse_bool(value: str, name: str) -> bool:
         name (str): Value used by `parse_bool`.
 
     Returns:
-        Parsed boolean.
+        bool: Parsed boolean.
 
 
     Raises:
@@ -215,7 +215,7 @@ def load_live_config(path: Path = DEFAULT_ENV_FILE) -> LiveConfig:
         path (Path): Value used by `load_live_config`.
 
     Returns:
-        LiveConfig with URL, credentials, and TLS verification setting.
+        LiveConfig: Configuration with URL, credentials, and TLS verification setting.
     """
     values = load_env_file(path)
     verify_ssl_raw = get_env_value(values, "VERIFY_SSL", required=False)
@@ -236,7 +236,7 @@ def format_json(payload: Any) -> str:
         payload (Any): Value used by `format_json`.
 
     Returns:
-        Pretty JSON string ending with a newline.
+        str: Pretty JSON string ending with a newline.
     """
     return json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
 
@@ -274,7 +274,7 @@ def create_client(config: LiveConfig, session: aiohttp.ClientSession) -> "OPNsen
         session (aiohttp.ClientSession): Value used by `create_client`.
 
     Returns:
-        Configured OPNsenseClient.
+        OPNsenseClient: Configured OPNsense client.
     """
     client_class = _get_client_class()
     return client_class(

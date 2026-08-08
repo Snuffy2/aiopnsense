@@ -212,8 +212,11 @@ class ClientEndpointMixin:
                 When no exception is raised, this method always returns a ``bool``.
 
         Raises:
-            OPNsenseError: Raised when an HTTP response or transport error occurs and
-                ``self._throw_errors`` is ``True``.
+            _opnsense_http_error: Raised as the mapped public OPNsense error for a
+                non-successful HTTP response when ``self._throw_errors`` is ``True``.
+            _map_opnsense_exception: Raised as the mapped public OPNsense error for
+                an aiohttp client error or timeout when ``self._throw_errors`` is
+                ``True``.
 
         Side Effects:
             Increments the REST query counter for uncached probes and updates

@@ -188,6 +188,9 @@ async def test_is_get_endpoint_available_handles_timeout(make_client: MakeClient
 
         Returns:
             Any: Decoded response payload returned by the GET request.
+
+        Raises:
+            TimeoutError: Always raised to simulate a probe timeout.
         """
         nonlocal calls
         calls += 1
@@ -235,6 +238,9 @@ async def test_is_get_endpoint_available_raises_transport_error_when_throw_enabl
 
         Returns:
             FakeResponse: Response object returned by the mocked session getter.
+
+        Raises:
+            _TestClientSSLError: Always raised to simulate an SSL transport failure.
         """
         del _url, auth, timeout, ssl
         nonlocal calls
@@ -286,6 +292,9 @@ async def test_validate_maps_endpoint_probe_ssl_to_opnsense_ssl_error(
 
         Returns:
             FakeResponse: Response object returned by the mocked session getter.
+
+        Raises:
+            _TestClientSSLError: Always raised to simulate an SSL transport failure.
         """
         del _url, auth, timeout, ssl
         nonlocal calls

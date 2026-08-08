@@ -60,6 +60,13 @@ class ClientTransportMixin:
 
         Returns:
             dict[str, Any]: Decoded payload extracted from the streaming API response.
+
+        Raises:
+            _opnsense_http_error: Raised as the mapped public OPNsense error for a
+                non-successful HTTP response when ``self._throw_errors`` is ``True``.
+            _map_opnsense_exception: Raised as the mapped public OPNsense error for
+                an aiohttp client error or timeout when ``self._throw_errors`` is
+                ``True``.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -139,6 +146,13 @@ class ClientTransportMixin:
 
         Yields:
             dict[str, Any]: Decoded JSON object from each valid ``data:`` event.
+
+        Raises:
+            _opnsense_http_error: Raised as the mapped public OPNsense error for a
+                non-successful HTTP response when ``self._throw_errors`` is ``True``.
+            _map_opnsense_exception: Raised as the mapped public OPNsense error for
+                an aiohttp client error or timeout when ``self._throw_errors`` is
+                ``True``.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -296,6 +310,13 @@ class ClientTransportMixin:
         Returns:
             MutableMapping[str, Any] | list | str | None: Decoded response payload
                 returned by the GET request.
+
+        Raises:
+            _opnsense_http_error: Raised as the mapped public OPNsense error for a
+                non-successful HTTP response when ``self._throw_errors`` is ``True``.
+            _map_opnsense_exception: Raised as the mapped public OPNsense error for
+                an aiohttp client error or timeout when ``self._throw_errors`` is
+                ``True``.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -410,6 +431,13 @@ class ClientTransportMixin:
 
         Returns:
             MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request.
+
+        Raises:
+            _opnsense_http_error: Raised as the mapped public OPNsense error for a
+                non-successful HTTP response when ``self._throw_errors`` is ``True``.
+            _map_opnsense_exception: Raised as the mapped public OPNsense error for
+                an aiohttp client error or timeout when ``self._throw_errors`` is
+                ``True``.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"

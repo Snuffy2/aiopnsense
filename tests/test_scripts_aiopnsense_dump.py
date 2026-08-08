@@ -255,6 +255,9 @@ def test_choose_endpoint_from_menu_rejects_prompt_cancellation(
 
         Args:
             _prompt (str): Value used by `raise_prompt_error`.
+
+        Raises:
+            prompt_error: The configured prompt cancellation error.
         """
         raise prompt_error
 
@@ -361,6 +364,9 @@ async def test_run_endpoint_collects_empty_stream_with_short_timeout() -> None:
 
             Returns:
                 dict[str, Any]: Result returned by `__anext__`.
+
+            Raises:
+                StopAsyncIteration: Raised after the simulated wait ends.
             """
             await module.asyncio.sleep(1.0)
             raise StopAsyncIteration
@@ -433,6 +439,9 @@ async def test_run_endpoint_propagates_stream_timeout_error_and_closes_stream(
 
             Returns:
                 dict[str, Any]: Result returned by `__anext__`.
+
+            Raises:
+                TimeoutError: Always raised to simulate a stream timeout.
             """
             raise TimeoutError("stream-level timeout")
 
@@ -504,11 +513,18 @@ async def test_run_endpoint_stream_error_beats_close_error(
 
             Returns:
                 dict[str, Any]: Result returned by `__anext__`.
+
+            Raises:
+                TimeoutError: Always raised to simulate a stream timeout.
             """
             raise TimeoutError("stream-level timeout")
 
         async def aclose(self) -> None:
-            """Raise when the stream cannot be closed cleanly."""
+            """Raise when the stream cannot be closed cleanly.
+
+            Raises:
+                RuntimeError: Always raised to simulate a close failure.
+            """
             self.closed = True
             raise RuntimeError("close failed")
 
