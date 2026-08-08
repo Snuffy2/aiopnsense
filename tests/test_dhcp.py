@@ -1071,6 +1071,64 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
 
 
 @pytest.mark.asyncio
+async def test_kea_and_dnsmasq_preserve_overflowing_expiration(
+    make_client: ClientType,
+) -> None:
+    """Keep leases whose numeric expiration exceeds the platform datetime range.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates overflow-safe Kea and dnsmasq expiration parsing.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        overflowing_expiration = 10**40
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "address": "192.0.2.30",
+                        "hostname": "kea-overflow",
+                        "hwaddr": "aa:bb:cc:dd:ee:30",
+                        "if_name": "lan",
+                        "is_reserved": "0",
+                        "state": "0",
+                        "expire": overflowing_expiration,
+                    }
+                ]
+            }
+        )
+
+        kea_leases = await client._get_kea_dhcpv4_leases()
+        assert len(kea_leases) == 1
+        assert kea_leases[0]["expires"] == overflowing_expiration
+
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "address": "192.0.2.31",
+                        "hostname": "dnsmasq-overflow",
+                        "hwaddr": "aa:bb:cc:dd:ee:31",
+                        "if_name": "lan",
+                        "is_reserved": "0",
+                        "expire": overflowing_expiration,
+                    }
+                ]
+            }
+        )
+
+        dnsmasq_leases = await client._get_dnsmasq_leases()
+        assert len(dnsmasq_leases) == 1
+        assert dnsmasq_leases[0]["expires"] == overflowing_expiration
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
     make_client: ClientType,
 ) -> None:

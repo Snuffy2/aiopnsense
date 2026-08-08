@@ -81,6 +81,22 @@ class DHCPMixin(AiopnsenseClientProtocol):
         )
 
     @staticmethod
+    def _expiration_to_datetime(expiration: int | None) -> datetime | None:
+        """Convert a DHCP expiration timestamp without propagating platform overflow.
+
+        Args:
+            expiration (int | None): Parsed DHCP expiration timestamp.
+
+        Returns:
+            datetime | None: Converted expiration, or ``None`` when the
+                timestamp is outside the platform-supported range.
+        """
+        try:
+            return timestamp_to_datetime(expiration)
+        except OverflowError, OSError:
+            return None
+
+    @staticmethod
     def _is_expired_kea_lease(lease_info: MutableMapping[str, Any], current_time: datetime) -> bool:
         """Return whether a Kea lease has an expiration in the past.
 
@@ -92,7 +108,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             bool: Whether the row has a parseable expiration that has passed.
         """
         expiration = try_to_int(lease_info.get("expire"))
-        expiration_datetime = timestamp_to_datetime(expiration) if expiration else None
+        expiration_datetime = DHCPMixin._expiration_to_datetime(expiration) if expiration else None
         return bool(expiration_datetime and expiration_datetime < current_time)
 
     @staticmethod
@@ -364,9 +380,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
             self._copy_lease_identity_fields(lease, lease_info)
             expiration = try_to_int(lease_info.get("expire", None))
             if expiration:
-                expiration_datetime = timestamp_to_datetime(expiration)
-                lease["expires"] = expiration_datetime
-                if expiration_datetime and expiration_datetime < current_time:
+                expiration_datetime = self._expiration_to_datetime(expiration)
+                lease["expires"] = (
+                    expiration_datetime
+                    if expiration_datetime is not None
+                    else lease_info.get("expire", None)
+                )
+                if expiration_datetime is not None and expiration_datetime < current_time:
                     continue
             else:
                 lease["expires"] = lease_info.get("expire", None)
@@ -462,9 +482,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
 
             expiration = try_to_int(lease_info.get("expire", None))
             if expiration:
-                expiration_datetime = timestamp_to_datetime(expiration)
-                lease["expires"] = expiration_datetime
-                if expiration_datetime and expiration_datetime < current_time:
+                expiration_datetime = self._expiration_to_datetime(expiration)
+                lease["expires"] = (
+                    expiration_datetime
+                    if expiration_datetime is not None
+                    else lease_info.get("expire", None)
+                )
+                if expiration_datetime is not None and expiration_datetime < current_time:
                     continue
             else:
                 lease["expires"] = lease_info.get("expire", None)
