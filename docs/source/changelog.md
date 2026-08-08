@@ -1,5 +1,20 @@
 # Changelog
 
+## [v1.1.7](https://github.com/Snuffy2/aiopnsense/tree/v1.1.7) (2026-08-08)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.6...v1.1.7)
+
+**Documentation**
+
+- Add pydoclint documentation checks [\#95](https://github.com/Snuffy2/aiopnsense/pull/95) ([Snuffy2](https://github.com/Snuffy2))
+
+**Code Quality**
+
+- Reuse parsed vnStat period labels [\#99](https://github.com/Snuffy2/aiopnsense/pull/99) ([Snuffy2](https://github.com/Snuffy2))
+- Optimize and harden DHCP lease collection [\#98](https://github.com/Snuffy2/aiopnsense/pull/98) ([Snuffy2](https://github.com/Snuffy2))
+- Defer caught-error log rendering [\#97](https://github.com/Snuffy2/aiopnsense/pull/97) ([Snuffy2](https://github.com/Snuffy2))
+- Avoid expensive caller stack inspection [\#96](https://github.com/Snuffy2/aiopnsense/pull/96) ([Snuffy2](https://github.com/Snuffy2))
+
 ## [v1.1.6](https://github.com/Snuffy2/aiopnsense/tree/v1.1.6) (2026-08-01)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.5...v1.1.6)
