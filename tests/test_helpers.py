@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta, timezone
 import inspect
 import logging
 import traceback
-from unittest.mock import MagicMock
 from typing import Any, NoReturn
+from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
@@ -16,49 +16,42 @@ from aiopnsense import (
     OPNsenseError,
     OPNsenseInvalidURL,
     OPNsenseTimeoutError,
+    helpers as aiopnsense_helpers,
 )
-from aiopnsense import helpers as aiopnsense_helpers
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
 
 
-def test_human_friendly_duration() -> None:
-    """Convert seconds into a human-friendly duration string."""
-    assert aiopnsense_helpers.human_friendly_duration(65) == "1 minute, 5 seconds"
-    assert aiopnsense_helpers.human_friendly_duration(0) == "0 seconds"
-    assert "month" in aiopnsense_helpers.human_friendly_duration(2419200)
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        pytest.param(0, "0 seconds", id="zero-seconds"),
+        pytest.param(1, "1 second", id="singular-second"),
+        pytest.param(2, "2 seconds", id="plural-seconds"),
+        pytest.param(60, "1 minute", id="singular-minute"),
+        pytest.param(61, "1 minute, 1 second", id="minute-and-singular-second"),
+        pytest.param(65, "1 minute, 5 seconds", id="minute-and-plural-seconds"),
+        pytest.param(3600, "1 hour", id="singular-hour"),
+        pytest.param(7200, "2 hours", id="plural-hours"),
+        pytest.param(86400, "1 day", id="singular-day"),
+        pytest.param(604800, "1 week", id="singular-week"),
+        pytest.param(1209600, "2 weeks", id="plural-weeks"),
+        pytest.param(2419200, "1 month", id="singular-month"),
+        pytest.param(4838400, "2 months", id="plural-months"),
+    ],
+)
+def test_human_friendly_duration(seconds: int, expected: str) -> None:
+    """Convert seconds to exact human-friendly duration strings.
 
+    Args:
+        seconds (int): Duration to format, in seconds.
+        expected (str): Expected human-friendly duration.
 
-def test_human_friendly_duration_singular_and_plural() -> None:
-    """Verify singular and plural forms for all supported units.
-
-    This covers seconds, minutes, hours, days, weeks and months and ensures
-    the function emits the singular form when the value is 1 and plural
-    otherwise.
+    Returns:
+        None: This test validates formatted output via assertions.
     """
-    # seconds
-    assert aiopnsense_helpers.human_friendly_duration(1) == "1 second"
-    assert aiopnsense_helpers.human_friendly_duration(2) == "2 seconds"
-
-    # minutes + seconds
-    assert aiopnsense_helpers.human_friendly_duration(60) == "1 minute"
-    assert aiopnsense_helpers.human_friendly_duration(61) == "1 minute, 1 second"
-
-    # hours
-    assert aiopnsense_helpers.human_friendly_duration(3600) == "1 hour"
-    assert aiopnsense_helpers.human_friendly_duration(7200) == "2 hours"
-
-    # days
-    assert aiopnsense_helpers.human_friendly_duration(86400) == "1 day"
-
-    # weeks
-    assert aiopnsense_helpers.human_friendly_duration(604800) == "1 week"
-    assert aiopnsense_helpers.human_friendly_duration(1209600) == "2 weeks"
-
-    # months (28-day month used in implementation)
-    assert aiopnsense_helpers.human_friendly_duration(2419200) == "1 month"
-    assert aiopnsense_helpers.human_friendly_duration(4838400) == "2 months"
+    assert aiopnsense_helpers.human_friendly_duration(seconds) == expected
 
 
 def test_get_ip_key() -> None:
