@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import MutableMapping
 import contextlib
-from typing import Any
+from typing import Any, Never
 from unittest.mock import AsyncMock
 
 import pytest
@@ -265,6 +265,7 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
         res = await client._get("/testpath")
 
         assert res == returned
+        # Lock the direct-call caller label derived from the fixed frame depth.
         assert called.get("caller") == "test_get_enqueues_and_processes"
     finally:
         if task is not None and not task.done():
@@ -305,15 +306,18 @@ async def test_get_text_rejects_unexpected_type(make_client: MakeClientFactory) 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [ValueError, AttributeError])
 async def test_get_uses_unknown_when_caller_frame_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,
+    error_type: type[ValueError] | type[AttributeError],
 ) -> None:
     """Verify ``_get`` uses ``Unknown`` caller when frame lookup fails.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for patching frame lookup.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        error_type (type[ValueError] | type[AttributeError]): Frame lookup error to raise.
 
     Returns:
         None: This test asserts caller fallback behavior.
@@ -321,22 +325,24 @@ async def test_get_uses_unknown_when_caller_frame_is_unavailable(
     client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
-        # Replace the queue helper's sys._getframe to raise a ValueError.
+
         class _BadSys:
+            """Provide a ``sys`` substitute whose frame lookup always fails."""
+
             @staticmethod
-            def _getframe(_depth: int) -> Any:
+            def _getframe(_depth: int) -> Never:
                 """Raise an error because no caller frame is available.
 
                 Args:
                     _depth (int): Requested frame depth.
 
                 Returns:
-                    Any: No frame details; this method always raises instead.
+                    Never: This method always raises the parameterized error.
 
                 Raises:
-                    ValueError: Always raised to simulate an unavailable caller frame.
+                    error_type: The parameterized frame lookup error.
                 """
-                raise ValueError("no frame")
+                raise error_type("no frame")
 
         monkeypatch.setattr(aiopnsense_client_queue, "sys", _BadSys)
 
@@ -417,6 +423,7 @@ async def test_post_enqueues_and_processes(returned: Any, make_client: MakeClien
 
         assert res == returned
         assert captured.get("payload") == payload
+        # Lock the direct-call caller label derived from the fixed frame depth.
         assert captured.get("caller") == "test_post_enqueues_and_processes"
     finally:
         if task is not None and not task.done():
@@ -427,15 +434,18 @@ async def test_post_enqueues_and_processes(returned: Any, make_client: MakeClien
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [ValueError, AttributeError])
 async def test_post_uses_unknown_when_caller_frame_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,
+    error_type: type[ValueError] | type[AttributeError],
 ) -> None:
     """Verify ``_post`` uses ``Unknown`` caller when frame lookup fails.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for patching frame lookup.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        error_type (type[ValueError] | type[AttributeError]): Frame lookup error to raise.
 
     Returns:
         None: This test asserts caller fallback behavior for ``_post``.
@@ -445,20 +455,22 @@ async def test_post_uses_unknown_when_caller_frame_is_unavailable(
     try:
 
         class _BadSys:
+            """Provide a ``sys`` substitute whose frame lookup always fails."""
+
             @staticmethod
-            def _getframe(_depth: int) -> Any:
+            def _getframe(_depth: int) -> Never:
                 """Raise an error because no caller frame is available.
 
                 Args:
                     _depth (int): Requested frame depth.
 
                 Returns:
-                    Any: No frame details; this method always raises instead.
+                    Never: This method always raises the parameterized error.
 
                 Raises:
-                    ValueError: Always raised to simulate an unavailable caller frame.
+                    error_type: The parameterized frame lookup error.
                 """
-                raise ValueError("no frame")
+                raise error_type("no frame")
 
         monkeypatch.setattr(aiopnsense_client_queue, "sys", _BadSys)
 
