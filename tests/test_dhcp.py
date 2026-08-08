@@ -677,6 +677,106 @@ async def test_get_kea_dhcpv4_leases_skips_redundant_reservation_lookup(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("is_reserved", [None, {"unexpected": "value"}])
+async def test_get_kea_dhcpv4_leases_falls_back_for_invalid_reservation_metadata(
+    make_client: ClientType,
+    is_reserved: object,
+) -> None:
+    """Use reservation-table fallback for unsupported Kea metadata values.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        is_reserved (object): Unsupported reservation metadata value to exercise.
+
+    Returns:
+        None: This test verifies matching legacy reservations remain static.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {
+                    "rows": [
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:01",
+                            "address": "192.0.2.10",
+                            "is_reserved": is_reserved,
+                        }
+                    ]
+                },
+                {
+                    "rows": [
+                        {
+                            "hw_address": "aa:bb:cc:dd:ee:01",
+                            "ip_address": "192.0.2.10",
+                        }
+                    ]
+                },
+            ]
+        )
+
+        leases = await client._get_kea_dhcpv4_leases()
+
+        assert leases[0]["type"] == "static"
+        assert client._safe_dict_get.await_count == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_kea_dhcpv4_leases_ignores_expired_rows_for_reservation_lookup(
+    make_client: ClientType,
+) -> None:
+    """Avoid reservation lookup when only an expired row lacks metadata.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test verifies expired rows do not create reservation-table I/O.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        past_ts = int(datetime.now(tz=UTC).timestamp()) - 3600
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:01",
+                        "address": "192.0.2.10",
+                        "expire": past_ts,
+                    },
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:02",
+                        "address": "192.0.2.11",
+                        "is_reserved": 0,
+                    },
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:03",
+                        "address": "192.0.2.12",
+                        "is_reserved": ["hwaddr"],
+                    },
+                ]
+            }
+        )
+
+        leases = await client._get_kea_dhcpv4_leases()
+
+        assert [lease["type"] for lease in leases] == ["dynamic", "static"]
+        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
+        client._is_get_endpoint_available.assert_awaited_once_with("/api/kea/leases4/search")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientType) -> None:
     """Verify Kea DHCPv6 leases parse the OPNsense DUID-oriented row shape.
 

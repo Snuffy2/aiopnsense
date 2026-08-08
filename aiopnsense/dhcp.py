@@ -68,6 +68,35 @@ class DHCPMixin(AiopnsenseClientProtocol):
         return bool(raw_reserved)
 
     @staticmethod
+    def _has_authoritative_reservation_metadata(raw_reserved: object) -> bool:
+        """Return whether a Kea reservation flag has a supported representation.
+
+        Args:
+            raw_reserved (object): Raw ``is_reserved`` field returned by Kea.
+
+        Returns:
+            bool: Whether the value can authoritatively classify the lease.
+        """
+        return isinstance(raw_reserved, list) or (
+            type(raw_reserved) in (str, int)
+            and (api_value_matches(raw_reserved, "0") or api_value_matches(raw_reserved, "1"))
+        )
+
+    @staticmethod
+    def _is_expired_kea_lease(lease_info: MutableMapping[str, Any]) -> bool:
+        """Return whether a Kea lease has an expiration in the past.
+
+        Args:
+            lease_info (MutableMapping[str, Any]): Raw Kea lease row.
+
+        Returns:
+            bool: Whether the row has a parseable expiration that has passed.
+        """
+        expiration = try_to_int(lease_info.get("expire"))
+        expiration_datetime = timestamp_to_datetime(expiration) if expiration else None
+        return bool(expiration_datetime and expiration_datetime < datetime.now().astimezone())
+
+    @staticmethod
     def _copy_lease_identity_fields(
         lease: dict[str, Any], lease_info: MutableMapping[str, Any]
     ) -> None:
@@ -268,7 +297,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
             isinstance(lease_info, MutableMapping)
             and api_value_matches(lease_info.get("state"), "0")
             and (not require_hardware_address or bool(lease_info.get("hwaddr")))
-            and "is_reserved" not in lease_info
+            and not self._is_expired_kea_lease(lease_info)
+            and not self._has_authoritative_reservation_metadata(lease_info.get("is_reserved"))
             for lease_info in leases_info
         )
         if (
@@ -322,7 +352,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             lease["if_name"] = lease_info.get("if_name", None)
             if self._is_reserved_lease(lease_info.get("is_reserved")):
                 lease["type"] = "static"
-            elif "is_reserved" in lease_info:
+            elif self._has_authoritative_reservation_metadata(lease_info.get("is_reserved")):
                 lease["type"] = "dynamic"
             elif res_info is None:
                 if dynamic_when_reservation_lookup_unavailable:
@@ -345,7 +375,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 lease["expires"] = timestamp_to_datetime(
                     try_to_int(lease_info.get("expire", None)) or 0
                 )
-                if lease["expires"] < datetime.now().astimezone():
+                if self._is_expired_kea_lease(lease_info):
                     continue
             else:
                 lease["expires"] = lease_info.get("expire", None)
