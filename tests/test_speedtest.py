@@ -14,8 +14,12 @@ ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
-async def test_get_speedtest_skips_calls_when_endpoint_missing(make_client) -> None:
-    """get_speedtest should skip speedtest API calls when endpoint is unavailable."""
+async def test_get_speedtest_skips_calls_when_endpoint_missing(make_client: ClientType) -> None:
+    """get_speedtest should skip speedtest API calls when endpoint is unavailable.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=False)
@@ -31,8 +35,12 @@ async def test_get_speedtest_skips_calls_when_endpoint_missing(make_client) -> N
 
 
 @pytest.mark.asyncio
-async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client) -> None:
-    """get_speedtest should normalize shared showlog and showstat payload fields."""
+async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client: ClientType) -> None:
+    """get_speedtest should normalize shared showlog and showstat payload fields.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(side_effect=[True, True])
@@ -160,8 +168,12 @@ async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
 
 
 @pytest.mark.asyncio
-async def test_get_speedtest_preserves_timezone_aware_date(make_client) -> None:
-    """get_speedtest should preserve an existing timestamp UTC offset."""
+async def test_get_speedtest_preserves_timezone_aware_date(make_client: ClientType) -> None:
+    """get_speedtest should preserve an existing timestamp UTC offset.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
@@ -191,8 +203,12 @@ async def test_get_speedtest_preserves_timezone_aware_date(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_speedtest_drops_malformed_date(make_client) -> None:
-    """get_speedtest should omit malformed timestamp values."""
+async def test_get_speedtest_drops_malformed_date(make_client: ClientType) -> None:
+    """get_speedtest should omit malformed timestamp values.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
@@ -223,9 +239,13 @@ async def test_get_speedtest_drops_malformed_date(make_client) -> None:
 
 @pytest.mark.asyncio
 async def test_get_speedtest_preserves_aware_date_and_drops_naive_periods_when_timezone_unresolved(
-    make_client,
+    make_client: ClientType,
 ) -> None:
-    """When OPNsense timezone is unresolved, keep aware date fields but drop naive period fields."""
+    """When OPNsense timezone is unresolved, keep aware date fields but drop naive period fields.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
@@ -263,8 +283,12 @@ async def test_get_speedtest_preserves_aware_date_and_drops_naive_periods_when_t
 
 
 @pytest.mark.asyncio
-async def test_get_speedtest_normalizes_malformed_payloads(make_client) -> None:
-    """get_speedtest should coerce malformed or missing values to None safely."""
+async def test_get_speedtest_normalizes_malformed_payloads(make_client: ClientType) -> None:
+    """get_speedtest should coerce malformed or missing values to None safely.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(side_effect=[True, True])
@@ -322,7 +346,12 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client) -> None:
 async def test_parse_showlog_latest_rejects_malformed_rows(
     make_client: ClientType, show_log: object
 ) -> None:
-    """_parse_showlog_latest should reject missing or malformed history rows."""
+    """_parse_showlog_latest should reject missing or malformed history rows.
+
+    Args:
+        make_client (ClientType): Client fixture returning the parameterized show-log row.
+        show_log (object): Malformed show-log payload expected to be rejected.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         assert client._parse_showlog_latest(show_log) == {}
@@ -378,7 +407,15 @@ async def test_parse_showlog_latest_preserves_server_fields(
     expected_server_id: str | None,
     expected_server_name: str | None,
 ) -> None:
-    """_parse_showlog_latest should preserve separate server id and server name."""
+    """_parse_showlog_latest should preserve separate server id and server name.
+
+    Args:
+        make_client (ClientType): Client fixture returning the parameterized show-log row.
+        raw_server_id (object): Server identifier in the raw show-log payload.
+        raw_server_name (str): Server name in the raw show-log payload.
+        expected_server_id (str | None): Normalized server identifier expected in the result.
+        expected_server_name (str | None): Normalized server name expected in the result.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         parsed = client._parse_showlog_latest(
@@ -404,8 +441,12 @@ async def test_parse_showlog_latest_preserves_server_fields(
 
 
 @pytest.mark.asyncio
-async def test_run_speedtest_uses_extended_timeout(make_client) -> None:
-    """run_speedtest should use custom timeout helper for long-running endpoint calls."""
+async def test_run_speedtest_uses_extended_timeout(make_client: ClientType) -> None:
+    """run_speedtest should use custom timeout helper for long-running endpoint calls.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -423,8 +464,12 @@ async def test_run_speedtest_uses_extended_timeout(make_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client) -> None:
-    """run_speedtest should return an empty payload when endpoint is unavailable."""
+async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client: ClientType) -> None:
+    """run_speedtest should return an empty payload when endpoint is unavailable.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=False)
@@ -440,8 +485,14 @@ async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client) ->
 
 
 @pytest.mark.asyncio
-async def test_run_speedtest_returns_empty_for_non_mapping_response(make_client) -> None:
-    """run_speedtest should return an empty payload for non-mapping responses."""
+async def test_run_speedtest_returns_empty_for_non_mapping_response(
+    make_client: ClientType,
+) -> None:
+    """run_speedtest should return an empty payload for non-mapping responses.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
     client, _session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)

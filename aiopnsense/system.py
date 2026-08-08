@@ -423,10 +423,6 @@ class SystemMixin(AiopnsenseClientProtocol):
                 physical interface, otherwise the first sorted physical MAC
                 identifier. Returns ``None`` when no physical MAC addresses are
                 available and ``throw_errors`` is disabled.
-
-        Raises:
-            OPNsenseMissingDeviceUniqueID: No device unique ID could be
-                resolved and ``throw_errors`` is enabled.
         """
         if not await self._is_get_endpoint_available(INTERFACE_OVERVIEW_EXPORT_ENDPOINT):
             _LOGGER.debug("Interface overview endpoint unavailable for device id resolution")

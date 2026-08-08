@@ -26,7 +26,18 @@ class ClientQueueMixin:
             *,
             response_format: Literal["json", "text"] = "json",
         ) -> MutableMapping[str, Any] | list | str | None:
-            """Execute a queued GET request."""
+            """Execute an immediate GET transport request after it is dequeued.
+
+            Args:
+                path (str): API endpoint path to request.
+                caller (str): Calling method name used for diagnostics.
+                timeout_seconds (float | None): Optional transport request timeout.
+                response_format (Literal['json', 'text']): Expected response body format.
+
+            Returns:
+                MutableMapping[str, Any] | list | str | None: Decoded transport
+                    response, if available.
+            """
             ...
 
         async def _do_get_from_stream(
@@ -34,7 +45,15 @@ class ClientQueueMixin:
             path: str,
             caller: str = "Unknown",
         ) -> dict[str, Any]:
-            """Execute a queued streaming GET request."""
+            """Execute an immediate streaming GET transport request after dequeuing it.
+
+            Args:
+                path (str): Streaming API endpoint path to request.
+                caller (str): Calling method name used for diagnostics.
+
+            Returns:
+                dict[str, Any]: Decoded payload extracted from the stream response.
+            """
             ...
 
         async def _do_post(
@@ -43,7 +62,17 @@ class ClientQueueMixin:
             payload: MutableMapping[str, Any] | None = None,
             caller: str = "Unknown",
         ) -> MutableMapping[str, Any] | list | None:
-            """Execute a queued POST request."""
+            """Execute an immediate POST transport request after it is dequeued.
+
+            Args:
+                path (str): API endpoint path to request.
+                payload (MutableMapping[str, Any] | None): Optional request body.
+                caller (str): Calling method name used for diagnostics.
+
+            Returns:
+                MutableMapping[str, Any] | list | None: Decoded transport response,
+                    if available.
+            """
             ...
 
     async def _ensure_workers_started(self) -> None:
@@ -60,6 +89,10 @@ class ClientQueueMixin:
         Returns:
             asyncio.AbstractEventLoop: Running event loop used to create
                 queued request futures.
+
+        Raises:
+            OPNsenseError: Raised when worker startup does not initialize an event
+                loop.
         """
         await self._ensure_workers_started()
         if self._loop is None:
@@ -131,6 +164,9 @@ class ClientQueueMixin:
 
         Returns:
             str | None: Response body text, or ``None`` when the request fails.
+
+        Raises:
+            OPNsenseError: Raised when the queued request returns a non-text response.
         """
         result = await self._queue_request("get_text", path)
         if result is None or isinstance(result, str):
@@ -152,7 +188,11 @@ class ClientQueueMixin:
         return await self._queue_request("post", path, payload)
 
     async def _process_queue(self) -> None:
-        """Continuously process queued API requests and resolve waiting futures."""
+        """Continuously process queued API requests and resolve waiting futures.
+
+        Raises:
+            asyncio.CancelledError: Raised when the queue processor is cancelled.
+        """
         while True:
             method: str | None = None
             path: str | None = None

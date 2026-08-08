@@ -30,6 +30,12 @@ class VouchersMixin(AiopnsenseClientProtocol):
                 consumers and with ``expirytime`` converted to a timestamped
                 datetime plus ``expiry_timestamp`` and human-readable
                 ``validity_str`` when those values are available.
+
+        Raises:
+            OPNsenseConnectionError: Re-raised when voucher generation fails for
+                a reason other than an unavailable endpoint.
+            OPNsenseVoucherServerError: No voucher servers are available, or the
+                request omits a server while multiple servers are available.
         """
         list_providers_endpoint = await self._get_endpoint_path(
             snake_case_path=VOUCHER_LIST_PROVIDERS_ENDPOINT,

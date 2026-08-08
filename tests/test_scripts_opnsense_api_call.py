@@ -14,7 +14,11 @@ import pytest
 
 
 def load_api_call_module() -> ModuleType:
-    """Load the script module through importlib for direct unit testing."""
+    """Load the script module through importlib for direct unit testing.
+
+    Returns:
+        ModuleType: Imported raw-API script module under test.
+    """
     module_path = Path(__file__).parents[1] / "scripts" / "opnsense_api_call.py"
     sys.path.insert(0, str(module_path.parent))
     spec = importlib.util.spec_from_file_location("opnsense_api_call", module_path)
@@ -45,7 +49,16 @@ class FakeResponse:
         text: str = "",
         json_error: Exception | None = None,
     ) -> None:
-        """Create a minimal aiohttp-like response stub."""
+        """Create a minimal aiohttp-like response stub.
+
+        Args:
+            status (int): HTTP status exposed by the fake response.
+            reason (str): HTTP reason phrase exposed by the fake response.
+            headers (dict[str, str] | None): Response headers used for content detection.
+            json_payload (Any): JSON body returned when parsing succeeds.
+            text (str): Text body returned when JSON parsing is unavailable.
+            json_error (Exception | None): Parsing error raised by ``json`` when configured.
+        """
         self.status = status
         self.reason = reason
         self.headers = headers or {}
@@ -60,13 +73,28 @@ class FakeResponse:
         return None
 
     async def json(self, *_args: Any, **_kwargs: Any) -> Any:
-        """Parse JSON payload for response body."""
+        """Parse JSON payload for response body.
+
+        Args:
+            _args (Any): Positional arguments accepted by `json`.
+            _kwargs (Any): Keyword arguments accepted by `json`.
+
+        Returns:
+            Any: Configured JSON response body.
+
+        Raises:
+            self._json_error: Raised when the fake response is configured with a JSON error.
+        """
         if self._json_error is not None:
             raise self._json_error
         return self._json
 
     async def text(self) -> str:
-        """Return text fallback body."""
+        """Return text fallback body.
+
+        Returns:
+            str: Configured plain-text response body.
+        """
         return self._text
 
 
@@ -85,7 +113,12 @@ class FakeSession:
         get_response: FakeResponse | None = None,
         post_response: FakeResponse | None = None,
     ) -> None:
-        """Initialize call history and response stubs."""
+        """Initialize call history and response stubs.
+
+        Args:
+            get_response (FakeResponse | None): Response returned by recorded GET requests.
+            post_response (FakeResponse | None): Response returned by recorded POST requests.
+        """
         self.get_calls = []
         self.post_calls = []
         self.get_response = get_response or FakeResponse(200, "OK", json_payload={"default": True})
@@ -103,13 +136,29 @@ class FakeSession:
         self.exit_count += 1
         return None
 
-    def get(self, url: str, **kwargs: Any) -> FakeResponse:
-        """Record GET call and return response context."""
+    def get(self, url: str, **kwargs: object) -> FakeResponse:
+        """Record GET call and return response context.
+
+        Args:
+            url (str): Request URL recorded for the GET call.
+            kwargs (object): Keyword arguments accepted by `get`.
+
+        Returns:
+            FakeResponse: Configured GET response context manager.
+        """
         self.get_calls.append((url, kwargs))
         return self.get_response
 
-    def post(self, url: str, **kwargs: Any) -> FakeResponse:
-        """Record POST call and return response context."""
+    def post(self, url: str, **kwargs: object) -> FakeResponse:
+        """Record POST call and return response context.
+
+        Args:
+            url (str): Request URL recorded for the POST call.
+            kwargs (object): Keyword arguments accepted by `post`.
+
+        Returns:
+            FakeResponse: Configured POST response context manager.
+        """
         self.post_calls.append((url, kwargs))
         return self.post_response
 
@@ -157,7 +206,11 @@ def test_load_payload_from_json_string() -> None:
 
 
 def test_load_payload_from_file(tmp_path: Path) -> None:
-    """Payload file input supports JSON objects."""
+    """Payload file input supports JSON objects.
+
+    Args:
+        tmp_path (Path): Temporary directory containing the JSON payload file.
+    """
     module = load_api_call_module()
     payload_file = tmp_path / "payload.json"
     payload_file.write_text('{"from": "file"}', encoding="utf-8")
@@ -401,7 +454,11 @@ async def test_call_api_preserves_non_2xx_text_body() -> None:
 
 
 def test_main_converts_live_config_error_to_system_exit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """main() maps LiveConfigError from async_main to SystemExit."""
+    """main() maps LiveConfigError from async_main to SystemExit.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise configuration failure.
+    """
     module = load_api_call_module()
 
     async def raise_error() -> None:
@@ -427,7 +484,15 @@ async def test_async_main_rejects_payload_with_get_method(
     payload: str,
     name: str,
 ) -> None:
-    """GET + payload options are rejected before body parsing or output writes."""
+    """GET + payload options are rejected before body parsing or output writes.
+
+    Args:
+        tmp_path (Path): Temporary directory for the rejected output path.
+        capsys (pytest.CaptureFixture[str]): Fixture that captures the parser error.
+        monkeypatch (pytest.MonkeyPatch): Fixture that captures output-write attempts.
+        payload (str): Inline payload supplied with the invalid GET request.
+        name (str): Case label used in the temporary output filename.
+    """
     module = load_api_call_module()
     output_file = tmp_path / f"ignored-{name}.json"
     write_calls: list[tuple[dict[str, Any], Path | None]] = []
@@ -463,7 +528,12 @@ async def test_async_main_rejects_payload_file_with_get_method(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """GET + --payload-file is rejected with required parser error text."""
+    """GET + --payload-file is rejected with required parser error text.
+
+    Args:
+        tmp_path (Path): Temporary directory containing the payload file.
+        capsys (pytest.CaptureFixture[str]): Fixture that captures the parser error.
+    """
     module = load_api_call_module()
     payload_file = tmp_path / "payload.json"
     payload_file.write_text('{"ok": true}', encoding="utf-8")
@@ -534,7 +604,12 @@ async def test_async_main_rejects_non_object_payload_json() -> None:
 async def test_async_main_rejects_both_payload_sources_for_post(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """POST requests with both payload sources use load_payload conflict message."""
+    """POST requests with both payload sources use load_payload conflict message.
+
+    Args:
+        tmp_path (Path): Temporary directory containing the file payload.
+        capsys (pytest.CaptureFixture[str]): Fixture that captures the parser error.
+    """
     module = load_api_call_module()
     payload_file = tmp_path / "payload.json"
     payload_file.write_text('{"from": "file"}', encoding="utf-8")
@@ -561,7 +636,12 @@ async def test_async_main_rejects_missing_payload_file(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Missing payload files become parser errors instead of filesystem tracebacks."""
+    """Missing payload files become parser errors instead of filesystem tracebacks.
+
+    Args:
+        tmp_path (Path): Temporary directory used to form the missing file path.
+        capsys (pytest.CaptureFixture[str]): Fixture that captures the parser error.
+    """
     module = load_api_call_module()
     missing_file = tmp_path / "missing.json"
 
@@ -585,7 +665,12 @@ async def test_async_main_writes_output_and_closes_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Happy path runs the call and guarantees session lifecycle completion."""
+    """Happy path runs the call and guarantees session lifecycle completion.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture that replaces live dependencies with fakes.
+        tmp_path (Path): Temporary directory containing the expected output file.
+    """
     module = load_api_call_module()
     config = module.LiveConfig(
         url="https://firewall.example.test/",
@@ -648,7 +733,11 @@ async def test_async_main_writes_output_and_closes_session(
 async def test_async_main_without_payload_passes_no_payload_marker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """POST requests without payload preserve omitted-body semantics through dispatch."""
+    """POST requests without payload preserve omitted-body semantics through dispatch.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture that replaces live dependencies with fakes.
+    """
     module = load_api_call_module()
     config = module.LiveConfig(
         url="https://firewall.example.test/",
@@ -710,7 +799,11 @@ def test_entrypoint_exits_with_help_status_zero() -> None:
 def test_main_converts_client_error_to_system_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """main() converts aiohttp client transport exceptions into SystemExit."""
+    """main() converts aiohttp client transport exceptions into SystemExit.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise a client error.
+    """
     module = load_api_call_module()
 
     async def raise_connector_error() -> None:
@@ -737,7 +830,11 @@ def test_main_converts_client_error_to_system_exit(
 def test_main_converts_timeout_error_to_system_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """main() converts timeout exceptions into concise SystemExit messages."""
+    """main() converts timeout exceptions into concise SystemExit messages.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise a timeout.
+    """
     module = load_api_call_module()
 
     async def raise_timeout_error() -> None:
@@ -753,7 +850,11 @@ def test_main_converts_timeout_error_to_system_exit(
 def test_main_converts_os_error_to_system_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """main() converts I/O errors into concise SystemExit messages."""
+    """main() converts I/O errors into concise SystemExit messages.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise an I/O error.
+    """
     module = load_api_call_module()
 
     async def raise_os_error() -> None:

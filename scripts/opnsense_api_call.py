@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser for the raw API caller.
 
     Returns:
-        A configured ``ArgumentParser`` for the script CLI.
+        argparse.ArgumentParser: A configured ``ArgumentParser`` for the script CLI.
     """
     parser = argparse.ArgumentParser(description="Call a raw OPNsense API endpoint.")
     parser.add_argument(
@@ -77,10 +77,10 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments for the raw API caller.
 
     Args:
-        args: Optional argument override for testability.
+        args (list[str] | None): Optional CLI arguments; defaults to process arguments.
 
     Returns:
-        Parsed arguments with runtime defaults resolved.
+        argparse.Namespace: Parsed arguments with runtime defaults resolved.
     """
     parser = build_parser()
     parsed_args = parser.parse_args(args=args)
@@ -92,10 +92,11 @@ def normalize_endpoint(endpoint: str) -> str:
     """Return endpoint with leading slash and no surrounding whitespace.
 
     Args:
-        endpoint: Raw endpoint value from CLI.
+        endpoint (str): User-supplied API endpoint path.
 
     Returns:
-        Normalized endpoint path.
+        str: Normalized endpoint path.
+
 
     Raises:
         ValueError: If endpoint is blank after stripping.
@@ -112,11 +113,12 @@ def _load_json_object(payload_text: str, source: str) -> dict[str, Any]:
     """Load and validate a JSON object from a raw string.
 
     Args:
-        payload_text: Raw JSON text to parse.
-        source: Human-readable payload source used in validation messages.
+        payload_text (str): Raw JSON text to parse.
+        source (str): Input label included in validation errors.
 
     Returns:
-        Parsed JSON object.
+        dict[str, Any]: Parsed JSON object.
+
 
     Raises:
         ValueError: If the payload is invalid JSON or does not decode to an object.
@@ -137,11 +139,12 @@ def load_payload(
     """Load POST payload from inline JSON or payload file.
 
     Args:
-        payload: Inline JSON body string.
-        payload_file: Path to inline JSON file.
+        payload (str | None): Optional inline JSON object text.
+        payload_file (Path | None): Optional file containing a JSON object.
 
     Returns:
-        Parsed JSON object payload, or ``_NO_PAYLOAD`` when absent.
+        dict[str, Any] | object: Parsed JSON object payload, or ``_NO_PAYLOAD`` when absent.
+
 
     Raises:
         ValueError: If both inputs are set, JSON is invalid, or payload is not object.
@@ -169,14 +172,14 @@ async def call_api(
     """Call the configured OPNsense endpoint and return response metadata.
 
     Args:
-        session: Active aiohttp client session.
-        config: Live config with URL and credentials.
-        endpoint: Raw endpoint path.
-        method: HTTP method name (``get`` or ``post``).
-        payload: Optional POST payload dictionary or omitted-payload sentinel.
+        session (aiohttp.ClientSession): HTTP session that executes the request.
+        config ('LiveConfig'): Base URL, credentials, and TLS verification settings.
+        endpoint (str): API path appended to the configured base URL.
+        method (str): HTTP method selected by the CLI.
+        payload (dict[str, Any] | object): JSON object for POST, or ``_NO_PAYLOAD``.
 
     Returns:
-        Parsed response payload with request metadata.
+        dict[str, Any]: Parsed response payload with request metadata.
     """
     normalized_endpoint = normalize_endpoint(endpoint)
     url = f"{config.url.rstrip('/')}{normalized_endpoint}"
@@ -216,10 +219,10 @@ async def async_main(argv: list[str] | None = None) -> int:
     """Run the CLI flow and return shell status code.
 
     Args:
-        argv: Optional argument list for testability.
+        argv (list[str] | None): Optional CLI arguments; defaults to process arguments.
 
     Returns:
-        Process exit status code.
+        int: Process exit status code.
     """
     parser = build_parser()
     args = parse_args(argv)
@@ -242,7 +245,7 @@ def main() -> int:
     """Run CLI entrypoint and map config errors into CLI exits.
 
     Returns:
-        Process exit status code.
+        int: Process exit status code.
 
     Raises:
         SystemExit: Raised when configuration, HTTP, timeout, or OS errors occur.

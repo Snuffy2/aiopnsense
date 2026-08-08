@@ -74,10 +74,11 @@ def parse_endpoint_name(endpoint_name: str) -> str:
     """Validate a named dump endpoint from CLI input.
 
     Args:
-        endpoint_name: Endpoint name provided by the CLI.
+        endpoint_name (str): CLI endpoint name to validate against registered endpoints.
 
     Returns:
-        The validated endpoint name.
+        str: The validated endpoint name.
+
 
     Raises:
         argparse.ArgumentTypeError: Raised when the endpoint is unknown.
@@ -94,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser for the live endpoint dumper.
 
     Returns:
-        A configured ``ArgumentParser`` for the script CLI.
+        argparse.ArgumentParser: A configured ``ArgumentParser`` for the script CLI.
     """
     parser = argparse.ArgumentParser(description="Dump live OPNsense endpoint JSON payloads.")
     parser.add_argument(
@@ -132,10 +133,10 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments for the dump script.
 
     Args:
-        args: Optional argument override for testability.
+        args (list[str] | None): Optional CLI arguments; defaults to process arguments.
 
     Returns:
-        Parsed arguments.
+        argparse.Namespace: Parsed arguments.
     """
     parser = build_parser()
     parsed_args = parser.parse_args(args=args)
@@ -147,7 +148,7 @@ def list_endpoints() -> list[dict[str, Any]]:
     """Return sorted endpoint metadata entries.
 
     Returns:
-        Endpoint metadata dictionaries sorted by endpoint name.
+        list[dict[str, Any]]: Endpoint metadata dictionaries sorted by endpoint name.
     """
     return [
         {"endpoint": endpoint_name, "method": spec.method_name, "warning": spec.warning}
@@ -159,10 +160,11 @@ def choose_endpoint_from_menu(endpoint_names: list[str]) -> str:
     """Prompt for a 1-based endpoint selection and return the chosen name.
 
     Args:
-        endpoint_names: Stable, sorted endpoint names.
+        endpoint_names (list[str]): Endpoint names displayed as numbered choices.
 
     Returns:
-        Endpoint name selected by the user.
+        str: Endpoint name selected by the user.
+
 
     Raises:
         SystemExit: Raised for non-integer or out-of-range selections.
@@ -185,12 +187,24 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
     """Run a single endpoint and return a normalized dump payload.
 
     Args:
-        client: Active OPNsense client instance.
-        endpoint_name: CLI endpoint key mapped in ``ENDPOINTS``.
-        stream_seconds: Stream duration for streaming endpoints.
+        client (Any): Validated OPNsense client exposing registered endpoint methods.
+        endpoint_name (str): Registered endpoint name to invoke.
+        stream_seconds (float): Maximum collection window for traffic-stream samples.
 
     Returns:
-        A payload dictionary with endpoint metadata and returned data.
+        dict[str, Any]: A payload dictionary with endpoint metadata and returned data.
+
+    Raises:
+        OPNsenseError: Raised when the endpoint operation or stream cleanup
+            fails with an OPNsense error.
+        aiohttp.ClientError: Raised when the endpoint operation or stream
+            cleanup fails with an HTTP client error.
+        TimeoutError: Raised when the endpoint operation or stream cleanup
+            times out.
+        RuntimeError: Raised when the endpoint operation or stream cleanup
+            encounters a runtime error.
+        OSError: Raised when the endpoint operation or stream cleanup
+            encounters an operating system error.
     """
     spec = ENDPOINTS[endpoint_name]
     method_name = spec.method_name
@@ -263,10 +277,14 @@ async def async_main(argv: list[str] | None = None) -> int:
     """Run the dump command.
 
     Args:
-        argv: Optional argument list for testability.
+        argv (list[str] | None): Optional CLI arguments; defaults to process arguments.
 
     Returns:
-        Exit status code.
+        int: Exit status code.
+
+    Raises:
+        BaseException: Re-raised when the command body fails, or raised when
+            closing the OPNsense client fails without a prior body failure.
     """
     args = parse_args(argv)
 
@@ -303,7 +321,11 @@ def main() -> int:
     """Run the async entrypoint and map runtime failures to ``SystemExit``.
 
     Returns:
-        Process exit code.
+        int: Process exit code.
+
+    Raises:
+        SystemExit: Raised when a handled runtime failure prevents the command
+            from completing.
     """
     try:
         return asyncio.run(async_main())

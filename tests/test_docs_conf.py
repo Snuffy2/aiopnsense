@@ -16,7 +16,11 @@ DEPRECATED_PREFIX = ["", ".. admonition:: Deprecated", ""]
 
 
 def _load_conf_namespace() -> dict[str, Any]:
-    """Execute the Sphinx config and return its namespace."""
+    """Execute the Sphinx config and return its namespace.
+
+    Returns:
+        dict[str, Any]: Namespace produced by executing ``docs/source/conf.py``.
+    """
     return runpy.run_path(str(CONF_PATH))
 
 
@@ -24,10 +28,10 @@ def _append_deprecation(obj: object) -> list[str]:
     """Run the PEP 702 autodoc hook for an object.
 
     Args:
-        obj: The object to pass to the Sphinx autodoc hook.
+        obj (object): Object whose PEP 702 metadata is passed to the autodoc hook.
 
     Returns:
-        The docstring lines mutated by the hook.
+        list[str]: The docstring lines mutated by the hook.
     """
     namespace = _load_conf_namespace()
     lines = EXISTING_DOCS.copy()
@@ -50,7 +54,11 @@ def test_conf_adds_scripts_directory_to_sys_path() -> None:
 
 
 def _deprecated_property() -> object:
-    """Return a deprecated property with a multiline message."""
+    """Return a deprecated property with a multiline message.
+
+    Returns:
+        object: Deprecated property used to verify multiline warning rendering.
+    """
 
     class Example:
         """Example class with a deprecated property."""
@@ -61,7 +69,7 @@ def _deprecated_property() -> object:
             """Return the old value.
 
             Returns:
-                The old value.
+                str: The old value.
             """
             return "old"
 
@@ -69,7 +77,11 @@ def _deprecated_property() -> object:
 
 
 def _deprecated_function() -> object:
-    """Return a deprecated function with a single-line message."""
+    """Return a deprecated function with a single-line message.
+
+    Returns:
+        object: Deprecated function used to verify single-line warning rendering.
+    """
 
     @deprecated("Use new_function instead.")
     def old_function() -> None:
@@ -79,7 +91,11 @@ def _deprecated_function() -> object:
 
 
 def _deprecated_class() -> object:
-    """Return a deprecated class."""
+    """Return a deprecated class.
+
+    Returns:
+        object: Deprecated class used to verify class warning rendering.
+    """
 
     @deprecated("Use NewExample instead.")
     class OldExample:
@@ -89,7 +105,11 @@ def _deprecated_class() -> object:
 
 
 def _non_string_deprecated_class() -> object:
-    """Return a class with malformed deprecation metadata."""
+    """Return a class with malformed deprecation metadata.
+
+    Returns:
+        object: Class carrying an invalid non-string deprecation marker.
+    """
 
     class BrokenDeprecation:
         """Class with a malformed deprecation marker."""
@@ -100,12 +120,20 @@ def _non_string_deprecated_class() -> object:
 
 
 def _plain_object() -> object:
-    """Return an object without deprecation metadata."""
+    """Return an object without deprecation metadata.
+
+    Returns:
+        object: Plain object without PEP 702 deprecation metadata.
+    """
     return object()
 
 
 def _empty_property() -> object:
-    """Return a property without an accessor."""
+    """Return a property without an accessor.
+
+    Returns:
+        object: Property lacking an accessor and deprecation metadata.
+    """
     return property()
 
 
@@ -152,7 +180,14 @@ def test_append_pep702_deprecation(
     expected_warning: str | None,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Verify PEP 702 metadata handling for supported autodoc objects."""
+    """Verify PEP 702 metadata handling for supported autodoc objects.
+
+    Args:
+        obj_factory (Callable[[], object]): Builds the object supplied to the autodoc hook.
+        expected_lines (list[str]): Expected docstring lines after hook processing.
+        expected_warning (str | None): Warning text expected for malformed metadata.
+        caplog (pytest.LogCaptureFixture): Captures malformed-metadata warnings from the hook.
+    """
     assert _append_deprecation(obj_factory()) == expected_lines
     if expected_warning is not None:
         assert expected_warning in caplog.text

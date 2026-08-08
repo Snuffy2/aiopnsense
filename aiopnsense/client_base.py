@@ -40,13 +40,13 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
             username (str): Username for API authentication.
             password (str): Password for API authentication.
             session (aiohttp.ClientSession): HTTP client session used for API requests.
-            opts (MutableMapping[str, Any] | None, optional): Optional client configuration values
+            opts (MutableMapping[str, Any] | None): Optional client configuration values
                 (e.g. ``opts={"verify_ssl": True}``).
             initial (bool | object): Deprecated alias for ``throw_errors``. When provided,
                 a ``DeprecationWarning`` is emitted. Ignored when ``throw_errors`` is also set.
+            name (str): Display name for the client instance.
             throw_errors (bool | object): Whether request and decorator errors should be
                 re-raised instead of logged and suppressed. Defaults to ``False``.
-            name (str): Display name for the client instance.
 
         Raises:
             OPNsenseInvalidArgument: Raised when ``initial`` or ``throw_errors`` is not a ``bool``.

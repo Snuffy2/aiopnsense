@@ -41,12 +41,29 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
         """Execute wrapped coroutine with shared timeout/exception logging.
 
         Args:
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+            self (Any): Client instance whose ``_throw_errors`` setting controls
+                whether caught errors are mapped and propagated or logged and
+                suppressed.
+            args (Any): Positional arguments forwarded to the wrapped coroutine.
+            kwargs (Any): Keyword arguments forwarded to the wrapped coroutine.
 
         Returns:
-            Any: Value produced by the wrapped callable, or ``None`` when an
-                error is suppressed.
+            Any: Wrapped coroutine result, or ``None`` when an error is
+                suppressed.
+
+        Raises:
+            asyncio.CancelledError: Re-raised when the wrapped coroutine is
+                cancelled.
+            OPNsenseTimeoutError: Re-raised when ``_throw_errors`` is true
+                and the wrapped coroutine raises this OPNsense error.
+            TimeoutError: Caught and mapped to an OPNsense error when
+                ``_throw_errors`` is true.
+            aiohttp.ServerTimeoutError: Caught and mapped to an OPNsense error
+                when ``_throw_errors`` is true.
+            Exception: Re-raised or mapped to an OPNsense error when
+                ``_throw_errors`` is true.
+            _map_opnsense_exception: Maps caught errors to an OPNsense error
+                when ``_throw_errors`` is true.
         """
         try:
             return await func(self, *args, **kwargs)
@@ -392,14 +409,16 @@ def normalize_lookup_token(value: Any) -> str:
 
 
 def api_value_matches(value: object, expected: str) -> bool:
-    """Compare OPNsense API values across string, numeric, and boolean forms.
+    """Compare a normalized OPNsense API value with its expected string.
 
     Args:
-        value: Raw value returned by OPNsense APIs.
-        expected: Normalized expected value.
+        value (object): API value to normalize; booleans become integer strings and
+            all other values are converted directly to strings.
+        expected (str): Expected normalized string value.
 
     Returns:
-        ``True`` when the normalized API value matches ``expected``.
+        bool: ``True`` when the normalized API value has the same string representation
+        as ``expected``.
     """
     if isinstance(value, bool):
         value = int(value)

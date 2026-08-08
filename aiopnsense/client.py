@@ -84,15 +84,11 @@ class OPNsenseClient(
                 used during client validation.
 
         Returns:
-            _T: Result returned by the validation request.
+            _T: Decoded response from the successful validation request.
 
         Raises:
-            OPNsenseInvalidURL: Raised when the configured URL is invalid.
-            OPNsenseSSLError: Raised when the TLS handshake fails.
-            OPNsenseTimeoutError: Raised when validation requests time out.
-            OPNsenseInvalidAuth: Raised when API authentication fails.
-            OPNsensePrivilegeMissing: Raised when the API user lacks privileges.
-            OPNsenseConnectionError: Raised when another client connection error occurs.
+            _map_opnsense_exception: Raised as the mapped public OPNsense error
+                when the request encounters an aiohttp client error or times out.
         """
         try:
             return await request()
@@ -101,24 +97,17 @@ class OPNsenseClient(
 
     async def validate(self, *, require_device_id: bool = True) -> None:
         """Validate connectivity, authentication, and minimum firmware support.
-           Note that this will throw errors, regardless of what self._throw_errors is set to.
 
+        This raises request failures regardless of ``self._throw_errors``; those
+        failures are mapped to public OPNsense errors by ``_run_validation_request``.
 
         Args:
             require_device_id (bool): Whether validation must resolve a physical-device
                 unique ID.
 
         Raises:
-            OPNsenseInvalidURL: Raised when the configured URL is invalid.
-            OPNsenseSSLError: Raised when the TLS handshake fails.
-            OPNsenseTimeoutError: Raised when validation requests time out.
-            OPNsenseInvalidAuth: Raised when API authentication fails.
-            OPNsensePrivilegeMissing: Raised when the API user lacks privileges.
-            OPNsenseConnectionError: Raised when another client connection error occurs.
             OPNsenseUnknownFirmware: Raised when firmware detection returns no version.
             OPNsenseBelowMinFirmware: Raised when the detected firmware is unsupported.
-            OPNsenseMissingDeviceUniqueID: Raised when no device unique ID can be
-                resolved and `require_device_id` is `True`.
         """
         orig_throw_errors = self._throw_errors
         self._throw_errors = True

@@ -192,6 +192,9 @@ def test_firmware_is_newer_returns_none_when_version_comparison_raises(
 
             Args:
                 _version (str): Version value passed by the helper.
+
+            Raises:
+                ValueError: Always raised to simulate a comparison failure.
             """
             raise ValueError("comparison failed")
 
@@ -248,7 +251,13 @@ def test_normalize_lookup_token() -> None:
     ],
 )
 def test_api_value_matches(value: object, expected: str, matches: bool) -> None:
-    """Compare API flag values consistently across mixed payload types."""
+    """Compare API flag values consistently across mixed payload types.
+
+    Args:
+        value (object): API payload value evaluated for equivalence.
+        expected (str): Normalized string expected from the API value.
+        matches (bool): Whether the normalized comparison should succeed.
+    """
     assert aiopnsense_helpers.api_value_matches(value, expected) is matches
 
 
@@ -282,7 +291,11 @@ async def test_log_errors_decorator_re_raise_and_suppress() -> None:
 
         @aiopnsense_helpers._log_errors
         async def boom(self) -> None:
-            """Raise RuntimeError for testing error handling."""
+            """Raise RuntimeError for testing error handling.
+
+            Raises:
+                RuntimeError: Always raised to exercise error handling.
+            """
             raise RuntimeError("boom")
 
     # When error throwing is disabled, errors are logged and suppressed.
@@ -337,11 +350,14 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
             """Raising timeout.
 
             Args:
-                *args (Any): Positional arguments forwarded to the wrapped callable.
-                **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+                args (Any): Positional arguments accepted by `raising_timeout`.
+                kwargs (Any): Keyword arguments accepted by `raising_timeout`.
 
             Returns:
                 NoReturn: This helper always raises ``TimeoutError``.
+
+            Raises:
+                TimeoutError: Always raised to test timeout handling.
             """
             raise TimeoutError("boom")
 
@@ -373,7 +389,11 @@ async def test_log_errors_re_raises_existing_opnsense_timeout_instance() -> None
 
         @aiopnsense_helpers._log_errors
         async def boom(self) -> None:
-            """Raise the pre-existing timeout error instance."""
+            """Raise the pre-existing timeout error instance.
+
+            Raises:
+                timeout_error: Always raised to preserve the original instance.
+            """
             raise timeout_error
 
     with pytest.raises(OPNsenseTimeoutError) as exc_info:
@@ -399,11 +419,14 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
             """Raising server timeout.
 
             Args:
-                *args (Any): Positional arguments forwarded to the wrapped callable.
-                **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+                args (Any): Positional arguments accepted by `raising_server_timeout`.
+                kwargs (Any): Keyword arguments accepted by `raising_server_timeout`.
 
             Returns:
-                Any: Value produced by the wrapped callable.
+                Any: This coroutine only raises the configured timeout.
+
+            Raises:
+                aiohttp.ServerTimeoutError: Always raised to test server-timeout handling.
             """
             raise aiohttp.ServerTimeoutError("srv")
 
@@ -464,7 +487,11 @@ async def test_log_errors_redacts_url_userinfo(raw_url: str, forbidden: tuple[st
 
         @aiopnsense_helpers._log_errors
         async def boom(self) -> None:
-            """Raise an invalid URL with credential leaks."""
+            """Raise an invalid URL with credential leaks.
+
+            Raises:
+                aiohttp.InvalidURL: Always raised to test credential redaction.
+            """
             raise aiohttp.InvalidURL(raw_url)
 
     client = Dummy()
@@ -482,7 +509,11 @@ async def test_log_errors_redacts_url_userinfo(raw_url: str, forbidden: tuple[st
 async def test_log_errors_redacts_client_response_error_userinfo(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Verify _log_errors redacts credentials in ClientResponseError messages."""
+    """Verify _log_errors redacts credentials in ClientResponseError messages.
+
+    Args:
+        caplog (pytest.LogCaptureFixture): Captures the redacted response-error log output.
+    """
 
     class Dummy:
         """Small wrapper for testing logged ClientResponseError redaction."""
@@ -491,7 +522,11 @@ async def test_log_errors_redacts_client_response_error_userinfo(
 
         @aiopnsense_helpers._log_errors
         async def boom(self) -> None:
-            """Raise ClientResponseError with embedded user credentials."""
+            """Raise ClientResponseError with embedded user credentials.
+
+            Raises:
+                aiohttp.ClientResponseError: Always raised to test credential redaction.
+            """
             request_info = MagicMock()
             request_info.real_url = "https://alice:secret@api.example/opn"
             raise aiohttp.ClientResponseError(

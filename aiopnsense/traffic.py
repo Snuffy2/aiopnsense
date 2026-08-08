@@ -94,12 +94,15 @@ def normalize_traffic_payload(
     interval: float,
     include_per_second_rates: bool = True,
 ) -> dict[str, Any]:
-    """Normalize OPNsense diagnostics traffic payloads.
+    """Normalize a raw OPNsense diagnostics traffic payload.
 
     Args:
-        payload: Raw traffic payload from ``/api/diagnostics/traffic`` or a stream event.
-        interval: Seconds represented by the traffic counters in the payload.
-        include_per_second_rates: Derive per-second rates when true.
+        payload (Mapping[str, Any]): Raw diagnostics payload containing interface
+            traffic counters.
+        interval (float): Elapsed sample interval used to calculate per-second
+            rates; non-positive values use one second.
+        include_per_second_rates (bool): Whether to add derived per-second rate
+            fields. When ``False``, only normalized counters are returned.
 
     Returns:
         dict[str, Any]: Normalized traffic sample with an ``interfaces`` mapping keyed by interface name.
@@ -165,6 +168,22 @@ class TrafficMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Normalized diagnostics traffic sample. Returns an
                 empty traffic sample when endpoint probing or response parsing
                 fails.
+
+        Raises:
+            AttributeError: Caught from endpoint probing or payload normalization
+                and mapped when error propagation is enabled.
+            OPNsenseError: Re-raised from an OPNsense client operation when error
+                propagation is enabled.
+            RuntimeError: Caught from endpoint probing or payload normalization
+                and mapped when error propagation is enabled.
+            TimeoutError: Caught from endpoint probing or payload normalization
+                and mapped when error propagation is enabled.
+            TypeError: Caught from endpoint probing or payload normalization and
+                mapped when error propagation is enabled.
+            ValueError: Caught from endpoint probing or payload normalization and
+                mapped when error propagation is enabled.
+            _map_opnsense_exception: Maps caught non-OPNsense errors to a public
+                OPNsense exception when error propagation is enabled.
         """
         empty_sample: dict[str, Any] = {"time": None, "interfaces": {}}
 
@@ -200,13 +219,31 @@ class TrafficMixin(AiopnsenseClientProtocol):
         """Yield normalized diagnostics traffic stream samples.
 
         Args:
-            poll_interval: OPNsense stream sample interval in seconds. Values
-                less than 1 are clamped to 1.
+            poll_interval (int): Requested stream interval in seconds. Values below
+                1 are clamped to 1, and the clamped value selects the stream endpoint.
 
         Yields:
-            Normalized traffic samples. The first stream event is discarded because
-            OPNsense stream endpoints commonly emit an initialization sample
-            before interval deltas stabilize.
+            dict[str, Any]: Normalized traffic samples after the initial valid timing
+                event is discarded because it cannot represent an interval delta.
+                Later samples use elapsed time between strictly increasing server
+                timestamps; after a timing reset, the next valid sample uses the
+                selected stream interval.
+
+        Raises:
+            AttributeError: Caught while probing the stream endpoint and mapped
+                when error propagation is enabled.
+            OPNsenseError: Re-raised from an OPNsense client operation when error
+                propagation is enabled.
+            RuntimeError: Caught while probing the stream endpoint and mapped
+                when error propagation is enabled.
+            TimeoutError: Caught while probing the stream endpoint and mapped
+                when error propagation is enabled.
+            TypeError: Caught while probing the stream endpoint and mapped when
+                error propagation is enabled.
+            ValueError: Caught while probing the stream endpoint and mapped when
+                error propagation is enabled.
+            _map_opnsense_exception: Maps caught non-OPNsense errors to a public
+                OPNsense exception when error propagation is enabled.
         """
         interval = max(poll_interval, 1)
         endpoint = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/{interval}"

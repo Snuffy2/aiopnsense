@@ -69,15 +69,16 @@ def append_pep702_deprecation(
     options: object,
     lines: list[str],
 ) -> None:
-    """Append PEP 702 deprecation metadata to autodoc docstrings.
+    """Prepend PEP 702 deprecation metadata during an autodoc docstring event.
 
     Args:
-        app: The Sphinx application emitting the event.
-        what: The type of object being documented.
-        name: The fully qualified object name.
-        obj: The object being documented.
-        options: The autodoc options for the object.
-        lines: The docstring lines Sphinx will render.
+        app (Sphinx): Sphinx application dispatching the event; unused by this hook.
+        what (str): Autodoc object type, such as ``"function"`` or ``"class"``.
+        name (str): Fully qualified name of the documented object.
+        obj (object): Documented object, inspected for PEP 702 metadata.
+        options (object): Autodoc directive options for the documented object.
+        lines (list[str]): Mutable docstring source lines, updated in place to
+            prepend the generated deprecation admonition.
     """
     del app, what, name, options
 
@@ -103,13 +104,14 @@ def append_pep702_deprecation(
 
 
 def setup(app: Sphinx) -> dict[str, bool]:
-    """Register Sphinx event hooks.
+    """Register this extension's Sphinx event hooks.
 
     Args:
-        app: The Sphinx application to configure.
+        app (Sphinx): Sphinx application used to register the autodoc docstring
+            hook.
 
     Returns:
-        Sphinx extension metadata.
+        dict[str, bool]: Sphinx extension metadata.
     """
     app.connect("autodoc-process-docstring", append_pep702_deprecation)
     return {"parallel_read_safe": True, "parallel_write_safe": True}

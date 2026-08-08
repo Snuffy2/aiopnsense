@@ -138,8 +138,8 @@ class FakeResponse:
             status (int): HTTP status code.
             reason (str): HTTP reason phrase.
             ok (bool): Whether the response should be treated as successful.
-            json_payload (Any): Value returned by ``json()``.
-            text_payload (str): Value returned by ``text()``.
+            json_payload (Any): Payload emitted by the fake ``json()`` method.
+            text_payload (str): Text emitted by the fake ``text()`` method.
             stream_chunks (list[bytes] | None): Payload yielded by ``content.iter_chunked``.
             include_request_info (bool): Whether to include minimal ``request_info`` metadata.
             request_url (str): URL exposed via ``request_info.real_url``.
@@ -244,7 +244,12 @@ def make_mock_session_client(
 def _patch_asyncio_create_task(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
-    """Prevent background worker tasks from running in tests."""
+    """Prevent background worker tasks from running in tests.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture used to replace ``asyncio.create_task``.
+        request (pytest.FixtureRequest): Current test request used to select queue-specific tests.
+    """
 
     if request.node.fspath and request.node.fspath.basename in {
         "test_client_base.py",
@@ -289,8 +294,8 @@ def _patch_asyncio_create_task(
         Args:
             coro (Coroutine[Any, Any, Any]): Coroutine wrapped by the logging
                 decorator.
-            *args (Any): Positional arguments forwarded to the wrapped callable.
-            **kwargs (Any): Keyword arguments forwarded to the wrapped callable.
+            args (Any): Positional arguments accepted by `_fake_create_task`.
+            kwargs (Any): Keyword arguments accepted by `_fake_create_task`.
 
         Returns:
             asyncio.Task[Any] | _DummyTask: Real task for non-aiopnsense
@@ -309,7 +314,11 @@ def _patch_asyncio_create_task(
 
 @pytest.fixture
 def fake_response_factory() -> Callable[..., FakeResponse]:
-    """Return a factory that constructs reusable fake HTTP responses."""
+    """Return a factory that constructs reusable fake HTTP responses.
+
+    Returns:
+        Callable[..., FakeResponse]: Factory for configurable fake HTTP responses.
+    """
 
     def _make(
         *,
@@ -352,7 +361,14 @@ def fake_response_factory() -> Callable[..., FakeResponse]:
 def fake_stream_response_factory(
     fake_response_factory: Callable[..., FakeResponse],
 ) -> Callable[..., FakeResponse]:
-    """Return a factory that constructs fake streaming responses."""
+    """Return a factory that constructs fake streaming responses.
+
+    Args:
+        fake_response_factory (Callable[..., FakeResponse]): Base response factory wrapped for stream tests.
+
+    Returns:
+        Callable[..., FakeResponse]: Factory for fake responses with byte-stream content.
+    """
 
     def _make(
         chunks: list[bytes],
@@ -379,7 +395,11 @@ def fake_stream_response_factory(
 
 @pytest.fixture
 async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClient], None]:
-    """Return a factory that constructs an OPNsenseClient for tests."""
+    """Return a factory that constructs an OPNsenseClient for tests.
+
+    Yields:
+        Callable[..., aiopnsense.OPNsenseClient]: Factory that creates clients and registers them for cleanup.
+    """
 
     clients: list[aiopnsense.OPNsenseClient] = []
 
@@ -393,12 +413,11 @@ async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClien
         """Create an OPNsense test client with a fake session by default.
 
         Args:
-            session (aiohttp.ClientSession | None, optional): HTTP client session used for API requests.
+            session (aiohttp.ClientSession | None): HTTP client session used for API requests.
             username (str): Username for API authentication.
             password (str): Password for API authentication.
             url (str): Base URL of the OPNsense instance.
-            **client_kwargs (Any): Additional keyword arguments passed to
-                ``OPNsenseClient``.
+            client_kwargs (Any): Keyword arguments accepted by `_make`.
 
         Returns:
             aiopnsense.OPNsenseClient: Configured client instance using the

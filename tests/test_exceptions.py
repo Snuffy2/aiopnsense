@@ -11,13 +11,21 @@ from aiopnsense.exceptions import _map_opnsense_exception, _opnsense_http_error
 
 
 def test_voucher_server_error() -> None:
-    """Raise OPNsenseVoucherServerError to ensure the exception class exists."""
+    """Raise OPNsenseVoucherServerError to ensure the exception class exists.
+
+    Raises:
+        aiopnsense_module.OPNsenseVoucherServerError: Raised to verify the public exception exists.
+    """
     with pytest.raises(aiopnsense_module.OPNsenseVoucherServerError):
         raise aiopnsense_module.OPNsenseVoucherServerError
 
 
 def test_missing_device_unique_id_error() -> None:
-    """Raise OPNsenseMissingDeviceUniqueID to ensure the exception class exists."""
+    """Raise OPNsenseMissingDeviceUniqueID to ensure the exception class exists.
+
+    Raises:
+        aiopnsense_module.OPNsenseMissingDeviceUniqueID: Raised to verify the public exception exists.
+    """
     with pytest.raises(aiopnsense_module.OPNsenseMissingDeviceUniqueID):
         raise aiopnsense_module.OPNsenseMissingDeviceUniqueID
 
@@ -46,7 +54,7 @@ def test_http_errors_map_to_public_exceptions(
 
     Args:
         status (int): HTTP status to map.
-        expected_exception (type[OPNsenseConnectionError]): Expected public exception type.
+        expected_exception (type[aiopnsense_module.OPNsenseConnectionError]): Expected public exception type.
     """
     error = _opnsense_http_error(status, "failure")
 
@@ -70,7 +78,7 @@ def test_arbitrary_errors_map_to_public_exceptions(
 
     Args:
         source_error (Exception): Raw exception to map.
-        expected_exception (type[OPNsenseError]): Expected public exception type.
+        expected_exception (type[aiopnsense_module.OPNsenseError]): Expected public exception type.
     """
     assert isinstance(_map_opnsense_exception(source_error), expected_exception)
 
