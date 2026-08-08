@@ -42,6 +42,8 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
 
         Args:
             self (Any): Value used by `inner`.
+            args (Any): Positional arguments forwarded to the wrapped coroutine.
+            kwargs (Any): Keyword arguments forwarded to the wrapped coroutine.
 
         Returns:
             Any: Value produced by the wrapped callable, or ``None`` when an

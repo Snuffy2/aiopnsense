@@ -417,6 +417,11 @@ class VnstatMixin(AiopnsenseClientProtocol):
     ) -> list[str]:
         """Collect interface names present across parsed vnStat payloads.
 
+        Args:
+            payloads (Mapping[str, Any] | MutableMapping[str, Any]): Parsed
+                vnStat payload mappings whose ``interfaces`` keys should be
+                merged.
+
         Returns:
             list[str]: Sorted unique interface names found across all supplied
                 payloads.

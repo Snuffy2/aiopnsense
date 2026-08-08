@@ -342,6 +342,10 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
         async def raising_timeout(*args: Any, **kwargs: Any) -> NoReturn:
             """Raising timeout.
 
+            Args:
+                args (Any): Positional arguments accepted by `raising_timeout`.
+                kwargs (Any): Keyword arguments accepted by `raising_timeout`.
+
             Returns:
                 NoReturn: This helper always raises ``TimeoutError``.
             """
@@ -399,6 +403,10 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
 
         async def raising_server_timeout(*args: Any, **kwargs: Any) -> Any:
             """Raising server timeout.
+
+            Args:
+                args (Any): Positional arguments accepted by `raising_server_timeout`.
+                kwargs (Any): Keyword arguments accepted by `raising_server_timeout`.
 
             Returns:
                 Any: Value produced by the wrapped callable.

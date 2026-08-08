@@ -219,6 +219,8 @@ async def test_telemetry_memory_swap_branches(make_client: Callable[..., Any]) -
 
             Args:
                 path (str): API endpoint path to request.
+                _args (Any): Positional arguments accepted by `fake_get`.
+                _kwargs (Any): Keyword arguments accepted by `fake_get`.
 
             Returns:
                 dict[str, Any]: Memory, swap, or empty fixture payload selected

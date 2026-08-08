@@ -75,6 +75,10 @@ class FakeResponse:
     async def json(self, *_args: Any, **_kwargs: Any) -> Any:
         """Parse JSON payload for response body.
 
+        Args:
+            _args (Any): Positional arguments accepted by `json`.
+            _kwargs (Any): Keyword arguments accepted by `json`.
+
         Returns:
             Any: Result returned by `json`.
         """
@@ -134,6 +138,7 @@ class FakeSession:
 
         Args:
             url (str): Value used by `get`.
+            kwargs (Any): Keyword arguments accepted by `get`.
 
         Returns:
             FakeResponse: Result returned by `get`.
@@ -146,6 +151,7 @@ class FakeSession:
 
         Args:
             url (str): Value used by `post`.
+            kwargs (Any): Keyword arguments accepted by `post`.
 
         Returns:
             FakeResponse: Result returned by `post`.

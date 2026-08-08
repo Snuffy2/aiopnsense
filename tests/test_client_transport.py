@@ -276,6 +276,10 @@ async def test_transport_errors_map_when_throwing(
     def raise_transport_error(*_args: Any, **_kwargs: Any) -> Any:
         """Raise the configured transport failure when the request starts.
 
+        Args:
+            _args (Any): Positional arguments accepted by `raise_transport_error`.
+            _kwargs (Any): Keyword arguments accepted by `raise_transport_error`.
+
         Returns:
             Any: Result returned by `raise_transport_error`.
         """
@@ -403,6 +407,10 @@ async def test_do_get_from_stream_error_initial_raises(
     def fake_get(*args: Any, **kwargs: Any) -> Any:
         """Fake get.
 
+        Args:
+            args (Any): Positional arguments accepted by `fake_get`.
+            kwargs (Any): Keyword arguments accepted by `fake_get`.
+
         Returns:
             Any: Mock value returned to support test behavior.
         """
@@ -440,6 +448,10 @@ async def test_do_get_with_response_format_text_and_post_success_paths(
     def fake_get(*args: Any, **kwargs: Any) -> Any:
         """Fake get.
 
+        Args:
+            args (Any): Positional arguments accepted by `fake_get`.
+            kwargs (Any): Keyword arguments accepted by `fake_get`.
+
         Returns:
             Any: Mock value returned to support test behavior.
         """
@@ -454,6 +466,10 @@ async def test_do_get_with_response_format_text_and_post_success_paths(
 
     def fake_post(*args: Any, **kwargs: Any) -> Any:
         """Fake post.
+
+        Args:
+            args (Any): Positional arguments accepted by `fake_post`.
+            kwargs (Any): Keyword arguments accepted by `fake_post`.
 
         Returns:
             Any: Mock value returned to support test behavior.
@@ -1171,6 +1187,11 @@ async def test_stream_json_events_close_on_iterator_break(
         """Fake response that tracks async context manager exit."""
 
         def __init__(self, **kwargs: Any) -> None:
+            """Initialize a tracked response.
+
+            Args:
+                kwargs (Any): Keyword arguments forwarded to ``FakeResponse``.
+            """
             self.exited = False
             self.closed = False
             super().__init__(**kwargs)

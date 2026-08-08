@@ -294,6 +294,8 @@ def _patch_asyncio_create_task(
         Args:
             coro (Coroutine[Any, Any, Any]): Coroutine wrapped by the logging
                 decorator.
+            args (Any): Positional arguments accepted by `_fake_create_task`.
+            kwargs (Any): Keyword arguments accepted by `_fake_create_task`.
 
         Returns:
             asyncio.Task[Any] | _DummyTask: Real task for non-aiopnsense
@@ -415,6 +417,7 @@ async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClien
             username (str): Username for API authentication.
             password (str): Password for API authentication.
             url (str): Base URL of the OPNsense instance.
+            client_kwargs (Any): Keyword arguments accepted by `_make`.
 
         Returns:
             aiopnsense.OPNsenseClient: Configured client instance using the

@@ -402,6 +402,11 @@ def test_create_client_uses_live_config(monkeypatch: pytest.MonkeyPatch) -> None
         """Capture constructor arguments for verification."""
 
         def __init__(self, **kwargs: Any) -> None:
+            """Store constructor arguments for verification.
+
+            Args:
+                kwargs (Any): Keyword arguments supplied to the constructor.
+            """
             self.kwargs = kwargs
 
     fake_client = FakeOPNsenseClient()

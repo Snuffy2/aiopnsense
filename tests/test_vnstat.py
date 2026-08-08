@@ -190,6 +190,8 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: Any) ->
 
             Args:
                 path (str): API endpoint path to request.
+                _args (Any): Positional arguments accepted by `fake_safe_get`.
+                _kwargs (Any): Keyword arguments accepted by `fake_safe_get`.
 
             Returns:
                 dict[str, Any]: Mocked vnStat/system-time payloads by endpoint path.
@@ -246,6 +248,8 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: Any) -> Non
 
             Args:
                 path (str): API endpoint path to request.
+                _args (Any): Positional arguments accepted by `fake_safe_get`.
+                _kwargs (Any): Keyword arguments accepted by `fake_safe_get`.
 
             Returns:
                 dict[str, Any]: Mocked payloads for system-time endpoint coverage.
