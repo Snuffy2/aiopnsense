@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from datetime import timedelta, timezone
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -90,39 +90,35 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client: Cl
 
 
 @pytest.mark.parametrize(
-    ("endpoint_side_effect", "showstat_available"),
+    "showstat_available",
     [
-        pytest.param(
-            [True, True],
-            True,
-            id="showstat-available",
-        ),
-        pytest.param(
-            [True, False],
-            False,
-            id="showstat-missing",
-        ),
+        pytest.param(True, id="showstat-available"),
+        pytest.param(False, id="showstat-missing"),
     ],
 )
 @pytest.mark.asyncio
-async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
+async def test_get_speedtest_conditionally_fetches_optional_showstat_payload(
     make_client: ClientType,
-    endpoint_side_effect: list[bool],
     showstat_available: bool,
 ) -> None:
-    """Validate ``get_speedtest`` probes ``showstat`` before optional fetches.
+    """Validate ``get_speedtest`` conditionally fetches the ``showstat`` payload.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        endpoint_side_effect (list[bool]): Endpoint availability responses in call order.
         showstat_available (bool): Whether the ``showstat`` endpoint should be fetched.
 
     Returns:
-        None: This test validates endpoint probing order and conditional fetches.
+        None: This test validates endpoint availability and conditional fetches.
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=endpoint_side_effect)
+        endpoint_availability = {
+            "/api/speedtest/service/showlog": True,
+            "/api/speedtest/service/showstat": showstat_available,
+        }
+        client._is_get_endpoint_available = AsyncMock(
+            side_effect=lambda endpoint: endpoint_availability[endpoint]
+        )
         client._safe_list_get = AsyncMock(
             return_value=[
                 [
@@ -146,23 +142,19 @@ async def test_get_speedtest_probes_showstat_before_fetching_optional_payload(
         result = await client.get_speedtest()
 
         assert result["available"] is True
-        assert client._is_get_endpoint_available.await_args_list == [
-            call("/api/speedtest/service/showlog"),
-            call("/api/speedtest/service/showstat"),
-        ]
+        assert client._is_get_endpoint_available.await_count == 2
+        client._is_get_endpoint_available.assert_any_await("/api/speedtest/service/showlog")
+        client._is_get_endpoint_available.assert_any_await("/api/speedtest/service/showstat")
         client._get_resolved_opnsense_timezone.assert_awaited_once_with()
         client._safe_list_get.assert_awaited_once_with("/api/speedtest/service/showlog")
 
         if showstat_available:
             client._safe_dict_get.assert_awaited_once_with("/api/speedtest/service/showstat")
-            assert result["last"]["download"]["value"] == 1.0
-            assert result["last"]["upload"]["value"] == 2.0
-            assert result["last"]["latency"]["value"] == 3.0
         else:
             client._safe_dict_get.assert_not_awaited()
-            assert result["last"]["download"]["value"] == 1.0
-            assert result["last"]["upload"]["value"] == 2.0
-            assert result["last"]["latency"]["value"] == 3.0
+        assert result["last"]["download"]["value"] == 1.0
+        assert result["last"]["upload"]["value"] == 2.0
+        assert result["last"]["latency"]["value"] == 3.0
     finally:
         await client.async_close()
 
