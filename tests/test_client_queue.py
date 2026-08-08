@@ -329,7 +329,7 @@ async def test_get_uses_unknown_when_inspect_stack_raises(
                 """Stack.
 
                 Returns:
-                    Any: Value produced by this helper method.
+                    Any: No stack details; this method always raises instead.
 
                 Raises:
                     IndexError: Always raised to simulate unavailable stack details.
@@ -448,7 +448,7 @@ async def test_post_uses_unknown_when_inspect_stack_raises(
                 """Stack.
 
                 Returns:
-                    Any: Value produced by this helper method.
+                    Any: No stack details; this method always raises instead.
 
                 Raises:
                     IndexError: Always raised to simulate unavailable stack details.
@@ -653,8 +653,8 @@ async def test_stream_interface_traffic_does_not_enqueue_request(
     """Live traffic stream should bypass the queued request worker.
 
     Args:
-        make_client (MakeClientFactory): Value used by `test_stream_interface_traffic_does_not_enqueue_request`.
-        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_interface_traffic_does_not_enqueue_request`.
+        make_client (MakeClientFactory): Fixture factory used to configure the stream client.
+        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying the streamed traffic samples.
     """
 
     client, session = make_mock_session_client(make_client)

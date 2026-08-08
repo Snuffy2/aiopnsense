@@ -716,7 +716,7 @@ async def test_is_post_endpoint_available_returns_none_for_unsafe_path_without_h
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-        path (str): Value used by `test_is_post_endpoint_available_returns_none_for_unsafe_path_without_http_request`.
+        path (str): Unsafe POST path that must not trigger an HTTP probe.
 
     Returns:
         None: This test validates unknown availability behavior for unsafe POST paths.
@@ -995,7 +995,7 @@ async def test_set_use_snake_case_initial_raises_unknown_firmware_when_version_m
     """Verify missing firmware version still raises unknown-firmware in legacy init mode.
 
     Args:
-        make_client (MakeClientFactory): Value used by `test_set_use_snake_case_initial_raises_unknown_firmware_when_version_missing`.
+        make_client (MakeClientFactory): Fixture factory used to simulate a client without firmware data.
     """
 
     client = make_client()

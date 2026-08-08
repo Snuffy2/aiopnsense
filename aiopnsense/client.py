@@ -84,7 +84,7 @@ class OPNsenseClient(
                 used during client validation.
 
         Returns:
-            _T: Result returned by the validation request.
+            _T: Decoded response from the successful validation request.
 
         Raises:
             _map_opnsense_exception: Raised as the mapped public OPNsense error

@@ -19,7 +19,7 @@ def _load_conf_namespace() -> dict[str, Any]:
     """Execute the Sphinx config and return its namespace.
 
     Returns:
-        dict[str, Any]: Result returned by `_load_conf_namespace`.
+        dict[str, Any]: Namespace produced by executing ``docs/source/conf.py``.
     """
     return runpy.run_path(str(CONF_PATH))
 
@@ -28,7 +28,7 @@ def _append_deprecation(obj: object) -> list[str]:
     """Run the PEP 702 autodoc hook for an object.
 
     Args:
-        obj (object): Value used by `_append_deprecation`.
+        obj (object): Object whose PEP 702 metadata is passed to the autodoc hook.
 
     Returns:
         list[str]: The docstring lines mutated by the hook.
@@ -57,7 +57,7 @@ def _deprecated_property() -> object:
     """Return a deprecated property with a multiline message.
 
     Returns:
-        object: Result returned by `_deprecated_property`.
+        object: Deprecated property used to verify multiline warning rendering.
     """
 
     class Example:
@@ -80,7 +80,7 @@ def _deprecated_function() -> object:
     """Return a deprecated function with a single-line message.
 
     Returns:
-        object: Result returned by `_deprecated_function`.
+        object: Deprecated function used to verify single-line warning rendering.
     """
 
     @deprecated("Use new_function instead.")
@@ -94,7 +94,7 @@ def _deprecated_class() -> object:
     """Return a deprecated class.
 
     Returns:
-        object: Result returned by `_deprecated_class`.
+        object: Deprecated class used to verify class warning rendering.
     """
 
     @deprecated("Use NewExample instead.")
@@ -108,7 +108,7 @@ def _non_string_deprecated_class() -> object:
     """Return a class with malformed deprecation metadata.
 
     Returns:
-        object: Result returned by `_non_string_deprecated_class`.
+        object: Class carrying an invalid non-string deprecation marker.
     """
 
     class BrokenDeprecation:
@@ -123,7 +123,7 @@ def _plain_object() -> object:
     """Return an object without deprecation metadata.
 
     Returns:
-        object: Result returned by `_plain_object`.
+        object: Plain object without PEP 702 deprecation metadata.
     """
     return object()
 
@@ -132,7 +132,7 @@ def _empty_property() -> object:
     """Return a property without an accessor.
 
     Returns:
-        object: Result returned by `_empty_property`.
+        object: Property lacking an accessor and deprecation metadata.
     """
     return property()
 
@@ -183,10 +183,10 @@ def test_append_pep702_deprecation(
     """Verify PEP 702 metadata handling for supported autodoc objects.
 
     Args:
-        obj_factory (Callable[[], object]): Value used by `test_append_pep702_deprecation`.
-        expected_lines (list[str]): Value used by `test_append_pep702_deprecation`.
-        expected_warning (str | None): Value used by `test_append_pep702_deprecation`.
-        caplog (pytest.LogCaptureFixture): Value used by `test_append_pep702_deprecation`.
+        obj_factory (Callable[[], object]): Builds the object supplied to the autodoc hook.
+        expected_lines (list[str]): Expected docstring lines after hook processing.
+        expected_warning (str | None): Warning text expected for malformed metadata.
+        caplog (pytest.LogCaptureFixture): Captures malformed-metadata warnings from the hook.
     """
     assert _append_deprecation(obj_factory()) == expected_lines
     if expected_warning is not None:

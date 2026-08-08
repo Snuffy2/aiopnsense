@@ -254,9 +254,9 @@ def test_api_value_matches(value: object, expected: str, matches: bool) -> None:
     """Compare API flag values consistently across mixed payload types.
 
     Args:
-        value (object): Value used by `test_api_value_matches`.
-        expected (str): Value used by `test_api_value_matches`.
-        matches (bool): Value used by `test_api_value_matches`.
+        value (object): API payload value evaluated for equivalence.
+        expected (str): Normalized string expected from the API value.
+        matches (bool): Whether the normalized comparison should succeed.
     """
     assert aiopnsense_helpers.api_value_matches(value, expected) is matches
 
@@ -423,7 +423,7 @@ async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: Clie
                 kwargs (Any): Keyword arguments accepted by `raising_server_timeout`.
 
             Returns:
-                Any: Value produced by the wrapped callable.
+                Any: This coroutine only raises the configured timeout.
 
             Raises:
                 aiohttp.ServerTimeoutError: Always raised to test server-timeout handling.
@@ -512,7 +512,7 @@ async def test_log_errors_redacts_client_response_error_userinfo(
     """Verify _log_errors redacts credentials in ClientResponseError messages.
 
     Args:
-        caplog (pytest.LogCaptureFixture): Value used by `test_log_errors_redacts_client_response_error_userinfo`.
+        caplog (pytest.LogCaptureFixture): Captures the redacted response-error log output.
     """
 
     class Dummy:

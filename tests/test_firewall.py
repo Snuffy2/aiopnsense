@@ -75,7 +75,7 @@ async def test_get_firewall_rules_skips_invalid_rows(
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        caplog (pytest.LogCaptureFixture): Value used by `test_get_firewall_rules_skips_invalid_rows`.
+        caplog (pytest.LogCaptureFixture): Captures warnings emitted for skipped CSV rows.
     """
     client = make_client()
     try:
@@ -146,9 +146,9 @@ async def test_get_firewall_rules_supports_opnsense_csv_versions(
     """Firewall rule downloads should support all released CSV formats.
 
     Args:
-        make_client (ClientType): Value used by `test_get_firewall_rules_supports_opnsense_csv_versions`.
-        response (str): Value used by `test_get_firewall_rules_supports_opnsense_csv_versions`.
-        expected (dict[str, str]): Value used by `test_get_firewall_rules_supports_opnsense_csv_versions`.
+        make_client (ClientType): Fixture factory used to configure the CSV response client.
+        response (str): Firewall CSV payload for the OPNsense version case.
+        expected (dict[str, str]): Parsed rule mapping expected from the payload.
     """
     client = make_client()
     try:
@@ -169,7 +169,7 @@ async def test_get_nat_source_rules_labels_empty_interface_address_target(
     """Source NAT rows with an empty target should expose an interface-address label.
 
     Args:
-        make_client (ClientType): Value used by `test_get_nat_source_rules_labels_empty_interface_address_target`.
+        make_client (ClientType): Fixture factory used to configure the source-NAT response.
     """
     client = make_client()
     try:
@@ -324,7 +324,7 @@ async def test_uses_unified_nat_template_handles_invalid_firmware_string(
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        caplog (pytest.LogCaptureFixture): Value used by `test_uses_unified_nat_template_handles_invalid_firmware_string`.
+        caplog (pytest.LogCaptureFixture): Captures the invalid-version normalization debug log.
     """
     client = make_client()
     try:
@@ -387,8 +387,8 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        method_name (str): Value used by `test_rule_helpers_return_empty_when_endpoint_unavailable`.
-        api_endpoint (str): Value used by `test_rule_helpers_return_empty_when_endpoint_unavailable`.
+        method_name (str): Rule helper invoked for the unavailable endpoint.
+        api_endpoint (str): Endpoint that the helper must check before fetching.
         expected (dict[str, object]): Expected empty rule mapping.
     """
     client = make_client()
@@ -474,9 +474,9 @@ async def test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11(
     """Source NAT should hide OPNsense 26.1.11 generated automatic rows only.
 
     Args:
-        make_client (ClientType): Value used by `test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11`.
-        firmware_version (str): Value used by `test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11`.
-        expected (dict[str, Any]): Value used by `test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11`.
+        make_client (ClientType): Fixture factory used to configure the source-NAT response.
+        firmware_version (str): OPNsense version controlling automatic-row filtering.
+        expected (dict[str, Any]): Rule mapping expected after version-specific filtering.
     """
     client = make_client()
     try:

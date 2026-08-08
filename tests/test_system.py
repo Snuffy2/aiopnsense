@@ -214,7 +214,7 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_endpoint_unavailab
     """Verify resolved-only timezone lookup returns ``None`` when endpoint is unavailable.
 
     Args:
-        make_client (ClientType): Value used by `test_get_resolved_opnsense_timezone_returns_none_on_endpoint_unavailable`.
+        make_client (ClientType): Client fixture whose timezone endpoint is unavailable.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -237,7 +237,7 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_probe_error(
     """Verify a mapped endpoint probe error does not abort timezone enrichment.
 
     Args:
-        make_client (ClientType): Value used by `test_get_resolved_opnsense_timezone_returns_none_on_probe_error`.
+        make_client (ClientType): Client fixture whose endpoint probe raises an error.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -265,7 +265,7 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_fetch_error(
     """Verify resolved-only timezone lookup returns ``None`` when fetch fails.
 
     Args:
-        make_client (ClientType): Value used by `test_get_resolved_opnsense_timezone_returns_none_on_fetch_error`.
+        make_client (ClientType): Client fixture whose timezone fetch raises an error.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -287,7 +287,7 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_malformed_datetime
     """Verify resolved-only timezone lookup returns ``None`` for malformed data.
 
     Args:
-        make_client (ClientType): Value used by `test_get_resolved_opnsense_timezone_returns_none_on_malformed_datetime`.
+        make_client (ClientType): Client fixture returning a malformed timezone datetime.
     """
     client, _session = make_mock_session_client(make_client)
     try:

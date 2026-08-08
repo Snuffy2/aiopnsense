@@ -118,7 +118,7 @@ class ClientEndpointMixin:
         """Deprecated wrapper that preserves legacy ``initial`` compatibility.
 
         Args:
-            initial (bool): Value used by `set_use_snake_case`.
+            initial (bool): Whether to preserve legacy initial-detection behavior.
         """
         await self._set_use_snake_case(initial=initial)
 

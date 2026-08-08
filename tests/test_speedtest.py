@@ -349,8 +349,8 @@ async def test_parse_showlog_latest_rejects_malformed_rows(
     """_parse_showlog_latest should reject missing or malformed history rows.
 
     Args:
-        make_client (ClientType): Value used by `test_parse_showlog_latest_rejects_malformed_rows`.
-        show_log (object): Value used by `test_parse_showlog_latest_rejects_malformed_rows`.
+        make_client (ClientType): Client fixture returning the parameterized show-log row.
+        show_log (object): Malformed show-log payload expected to be rejected.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -410,11 +410,11 @@ async def test_parse_showlog_latest_preserves_server_fields(
     """_parse_showlog_latest should preserve separate server id and server name.
 
     Args:
-        make_client (ClientType): Value used by `test_parse_showlog_latest_preserves_server_fields`.
-        raw_server_id (object): Value used by `test_parse_showlog_latest_preserves_server_fields`.
-        raw_server_name (str): Value used by `test_parse_showlog_latest_preserves_server_fields`.
-        expected_server_id (str | None): Value used by `test_parse_showlog_latest_preserves_server_fields`.
-        expected_server_name (str | None): Value used by `test_parse_showlog_latest_preserves_server_fields`.
+        make_client (ClientType): Client fixture returning the parameterized show-log row.
+        raw_server_id (object): Server identifier in the raw show-log payload.
+        raw_server_name (str): Server name in the raw show-log payload.
+        expected_server_id (str | None): Normalized server identifier expected in the result.
+        expected_server_name (str | None): Normalized server name expected in the result.
     """
     client, _session = make_mock_session_client(make_client)
     try:

@@ -20,7 +20,7 @@ def load_dump_module() -> ModuleType:
     """Load the script as an importable module for direct unit testing.
 
     Returns:
-        ModuleType: Result returned by `load_dump_module`.
+        ModuleType: Imported dump-script module under test.
     """
     module_path = Path(__file__).parents[1] / "scripts" / "aiopnsense_dump.py"
     sys.path.insert(0, str(module_path.parent))
@@ -54,9 +54,9 @@ class FakeClient:
         """Create the async fakes used by run_endpoint tests.
 
         Args:
-            system_info_return (dict[str, Any] | None): Value used by `__init__`.
-            firmware_update_return (dict[str, Any] | None): Value used by `__init__`.
-            stream_samples (tuple[dict[str, Any], ...]): Value used by `__init__`.
+            system_info_return (dict[str, Any] | None): Canned system-info response.
+            firmware_update_return (dict[str, Any] | None): Canned firmware-update response.
+            stream_samples (tuple[dict[str, Any], ...]): Samples emitted by the traffic stream.
         """
         self.validate = AsyncMock()
         self.async_close = AsyncMock()
@@ -73,10 +73,10 @@ class FakeClient:
         """Return a bounded async sequence for streaming endpoint tests.
 
         Args:
-            poll_interval (int): Value used by `stream_interface_traffic`.
+            poll_interval (int): Requested interval recorded for later assertions.
 
         Returns:
-            Any: Result returned by `stream_interface_traffic`.
+            Any: Async iterator over the configured traffic samples.
         """
         self.stream_interface_traffic_calls += 1
         self.stream_poll_intervals.append(poll_interval)
@@ -190,8 +190,8 @@ def test_choose_endpoint_from_menu_prints_method_and_warning(
     """Menu rows include endpoint-to-method mapping and warning annotation.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_choose_endpoint_from_menu_prints_method_and_warning`.
-        capsys (pytest.CaptureFixture[str]): Value used by `test_choose_endpoint_from_menu_prints_method_and_warning`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that supplies the menu selection.
+        capsys (pytest.CaptureFixture[str]): Fixture that captures rendered menu rows.
     """
     module = load_dump_module()
     monkeypatch.setattr("builtins.input", lambda _prompt="": "3")
@@ -211,7 +211,7 @@ def test_choose_endpoint_from_menu_accepts_number(monkeypatch: pytest.MonkeyPatc
     """Menu input of a 1-based number returns the selected endpoint.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_choose_endpoint_from_menu_accepts_number`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that supplies the numeric menu selection.
     """
     module = load_dump_module()
     monkeypatch.setattr("builtins.input", lambda _prompt="": "2")
@@ -228,8 +228,8 @@ def test_choose_endpoint_from_menu_rejects_invalid_number(
     """Any invalid menu input should exit with a clear error.
 
     Args:
-        selection (str): Value used by `test_choose_endpoint_from_menu_rejects_invalid_number`.
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_choose_endpoint_from_menu_rejects_invalid_number`.
+        selection (str): Invalid menu input expected to be rejected.
+        monkeypatch (pytest.MonkeyPatch): Fixture that supplies the invalid selection.
     """
     module = load_dump_module()
     monkeypatch.setattr("builtins.input", lambda _prompt="": selection)
@@ -245,8 +245,8 @@ def test_choose_endpoint_from_menu_rejects_prompt_cancellation(
     """Prompt cancellation exits through the same controlled invalid-selection path.
 
     Args:
-        prompt_error (type[BaseException]): Value used by `test_choose_endpoint_from_menu_rejects_prompt_cancellation`.
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_choose_endpoint_from_menu_rejects_prompt_cancellation`.
+        prompt_error (type[BaseException]): Prompt cancellation exception to simulate.
+        monkeypatch (pytest.MonkeyPatch): Fixture that replaces input with the failing prompt.
     """
     module = load_dump_module()
 
@@ -254,7 +254,7 @@ def test_choose_endpoint_from_menu_rejects_prompt_cancellation(
         """Raise the configured prompt cancellation error.
 
         Args:
-            _prompt (str): Value used by `raise_prompt_error`.
+            _prompt (str): Input prompt ignored before raising the configured error.
 
         Raises:
             prompt_error: The configured prompt cancellation error.
@@ -355,7 +355,7 @@ async def test_run_endpoint_collects_empty_stream_with_short_timeout() -> None:
             """Return the stream iterator.
 
             Returns:
-                'StalledStream': Result returned by `__aiter__`.
+                'StalledStream': The stream instance used for async iteration.
             """
             return self
 
@@ -363,7 +363,7 @@ async def test_run_endpoint_collects_empty_stream_with_short_timeout() -> None:
             """Wait briefly and then end iteration.
 
             Returns:
-                dict[str, Any]: Result returned by `__anext__`.
+                dict[str, Any]: Next traffic sample, if the simulated wait completes.
 
             Raises:
                 StopAsyncIteration: Raised after the simulated wait ends.
@@ -381,10 +381,10 @@ async def test_run_endpoint_collects_empty_stream_with_short_timeout() -> None:
         """Expose the stalled stream with capture for the polling interval.
 
         Args:
-            poll_interval (int): Value used by `fake_stream`.
+            poll_interval (int): Requested interval ignored by the stalled stream.
 
         Returns:
-            StalledStream: Result returned by `fake_stream`.
+            StalledStream: Configured stalled stream instance.
         """
         del poll_interval
         client.stream_interface_traffic_calls += 1
@@ -414,7 +414,7 @@ async def test_run_endpoint_propagates_stream_timeout_error_and_closes_stream(
     """Iterator TimeoutError must propagate and the stream must still close.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_run_endpoint_propagates_stream_timeout_error_and_closes_stream`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that injects the timeout stream.
     """
     module = load_dump_module()
 
@@ -430,7 +430,7 @@ async def test_run_endpoint_propagates_stream_timeout_error_and_closes_stream(
             """Return the stream iterator.
 
             Returns:
-                TimeoutStream: Result returned by `__aiter__`.
+                TimeoutStream: The stream instance used for async iteration.
             """
             return self
 
@@ -438,7 +438,7 @@ async def test_run_endpoint_propagates_stream_timeout_error_and_closes_stream(
             """Raise the simulated stream timeout.
 
             Returns:
-                dict[str, Any]: Result returned by `__anext__`.
+                dict[str, Any]: Next traffic sample before the simulated timeout.
 
             Raises:
                 TimeoutError: Always raised to simulate a stream timeout.
@@ -458,10 +458,10 @@ async def test_run_endpoint_propagates_stream_timeout_error_and_closes_stream(
         """Expose the timeout stream with capture for the polling interval.
 
         Args:
-            poll_interval (int): Value used by `fake_stream`.
+            poll_interval (int): Requested interval ignored by the timeout stream.
 
         Returns:
-            TimeoutStream: Result returned by `fake_stream`.
+            TimeoutStream: Configured timeout stream instance.
         """
         del poll_interval
         client.stream_interface_traffic_calls += 1
@@ -487,8 +487,8 @@ async def test_run_endpoint_stream_error_beats_close_error(
     """Primary stream errors preserve when stream close fails too.
 
     Args:
-        caplog (pytest.LogCaptureFixture): Value used by `test_run_endpoint_stream_error_beats_close_error`.
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_run_endpoint_stream_error_beats_close_error`.
+        caplog (pytest.LogCaptureFixture): Fixture that captures the close-failure debug log.
+        monkeypatch (pytest.MonkeyPatch): Fixture that injects the failing-close stream.
     """
     module = load_dump_module()
 
@@ -504,7 +504,7 @@ async def test_run_endpoint_stream_error_beats_close_error(
             """Return the stream iterator.
 
             Returns:
-                TimeoutStream: Result returned by `__aiter__`.
+                TimeoutStream: The stream instance used for async iteration.
             """
             return self
 
@@ -512,7 +512,7 @@ async def test_run_endpoint_stream_error_beats_close_error(
             """Raise the simulated stream timeout.
 
             Returns:
-                dict[str, Any]: Result returned by `__anext__`.
+                dict[str, Any]: Next traffic sample before the simulated timeout.
 
             Raises:
                 TimeoutError: Always raised to simulate a stream timeout.
@@ -536,10 +536,10 @@ async def test_run_endpoint_stream_error_beats_close_error(
         """Expose the failing-close stream for polling capture.
 
         Args:
-            poll_interval (int): Value used by `fake_stream`.
+            poll_interval (int): Requested interval ignored by the failing-close stream.
 
         Returns:
-            TimeoutStream: Result returned by `fake_stream`.
+            TimeoutStream: Configured timeout stream instance.
         """
         del poll_interval
         client.stream_interface_traffic_calls += 1
@@ -572,9 +572,9 @@ async def test_async_main_list_uses_write_output_and_skips_env_load(
     """--list uses write_output and does not load live config.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_async_main_list_uses_write_output_and_skips_env_load`.
-        tmp_path (Path): Value used by `test_async_main_list_uses_write_output_and_skips_env_load`.
-        capsys (pytest.CaptureFixture[str]): Value used by `test_async_main_list_uses_write_output_and_skips_env_load`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that spies on config loading and output writing.
+        tmp_path (Path): Temporary directory containing the endpoint-list output.
+        capsys (pytest.CaptureFixture[str]): Fixture that captures the rendered endpoint list.
     """
     module = load_dump_module()
     load_live_config = MagicMock(
@@ -589,8 +589,8 @@ async def test_async_main_list_uses_write_output_and_skips_env_load(
         """Capture payload and output path while preserving write behavior.
 
         Args:
-            payload (Any): Value used by `spy_write_output`.
-            output (Path | None): Value used by `spy_write_output`.
+            payload (Any): Endpoint-list payload passed to the writer.
+            output (Path | None): Optional JSON output path passed to the writer.
         """
         write_calls.append((payload, output))
         original_write_output(payload, output)
@@ -619,7 +619,7 @@ async def test_async_main_returns_zero_on_success(
     """Normal execution path returns zero from async_main.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_async_main_returns_zero_on_success`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that replaces live dependencies with fakes.
     """
     module = load_dump_module()
     config = object()
@@ -646,7 +646,7 @@ async def test_async_main_wires_options_into_dependencies(
     """Endpoint, env file, output file, and stream seconds are passed through.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_async_main_wires_options_into_dependencies`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that captures wired async dependencies.
     """
     module = load_dump_module()
     config = object()
@@ -669,11 +669,11 @@ async def test_async_main_wires_options_into_dependencies(
         """Capture the resolved dependencies from async_main wiring.
 
         Args:
-            config_value (object): Value used by `fake_create_client`.
-            session_value (object): Value used by `fake_create_client`.
+            config_value (object): Loaded config passed to client construction.
+            session_value (object): HTTP session passed to client construction.
 
         Returns:
-            FakeClient: Result returned by `fake_create_client`.
+            FakeClient: Client stub used by the async entry point.
         """
         created["cfg"] = config_value
         created["session"] = session_value
@@ -686,11 +686,11 @@ async def test_async_main_wires_options_into_dependencies(
 
         Args:
             client_arg (FakeClient): Client created by the async entry point.
-            endpoint_name (str): Value used by `fake_run_endpoint`.
-            stream_seconds (float): Value used by `fake_run_endpoint`.
+            endpoint_name (str): Endpoint selected by parsed CLI options.
+            stream_seconds (float): Stream duration selected by parsed CLI options.
 
         Returns:
-            dict[str, Any]: Result returned by `fake_run_endpoint`.
+            dict[str, Any]: Canned endpoint result written to output.
         """
         run_calls.append((client_arg, endpoint_name, stream_seconds))
         return endpoint_result
@@ -699,8 +699,8 @@ async def test_async_main_wires_options_into_dependencies(
         """Capture output write intent for assertable side effects.
 
         Args:
-            payload (dict[str, Any]): Value used by `fake_write_output`.
-            output (Path | None): Value used by `fake_write_output`.
+            payload (dict[str, Any]): Endpoint result passed to the output writer.
+            output (Path | None): Optional file path passed to the output writer.
         """
         write_calls.append((payload, output))
 
@@ -742,7 +742,7 @@ async def test_async_main_closes_client_when_run_endpoint_fails(
     """``async_close`` is still awaited when run_endpoint raises.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_async_main_closes_client_when_run_endpoint_fails`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes endpoint execution fail.
     """
     module = load_dump_module()
     config = object()
@@ -772,7 +772,7 @@ async def test_async_main_preserves_run_endpoint_error_when_close_fails(
     """``async_close`` failures do not mask the primary endpoint error.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_async_main_preserves_run_endpoint_error_when_close_fails`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes endpoint execution and close fail.
     """
     module = load_dump_module()
     config = object()
@@ -803,7 +803,7 @@ async def test_async_main_preserves_primary_oserror_when_close_raises_oserror(
     """`OSError` from the endpoint remains visible when close also raises `OSError`.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_async_main_preserves_primary_oserror_when_close_raises_oserror`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that simulates competing I/O failures.
     """
     module = load_dump_module()
     config = object()
@@ -834,7 +834,7 @@ async def test_async_main_preserves_cancelled_error_when_close_fails(
     """``async_close`` failures do not mask cancellation.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_async_main_preserves_cancelled_error_when_close_fails`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that simulates cancellation and close failure.
     """
     module = load_dump_module()
     config = object()
@@ -865,7 +865,7 @@ async def test_async_main_closes_client_when_validate_fails(
     """``async_close`` is still awaited when ``validate`` raises.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_async_main_closes_client_when_validate_fails`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes client validation fail.
     """
     module = load_dump_module()
     config = object()
@@ -894,7 +894,7 @@ def test_main_returns_zero_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
     """``main`` returns 0 when async_main completes successfully.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_main_returns_zero_on_success`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` succeed.
     """
     module = load_dump_module()
 
@@ -909,7 +909,7 @@ def test_main_turns_live_config_error_into_system_exit(
     """``main`` converts ``LiveConfigError`` from async_main into ``SystemExit``.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_main_turns_live_config_error_into_system_exit`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise config failure.
     """
     module = load_dump_module()
 
@@ -930,7 +930,7 @@ def test_main_turns_opnsense_error_into_system_exit(
     """``main`` converts aiopnsense live failures into concise ``SystemExit``.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_main_turns_opnsense_error_into_system_exit`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise OPNsense failure.
     """
     module = load_dump_module()
 
@@ -951,7 +951,7 @@ def test_main_turns_aiohttp_client_error_into_system_exit(
     """``main`` converts aiohttp live failures into concise ``SystemExit``.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_main_turns_aiohttp_client_error_into_system_exit`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise transport failure.
     """
     module = load_dump_module()
 
@@ -972,7 +972,7 @@ def test_main_turns_runtime_error_into_system_exit(
     """``main`` converts runtime failures into concise ``SystemExit``.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_main_turns_runtime_error_into_system_exit`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise runtime failure.
     """
     module = load_dump_module()
 
@@ -993,7 +993,7 @@ def test_main_turns_timeout_error_into_system_exit(
     """``main`` converts timeout failures into concise ``SystemExit``.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_main_turns_timeout_error_into_system_exit`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise timeout failure.
     """
     module = load_dump_module()
 
@@ -1014,7 +1014,7 @@ def test_main_converts_os_error_to_system_exit(
     """``main`` converts I/O write failures into concise ``SystemExit``.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_main_converts_os_error_to_system_exit`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise I/O failure.
     """
     module = load_dump_module()
 

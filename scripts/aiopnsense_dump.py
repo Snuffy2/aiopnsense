@@ -74,7 +74,7 @@ def parse_endpoint_name(endpoint_name: str) -> str:
     """Validate a named dump endpoint from CLI input.
 
     Args:
-        endpoint_name (str): Value used by `parse_endpoint_name`.
+        endpoint_name (str): CLI endpoint name to validate against registered endpoints.
 
     Returns:
         str: The validated endpoint name.
@@ -133,7 +133,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments for the dump script.
 
     Args:
-        args (list[str] | None): Value used by `parse_args`.
+        args (list[str] | None): Optional CLI arguments; defaults to process arguments.
 
     Returns:
         argparse.Namespace: Parsed arguments.
@@ -160,7 +160,7 @@ def choose_endpoint_from_menu(endpoint_names: list[str]) -> str:
     """Prompt for a 1-based endpoint selection and return the chosen name.
 
     Args:
-        endpoint_names (list[str]): Value used by `choose_endpoint_from_menu`.
+        endpoint_names (list[str]): Endpoint names displayed as numbered choices.
 
     Returns:
         str: Endpoint name selected by the user.
@@ -187,9 +187,9 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
     """Run a single endpoint and return a normalized dump payload.
 
     Args:
-        client (Any): Value used by `run_endpoint`.
-        endpoint_name (str): Value used by `run_endpoint`.
-        stream_seconds (float): Value used by `run_endpoint`.
+        client (Any): Validated OPNsense client exposing registered endpoint methods.
+        endpoint_name (str): Registered endpoint name to invoke.
+        stream_seconds (float): Maximum collection window for traffic-stream samples.
 
     Returns:
         dict[str, Any]: A payload dictionary with endpoint metadata and returned data.
@@ -277,7 +277,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     """Run the dump command.
 
     Args:
-        argv (list[str] | None): Value used by `async_main`.
+        argv (list[str] | None): Optional CLI arguments; defaults to process arguments.
 
     Returns:
         int: Exit status code.

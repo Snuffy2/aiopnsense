@@ -436,10 +436,10 @@ async def test_client_constructor_throw_errors_configuration(
     """Verify constructor error-propagation configuration and deprecation handling.
 
     Args:
-        kwargs (dict[str, bool]): Value used by `test_client_constructor_throw_errors_configuration`.
-        expect_warning (bool): Value used by `test_client_constructor_throw_errors_configuration`.
-        expected_throw_errors (bool): Value used by `test_client_constructor_throw_errors_configuration`.
-        make_client (MakeClientFactory): Value used by `test_client_constructor_throw_errors_configuration`.
+        kwargs (dict[str, bool]): Constructor options for the error-propagation mode case.
+        expect_warning (bool): Whether the legacy ``initial`` option should warn.
+        expected_throw_errors (bool): Error-propagation state expected after construction.
+        make_client (MakeClientFactory): Fixture factory used to construct the client.
     """
     client: OPNsenseClient | None = None
     try:
@@ -463,7 +463,7 @@ async def test_client_constructor_invalid_throw_errors_raises_type_error(
     """Verify invalid ``throw_errors`` values raise ``TypeError``.
 
     Args:
-        make_client (MakeClientFactory): Value used by `test_client_constructor_invalid_throw_errors_raises_type_error`.
+        make_client (MakeClientFactory): Fixture factory used to pass an invalid constructor option.
     """
     with pytest.raises(TypeError, match="`throw_errors` must be a bool"):
         make_client(throw_errors="false")
@@ -476,7 +476,7 @@ async def test_client_constructor_invalid_initial_raises_type_error(
     """Verify invalid deprecated ``initial`` values raise ``TypeError``.
 
     Args:
-        make_client (MakeClientFactory): Value used by `test_client_constructor_invalid_initial_raises_type_error`.
+        make_client (MakeClientFactory): Fixture factory used to exercise legacy-option validation.
     """
     with pytest.raises(TypeError, match="`initial` must be a bool"):
         make_client(initial="false")
@@ -523,7 +523,7 @@ async def test_toggle_throwing_errors_updates_state(make_client: MakeClientFacto
     """Verify ``toggle_throwing_errors`` toggles and sets the error mode.
 
     Args:
-        make_client (MakeClientFactory): Value used by `test_toggle_throwing_errors_updates_state`.
+        make_client (MakeClientFactory): Fixture factory used to create the toggled client.
     """
     client = make_client()
     try:
@@ -544,7 +544,7 @@ async def test_toggle_throwing_errors_invalid_value_raises_type_error(
     """Verify invalid toggle values raise ``TypeError``.
 
     Args:
-        make_client (MakeClientFactory): Value used by `test_toggle_throwing_errors_invalid_value_raises_type_error`.
+        make_client (MakeClientFactory): Fixture factory used to create the client under validation.
     """
     client = make_client()
     try:

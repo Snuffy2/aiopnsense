@@ -30,10 +30,10 @@ class ClientTransportMixin:
             """Queue a GET request and return the decoded payload.
 
             Args:
-                path (str): Value used by `_get`.
+                path (str): API path to request.
 
             Returns:
-                MutableMapping[str, Any] | list | None: Result returned by `_get`.
+                MutableMapping[str, Any] | list | None: Decoded response payload.
             """
             ...
 
@@ -43,11 +43,11 @@ class ClientTransportMixin:
             """Queue a POST request and return the decoded payload.
 
             Args:
-                path (str): Value used by `_post`.
-                payload (MutableMapping[str, Any] | None): Value used by `_post`.
+                path (str): API path to request.
+                payload (MutableMapping[str, Any] | None): JSON object to send with the request.
 
             Returns:
-                MutableMapping[str, Any] | list | None: Result returned by `_post`.
+                MutableMapping[str, Any] | list | None: Decoded response payload.
             """
             ...
 

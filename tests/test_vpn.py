@@ -183,11 +183,11 @@ async def test_toggle_vpn_instance_variants(
     """Parametrized toggle_vpn_instance covering OpenVPN and WireGuard variants.
 
     Args:
-        make_client (ClientType): Value used by `test_toggle_vpn_instance_variants`.
-        vpn_type (str): Value used by `test_toggle_vpn_instance_variants`.
-        path (str): Value used by `test_toggle_vpn_instance_variants`.
-        post_resp (dict[str, Any] | list[dict[str, Any]]): Value used by `test_toggle_vpn_instance_variants`.
-        expected (bool): Value used by `test_toggle_vpn_instance_variants`.
+        make_client (ClientType): Client fixture configured for VPN toggle requests.
+        vpn_type (str): VPN implementation selected for the toggle request.
+        path (str): API path expected for the selected VPN implementation.
+        post_resp (dict[str, Any] | list[dict[str, Any]]): Canned response from the toggle request.
+        expected (bool): Whether the toggle operation should report success.
     """
     client, _session = make_mock_session_client(make_client)
     client._use_snake_case = True
@@ -546,8 +546,8 @@ def test__wireguard_is_connected_variants(
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for replacing the module datetime provider.
-        delta_minutes (int): Value used by `test__wireguard_is_connected_variants`.
-        expected (bool): Value used by `test__wireguard_is_connected_variants`.
+        delta_minutes (int): Age of the latest WireGuard handshake.
+        expected (bool): Connection state expected for that handshake age.
     """
     fixed_now = datetime.now().astimezone().replace(microsecond=0)
     # create a minimal fake datetime provider with a static now() returning fixed_now

@@ -48,8 +48,8 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
             kwargs (Any): Keyword arguments forwarded to the wrapped coroutine.
 
         Returns:
-            Any: Value produced by the wrapped callable, or ``None`` when an
-                error is suppressed.
+            Any: Wrapped coroutine result, or ``None`` when an error is
+                suppressed.
 
         Raises:
             asyncio.CancelledError: Re-raised when the wrapped coroutine is

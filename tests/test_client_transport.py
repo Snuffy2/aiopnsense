@@ -281,7 +281,7 @@ async def test_transport_errors_map_when_throwing(
             _kwargs (Any): Keyword arguments accepted by `raise_transport_error`.
 
         Returns:
-            Any: Result returned by `raise_transport_error`.
+            Any: This synchronous test double only raises the configured failure.
 
         Raises:
             transport_error: The configured transport failure.
@@ -547,8 +547,8 @@ async def test_stream_json_events_yields_each_valid_data_message(
     """Direct stream iterator should yield every JSON SSE data message.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_yields_each_valid_data_message`.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_yields_each_valid_data_message`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying the SSE byte chunks.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -579,7 +579,7 @@ async def test_stream_json_events_returns_empty_sequence_for_non_ok_response_whe
     """Non-OK stream responses should yield no events when errors are disabled.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_returns_empty_sequence_for_non_ok_response_when_not_throwing`.
+        make_client (Callable[..., Any]): Factory used to configure the non-throwing SSE client.
     """
     session = MagicMock()
     session.get = lambda *a, **k: FakeResponse(
@@ -608,8 +608,8 @@ async def test_stream_json_events_skips_non_data_lines_before_valid_data_message
     """Comment and event metadata lines should be ignored until a data line arrives.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_skips_non_data_lines_before_valid_data_message`.
-        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_skips_non_data_lines_before_valid_data_message`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying metadata and data SSE frames.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -636,8 +636,8 @@ async def test_stream_json_events_skips_comment_only_frame_before_later_data_mes
     """Frames without any data lines should be skipped without suppressing later events.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_skips_comment_only_frame_before_later_data_message`.
-        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_skips_comment_only_frame_before_later_data_message`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying comment-only and data frames.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -665,8 +665,8 @@ async def test_stream_json_events_sets_connect_and_read_timeouts(
     """Direct stream iterator should not wait forever for silent connections.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_sets_connect_and_read_timeouts`.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_sets_connect_and_read_timeouts`.
+        make_client (Callable[..., Any]): Factory used to configure the timed SSE stream client.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying the response used to capture timeouts.
     """
     captured_timeout: aiohttp.ClientTimeout | None = None
 
@@ -700,8 +700,8 @@ async def test_stream_json_events_allows_read_timeout_override(
     """Stream caller should be able to override the socket read timeout.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_allows_read_timeout_override`.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_allows_read_timeout_override`.
+        make_client (Callable[..., Any]): Factory used to configure the timeout-override client.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying the response used to capture timeouts.
     """
     captured_timeout: aiohttp.ClientTimeout | None = None
 
@@ -736,8 +736,8 @@ async def test_stream_json_events_skips_malformed_json(
     """Malformed data messages should be skipped while the stream continues.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_skips_malformed_json`.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_skips_malformed_json`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying malformed and valid JSON frames.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -766,8 +766,8 @@ async def test_stream_json_events_yields_reset_marker_for_malformed_json_when_re
     """Malformed JSON payloads can request an internal reseed marker.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_yields_reset_marker_for_malformed_json_when_requested`.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_yields_reset_marker_for_malformed_json_when_requested`.
+        make_client (Callable[..., Any]): Factory used to configure reset-marker stream handling.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying malformed and valid JSON frames.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -799,8 +799,8 @@ async def test_stream_json_events_recovers_after_invalid_utf8_chunk(
     """Invalid UTF-8 chunks should be dropped while later events are still emitted.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_recovers_after_invalid_utf8_chunk`.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_recovers_after_invalid_utf8_chunk`.
+        make_client (Callable[..., Any]): Factory used to configure the recovering SSE client.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying invalid UTF-8 between valid events.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -832,8 +832,8 @@ async def test_stream_json_events_yields_reset_marker_when_requested(
     """Opt-in decode reset signaling should emit a private stream reset marker.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_yields_reset_marker_when_requested`.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_yields_reset_marker_when_requested`.
+        make_client (Callable[..., Any]): Factory used to configure reset-marker stream handling.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying invalid UTF-8 between valid events.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -870,8 +870,8 @@ async def test_stream_json_events_reassembles_split_multiline_json_event(
     """Split and multiline SSE data lines should reassemble into one JSON object.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_reassembles_split_multiline_json_event`.
-        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_reassembles_split_multiline_json_event`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying a split multiline SSE event.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -900,8 +900,8 @@ async def test_stream_json_events_reassembles_split_multibyte_utf8_event(
     """Split UTF-8 multibyte sequences across chunks should decode without error.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_reassembles_split_multibyte_utf8_event`.
-        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_reassembles_split_multibyte_utf8_event`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying split multibyte UTF-8 event chunks.
     """
     event_json = json.dumps(
         {
@@ -957,8 +957,8 @@ async def test_stream_json_events_ignores_trailing_incomplete_utf8_chunk(
     """Trailing incomplete UTF-8 bytes should not raise and should drop only partial event.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_ignores_trailing_incomplete_utf8_chunk`.
-        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_ignores_trailing_incomplete_utf8_chunk`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying an incomplete final UTF-8 event.
     """
     incomplete_event_json = json.dumps(
         {"time": 12, "interfaces": {"wan": {"description": "Café"}}},
@@ -994,8 +994,8 @@ async def test_stream_json_events_appends_final_decoder_tail_text_at_eof(
     """EOF tail text from the incremental decoder should complete the final JSON event.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_appends_final_decoder_tail_text_at_eof`.
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_stream_json_events_appends_final_decoder_tail_text_at_eof`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        monkeypatch (pytest.MonkeyPatch): Fixture used to install the EOF-tail decoder stub.
     """
 
     class _FakeIncrementalDecoder:
@@ -1019,10 +1019,10 @@ async def test_stream_json_events_appends_final_decoder_tail_text_at_eof(
         """Return the fake incremental decoder factory used by this test.
 
         Args:
-            _encoding (str): Value used by `fake_getincrementaldecoder`.
+            _encoding (str): Encoding name ignored by the deterministic decoder stub.
 
         Returns:
-            Callable[[], _FakeIncrementalDecoder]: Result returned by `fake_getincrementaldecoder`.
+            Callable[[], _FakeIncrementalDecoder]: Factory for the decoder that returns its tail at EOF.
         """
         return _FakeIncrementalDecoder
 
@@ -1057,8 +1057,8 @@ async def test_stream_json_events_reassembles_split_crlf_boundary_multiline_json
     """Split CRLF frame separators across chunks should still reassemble a valid event.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_reassembles_split_crlf_boundary_multiline_json_event`.
-        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_reassembles_split_crlf_boundary_multiline_json_event`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying chunks split across CRLF boundaries.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -1088,8 +1088,8 @@ async def test_stream_json_events_yields_eof_complete_event(
     """Stream parser should emit a complete SSE event when only EOF terminates it.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_yields_eof_complete_event`.
-        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_yields_eof_complete_event`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying an event terminated only by EOF.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -1115,9 +1115,9 @@ async def test_stream_json_events_preserves_leading_sse_space_after_data_prefix(
     """Parser should preserve only one leading space after `data:` when present.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_preserves_leading_sse_space_after_data_prefix`.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_preserves_leading_sse_space_after_data_prefix`.
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_stream_json_events_preserves_leading_sse_space_after_data_prefix`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying a data field with leading spaces.
+        monkeypatch (pytest.MonkeyPatch): Fixture used to capture payloads passed to JSON decoding.
     """
     captured_payloads: list[str] = []
     original_loads = aiopnsense.client_transport.json.loads
@@ -1153,8 +1153,8 @@ async def test_stream_json_events_skips_non_mapping_json_events(
     """Non-mapping JSON SSE events should be skipped and later mapping events yielded.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_skips_non_mapping_json_events`.
-        fake_stream_response_factory (FakeStreamResponseFactory): Value used by `test_stream_json_events_skips_non_mapping_json_events`.
+        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
+        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying scalar, list, and mapping JSON events.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
@@ -1183,7 +1183,7 @@ async def test_stream_json_events_close_on_iterator_break(
     """Canceling iteration early should still close the response context.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_close_on_iterator_break`.
+        make_client (Callable[..., Any]): Factory used to configure the iterator-closure client.
     """
 
     class _TrackedResponse(FakeResponse):
@@ -1243,8 +1243,8 @@ async def test_stream_json_events_raises_when_throw_errors_enabled(
     """Direct stream iterator should honor throw_errors for non-OK responses.
 
     Args:
-        make_client (Callable[..., Any]): Value used by `test_stream_json_events_raises_when_throw_errors_enabled`.
-        fake_response_factory (Callable[..., FakeResponse]): Value used by `test_stream_json_events_raises_when_throw_errors_enabled`.
+        make_client (Callable[..., Any]): Factory used to enable errors on the SSE client.
+        fake_response_factory (Callable[..., FakeResponse]): Factory supplying the forbidden HTTP response.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_response_factory(

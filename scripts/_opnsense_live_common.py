@@ -51,7 +51,7 @@ def reexec_with_repo_venv(script_path: Path) -> None:
     """Re-run a live script with the repo virtualenv when launched directly.
 
     Args:
-        script_path (Path): Value used by `reexec_with_repo_venv`.
+        script_path (Path): Launched script used to locate the repository virtualenv.
     """
     if os.environ.get("AIOPNSENSE_LIVE_SCRIPT_BOOTSTRAPPED") == "1":
         return
@@ -69,7 +69,7 @@ def resolve_env_file_argument(env_file: Path) -> Path:
     """Resolve the documented default env path to the script-local file.
 
     Args:
-        env_file (Path): Value used by `resolve_env_file_argument`.
+        env_file (Path): Parsed ``--env-file`` path.
 
     Returns:
         Path: Absolute script-local default for the documented default, otherwise the
@@ -84,7 +84,7 @@ def _strip_inline_comment(value: str) -> str:
     """Remove unquoted inline comments from an env file value.
 
     Args:
-        value (str): Value used by `_strip_inline_comment`.
+        value (str): Raw right-hand side from an env-file assignment.
 
     Returns:
         str: Value text with an unquoted ``#`` comment removed.
@@ -105,7 +105,7 @@ def _unquote(value: str) -> str:
     """Remove matching single or double quotes around a value.
 
     Args:
-        value (str): Value used by `_unquote`.
+        value (str): Env-file value that may have matching surrounding quotes.
 
     Returns:
         str: Unquoted value when quotes match, otherwise the original value.
@@ -119,7 +119,7 @@ def load_env_file(path: Path = DEFAULT_ENV_FILE) -> dict[str, str]:
     """Load a simple ``KEY=value`` env file.
 
     Args:
-        path (Path): Value used by `load_env_file`.
+        path (Path): Env file containing ``KEY=value`` connection settings.
 
     Returns:
         dict[str, str]: Mapping of env variable names to values.
@@ -158,9 +158,9 @@ def get_env_value(values: Mapping[str, str], suffix: str, *, required: bool = Tr
     """Return a canonical ``AIOPNSENSE_*`` value with ``OPNSENSE_*`` fallback.
 
     Args:
-        values (Mapping[str, str]): Value used by `get_env_value`.
-        suffix (str): Value used by `get_env_value`.
-        required (bool): Value used by `get_env_value`.
+        values (Mapping[str, str]): Parsed env-file settings.
+        suffix (str): Setting suffix after the ``AIOPNSENSE_`` prefix.
+        required (bool): Whether a missing or blank setting raises an error.
 
     Returns:
         str | None: Configured value or ``None`` when missing and not required.
@@ -190,8 +190,8 @@ def parse_bool(value: str, name: str) -> bool:
     """Parse a documented boolean env value.
 
     Args:
-        value (str): Value used by `parse_bool`.
-        name (str): Value used by `parse_bool`.
+        value (str): Raw boolean setting value.
+        name (str): Setting name included in validation errors.
 
     Returns:
         bool: Parsed boolean.
@@ -212,7 +212,7 @@ def load_live_config(path: Path = DEFAULT_ENV_FILE) -> LiveConfig:
     """Load live OPNsense connection configuration.
 
     Args:
-        path (Path): Value used by `load_live_config`.
+        path (Path): Env file containing live connection settings.
 
     Returns:
         LiveConfig: Configuration with URL, credentials, and TLS verification setting.
@@ -233,7 +233,7 @@ def format_json(payload: Any) -> str:
     """Return stable pretty JSON for terminal and file output.
 
     Args:
-        payload (Any): Value used by `format_json`.
+        payload (Any): Data to serialize as indented JSON.
 
     Returns:
         str: Pretty JSON string ending with a newline.
@@ -245,8 +245,8 @@ def write_output(payload: Any, output_path: Path | None = None) -> None:
     """Print JSON output and optionally mirror it to a file.
 
     Args:
-        payload (Any): Value used by `write_output`.
-        output_path (Path | None): Value used by `write_output`.
+        payload (Any): Data to print as formatted JSON.
+        output_path (Path | None): Optional file that receives the same JSON output.
     """
     rendered = format_json(payload)
     print(rendered, end="")
@@ -259,7 +259,7 @@ def _get_client_class() -> type["OPNsenseClient"]:
     """Return the lazily imported OPNsense client class.
 
     Returns:
-        type['OPNsenseClient']: Result returned by `_get_client_class`.
+        type['OPNsenseClient']: Lazily imported client class used by live scripts.
     """
     from aiopnsense import OPNsenseClient
 
@@ -270,8 +270,8 @@ def create_client(config: LiveConfig, session: aiohttp.ClientSession) -> "OPNsen
     """Create an OPNsense client for live scripts.
 
     Args:
-        config (LiveConfig): Value used by `create_client`.
-        session (aiohttp.ClientSession): Value used by `create_client`.
+        config (LiveConfig): Connection URL, credentials, and TLS settings.
+        session (aiohttp.ClientSession): HTTP session used for client requests.
 
     Returns:
         OPNsenseClient: Configured OPNsense client.

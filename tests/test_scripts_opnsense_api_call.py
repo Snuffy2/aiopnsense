@@ -17,7 +17,7 @@ def load_api_call_module() -> ModuleType:
     """Load the script module through importlib for direct unit testing.
 
     Returns:
-        ModuleType: Result returned by `load_api_call_module`.
+        ModuleType: Imported raw-API script module under test.
     """
     module_path = Path(__file__).parents[1] / "scripts" / "opnsense_api_call.py"
     sys.path.insert(0, str(module_path.parent))
@@ -52,12 +52,12 @@ class FakeResponse:
         """Create a minimal aiohttp-like response stub.
 
         Args:
-            status (int): Value used by `__init__`.
-            reason (str): Value used by `__init__`.
-            headers (dict[str, str] | None): Value used by `__init__`.
-            json_payload (Any): Value used by `__init__`.
-            text (str): Value used by `__init__`.
-            json_error (Exception | None): Value used by `__init__`.
+            status (int): HTTP status exposed by the fake response.
+            reason (str): HTTP reason phrase exposed by the fake response.
+            headers (dict[str, str] | None): Response headers used for content detection.
+            json_payload (Any): JSON body returned when parsing succeeds.
+            text (str): Text body returned when JSON parsing is unavailable.
+            json_error (Exception | None): Parsing error raised by ``json`` when configured.
         """
         self.status = status
         self.reason = reason
@@ -80,7 +80,7 @@ class FakeResponse:
             _kwargs (Any): Keyword arguments accepted by `json`.
 
         Returns:
-            Any: Result returned by `json`.
+            Any: Configured JSON response body.
 
         Raises:
             self._json_error: Raised when the fake response is configured with a JSON error.
@@ -93,7 +93,7 @@ class FakeResponse:
         """Return text fallback body.
 
         Returns:
-            str: Result returned by `text`.
+            str: Configured plain-text response body.
         """
         return self._text
 
@@ -116,8 +116,8 @@ class FakeSession:
         """Initialize call history and response stubs.
 
         Args:
-            get_response (FakeResponse | None): Value used by `__init__`.
-            post_response (FakeResponse | None): Value used by `__init__`.
+            get_response (FakeResponse | None): Response returned by recorded GET requests.
+            post_response (FakeResponse | None): Response returned by recorded POST requests.
         """
         self.get_calls = []
         self.post_calls = []
@@ -140,11 +140,11 @@ class FakeSession:
         """Record GET call and return response context.
 
         Args:
-            url (str): Value used by `get`.
+            url (str): Request URL recorded for the GET call.
             kwargs (object): Keyword arguments accepted by `get`.
 
         Returns:
-            FakeResponse: Result returned by `get`.
+            FakeResponse: Configured GET response context manager.
         """
         self.get_calls.append((url, kwargs))
         return self.get_response
@@ -153,11 +153,11 @@ class FakeSession:
         """Record POST call and return response context.
 
         Args:
-            url (str): Value used by `post`.
+            url (str): Request URL recorded for the POST call.
             kwargs (object): Keyword arguments accepted by `post`.
 
         Returns:
-            FakeResponse: Result returned by `post`.
+            FakeResponse: Configured POST response context manager.
         """
         self.post_calls.append((url, kwargs))
         return self.post_response
@@ -209,7 +209,7 @@ def test_load_payload_from_file(tmp_path: Path) -> None:
     """Payload file input supports JSON objects.
 
     Args:
-        tmp_path (Path): Value used by `test_load_payload_from_file`.
+        tmp_path (Path): Temporary directory containing the JSON payload file.
     """
     module = load_api_call_module()
     payload_file = tmp_path / "payload.json"
@@ -457,7 +457,7 @@ def test_main_converts_live_config_error_to_system_exit(monkeypatch: pytest.Monk
     """main() maps LiveConfigError from async_main to SystemExit.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_main_converts_live_config_error_to_system_exit`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise configuration failure.
     """
     module = load_api_call_module()
 
@@ -487,11 +487,11 @@ async def test_async_main_rejects_payload_with_get_method(
     """GET + payload options are rejected before body parsing or output writes.
 
     Args:
-        tmp_path (Path): Value used by `test_async_main_rejects_payload_with_get_method`.
-        capsys (pytest.CaptureFixture[str]): Value used by `test_async_main_rejects_payload_with_get_method`.
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_async_main_rejects_payload_with_get_method`.
-        payload (str): Value used by `test_async_main_rejects_payload_with_get_method`.
-        name (str): Value used by `test_async_main_rejects_payload_with_get_method`.
+        tmp_path (Path): Temporary directory for the rejected output path.
+        capsys (pytest.CaptureFixture[str]): Fixture that captures the parser error.
+        monkeypatch (pytest.MonkeyPatch): Fixture that captures output-write attempts.
+        payload (str): Inline payload supplied with the invalid GET request.
+        name (str): Case label used in the temporary output filename.
     """
     module = load_api_call_module()
     output_file = tmp_path / f"ignored-{name}.json"
@@ -531,8 +531,8 @@ async def test_async_main_rejects_payload_file_with_get_method(
     """GET + --payload-file is rejected with required parser error text.
 
     Args:
-        tmp_path (Path): Value used by `test_async_main_rejects_payload_file_with_get_method`.
-        capsys (pytest.CaptureFixture[str]): Value used by `test_async_main_rejects_payload_file_with_get_method`.
+        tmp_path (Path): Temporary directory containing the payload file.
+        capsys (pytest.CaptureFixture[str]): Fixture that captures the parser error.
     """
     module = load_api_call_module()
     payload_file = tmp_path / "payload.json"
@@ -607,8 +607,8 @@ async def test_async_main_rejects_both_payload_sources_for_post(
     """POST requests with both payload sources use load_payload conflict message.
 
     Args:
-        tmp_path (Path): Value used by `test_async_main_rejects_both_payload_sources_for_post`.
-        capsys (pytest.CaptureFixture[str]): Value used by `test_async_main_rejects_both_payload_sources_for_post`.
+        tmp_path (Path): Temporary directory containing the file payload.
+        capsys (pytest.CaptureFixture[str]): Fixture that captures the parser error.
     """
     module = load_api_call_module()
     payload_file = tmp_path / "payload.json"
@@ -639,8 +639,8 @@ async def test_async_main_rejects_missing_payload_file(
     """Missing payload files become parser errors instead of filesystem tracebacks.
 
     Args:
-        tmp_path (Path): Value used by `test_async_main_rejects_missing_payload_file`.
-        capsys (pytest.CaptureFixture[str]): Value used by `test_async_main_rejects_missing_payload_file`.
+        tmp_path (Path): Temporary directory used to form the missing file path.
+        capsys (pytest.CaptureFixture[str]): Fixture that captures the parser error.
     """
     module = load_api_call_module()
     missing_file = tmp_path / "missing.json"
@@ -668,8 +668,8 @@ async def test_async_main_writes_output_and_closes_session(
     """Happy path runs the call and guarantees session lifecycle completion.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_async_main_writes_output_and_closes_session`.
-        tmp_path (Path): Value used by `test_async_main_writes_output_and_closes_session`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that replaces live dependencies with fakes.
+        tmp_path (Path): Temporary directory containing the expected output file.
     """
     module = load_api_call_module()
     config = module.LiveConfig(
@@ -736,7 +736,7 @@ async def test_async_main_without_payload_passes_no_payload_marker(
     """POST requests without payload preserve omitted-body semantics through dispatch.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_async_main_without_payload_passes_no_payload_marker`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that replaces live dependencies with fakes.
     """
     module = load_api_call_module()
     config = module.LiveConfig(
@@ -802,7 +802,7 @@ def test_main_converts_client_error_to_system_exit(
     """main() converts aiohttp client transport exceptions into SystemExit.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_main_converts_client_error_to_system_exit`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise a client error.
     """
     module = load_api_call_module()
 
@@ -833,7 +833,7 @@ def test_main_converts_timeout_error_to_system_exit(
     """main() converts timeout exceptions into concise SystemExit messages.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_main_converts_timeout_error_to_system_exit`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise a timeout.
     """
     module = load_api_call_module()
 
@@ -853,7 +853,7 @@ def test_main_converts_os_error_to_system_exit(
     """main() converts I/O errors into concise SystemExit messages.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Value used by `test_main_converts_os_error_to_system_exit`.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise an I/O error.
     """
     module = load_api_call_module()
 
