@@ -265,8 +265,7 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
         res = await client._get("/testpath")
 
         assert res == returned
-        # caller should be the test function name when inspect.stack works
-        assert called.get("caller") is not None
+        assert called.get("caller") == "test_get_enqueues_and_processes"
     finally:
         if task is not None and not task.done():
             task.cancel()
@@ -306,14 +305,14 @@ async def test_get_text_rejects_unexpected_type(make_client: MakeClientFactory) 
 
 
 @pytest.mark.asyncio
-async def test_get_uses_unknown_when_inspect_stack_raises(
+async def test_get_uses_unknown_when_caller_frame_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify ``_get`` uses ``Unknown`` caller when stack inspection fails.
+    """Verify ``_get`` uses ``Unknown`` caller when frame lookup fails.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture for patching ``inspect`` helpers.
+        monkeypatch (pytest.MonkeyPatch): Fixture for patching frame lookup.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
@@ -322,21 +321,24 @@ async def test_get_uses_unknown_when_inspect_stack_raises(
     client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
-        # Replace the queue helper's inspect.stack to raise an IndexError
-        class _BadInspect:
+        # Replace the queue helper's sys._getframe to raise a ValueError.
+        class _BadSys:
             @staticmethod
-            def stack() -> Any:
-                """Stack.
+            def _getframe(_depth: int) -> Any:
+                """Raise an error because no caller frame is available.
+
+                Args:
+                    _depth (int): Requested frame depth.
 
                 Returns:
-                    Any: No stack details; this method always raises instead.
+                    Any: No frame details; this method always raises instead.
 
                 Raises:
-                    IndexError: Always raised to simulate unavailable stack details.
+                    ValueError: Always raised to simulate an unavailable caller frame.
                 """
-                raise IndexError("no stack")
+                raise ValueError("no frame")
 
-        monkeypatch.setattr(aiopnsense_client_queue, "inspect", _BadInspect)
+        monkeypatch.setattr(aiopnsense_client_queue, "sys", _BadSys)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
@@ -415,7 +417,7 @@ async def test_post_enqueues_and_processes(returned: Any, make_client: MakeClien
 
         assert res == returned
         assert captured.get("payload") == payload
-        assert captured.get("caller") is not None
+        assert captured.get("caller") == "test_post_enqueues_and_processes"
     finally:
         if task is not None and not task.done():
             task.cancel()
@@ -425,14 +427,14 @@ async def test_post_enqueues_and_processes(returned: Any, make_client: MakeClien
 
 
 @pytest.mark.asyncio
-async def test_post_uses_unknown_when_inspect_stack_raises(
+async def test_post_uses_unknown_when_caller_frame_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify ``_post`` uses ``Unknown`` caller when stack inspection fails.
+    """Verify ``_post`` uses ``Unknown`` caller when frame lookup fails.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture for patching ``inspect`` helpers.
+        monkeypatch (pytest.MonkeyPatch): Fixture for patching frame lookup.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
@@ -442,20 +444,23 @@ async def test_post_uses_unknown_when_inspect_stack_raises(
     task: asyncio.Task | None = None
     try:
 
-        class _BadInspect:
+        class _BadSys:
             @staticmethod
-            def stack() -> Any:
-                """Stack.
+            def _getframe(_depth: int) -> Any:
+                """Raise an error because no caller frame is available.
+
+                Args:
+                    _depth (int): Requested frame depth.
 
                 Returns:
-                    Any: No stack details; this method always raises instead.
+                    Any: No frame details; this method always raises instead.
 
                 Raises:
-                    IndexError: Always raised to simulate unavailable stack details.
+                    ValueError: Always raised to simulate an unavailable caller frame.
                 """
-                raise IndexError("no stack")
+                raise ValueError("no frame")
 
-        monkeypatch.setattr(aiopnsense_client_queue, "inspect", _BadInspect)
+        monkeypatch.setattr(aiopnsense_client_queue, "sys", _BadSys)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
