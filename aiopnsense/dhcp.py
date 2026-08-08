@@ -362,11 +362,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             if "duid" in lease_info:
                 lease["duid"] = lease_info.get("duid")
             self._copy_lease_identity_fields(lease, lease_info)
-            if try_to_int(lease_info.get("expire", None)):
-                lease["expires"] = timestamp_to_datetime(
-                    try_to_int(lease_info.get("expire", None)) or 0
-                )
-                if self._is_expired_kea_lease(lease_info):
+            expiration = try_to_int(lease_info.get("expire", None))
+            if expiration:
+                expiration_datetime = timestamp_to_datetime(expiration)
+                lease["expires"] = expiration_datetime
+                if expiration_datetime and expiration_datetime < datetime.now().astimezone():
                     continue
             else:
                 lease["expires"] = lease_info.get("expire", None)
