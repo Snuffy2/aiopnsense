@@ -345,11 +345,18 @@ async def test_parse_vnstat_payload_and_helpers_edge_cases(make_client: ClientTy
         assert client._pick_daily_row([{"label": "bad0"}, {"label": "bad1"}], 1, tz) == {
             "label": "bad0"
         }
+        assert client._pick_daily_row([{"label": "bad"}], 2, tz) is None
 
         this_month = datetime.now(tz=tz).strftime("%b '%y")
         assert client._pick_monthly_row([{"label": this_month}], 0, tz) == {"label": this_month}
         assert client._pick_monthly_row([{"label": "bad0"}, {"label": "bad1"}], 1, tz) == {
             "label": "bad0"
+        }
+        now = datetime.now(tz=tz)
+        previous_year = now.year - 1
+        previous_december = f"Dec '{previous_year % 100:02d}"
+        assert client._pick_monthly_row([{"label": previous_december}], now.month, tz) == {
+            "label": previous_december
         }
 
         now_hour = datetime.now(tz=tz).replace(minute=0, second=0, microsecond=0)
