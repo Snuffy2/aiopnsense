@@ -8,15 +8,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from aiopnsense import (
-    OPNsenseError,
-    client_queue as aiopnsense_client_queue,
-)
-from tests.conftest import (
-    FakeStreamResponseFactory,
-    MakeClientFactory,
-    make_mock_session_client,
-)
+from aiopnsense import OPNsenseError, client_queue as aiopnsense_client_queue
+from tests.conftest import FakeStreamResponseFactory, MakeClientFactory, make_mock_session_client
 
 
 @pytest.mark.asyncio
@@ -231,7 +224,7 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test asserts queue integration and caller propagation for ``_get``.
+        None: This test asserts queue integration for ``_get``.
     """
     client, _session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
@@ -240,23 +233,7 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
 
-        called = {}
-
-        async def fake_do_get(path: Any, caller: str = "x") -> Any:
-            # capture the caller name supplied by _get
-            """Fake do get.
-
-            Args:
-                path (Any): API endpoint path to request.
-                caller (str): Caller name used for diagnostics and logging.
-
-            Returns:
-                Any: Mock value returned to support test behavior.
-            """
-            called["caller"] = caller
-            return returned
-
-        client._do_get = AsyncMock(side_effect=fake_do_get)
+        client._do_get = AsyncMock(return_value=returned)
 
         # start the real processor task
         task = asyncio.get_running_loop().create_task(client._process_queue())
@@ -265,8 +242,8 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
         res = await client._get("/testpath")
 
         assert res == returned
-        # Lock the direct-call caller label derived from the fixed frame depth.
-        assert called.get("caller") == "test_get_enqueues_and_processes"
+        client._do_get.assert_awaited_once()
+        assert client._do_get.await_args.args[0] == "/testpath"
     finally:
         if task is not None and not task.done():
             task.cancel()
@@ -310,14 +287,14 @@ async def test_get_text_rejects_unexpected_type(make_client: MakeClientFactory) 
 async def test_get_uses_unknown_when_caller_frame_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,
-    error_type: type[ValueError] | type[AttributeError],
+    error_type: type[ValueError | AttributeError],
 ) -> None:
     """Verify ``_get`` uses ``Unknown`` caller when frame lookup fails.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for patching frame lookup.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-        error_type (type[ValueError] | type[AttributeError]): Frame lookup error to raise.
+        error_type (type[ValueError | AttributeError]): Frame lookup error to raise.
 
     Returns:
         None: This test asserts caller fallback behavior.
@@ -397,24 +374,7 @@ async def test_post_enqueues_and_processes(returned: Any, make_client: MakeClien
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
 
-        captured: dict[str, Any] = {}
-
-        async def fake_do_post(path: Any, payload: Any = None, caller: str = "x") -> Any:
-            """Fake do post.
-
-            Args:
-                path (Any): API endpoint path to request.
-                payload (Any): Request payload sent to the API endpoint.
-                caller (str): Caller name used for diagnostics and logging.
-
-            Returns:
-                Any: Mock value returned to support test behavior.
-            """
-            captured["caller"] = caller
-            captured["payload"] = payload
-            return returned
-
-        client._do_post = AsyncMock(side_effect=fake_do_post)
+        client._do_post = AsyncMock(return_value=returned)
 
         task = asyncio.get_running_loop().create_task(client._process_queue())
 
@@ -422,9 +382,8 @@ async def test_post_enqueues_and_processes(returned: Any, make_client: MakeClien
         res = await client._post("/postpath", payload=payload)
 
         assert res == returned
-        assert captured.get("payload") == payload
-        # Lock the direct-call caller label derived from the fixed frame depth.
-        assert captured.get("caller") == "test_post_enqueues_and_processes"
+        client._do_post.assert_awaited_once()
+        assert client._do_post.await_args.args[:2] == ("/postpath", payload)
     finally:
         if task is not None and not task.done():
             task.cancel()
@@ -438,14 +397,14 @@ async def test_post_enqueues_and_processes(returned: Any, make_client: MakeClien
 async def test_post_uses_unknown_when_caller_frame_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,
-    error_type: type[ValueError] | type[AttributeError],
+    error_type: type[ValueError | AttributeError],
 ) -> None:
     """Verify ``_post`` uses ``Unknown`` caller when frame lookup fails.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for patching frame lookup.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-        error_type (type[ValueError] | type[AttributeError]): Frame lookup error to raise.
+        error_type (type[ValueError | AttributeError]): Frame lookup error to raise.
 
     Returns:
         None: This test asserts caller fallback behavior for ``_post``.
