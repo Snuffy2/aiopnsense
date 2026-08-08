@@ -28,12 +28,23 @@ class _ExceptionLogDetails:
     """Lazily render redacted exception details for an emitted log record."""
 
     def __init__(self, error: Exception) -> None:
-        """Store an exception until a logging formatter requests its details.
+        """Capture safe exception details before creating a log record.
 
         Args:
             error (Exception): Caught exception to redact and render.
         """
-        self._error = error
+        self._error_type = type(error).__name__
+        self._logged_message = (
+            _INVALID_URL_ERROR_MESSAGE
+            if isinstance(error, aiohttp.InvalidURL)
+            else re.sub(
+                r"(://)([^:/@\s]+):([^@\s]+)@",
+                r"\1<redacted>:<redacted>@",
+                str(error),
+            )
+        )
+        self._traceback_snapshot = traceback.extract_tb(error.__traceback__)
+        self._rendered: str | None = None
 
     def __str__(self) -> str:
         """Render the redacted message and traceback.
@@ -41,19 +52,12 @@ class _ExceptionLogDetails:
         Returns:
             str: Exception type, redacted message, and formatted traceback.
         """
-        logged_message = (
-            _INVALID_URL_ERROR_MESSAGE
-            if isinstance(self._error, aiohttp.InvalidURL)
-            else re.sub(
-                r"(://)([^:/@\s]+):([^@\s]+)@",
-                r"\1<redacted>:<redacted>@",
-                str(self._error),
+        if self._rendered is None:
+            self._rendered = (
+                f"{self._error_type}: {self._logged_message}\n"
+                f"{''.join(self._traceback_snapshot.format())}"
             )
-        )
-        return (
-            f"{type(self._error).__name__}: {logged_message}\n"
-            f"{''.join(traceback.format_tb(self._error.__traceback__))}"
-        )
+        return self._rendered
 
 
 def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
