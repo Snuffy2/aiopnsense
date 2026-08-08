@@ -186,8 +186,8 @@ async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> No
         ("_get_kea_dhcpv4_leases", "/api/kea/leases4/search"),
         ("_get_kea_dhcpv6_leases", "/api/kea/leases6/search"),
         ("_get_dnsmasq_leases", "/api/dnsmasq/leases/search"),
-        ("_get_isc_dhcpv4_leases", "/api/dhcpv4/service/status"),
-        ("_get_isc_dhcpv6_leases", "/api/dhcpv6/service/status"),
+        ("_get_isc_dhcpv4_leases", "/api/dhcpv4/leases/search_lease"),
+        ("_get_isc_dhcpv6_leases", "/api/dhcpv6/leases/search_lease"),
     ],
 )
 async def test_dhcp_endpoint_unavailable(
@@ -207,6 +207,7 @@ async def test_dhcp_endpoint_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         leases = await getattr(client, method_name)()
@@ -1154,31 +1155,19 @@ async def test_version_switched_dhcp_endpoints_skip_unneeded_kea_reservations(
         client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
         client._is_get_endpoint_available.assert_awaited_once_with("/api/kea/leases4/search")
 
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         assert await client._get_isc_dhcpv4_leases() == []
-        assert client._is_get_endpoint_available.await_count == 2
-        assert (
-            client._is_get_endpoint_available.await_args_list[0].args[0]
-            == "/api/dhcpv4/service/status"
-        )
-        assert (
-            client._is_get_endpoint_available.await_args_list[1].args[0]
-            == "/api/dhcpv4/leases/search_lease"
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            "/api/dhcpv4/leases/search_lease"
         )
         client._safe_dict_get.assert_not_awaited()
 
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
         assert await client._get_isc_dhcpv6_leases() == []
-        assert client._is_get_endpoint_available.await_count == 2
-        assert (
-            client._is_get_endpoint_available.await_args_list[0].args[0]
-            == "/api/dhcpv6/service/status"
-        )
-        assert (
-            client._is_get_endpoint_available.await_args_list[1].args[0]
-            == "/api/dhcpv6/leases/search_lease"
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            "/api/dhcpv6/leases/search_lease"
         )
         client._safe_dict_get.assert_not_awaited()
     finally:
