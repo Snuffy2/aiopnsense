@@ -210,8 +210,7 @@ class ClientTransportMixin:
                             if not line.startswith("data:"):
                                 continue
                             value = line[len("data:") :]
-                            if value.startswith(" "):
-                                value = value[1:]
+                            value = value.removeprefix(" ")
                             data_lines.append(value)
 
                         if not data_lines:

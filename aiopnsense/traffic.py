@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
+from ._typing import AiopnsenseClientProtocol
 from .client_transport import _STREAM_JSON_EVENT_RESET_KEY
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
-from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, try_to_float, try_to_int
 
 DIAGNOSTICS_TRAFFIC_ENDPOINT = "/api/diagnostics/traffic/interface"

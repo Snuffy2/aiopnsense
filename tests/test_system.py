@@ -1,7 +1,7 @@
 """Tests for `aiopnsense.system`."""
 
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -522,7 +522,7 @@ async def test_gateways_notices_and_close_notice_all(make_client: ClientType) ->
                 "n1": {
                     "statusCode": 1,
                     "message": "m",
-                    "timestamp": int(datetime.now(tz=timezone.utc).timestamp()),
+                    "timestamp": int(datetime.now(tz=UTC).timestamp()),
                 }
             }
         )

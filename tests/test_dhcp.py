@@ -295,7 +295,7 @@ async def test_keep_latest_leases_handles_list_values(make_client: ClientType) -
 async def test_is_reserved_lease_handles_legacy_and_list_flags(
     make_client: ClientType,
     raw_reserved: object,
-    expected: bool,  # noqa: FBT001 - pytest injects parametrized values by name.
+    expected: bool,
 ) -> None:
     """Verify reserved lease detection supports legacy and new value shapes.
 

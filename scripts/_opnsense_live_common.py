@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-import json
-import os
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
+import json
+import os
 from pathlib import Path
+import re
 import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import aiohttp
+
     from aiopnsense import OPNsenseClient
 
 
@@ -255,7 +256,7 @@ def write_output(payload: Any, output_path: Path | None = None) -> None:
 
 
 @cache
-def _get_client_class() -> type["OPNsenseClient"]:
+def _get_client_class() -> type[OPNsenseClient]:
     """Return the lazily imported OPNsense client class.
 
     Returns:
@@ -266,7 +267,7 @@ def _get_client_class() -> type["OPNsenseClient"]:
     return OPNsenseClient
 
 
-def create_client(config: LiveConfig, session: aiohttp.ClientSession) -> "OPNsenseClient":
+def create_client(config: LiveConfig, session: aiohttp.ClientSession) -> OPNsenseClient:
     """Create an OPNsense client for live scripts.
 
     Args:

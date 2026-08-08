@@ -9,11 +9,8 @@ import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
-from .const import (
-    AMBIGUOUS_TZINFOS,
-    OPNSENSE_26_1_11_COMPAT_FIRMWARE,
-)
-from .exceptions import OPNsenseMissingDeviceUniqueID, OPNsenseError
+from .const import AMBIGUOUS_TZINFOS, OPNSENSE_26_1_11_COMPAT_FIRMWARE
+from .exceptions import OPNsenseError, OPNsenseMissingDeviceUniqueID
 from .helpers import (
     _LOGGER,
     _log_errors,

@@ -27,7 +27,7 @@ write_output = _common.write_output
 if __name__ == "__main__":
     reexec_with_repo_venv(Path(__file__))
 
-import aiohttp  # noqa: E402
+import aiohttp
 
 _NO_PAYLOAD = object()
 
@@ -164,7 +164,7 @@ def load_payload(
 
 async def call_api(
     session: aiohttp.ClientSession,
-    config: "LiveConfig",
+    config: LiveConfig,
     endpoint: str,
     method: str,
     payload: dict[str, Any] | object,

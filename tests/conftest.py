@@ -45,7 +45,7 @@ def legacy_dnsbl_payload() -> dict[str, Any]:
 class FakeClientSession:
     """Minimal fake aiohttp session for unit tests."""
 
-    async def __aenter__(self) -> "FakeClientSession":
+    async def __aenter__(self) -> FakeClientSession:
         """Enter async context.
 
         Returns:
@@ -276,7 +276,7 @@ def _patch_asyncio_create_task(
             """
             return False
 
-        def __await__(self) -> Generator[None, None, None]:
+        def __await__(self) -> Generator[None]:
             """Await.
 
             Returns:
@@ -394,7 +394,7 @@ def fake_stream_response_factory(
 
 
 @pytest.fixture
-async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClient], None]:
+async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClient]]:
     """Return a factory that constructs an OPNsenseClient for tests.
 
     Yields:

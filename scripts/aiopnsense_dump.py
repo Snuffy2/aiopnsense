@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import dataclass
 import importlib
 import logging
-import time
-from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Any
 
 _common = importlib.import_module("_opnsense_live_common")
@@ -25,8 +25,9 @@ write_output = _common.write_output
 if __name__ == "__main__":
     reexec_with_repo_venv(Path(__file__))
 
-import aiohttp  # noqa: E402
-from aiopnsense.exceptions import OPNsenseError  # noqa: E402
+import aiohttp
+
+from aiopnsense.exceptions import OPNsenseError
 
 _LOGGER = logging.getLogger(__name__)
 

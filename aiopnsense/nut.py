@@ -1,7 +1,7 @@
 """NUT plugin methods for OPNsenseClient."""
 
-import re
 from collections.abc import Mapping
+import re
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
