@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 import inspect
 import logging
+import traceback
 from unittest.mock import MagicMock
 from typing import Any, NoReturn
 
@@ -307,6 +308,87 @@ async def test_log_errors_decorator_re_raise_and_suppress() -> None:
     d2 = Dummy(throw_errors=True)
     with pytest.raises(OPNsenseError, match="boom"):
         await d2.boom()
+
+
+@pytest.mark.asyncio
+async def test_log_errors_captures_safe_details_and_caches_rendering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Capture only safe details in the record and cache their rendered form.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing logging and traceback calls.
+    """
+
+    rendered_messages = 0
+
+    class LazyMessageError(Exception):
+        """Exception that records when its message is sanitized for logging."""
+
+        def __str__(self) -> str:
+            """Record message rendering during eager sanitization.
+
+            Returns:
+                str: Stable exception message.
+            """
+            nonlocal rendered_messages
+            rendered_messages += 1
+            return "request failed for https://user:secret@example.invalid"
+
+    class Dummy:
+        """Small wrapper for exercising safe exception logging."""
+
+        _throw_errors = False
+
+        @aiopnsense_helpers._log_errors
+        async def boom(self) -> None:
+            """Raise an exception whose message must be sanitized before logging.
+
+            Raises:
+                LazyMessageError: Always raised to exercise safe logging.
+            """
+            raise LazyMessageError
+
+    error_log = MagicMock()
+    traceback_format_calls = 0
+    original_format = traceback.StackSummary.format
+
+    def format_traceback_snapshot(
+        snapshot: traceback.StackSummary,
+    ) -> list[str]:
+        """Record and perform formatting of a frame-free traceback snapshot.
+
+        Args:
+            snapshot (traceback.StackSummary): Captured traceback metadata.
+
+        Returns:
+            list[str]: Formatted traceback lines.
+        """
+        nonlocal traceback_format_calls
+        traceback_format_calls += 1
+        return original_format(snapshot)
+
+    monkeypatch.setattr(aiopnsense_helpers._LOGGER, "error", error_log)
+    monkeypatch.setattr(traceback.StackSummary, "format", format_traceback_snapshot)
+
+    assert await Dummy().boom() is None
+    assert rendered_messages == 1
+    assert traceback_format_calls == 0
+    log_details = error_log.call_args.args[2]
+    traceback_snapshot = log_details._traceback_snapshot
+
+    first_render = log_details.__str__()
+    second_render = log_details.__str__()
+    assert first_render.startswith(
+        "LazyMessageError: request failed for https://<redacted>:<redacted>@example.invalid\n"
+    )
+    assert second_render is first_render
+    assert rendered_messages == 1
+    assert traceback_format_calls == 1
+    assert not hasattr(log_details, "_error")
+    assert all(not hasattr(frame, "tb_frame") for frame in traceback_snapshot)
+    assert "user" not in repr(vars(log_details))
+    assert "secret" not in repr(vars(log_details))
 
 
 def test_log_errors_preserves_wrapped_metadata() -> None:

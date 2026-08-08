@@ -24,6 +24,42 @@ from .exceptions import (
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
+class _ExceptionLogDetails:
+    """Lazily render redacted exception details for an emitted log record."""
+
+    def __init__(self, error: Exception) -> None:
+        """Capture safe exception details before creating a log record.
+
+        Args:
+            error (Exception): Caught exception to redact and render.
+        """
+        self._error_type = type(error).__name__
+        self._logged_message = (
+            _INVALID_URL_ERROR_MESSAGE
+            if isinstance(error, aiohttp.InvalidURL)
+            else re.sub(
+                r"(://)([^:/@\s]+):([^@\s]+)@",
+                r"\1<redacted>:<redacted>@",
+                str(error),
+            )
+        )
+        self._traceback_snapshot = traceback.extract_tb(error.__traceback__)
+        self._rendered: str | None = None
+
+    def __str__(self) -> str:
+        """Render the redacted message and traceback.
+
+        Returns:
+            str: Exception type, redacted message, and formatted traceback.
+        """
+        if self._rendered is None:
+            self._rendered = (
+                f"{self._error_type}: {self._logged_message}\n"
+                f"{''.join(self._traceback_snapshot.format())}"
+            )
+        return self._rendered
+
+
 def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap coroutine methods with shared timeout/error logging behavior.
 
@@ -76,21 +112,10 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
                     raise
                 raise _map_opnsense_exception(e) from e
         except Exception as e:
-            logged_message = (
-                _INVALID_URL_ERROR_MESSAGE
-                if isinstance(e, aiohttp.InvalidURL)
-                else re.sub(
-                    r"(://)([^:/@\s]+):([^@\s]+)@",
-                    r"\1<redacted>:<redacted>@",
-                    str(e),
-                )
-            )
             _LOGGER.error(
-                "Error in %s. %s: %s\n%s",
+                "Error in %s. %s",
                 func.__name__.strip("_"),
-                type(e).__name__,
-                logged_message,
-                "".join(traceback.format_tb(e.__traceback__)),
+                _ExceptionLogDetails(e),
             )
             if self._throw_errors:
                 if isinstance(e, OPNsenseError):
