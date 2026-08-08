@@ -81,18 +81,19 @@ class DHCPMixin(AiopnsenseClientProtocol):
         )
 
     @staticmethod
-    def _is_expired_kea_lease(lease_info: MutableMapping[str, Any]) -> bool:
+    def _is_expired_kea_lease(lease_info: MutableMapping[str, Any], current_time: datetime) -> bool:
         """Return whether a Kea lease has an expiration in the past.
 
         Args:
             lease_info (MutableMapping[str, Any]): Raw Kea lease row.
+            current_time (datetime): Point-in-time reference used for expiration.
 
         Returns:
             bool: Whether the row has a parseable expiration that has passed.
         """
         expiration = try_to_int(lease_info.get("expire"))
         expiration_datetime = timestamp_to_datetime(expiration) if expiration else None
-        return bool(expiration_datetime and expiration_datetime < datetime.now().astimezone())
+        return bool(expiration_datetime and expiration_datetime < current_time)
 
     @staticmethod
     def _copy_lease_identity_fields(
@@ -285,12 +286,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if not isinstance(response.get("rows", None), list):
             return []
         leases_info: list = response.get("rows", [])
+        current_time = datetime.now().astimezone()
         res_info: list[Any] | None
         needs_reservation_lookup = any(
             isinstance(lease_info, MutableMapping)
             and api_value_matches(lease_info.get("state"), "0")
             and (not require_hardware_address or bool(lease_info.get("hwaddr")))
-            and not self._is_expired_kea_lease(lease_info)
+            and not self._is_expired_kea_lease(lease_info, current_time)
             and not self._has_authoritative_reservation_metadata(lease_info.get("is_reserved"))
             for lease_info in leases_info
         )
@@ -364,7 +366,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             if expiration:
                 expiration_datetime = timestamp_to_datetime(expiration)
                 lease["expires"] = expiration_datetime
-                if expiration_datetime and expiration_datetime < datetime.now().astimezone():
+                if expiration_datetime and expiration_datetime < current_time:
                     continue
             else:
                 lease["expires"] = lease_info.get("expire", None)
@@ -382,7 +384,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             list[dict]: Deduplicated rows where all fields except ``expire``
                 define identity and the highest expiration value is retained.
         """
-        seen: dict[tuple, dict] = {}
+        seen: dict[tuple, tuple[int, dict]] = {}
 
         for entry in reservations:
             if not isinstance(entry, MutableMapping):
@@ -400,13 +402,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             )
 
             # Keep the entry with the latest expiration time
-            seen_expire = try_to_int(seen.get(key, {}).get("expire"), -1)
-            if seen_expire is None:
-                seen_expire = -1
-            if key not in seen or expire > seen_expire:
-                seen[key] = dict(entry)
+            previous_entry = seen.get(key)
+            if previous_entry is None or expire > previous_entry[0]:
+                seen[key] = (expire, dict(entry))
 
-        return list(seen.values())
+        return [entry for _, entry in seen.values()]
 
     async def _get_dnsmasq_leases(self, opnsense_tz: tzinfo | None = None) -> list:
         """Return active IPv4 and IPv6 DHCP leases reported by dnsmasq.
@@ -430,6 +430,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         cleaned_leases = self._keep_latest_leases(leases_info)
 
         leases: list = []
+        current_time = datetime.now().astimezone()
         for lease_info in cleaned_leases:
             if not isinstance(lease_info, MutableMapping):
                 continue
@@ -459,11 +460,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             )
             self._copy_lease_identity_fields(lease, lease_info)
 
-            if try_to_int(lease_info.get("expire", None)):
-                lease["expires"] = timestamp_to_datetime(
-                    try_to_int(lease_info.get("expire", None)) or 0
-                )
-                if lease["expires"] < datetime.now().astimezone():
+            expiration = try_to_int(lease_info.get("expire", None))
+            if expiration:
+                expiration_datetime = timestamp_to_datetime(expiration)
+                lease["expires"] = expiration_datetime
+                if expiration_datetime and expiration_datetime < current_time:
                     continue
             else:
                 lease["expires"] = lease_info.get("expire", None)
@@ -495,6 +496,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
         leases: list = []
+        current_time = datetime.now().astimezone()
         for lease_info in leases_info:
             if (
                 not isinstance(lease_info, MutableMapping)
@@ -522,7 +524,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 except TypeError, ValueError:
                     continue
                 lease["expires"] = dt.replace(tzinfo=opnsense_tz)
-                if lease["expires"] < datetime.now().astimezone():
+                if lease["expires"] < current_time:
                     continue
             else:
                 lease["expires"] = lease_info.get("ends", None)
@@ -554,6 +556,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
         leases: list = []
+        current_time = datetime.now().astimezone()
         for lease_info in leases_info:
             if (
                 not isinstance(lease_info, MutableMapping)
@@ -581,7 +584,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 except TypeError, ValueError:
                     continue
                 lease["expires"] = dt.replace(tzinfo=opnsense_tz)
-                if lease["expires"] < datetime.now().astimezone():
+                if lease["expires"] < current_time:
                     continue
             else:
                 lease["expires"] = lease_info.get("ends", None)
