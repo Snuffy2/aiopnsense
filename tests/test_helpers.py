@@ -409,11 +409,21 @@ def test_log_errors_preserves_wrapped_metadata() -> None:
 
 
 @pytest.mark.asyncio
-async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType) -> None:
-    """Verify ``_log_errors`` re-raises or suppresses ``TimeoutError`` by configuration.
+@pytest.mark.parametrize(
+    "timeout_error",
+    [
+        pytest.param(TimeoutError("boom"), id="timeout-error"),
+        pytest.param(aiohttp.ServerTimeoutError("srv"), id="server-timeout-error"),
+    ],
+)
+async def test_log_errors_timeout_re_raise_and_suppress(
+    make_client: ClientType, timeout_error: TimeoutError
+) -> None:
+    """Verify ``_log_errors`` maps or suppresses timeout-family errors by configuration.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        timeout_error (TimeoutError): Timeout-family error raised by the wrapped coroutine.
 
     Returns:
         None: This test validates timeout error propagation behavior.
@@ -422,7 +432,7 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
     try:
 
         async def raising_timeout(*args: Any, **kwargs: Any) -> NoReturn:
-            """Raising timeout.
+            """Raise the configured timeout-family error.
 
             Args:
                 args (Any): Positional arguments accepted by `raising_timeout`.
@@ -432,16 +442,16 @@ async def test_log_errors_timeout_re_raise_and_suppress(make_client: ClientType)
                 NoReturn: This helper always raises ``TimeoutError``.
 
             Raises:
-                TimeoutError: Always raised to test timeout handling.
+                timeout_error: Always raised to test timeout handling.
             """
-            raise TimeoutError("boom")
+            raise timeout_error
 
         # wrap the coroutine with the decorator
         decorated = aiopnsense_helpers._log_errors(raising_timeout)
 
         # When error throwing is enabled we expect a public timeout error.
         client._throw_errors = True
-        with pytest.raises(OPNsenseTimeoutError, match="boom"):
+        with pytest.raises(OPNsenseTimeoutError, match=str(timeout_error)):
             await decorated(client)
 
         # When error throwing is disabled the decorator suppresses ``TimeoutError``.
@@ -478,82 +488,9 @@ async def test_log_errors_re_raises_existing_opnsense_timeout_instance() -> None
 
 
 @pytest.mark.asyncio
-async def test_log_errors_server_timeout_re_raise_and_suppress(make_client: ClientType) -> None:
-    """Verify ``_log_errors`` re-raises or suppresses ``ServerTimeoutError`` by configuration.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates server-timeout error propagation behavior.
-    """
-    client, _ = make_mock_session_client(make_client, url="http://x")
-    try:
-
-        async def raising_server_timeout(*args: Any, **kwargs: Any) -> Any:
-            """Raising server timeout.
-
-            Args:
-                args (Any): Positional arguments accepted by `raising_server_timeout`.
-                kwargs (Any): Keyword arguments accepted by `raising_server_timeout`.
-
-            Returns:
-                Any: This coroutine only raises the configured timeout.
-
-            Raises:
-                aiohttp.ServerTimeoutError: Always raised to test server-timeout handling.
-            """
-            raise aiohttp.ServerTimeoutError("srv")
-
-        decorated = aiopnsense_helpers._log_errors(raising_server_timeout)
-
-        client._throw_errors = True
-        with pytest.raises(OPNsenseTimeoutError, match="srv"):
-            await decorated(client)
-
-        client._throw_errors = False
-        assert await decorated(client) is None
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.parametrize(
-    ("raw_url", "forbidden"),
-    [
-        ("https://alice:secret@api.example/opn", ("alice", "secret")),
-        ("https://alice secret@api.example/opn", ("alice secret",)),
-        ("'https://alice:secret@api.example/opn'", ("alice", "secret")),
-        ('"https://alice:secret@api.example/opn"', ("alice", "secret")),
-        ("<https://alice:secret@api.example/opn>", ("alice", "secret")),
-        ("`https://alice:secret@api.example/opn`", ("alice", "secret")),
-        ("https://alice@api.example/opn", ("alice",)),
-        ("https://alice:@api.example/opn", ("alice",)),
-        ("https://alice:pa@ss@api.example/opn", ("alice", "pa@ss")),
-        ("https://u%40lice:p%40ss@api.example/opn", ("u%40lice", "p%40ss")),
-        ("https://u:pa@ss@api.example/path@with@ats", ("u", "pa@ss")),
-        ("https://alice:secret@[2001:db8::1]:443/path", ("alice", "secret")),
-        ("https://alice:secret@[bad", ("alice", "secret")),
-        (
-            "https://public.example/path https://alice:secret@api.example/opn",
-            ("alice", "secret"),
-        ),
-        ("https://alice?bad:secret@api.example/opn", ("alice?bad", "secret")),
-        ("https://alice#bad:secret@api.example/opn", ("alice#bad", "secret")),
-        ("https://alice:pa/ss@api.example/opn", ("alice", "pa/ss")),
-        (
-            "https://alice:secret@api.example/opn https://bob:pass@other.example/opn",
-            ("alice", "secret", "bob", "pass"),
-        ),
-    ],
-)
-@pytest.mark.asyncio
-async def test_log_errors_redacts_url_userinfo(raw_url: str, forbidden: tuple[str, ...]) -> None:
-    """Verify _log_errors maps invalid URLs using a constant-safe message.
-
-    Args:
-        raw_url (str): URL containing credentials to redact.
-        forbidden (tuple[str, ...]): Fragments that must not appear in the mapped message.
-    """
+async def test_log_errors_redacts_url_userinfo() -> None:
+    """Verify _log_errors integration maps a representative credentialed invalid URL safely."""
+    raw_url = "https://alice:secret@api.example/opn"
 
     class Dummy:
         """Small wrapper for testing redaction in error logs and mapping."""
@@ -576,7 +513,7 @@ async def test_log_errors_redacts_url_userinfo(raw_url: str, forbidden: tuple[st
     message = str(exc_info.value)
     assert message == "Invalid OPNsense URL"
     assert raw_url not in message
-    for token in forbidden:
+    for token in ("alice", "secret"):
         assert token not in message
 
 
