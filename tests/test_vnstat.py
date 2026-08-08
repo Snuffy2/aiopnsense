@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -213,6 +213,8 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
             return {}
 
         client._safe_dict_get = AsyncMock(side_effect=fake_safe_get)
+        client._parse_daily_label = Mock(wraps=client._parse_daily_label)
+        client._parse_month_label = Mock(wraps=client._parse_month_label)
         vnstat = await client.get_vnstat()
 
         gib = 1024**3
@@ -234,6 +236,8 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
         assert igc1_metrics["vnstat_yesterday"]["total_bytes"] == 1 * gib
         assert igc1_metrics["vnstat_last_month"]["total_bytes"] == 2 * gib
         assert igc1_metrics["vnstat_last_hour"]["total_bytes"] == int(1.5 * gib)
+        assert client._parse_daily_label.call_count == 4
+        assert client._parse_month_label.call_count == 4
     finally:
         await client.async_close()
 
@@ -341,11 +345,18 @@ async def test_parse_vnstat_payload_and_helpers_edge_cases(make_client: ClientTy
         assert client._pick_daily_row([{"label": "bad0"}, {"label": "bad1"}], 1, tz) == {
             "label": "bad0"
         }
+        assert client._pick_daily_row([{"label": "bad"}], 2, tz) is None
 
         this_month = datetime.now(tz=tz).strftime("%b '%y")
         assert client._pick_monthly_row([{"label": this_month}], 0, tz) == {"label": this_month}
         assert client._pick_monthly_row([{"label": "bad0"}, {"label": "bad1"}], 1, tz) == {
             "label": "bad0"
+        }
+        now = datetime.now(tz=tz)
+        previous_year = now.year - 1
+        previous_december = f"Dec '{previous_year % 100:02d}"
+        assert client._pick_monthly_row([{"label": previous_december}], now.month, tz) == {
+            "label": previous_december
         }
 
         now_hour = datetime.now(tz=tz).replace(minute=0, second=0, microsecond=0)
