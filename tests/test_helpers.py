@@ -323,10 +323,10 @@ async def test_log_errors_captures_safe_details_and_caches_rendering(
     rendered_messages = 0
 
     class LazyMessageError(Exception):
-        """Exception that records when its message is rendered."""
+        """Exception that records when its message is sanitized for logging."""
 
         def __str__(self) -> str:
-            """Record message rendering for lazy logging assertions.
+            """Record message rendering during eager sanitization.
 
             Returns:
                 str: Stable exception message.
@@ -336,16 +336,16 @@ async def test_log_errors_captures_safe_details_and_caches_rendering(
             return "request failed for https://user:secret@example.invalid"
 
     class Dummy:
-        """Small wrapper for exercising lazy exception logging."""
+        """Small wrapper for exercising safe exception logging."""
 
         _throw_errors = False
 
         @aiopnsense_helpers._log_errors
         async def boom(self) -> None:
-            """Raise an exception whose message must remain lazy.
+            """Raise an exception whose message must be sanitized before logging.
 
             Raises:
-                LazyMessageError: Always raised to exercise lazy logging.
+                LazyMessageError: Always raised to exercise safe logging.
             """
             raise LazyMessageError
 
