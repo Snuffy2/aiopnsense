@@ -663,13 +663,30 @@ async def test_get_kea_dhcpv4_leases_skips_redundant_reservation_lookup(
                         "address": "192.0.2.11",
                         "is_reserved": ["hwaddr"],
                     },
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:03",
+                        "address": "192.0.2.12",
+                        "is_reserved": False,
+                    },
+                    {
+                        "state": "0",
+                        "hwaddr": "aa:bb:cc:dd:ee:04",
+                        "address": "192.0.2.13",
+                        "is_reserved": True,
+                    },
                 ]
             }
         )
 
         leases = await client._get_kea_dhcpv4_leases()
 
-        assert [lease["type"] for lease in leases] == ["dynamic", "static"]
+        assert [lease["type"] for lease in leases] == [
+            "dynamic",
+            "static",
+            "dynamic",
+            "static",
+        ]
         client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
         client._is_get_endpoint_available.assert_awaited_once_with("/api/kea/leases4/search")
     finally:
@@ -721,6 +738,55 @@ async def test_get_kea_dhcpv4_leases_falls_back_for_invalid_reservation_metadata
         leases = await client._get_kea_dhcpv4_leases()
 
         assert leases[0]["type"] == "static"
+        assert client._safe_dict_get.await_count == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reservation_rows",
+    [
+        [],
+        [{"hw_address": "aa:bb:cc:dd:ee:02", "ip_address": "192.0.2.11"}],
+    ],
+)
+async def test_get_kea_dhcpv4_leases_invalid_truthy_metadata_falls_back_to_dynamic(
+    make_client: ClientType,
+    reservation_rows: list[dict[str, str]],
+) -> None:
+    """Classify invalid truthy metadata from a non-matching reservation fallback.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        reservation_rows (list[dict[str, str]]): Empty or mismatched reservation-table rows.
+
+    Returns:
+        None: This test verifies unsupported truthy metadata does not imply a static lease.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            side_effect=[
+                {
+                    "rows": [
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:01",
+                            "address": "192.0.2.10",
+                            "is_reserved": {"unexpected": "truthy"},
+                        }
+                    ]
+                },
+                {"rows": reservation_rows},
+            ]
+        )
+
+        leases = await client._get_kea_dhcpv4_leases()
+
+        assert leases[0]["type"] == "dynamic"
         assert client._safe_dict_get.await_count == 2
     finally:
         await client.async_close()

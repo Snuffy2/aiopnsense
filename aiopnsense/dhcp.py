@@ -78,7 +78,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             bool: Whether the value can authoritatively classify the lease.
         """
         return isinstance(raw_reserved, list) or (
-            type(raw_reserved) in (str, int)
+            type(raw_reserved) in (str, int, bool)
             and (api_value_matches(raw_reserved, "0") or api_value_matches(raw_reserved, "1"))
         )
 
@@ -350,10 +350,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
             )
             lease["if_descr"] = lease_info.get("if_descr", None)
             lease["if_name"] = lease_info.get("if_name", None)
-            if self._is_reserved_lease(lease_info.get("is_reserved")):
-                lease["type"] = "static"
-            elif self._has_authoritative_reservation_metadata(lease_info.get("is_reserved")):
-                lease["type"] = "dynamic"
+            raw_reserved = lease_info.get("is_reserved")
+            if self._has_authoritative_reservation_metadata(raw_reserved):
+                lease["type"] = "static" if self._is_reserved_lease(raw_reserved) else "dynamic"
             elif res_info is None:
                 if dynamic_when_reservation_lookup_unavailable:
                     lease["type"] = "dynamic"
