@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import importlib.util
-import runpy
 from pathlib import Path
+import runpy
 import sys
 from types import ModuleType
-from typing import Any
-import aiohttp
+from typing import Any, Self
 
+import aiohttp
 import pytest
 
 
@@ -66,10 +67,10 @@ class FakeResponse:
         self._text = text
         self._json_error = json_error
 
-    async def __aenter__(self) -> "FakeResponse":
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *_args: Any) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
     async def json(self, *_args: Any, **_kwargs: Any) -> Any:
@@ -128,13 +129,12 @@ class FakeSession:
         self.enter_count = 0
         self.exit_count = 0
 
-    async def __aenter__(self) -> "FakeSession":
+    async def __aenter__(self) -> Self:
         self.enter_count += 1
         return self
 
-    async def __aexit__(self, *_args: Any) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         self.exit_count += 1
-        return None
 
     def get(self, url: str, **kwargs: object) -> FakeResponse:
         """Record GET call and return response context.
@@ -451,25 +451,6 @@ async def test_call_api_preserves_non_2xx_text_body() -> None:
     assert result["reason"] == "Not Found"
     assert result["json"] is None
     assert result["text"] == "resource not found"
-
-
-def test_main_converts_live_config_error_to_system_exit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """main() maps LiveConfigError from async_main to SystemExit.
-
-    Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise configuration failure.
-    """
-    module = load_api_call_module()
-
-    async def raise_error() -> None:
-        raise module.LiveConfigError("bad config")
-
-    monkeypatch.setattr(module, "async_main", raise_error)
-
-    with pytest.raises(SystemExit) as excinfo:
-        module.main()
-
-    assert "bad config" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(
@@ -796,72 +777,71 @@ def test_entrypoint_exits_with_help_status_zero() -> None:
     assert excinfo.value.code == 0
 
 
-def test_main_converts_client_error_to_system_exit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """main() converts aiohttp client transport exceptions into SystemExit.
-
-    Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise a client error.
-    """
-    module = load_api_call_module()
-
-    async def raise_connector_error() -> None:
-        raise module.aiohttp.ClientConnectorError(
-            module.aiohttp.client_reqrep.ConnectionKey(
-                host="localhost",
-                port=443,
-                is_ssl=False,
-                ssl=None,
-                proxy=None,
-                proxy_auth=None,
-                proxy_headers_hash=None,
+@pytest.mark.parametrize(
+    ("exception_factory", "expected_message", "exact"),
+    [
+        pytest.param(
+            lambda module: module.LiveConfigError("bad config"),
+            "bad config",
+            False,
+            id="live-config-error",
+        ),
+        pytest.param(
+            lambda module: module.aiohttp.ClientConnectorError(
+                module.aiohttp.client_reqrep.ConnectionKey(
+                    host="localhost",
+                    port=443,
+                    is_ssl=False,
+                    ssl=None,
+                    proxy=None,
+                    proxy_auth=None,
+                    proxy_headers_hash=None,
+                ),
+                OSError("boom"),
             ),
-            OSError("boom"),
-        )
-
-    monkeypatch.setattr(module, "async_main", raise_connector_error)
-    with pytest.raises(SystemExit) as excinfo:
-        module.main()
-
-    assert "ClientConnectorError" in str(excinfo.value)
-
-
-def test_main_converts_timeout_error_to_system_exit(
+            "ClientConnectorError",
+            False,
+            id="client-connector-error",
+        ),
+        pytest.param(
+            lambda _module: TimeoutError("timeout while waiting for response"),
+            "TimeoutError",
+            False,
+            id="timeout-error",
+        ),
+        pytest.param(
+            lambda _module: OSError("output is unavailable"),
+            "OSError: output is unavailable",
+            True,
+            id="os-error",
+        ),
+    ],
+)
+def test_main_converts_expected_errors_to_system_exit(
     monkeypatch: pytest.MonkeyPatch,
+    exception_factory: Callable[[ModuleType], Exception],
+    expected_message: str,
+    exact: bool,
 ) -> None:
-    """main() converts timeout exceptions into concise SystemExit messages.
+    """main() maps expected failures to concise user-visible SystemExit messages.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise a timeout.
+        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise the failure.
+        exception_factory (Callable[[ModuleType], Exception]): Factory for the failure case.
+        expected_message (str): Exact message or substring expected in ``SystemExit``.
+        exact (bool): Whether the complete exit message must match.
     """
     module = load_api_call_module()
 
-    async def raise_timeout_error() -> None:
-        raise TimeoutError("timeout while waiting for response")
+    async def raise_error() -> None:
+        raise exception_factory(module)
 
-    monkeypatch.setattr(module, "async_main", raise_timeout_error)
+    monkeypatch.setattr(module, "async_main", raise_error)
     with pytest.raises(SystemExit) as excinfo:
         module.main()
 
-    assert "TimeoutError" in str(excinfo.value)
-
-
-def test_main_converts_os_error_to_system_exit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """main() converts I/O errors into concise SystemExit messages.
-
-    Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture that makes ``async_main`` raise an I/O error.
-    """
-    module = load_api_call_module()
-
-    async def raise_os_error() -> None:
-        raise OSError("output is unavailable")
-
-    monkeypatch.setattr(module, "async_main", raise_os_error)
-    with pytest.raises(SystemExit) as excinfo:
-        module.main()
-
-    assert str(excinfo.value) == "OSError: output is unavailable"
+    message = str(excinfo.value)
+    if exact:
+        assert message == expected_message
+    else:
+        assert expected_message in message
