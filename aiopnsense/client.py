@@ -9,11 +9,7 @@ import aiohttp
 from .client_base import ClientBaseMixin
 from .const import OPNSENSE_LTD_FIRMWARE, OPNSENSE_MIN_FIRMWARE
 from .dhcp import DHCPMixin
-from .exceptions import (
-    OPNsenseBelowMinFirmware,
-    OPNsenseUnknownFirmware,
-    _map_opnsense_exception,
-)
+from .exceptions import OPNsenseBelowMinFirmware, OPNsenseUnknownFirmware, _map_opnsense_exception
 from .firewall import FirewallMixin
 from .firmware import FirmwareMixin
 from .helpers import _LOGGER, firmware_is_at_least

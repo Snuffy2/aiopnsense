@@ -27,7 +27,7 @@ write_output = _common.write_output
 if __name__ == "__main__":
     reexec_with_repo_venv(Path(__file__))
 
-import aiohttp  # noqa: E402
+import aiohttp
 
 _NO_PAYLOAD = object()
 
@@ -121,14 +121,16 @@ def _load_json_object(payload_text: str, source: str) -> dict[str, Any]:
 
 
     Raises:
-        ValueError: If the payload is invalid JSON or does not decode to an object.
+        ValueError: If the payload is invalid JSON or does not decode to an
+            object.
     """
     try:
         value = json.loads(payload_text)
     except json.JSONDecodeError as err:
         raise ValueError(f"Invalid JSON in {source}: {err}") from err
     if not isinstance(value, dict):
-        raise ValueError(f"{source} must be a JSON object")
+        # ValueError is the CLI's documented payload-validation contract.
+        raise ValueError(f"{source} must be a JSON object")  # noqa: TRY004
     return value
 
 
@@ -164,7 +166,7 @@ def load_payload(
 
 async def call_api(
     session: aiohttp.ClientSession,
-    config: "LiveConfig",
+    config: LiveConfig,
     endpoint: str,
     method: str,
     payload: dict[str, Any] | object,

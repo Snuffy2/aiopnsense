@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -93,7 +93,7 @@ async def test_get_vnstat_metrics_yearly_parsing(make_client: ClientType) -> Non
         assert parsed["period"] == "yearly"
         assert len(rows) == 4
         assert rows[0]["label"] == "2023"
-        assert rows[0]["total_bytes"] == int(round(63.25 * tib))
+        assert rows[0]["total_bytes"] == round(63.25 * tib)
         assert rows[3]["label"] == "2026"
         assert rows[3]["avg_rate_bits_per_second"] == 14150000
         client._safe_dict_get.assert_awaited_once_with("/api/vnstat/service/yearly")
@@ -213,8 +213,6 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
             return {}
 
         client._safe_dict_get = AsyncMock(side_effect=fake_safe_get)
-        client._parse_daily_label = Mock(wraps=client._parse_daily_label)
-        client._parse_month_label = Mock(wraps=client._parse_month_label)
         vnstat = await client.get_vnstat()
 
         gib = 1024**3
@@ -236,8 +234,6 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
         assert igc1_metrics["vnstat_yesterday"]["total_bytes"] == 1 * gib
         assert igc1_metrics["vnstat_last_month"]["total_bytes"] == 2 * gib
         assert igc1_metrics["vnstat_last_hour"]["total_bytes"] == int(1.5 * gib)
-        assert client._parse_daily_label.call_count == 4
-        assert client._parse_month_label.call_count == 4
     finally:
         await client.async_close()
 

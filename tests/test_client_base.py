@@ -7,14 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from aiopnsense import (
-    OPNsenseClient,
-    client as aiopnsense_client,
-)
-from aiopnsense.const import (
-    OPNSENSE_LTD_FIRMWARE,
-    OPNSENSE_MIN_FIRMWARE,
-)
+from aiopnsense import OPNsenseClient, client as aiopnsense_client
+from aiopnsense.const import OPNSENSE_LTD_FIRMWARE, OPNSENSE_MIN_FIRMWARE
 from aiopnsense.exceptions import (
     OPNsenseBelowMinFirmware,
     OPNsenseConnectionError,
@@ -457,29 +451,38 @@ async def test_client_constructor_throw_errors_configuration(
 
 
 @pytest.mark.asyncio
-async def test_client_constructor_invalid_throw_errors_raises_type_error(
+@pytest.mark.parametrize(
+    ("kwargs", "error_message"),
+    [
+        pytest.param(
+            {"throw_errors": "false"},
+            "`throw_errors` must be a bool",
+            id="throw-errors",
+        ),
+        pytest.param(
+            {"initial": "false"},
+            "`initial` must be a bool",
+            id="legacy-initial",
+        ),
+    ],
+)
+async def test_client_constructor_invalid_boolean_option_raises_type_error(
+    kwargs: dict[str, str],
+    error_message: str,
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify invalid ``throw_errors`` values raise ``TypeError``.
+    """Verify invalid constructor boolean options raise ``TypeError``.
 
     Args:
-        make_client (MakeClientFactory): Fixture factory used to pass an invalid constructor option.
+        kwargs (dict[str, str]): Invalid constructor option and value.
+        error_message (str): Exact validation error expected for the option.
+        make_client (MakeClientFactory): Fixture factory used to exercise option validation.
+
+    Returns:
+        None: This test validates constructor option type enforcement.
     """
-    with pytest.raises(TypeError, match="`throw_errors` must be a bool"):
-        make_client(throw_errors="false")
-
-
-@pytest.mark.asyncio
-async def test_client_constructor_invalid_initial_raises_type_error(
-    make_client: MakeClientFactory,
-) -> None:
-    """Verify invalid deprecated ``initial`` values raise ``TypeError``.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory used to exercise legacy-option validation.
-    """
-    with pytest.raises(TypeError, match="`initial` must be a bool"):
-        make_client(initial="false")
+    with pytest.raises(TypeError, match=error_message):
+        make_client(**kwargs)
 
 
 @pytest.mark.asyncio

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.util
 import dataclasses
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -122,16 +122,13 @@ def test_load_env_file_parses_simple_shell_style_values(tmp_path: Path) -> None:
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text(
-        "\n".join(
-            [
-                "# local credentials",
-                "AIOPNSENSE_URL=https://firewall.example.test",
-                "AIOPNSENSE_API_KEY='key value'",
-                'AIOPNSENSE_API_SECRET="secret value"',
-                "AIOPNSENSE_VERIFY_SSL=false # local cert",
-                "",
-            ]
-        ),
+        """\
+# local credentials
+AIOPNSENSE_URL=https://firewall.example.test
+AIOPNSENSE_API_KEY='key value'
+AIOPNSENSE_API_SECRET="secret value"
+AIOPNSENSE_VERIFY_SSL=false # local cert
+""",
         encoding="utf-8",
     )
 
@@ -306,15 +303,12 @@ def test_load_config_builds_config_from_fallback_names(tmp_path: Path) -> None:
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text(
-        "\n".join(
-            [
-                "OPNSENSE_URL=https://firewall.example.test",
-                "OPNSENSE_API_KEY=key",
-                "OPNSENSE_API_SECRET=secret",
-                "OPNSENSE_VERIFY_SSL=no",
-                "",
-            ]
-        ),
+        """\
+OPNSENSE_URL=https://firewall.example.test
+OPNSENSE_API_KEY=key
+OPNSENSE_API_SECRET=secret
+OPNSENSE_VERIFY_SSL=no
+""",
         encoding="utf-8",
     )
 
@@ -335,14 +329,11 @@ def test_load_config_defaults_verify_ssl_true(tmp_path: Path) -> None:
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text(
-        "\n".join(
-            [
-                "AIOPNSENSE_URL=https://firewall.example.test",
-                "AIOPNSENSE_API_KEY=key",
-                "AIOPNSENSE_API_SECRET=secret",
-                "",
-            ]
-        ),
+        """\
+AIOPNSENSE_URL=https://firewall.example.test
+AIOPNSENSE_API_KEY=key
+AIOPNSENSE_API_SECRET=secret
+""",
         encoding="utf-8",
     )
 
@@ -360,15 +351,12 @@ def test_load_config_empty_canonical_verify_ssl_is_invalid(tmp_path: Path) -> No
     common = load_common_module()
     env_file = tmp_path / "aiopnsense.env"
     env_file.write_text(
-        "\n".join(
-            [
-                "AIOPNSENSE_URL=https://firewall.example.test",
-                "AIOPNSENSE_API_KEY=key",
-                "AIOPNSENSE_API_SECRET=secret",
-                "AIOPNSENSE_VERIFY_SSL=",
-                "",
-            ]
-        ),
+        """\
+AIOPNSENSE_URL=https://firewall.example.test
+AIOPNSENSE_API_KEY=key
+AIOPNSENSE_API_SECRET=secret
+AIOPNSENSE_VERIFY_SSL=
+""",
         encoding="utf-8",
     )
 

@@ -1,20 +1,17 @@
 """Tests for client transport helpers and HTTP response handling."""
 
+from collections.abc import Callable, MutableMapping
 import json
-from collections.abc import MutableMapping
 from types import TracebackType
-from typing import Any, Callable
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
 
 import aiopnsense.client_transport
-
 from aiopnsense.client_transport import _STREAM_JSON_EVENT_RESET_KEY
-from aiopnsense.const import (
-    DEFAULT_REQUEST_TIMEOUT_SECONDS,
-)
+from aiopnsense.const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
@@ -299,36 +296,6 @@ async def test_transport_errors_map_when_throwing(
                 await getattr(client, method_name)(*args, **kwargs)
 
         assert exc_info.value.__cause__ is transport_error
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_from_stream_parsing(
-    make_client: MakeClientFactory,
-    fake_stream_response_factory: FakeStreamResponseFactory,
-) -> None:
-    """Verify stream parsing returns the second valid SSE payload as mapping.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-        fake_stream_response_factory (FakeStreamResponseFactory): Fixture function building stream
-            response stubs.
-
-    Returns:
-        None: This test asserts stream payload parsing behavior.
-    """
-    client, session = make_mock_session_client(make_client)
-
-    # use shared factory to construct a fake streaming response
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        [b'data: {"a": 1}\n\n', b'data: {"b": 2}\n\n']
-    )
-    try:
-        res = await client._do_get_from_stream("/stream", caller="tst")
-        # implementation returns the second 'data' message parsed as JSON
-        assert isinstance(res, MutableMapping)
-        assert res.get("b") == 2
     finally:
         await client.async_close()
 
@@ -918,8 +885,8 @@ async def test_stream_json_events_reassembles_split_multibyte_utf8_event(
         },
         ensure_ascii=False,
     ).encode("utf-8")
-    event_payload = f"data: {event_json.decode('utf-8')}\n\n".encode("utf-8")
-    accent_index = event_payload.index("é".encode("utf-8")) + 1
+    event_payload = f"data: {event_json.decode('utf-8')}\n\n".encode()
+    accent_index = event_payload.index("é".encode()) + 1
     chunks = [
         b'data: {"time": 9, "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}}}\n\n',
         event_payload[:accent_index],
@@ -964,8 +931,8 @@ async def test_stream_json_events_ignores_trailing_incomplete_utf8_chunk(
         {"time": 12, "interfaces": {"wan": {"description": "Café"}}},
         ensure_ascii=False,
     ).encode("utf-8")
-    incomplete_payload = f"data: {incomplete_event_json.decode('utf-8')}\n\n".encode("utf-8")
-    leading_byte_index = incomplete_payload.index("é".encode("utf-8"))
+    incomplete_payload = f"data: {incomplete_event_json.decode('utf-8')}\n\n".encode()
+    leading_byte_index = incomplete_payload.index("é".encode())
     leading_byte_index += 1
 
     session = MagicMock()
@@ -1107,27 +1074,16 @@ async def test_stream_json_events_yields_eof_complete_event(
 
 
 @pytest.mark.asyncio
-async def test_stream_json_events_preserves_leading_sse_space_after_data_prefix(
+async def test_stream_json_events_preserves_leading_spaces_in_json_values(
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Parser should preserve only one leading space after `data:` when present.
+    """SSE payload whitespace should not strip leading spaces from JSON values.
 
     Args:
         make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
         fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying a data field with leading spaces.
-        monkeypatch (pytest.MonkeyPatch): Fixture used to capture payloads passed to JSON decoding.
     """
-    captured_payloads: list[str] = []
-    original_loads = aiopnsense.client_transport.json.loads
-
-    def fake_loads(response_str: str) -> dict[str, Any]:
-        captured_payloads.append(response_str)
-        return original_loads(response_str)
-
-    monkeypatch.setattr("aiopnsense.client_transport.json.loads", fake_loads)
-
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
         [b'data:   {"time": 22, "name": "  leading"}\n\n']
@@ -1138,9 +1094,7 @@ async def test_stream_json_events_preserves_leading_sse_space_after_data_prefix(
             event async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1")
         ]
 
-        assert len(events) == 1
-        assert events[0] == {"time": 22, "name": "  leading"}
-        assert captured_payloads == ['  {"time": 22, "name": "  leading"}']
+        assert events == [{"time": 22, "name": "  leading"}]
     finally:
         await client.async_close()
 

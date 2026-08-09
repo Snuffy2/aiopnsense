@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator, Callable, Coroutine, Generator, Muta
 import contextlib
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, cast
+from typing import Any, Self, cast
 from unittest.mock import MagicMock
 
 import aiohttp
@@ -45,11 +45,11 @@ def legacy_dnsbl_payload() -> dict[str, Any]:
 class FakeClientSession:
     """Minimal fake aiohttp session for unit tests."""
 
-    async def __aenter__(self) -> "FakeClientSession":
+    async def __aenter__(self) -> Self:
         """Enter async context.
 
         Returns:
-            FakeClientSession: The context-managed instance.
+            Self: The context-managed instance.
         """
         return self
 
@@ -159,11 +159,11 @@ class FakeResponse:
         if include_request_info:
             self.request_info = _FakeRequestInfo(real_url=URL(request_url))
 
-    async def __aenter__(self) -> FakeResponse:
+    async def __aenter__(self) -> Self:
         """Enter the asynchronous context.
 
         Returns:
-            FakeResponse: The context-managed instance.
+            Self: The context-managed instance.
         """
         return self
 
@@ -276,11 +276,11 @@ def _patch_asyncio_create_task(
             """
             return False
 
-        def __await__(self) -> Generator[None, None, None]:
+        def __await__(self) -> Generator[None]:
             """Await.
 
             Returns:
-                Generator[None, None, None]: Iterator used by the await
+                Generator[None]: Iterator used by the await
                     protocol.
             """
             if False:
@@ -394,7 +394,7 @@ def fake_stream_response_factory(
 
 
 @pytest.fixture
-async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClient], None]:
+async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClient]]:
     """Return a factory that constructs an OPNsenseClient for tests.
 
     Yields:

@@ -183,14 +183,47 @@ async def test_smart_fails_closed_when_endpoint_is_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_get_smart_does_not_probe_post_only_endpoint(make_client: ClientType) -> None:
-    """SMART list queries should not use GET endpoint probes for POST-only APIs.
+@pytest.mark.parametrize(
+    ("operation", "response", "expected", "preflight_endpoint", "post_args"),
+    [
+        pytest.param(
+            "list",
+            {"devices": [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]},
+            [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}],
+            "/api/smart/service/list",
+            ("/api/smart/service/list/1",),
+            id="list",
+        ),
+        pytest.param(
+            "info",
+            {"output": {"smart_status": "PASSED"}},
+            {"smart_status": "PASSED"},
+            "/api/smart/service/info",
+            ("/api/smart/service/info", {"device": "nvme0", "type": "a", "json": True}),
+            id="info",
+        ),
+    ],
+)
+async def test_smart_does_not_probe_post_only_endpoint(
+    make_client: ClientType,
+    operation: str,
+    response: dict[str, object],
+    expected: object,
+    preflight_endpoint: str,
+    post_args: tuple[object, ...],
+) -> None:
+    """SMART operations should not use GET endpoint probes for POST-only APIs.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        operation (str): SMART operation under test.
+        response (dict[str, object]): Mocked response from the POST request.
+        expected (object): Expected result from the SMART operation.
+        preflight_endpoint (str): Expected endpoint for the POST availability check.
+        post_args (tuple[object, ...]): Expected arguments for the SMART POST request.
 
     Returns:
-        None: This test validates that SMART list requests do not depend on GET probes.
+        None: This test validates that SMART POST requests do not depend on GET probes.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -198,15 +231,17 @@ async def test_get_smart_does_not_probe_post_only_endpoint(make_client: ClientTy
             side_effect=AssertionError("GET probe should not run")
         )
         client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(
-            return_value={"devices": [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]}
-        )
+        client._safe_dict_post = AsyncMock(return_value=response)
 
-        assert await client.get_smart() == [
-            {"ident": "nvme0", "device": "nvme0", "status": "PASSED"}
-        ]
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
+        if operation == "list":
+            got = await client.get_smart()
+        else:
+            got = await client.get_smart_info("nvme0")
+
+        assert got == expected
+        client._is_get_endpoint_available.assert_not_awaited()
+        client._is_post_endpoint_available.assert_awaited_once_with(preflight_endpoint)
+        client._safe_dict_post.assert_awaited_once_with(*post_args)
     finally:
         await client.async_close()
 
@@ -262,34 +297,6 @@ async def test_get_smart_info_wraps_non_mapping_output(make_client: ClientType) 
         client._safe_dict_post.assert_awaited_once_with(
             "/api/smart/service/info",
             {"device": "nvme0", "type": "H", "json": True},
-        )
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_smart_info_does_not_probe_post_only_endpoint(make_client: ClientType) -> None:
-    """SMART info queries should not use GET endpoint probes for POST-only APIs.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates that SMART info requests do not depend on GET probes.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=AssertionError("GET probe should not run")
-        )
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(return_value={"output": {"smart_status": "PASSED"}})
-
-        assert await client.get_smart_info("nvme0") == {"smart_status": "PASSED"}
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
-        client._safe_dict_post.assert_awaited_once_with(
-            "/api/smart/service/info",
-            {"device": "nvme0", "type": "a", "json": True},
         )
     finally:
         await client.async_close()

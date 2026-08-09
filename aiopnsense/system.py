@@ -9,11 +9,8 @@ import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
-from .const import (
-    AMBIGUOUS_TZINFOS,
-    OPNSENSE_26_1_11_COMPAT_FIRMWARE,
-)
-from .exceptions import OPNsenseMissingDeviceUniqueID, OPNsenseError
+from .const import AMBIGUOUS_TZINFOS, OPNSENSE_26_1_11_COMPAT_FIRMWARE
+from .exceptions import OPNsenseError, OPNsenseMissingDeviceUniqueID
 from .helpers import (
     _LOGGER,
     _log_errors,
@@ -448,7 +445,7 @@ class SystemMixin(AiopnsenseClientProtocol):
             )
             return expected_id
 
-        device_unique_id = sorted(mac_addresses)[0]
+        device_unique_id = min(mac_addresses)
         _LOGGER.debug("[get_device_unique_id] device_unique_id (first): %s", device_unique_id)
         return device_unique_id
 
@@ -619,9 +616,7 @@ class SystemMixin(AiopnsenseClientProtocol):
         """
         response = await self._safe_dict_post(CORE_SYSTEM_REBOOT_ENDPOINT)
         _LOGGER.debug("[system_reboot] response: %s", response)
-        if response.get("status", "") == "ok":
-            return True
-        return False
+        return response.get("status", "") == "ok"
 
     @_log_errors
     async def system_halt(self) -> None:
@@ -677,9 +672,7 @@ class SystemMixin(AiopnsenseClientProtocol):
         _LOGGER.debug("[send_wol] payload: %s", payload)
         response = await self._safe_dict_post(WOL_SET_ENDPOINT, payload)
         _LOGGER.debug("[send_wol] response: %s", response)
-        if response.get("status", "") == "ok":
-            return True
-        return False
+        return response.get("status", "") == "ok"
 
     @_log_errors
     async def get_notices(self) -> dict[str, Any]:
