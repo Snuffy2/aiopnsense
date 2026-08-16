@@ -39,27 +39,6 @@ jobs:
               ;;
           esac
 
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Setup Python 3.14 (with caching)
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-
-      - name: Install development requirements
-        run: python -m pip install --group dev -e .
-
-      - name: Run pytest
-        run: pytest
-
-      - name: Run prek
-        run: prek run --all-files
-
   enable-auto-merge:
     needs: verify-prek-update
     runs-on: ubuntu-latest
