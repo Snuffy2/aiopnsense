@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   prek-autoupdate:
+    if: github.event.repository.fork == false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -29,4 +30,6 @@ jobs:
         id: prek-autoupdate
         uses: Snuffy2/prek-autoupdate@v2
         with:
+          token: ${{ secrets.PREK_AUTOUPDATE_TOKEN }}
+          author-login: prek-autoupdate-bot
           update-day: "1"
