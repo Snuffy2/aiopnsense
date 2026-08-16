@@ -55,6 +55,9 @@ jobs:
 
       - name: 'Generate coverage Comment (and possibly Post to PR)'
         id: coverage_comment
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.user.login != 'prek-autoupdate-bot'
         uses: py-cov-action/python-coverage-comment-action@v3
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
