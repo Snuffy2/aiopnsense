@@ -41,7 +41,7 @@ exclude = "^docs/_build/"
 
 [[repos]]
 repo = "https://github.com/pre-commit/mirrors-mypy"
-rev = "v2.3.0"
+rev = "v2.3.1"
 
 [[repos.hooks]]
 id = "mypy"
@@ -72,7 +72,7 @@ language_version = "python3.14"
 
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"
-rev = "v0.16.2"
+rev = "v0.16.3"
 
 [[repos.hooks]]
 id = "ruff-check"
