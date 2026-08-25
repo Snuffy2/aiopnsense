@@ -11,10 +11,12 @@
      false, and choose `patch`, `minor`, or `major`. The workflow derives the
      next tag from the published stable releases.
 
-3. Wait for the workflow to validate the tag, create a local version-only
-   commit and annotated tag, build and check the source and wheel distributions,
-   push only the tag, create the GitHub release with generated notes, and publish
-   to PyPI. Prereleases are published to TestPyPI instead.
+3. Wait for the workflow to validate the tag, regenerate
+   `docs/source/changelog.md`, create a local version-and-changelog commit and
+   annotated tag, build and check the source and wheel distributions, push only
+   the tag, create the GitHub release with generated notes, and publish to PyPI.
+   The PyPI project description combines the README and generated changelog.
+   Prereleases are published to TestPyPI instead.
 
 No personal access token is needed. The workflow never pushes `main`.
 
@@ -27,12 +29,13 @@ distributions stored by the successful release job.
 If a failed downstream job cannot be rerun, do not rerun the release job: it
 correctly rejects existing tags. Do not force-move the tag.
 
-1. Inspect the existing tag and package version:
+1. Inspect the existing tag, package version, and documentation changelog:
 
    ```sh
    git fetch --tags origin
    git show --no-patch --decorate <tag>
    git show <tag>:aiopnsense/const.py
+   git show <tag>:docs/source/changelog.md
    ```
 
 2. If the tag and version are correct, build and check the distributions from
@@ -58,5 +61,5 @@ correctly rejects existing tags. Do not force-move the tag.
 
    Add `--prerelease` when the tag is a prerelease.
 
-If the tag points to the wrong commit or contains the wrong version, leave it
-unchanged and release a new, correct version instead.
+If the tag points to the wrong commit or contains the wrong version or
+changelog, leave it unchanged and release a new, correct version instead.

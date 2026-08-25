@@ -142,7 +142,21 @@ jobs:
             exit 1
           fi
 
-      - name: Create versioned release commit and annotated tag
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ruby
+
+      - name: Install github-changelog-generator
+        run: gem install github_changelog_generator --no-document
+
+      - name: Generate documentation changelog
+        env:
+          CHANGELOG_GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.release-tag }}
+        run: github_changelog_generator --future-release "$RELEASE_TAG"
+
+      - name: Create release commit and annotated tag
         env:
           RELEASE_TAG: ${{ steps.release_tag.outputs.release-tag }}
         run: |
@@ -153,7 +167,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
-          git add aiopnsense/const.py
+          git add aiopnsense/const.py docs/source/changelog.md
           git commit -m "Release $RELEASE_TAG"
           git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
 
