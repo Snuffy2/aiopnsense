@@ -43,6 +43,7 @@ lint = [
     "types-python-dateutil",
     "types-PyYAML",
     "types-setuptools",
+    "uv",
 ]
 pytest = [
     "aiohttp<4",
@@ -55,6 +56,9 @@ dev = [
     { include-group = "lint" },
     { include-group = "pytest" },
 ]
+
+[tool.uv]
+required-version = ">=0.11.0"
 
 [tool.setuptools]
 include-package-data = true
