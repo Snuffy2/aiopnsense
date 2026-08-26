@@ -118,9 +118,30 @@ def test_next_stable_release_tag_uses_highest_stable_version(
 
 
 @pytest.mark.parametrize(
+    ("tags", "bump_type", "expected_tag"),
+    [
+        (["v1.2.9", "v1.3.0.1"], "patch", "v1.3.1"),
+        (["v1.2.9", "v1.3.0.1"], "minor", "v1.4.0"),
+        (["v1.9.9", "v2.0.0.1"], "major", "v3.0.0"),
+    ],
+)
+def test_next_stable_release_tag_considers_four_component_stable_versions(
+    tags: list[str], bump_type: str, expected_tag: str
+) -> None:
+    """Use four-component stable tags when selecting the next release.
+
+    Args:
+        tags (list[str]): Candidate stable and prerelease tag names.
+        bump_type (str): Requested version increment.
+        expected_tag (str): Expected next stable release tag.
+    """
+    assert prepare_release.next_stable_release_tag(tags, bump_type) == expected_tag
+
+
+@pytest.mark.parametrize(
     ("tags", "bump_type", "message"),
     [
-        (["v1.1.7-beta.1", "v1.1.7.1"], "patch", "No stable released tag"),
+        (["v1.1.7-beta.1", "v1.1.7b1"], "patch", "No stable released tag"),
         (["v1.1.7"], "feature", "Unsupported bump type"),
     ],
 )
@@ -191,6 +212,55 @@ def test_check_only_cli_rejects_prerelease_input_mismatch(
 
     with pytest.raises(SystemExit, match="2"):
         prepare_release.main()
+
+
+def test_default_cli_updates_version_in_working_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Update the package version through the workflow's default CLI path.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing CLI inputs and
+            the process working directory.
+        tmp_path (Path): Temporary repository root.
+    """
+    const_path = _write_version_file(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT_PATH), "v1.1.8"])
+
+    assert prepare_release.main() == 0
+    assert const_path.read_text(encoding="utf-8") == (
+        'VERSION = "v1.1.8"\nOTHER_VERSION = "v1.0.0"\n'
+    )
+
+
+def test_default_cli_rejects_expected_prerelease_without_check_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject the prerelease option when version preparation is requested.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing CLI inputs and
+            the process working directory.
+        tmp_path (Path): Temporary repository root.
+        capsys (pytest.CaptureFixture[str]): Fixture for capturing CLI errors.
+    """
+    const_path = _write_version_file(tmp_path)
+    original = const_path.read_text(encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(SCRIPT_PATH), "--expected-prerelease", "false", "v1.1.8"],
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        prepare_release.main()
+
+    assert "--expected-prerelease requires --check-only" in capsys.readouterr().err
+    assert const_path.read_text(encoding="utf-8") == original
 
 
 def _write_version_file(repository: Path, content: str | None = None) -> Path:

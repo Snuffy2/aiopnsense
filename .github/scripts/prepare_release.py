@@ -12,7 +12,9 @@ TAG_PATTERN = re.compile(
     r"^v[0-9]+(?:\.[0-9]+){1,3}(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:[A-Za-z]+[0-9]+)?$"
 )
 CONST_VERSION_PATTERN = re.compile(r'^(VERSION\s*=\s*)"[^"]*"', re.MULTILINE)
-STABLE_TAG_PATTERN = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+STABLE_TAG_PATTERN = re.compile(
+    r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?$"
+)
 NUMERIC_TAG_PATTERN = re.compile(r"^v[0-9]+(?:\.[0-9]+){1,3}$")
 
 
@@ -67,7 +69,7 @@ def next_stable_release_tag(tags: Iterable[str], bump_type: str) -> str:
         raise ValueError(msg)
 
     versions = [
-        tuple(int(component) for component in match.groups())
+        tuple(int(component or 0) for component in match.groups())
         for tag in tags
         if (match := STABLE_TAG_PATTERN.fullmatch(tag)) is not None
     ]
@@ -75,7 +77,7 @@ def next_stable_release_tag(tags: Iterable[str], bump_type: str) -> str:
         msg = "No stable released tag found."
         raise ValueError(msg)
 
-    major, minor, patch = max(versions)
+    major, minor, patch, _build = max(versions)
     if bump_type == "patch":
         patch += 1
     elif bump_type == "minor":

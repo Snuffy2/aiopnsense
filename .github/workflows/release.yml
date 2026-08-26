@@ -74,6 +74,8 @@ jobs:
               echo "An explicit tag requires bump=none." >&2
               exit 1
             fi
+            python3 .github/scripts/prepare_release.py --check-only \
+              --expected-prerelease "$IS_PRERELEASE" "$EXPLICIT_TAG"
             echo "release-tag=$EXPLICIT_TAG" >> "$GITHUB_OUTPUT"
             exit 0
           fi
