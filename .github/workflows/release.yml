@@ -1,51 +1,151 @@
-name: Publish to PyPI on Release
+name: Release
+
+run-name: Release ${{ inputs.tag || inputs.bump }}
+
 on:
   workflow_dispatch:
-  release:
-    types: [published]
+    inputs:
+      bump:
+        description: Stable version bump when tag is blank
+        required: true
+        default: none
+        type: choice
+        options:
+          - none
+          - patch
+          - minor
+          - major
+      tag:
+        description: Release tag (for example, v1.1.8 or v1.2.0-beta.1)
+        required: false
+        default: ""
+        type: string
+      prerelease:
+        description: Publish to TestPyPI as a prerelease
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  release:
+    outputs:
+      release-tag: ${{ steps.release_tag.outputs.release-tag }}
     permissions:
       contents: write
-      id-token: write
-
-    environment:
-      name: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.release.prerelease == true)) && 'testpypi' || 'pypi' }}
-      url: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.release.prerelease == true)) && 'https://test.pypi.org/project/aiopnsense/' || 'https://pypi.org/project/aiopnsense/' }}
+    runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        if: ${{ github.event_name == 'release' && github.event.release.draft == false }}
+      - name: Validate dispatch ref
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$RELEASE_REF" != "$DEFAULT_BRANCH" ]]; then
+            echo "Release workflow must be dispatched from $DEFAULT_BRANCH," >&2
+            echo "not $RELEASE_REF." >&2
+            exit 1
+          fi
+
+      - name: Checkout selected revision
         uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ github.event.release.tag_name }}
+          fetch-depth: 0
 
-      - name: Check out repository (workflow_dispatch)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        uses: actions/checkout@v7
-
-      - name: Debug GitHub Variables
+      - name: Resolve release tag
+        id: release_tag
+        env:
+          BUMP_TYPE: ${{ inputs.bump }}
+          EXPLICIT_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
         run: |
-          echo "github.event_name: ${{ github.event_name }}"
-          echo "github.ref_name: ${{ github.ref_name }}"
-          echo "github.event.release.tag_name: ${{ github.event.release.tag_name }}"
-          echo "github.event.repository.default_branch: ${{ github.event.repository.default_branch }}"
-          echo "github.event.release.target_commitish: ${{ github.event.release.target_commitish }}"
-          echo "github.event.release.prerelease: ${{ github.event.release.prerelease }}"
-          echo "github.event.release.draft: ${{ github.event.release.draft  }}"
+          set -euo pipefail
 
-      - name: Update Version in const.py
-        if: ${{ github.event_name == 'release' && github.event.release.draft == false }}
+          if [[ -n "$EXPLICIT_TAG" ]]; then
+            if [[ "$BUMP_TYPE" != "none" ]]; then
+              echo "An explicit tag requires bump=none." >&2
+              exit 1
+            fi
+            python3 .github/scripts/prepare_release.py --check-only \
+              --expected-prerelease "$IS_PRERELEASE" "$EXPLICIT_TAG"
+            echo "release-tag=$EXPLICIT_TAG" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            echo "Prereleases require an explicit tag." >&2
+            exit 1
+          fi
+          if [[ "$BUMP_TYPE" == "none" ]]; then
+            echo "Provide an explicit tag or select a stable version bump." >&2
+            exit 1
+          fi
+
+          release_tags="$(gh release list --exclude-drafts \
+            --exclude-pre-releases --limit 1000 --json tagName \
+            --jq '.[].tagName')"
+          release_tag="$(printf '%s\n' "$release_tags" | \
+            python3 .github/scripts/prepare_release.py --next-tag "$BUMP_TYPE")"
+          echo "release-tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release request
+        env:
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.release-tag }}
         run: |
-          sed -i 's/^VERSION \= \".*\"/VERSION \= \"${{ github.event.release.tag_name }}\"/' ./aiopnsense/const.py
+          python3 .github/scripts/prepare_release.py --check-only \
+            --expected-prerelease "$IS_PRERELEASE" "$RELEASE_TAG"
 
-      - name: Commit Version Change
-        if: ${{ github.event_name == 'release' && github.event.release.draft == false && github.event.release.prerelease == false }}
-        uses: stefanzweifel/git-auto-commit-action@v7
-        with:
-          branch: ${{ github.event.release.target_commitish }}
-          commit_message: 'Update to version ${{ github.event.release.tag_name }} [skip ci]'
+      - name: Require unused tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.release-tag }}
+        run: |
+          set -euo pipefail
+
+          set +e
+          tag_output="$(git ls-remote --exit-code --tags origin \
+            "refs/tags/$RELEASE_TAG" 2>&1)"
+          tag_status=$?
+          set -e
+          case "$tag_status" in
+            0)
+              echo "Remote tag already exists: $RELEASE_TAG" >&2
+              exit 1
+              ;;
+            2) ;;
+            *)
+              echo "Unable to verify whether remote tag exists:" >&2
+              echo "$RELEASE_TAG" >&2
+              printf '%s\n' "$tag_output" >&2
+              exit 1
+              ;;
+          esac
+
+          set +e
+          release_output="$(gh api --include \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>&1)"
+          release_status=$?
+          set -e
+          if [[ "$release_status" -eq 0 ]]; then
+            echo "GitHub release already exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$release_output" | \
+            grep -Eq '^HTTP/[0-9.]+ 404 '; then
+            echo "Unable to verify whether GitHub release exists:" >&2
+            echo "$RELEASE_TAG" >&2
+            printf '%s\n' "$release_output" >&2
+            exit 1
+          fi
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@v1
@@ -55,63 +155,99 @@ jobs:
       - name: Install github-changelog-generator
         run: gem install github_changelog_generator --no-document
 
-      - name: Generate changelog
+      - name: Generate documentation changelog
         env:
           CHANGELOG_GITHUB_TOKEN: ${{ github.token }}
-        run: github_changelog_generator
+          RELEASE_TAG: ${{ steps.release_tag.outputs.release-tag }}
+        run: github_changelog_generator --future-release "$RELEASE_TAG"
 
-      - name: Commit Changelog
-        if: ${{ github.event_name == 'release' && github.event.release.draft == false && github.event.release.prerelease == false }}
-        uses: stefanzweifel/git-auto-commit-action@v7
-        with:
-          branch: ${{ github.event.release.target_commitish }}
-          commit_message: 'Update changelog [skip ci]'
-
-      - name: Update Release with Version Change and Changelog Commits
-        if: ${{ github.event_name == 'release' && github.event.release.draft == false && github.event.release.prerelease == false }}
+      - name: Create release commit and annotated tag
+        env:
+          RELEASE_TAG: ${{ steps.release_tag.outputs.release-tag }}
         run: |
-          git tag -f "${{ github.event.release.tag_name }}"
-          git push -f origin "${{ github.event.release.tag_name }}"
+          set -euo pipefail
 
-      - name: Setup Python 3 (with caching)
-        uses: actions/setup-python@v7
+          python3 .github/scripts/prepare_release.py "$RELEASE_TAG"
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git add aiopnsense/const.py docs/source/changelog.md
+          git commit -m "Release $RELEASE_TAG"
+          git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v10.0.0
         with:
-          python-version: 3.x
-          cache: 'pip'
-          cache-dependency-path: |
-            pyproject.toml
+          python-version: "3.14"
 
-      - name: Install build tooling
-        run: python -m pip install --upgrade build twine
-
-      - name: Build distributions
-        run: python -m build
-
-      - name: Check distributions
-        run: python -m twine check dist/*
-
-      - name: Create Zip
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Build and check distributions
         run: |
-          cd ${{ github.workspace }}
-          zip -r aiopnsense.zip dist/
+          set -euo pipefail
 
-      - name: Add Zip to Action
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+          uv build
+          uvx --from twine twine check dist/*
+
+      - name: Store distributions for trusted publishing
         uses: actions/upload-artifact@v7
         with:
-          name: aiopnsense
-          path: |
-            ./aiopnsense.zip
-            ./docs/source/changelog.md
+          name: python-distributions
+          path: dist/
           if-no-files-found: error
 
-      - name: Publish to Test PyPI
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.release.prerelease == true) }}
+      - name: Push release tag
+        env:
+          RELEASE_TAG: ${{ steps.release_tag.outputs.release-tag }}
+        run: git push origin "refs/tags/$RELEASE_TAG"
+
+  github-release:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-distributions
+          path: dist/
+
+      - name: Create GitHub release with distributions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+          RELEASE_TAG: ${{ needs.release.outputs.release-tag }}
+        run: |
+          set -euo pipefail
+
+          arguments=(release create "$RELEASE_TAG" dist/*)
+          arguments+=(--generate-notes --title "$RELEASE_TAG" --verify-tag)
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            arguments+=(--prerelease)
+          fi
+          gh "${arguments[@]}"
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: ${{ inputs.prerelease && 'testpypi' || 'pypi' }}
+      url: ${{ inputs.prerelease && 'https://test.pypi.org/project/aiopnsense/' || 'https://pypi.org/project/aiopnsense/' }}
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-distributions
+          path: dist/
+
+      - name: Publish prerelease to TestPyPI
+        if: inputs.prerelease
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
 
-      - name: Publish to PyPI
-        if: ${{ github.event_name == 'release' && github.event.release.draft == false && github.event.release.prerelease == false }}
+      - name: Publish stable release to PyPI
+        if: ${{ !inputs.prerelease }}
         uses: pypa/gh-action-pypi-publish@release/v1

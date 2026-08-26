@@ -5,7 +5,6 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aiopnsense"
 description = "Async Python client library for OPNsense"
-readme = "README.md"
 requires-python = ">=3.14"
 license = "Apache-2.0"
 authors = [
@@ -16,7 +15,7 @@ dependencies = [
     "awesomeversion>=25.8.0",
     "python-dateutil>=2.9.0",
 ]
-dynamic = ["version"]
+dynamic = ["readme", "version"]
 
 [project.urls]
 Homepage = "https://github.com/Snuffy2/aiopnsense"
@@ -43,6 +42,7 @@ lint = [
     "types-python-dateutil",
     "types-PyYAML",
     "types-setuptools",
+    "uv",
 ]
 pytest = [
     "aiohttp<4",
@@ -56,6 +56,9 @@ dev = [
     { include-group = "pytest" },
 ]
 
+[tool.uv]
+required-version = ">=0.11.0"
+
 [tool.setuptools]
 include-package-data = true
 
@@ -66,6 +69,7 @@ include = ["aiopnsense*"]
 aiopnsense = ["py.typed"]
 
 [tool.setuptools.dynamic]
+readme = { file = ["README.md", "docs/source/changelog.md"], content-type = "text/markdown" }
 version = { attr = "aiopnsense.const.VERSION" }
 
 [tool.coverage.run]
