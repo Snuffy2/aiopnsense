@@ -177,7 +177,7 @@ jobs:
           git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v10.0.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.14"
 
