@@ -96,8 +96,11 @@ jobs:
 
       - name: Validate release request
         env:
+          IS_PRERELEASE: ${{ inputs.prerelease }}
           RELEASE_TAG: ${{ steps.release_tag.outputs.release-tag }}
-        run: python3 .github/scripts/prepare_release.py --check-only "$RELEASE_TAG"
+        run: |
+          python3 .github/scripts/prepare_release.py --check-only \
+            --expected-prerelease "$IS_PRERELEASE" "$RELEASE_TAG"
 
       - name: Require unused tag and release
         env:

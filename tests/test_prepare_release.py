@@ -43,6 +43,50 @@ def test_validate_release_tag_rejects_unsupported_formats(tag: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("tag", "prerelease"),
+    [
+        ("v1.1.8", False),
+        ("v1.1.7.1", False),
+        ("v1.2.0-beta.1", True),
+        ("v1.2.0b1", True),
+    ],
+)
+def test_validate_release_request_accepts_matching_classification(
+    tag: str, prerelease: bool
+) -> None:
+    """Accept release requests whose tag and prerelease input agree.
+
+    Args:
+        tag (str): Supported release tag under test.
+        prerelease (bool): Matching prerelease selection.
+    """
+    prepare_release.validate_release_request(tag, prerelease)
+
+
+@pytest.mark.parametrize(
+    ("tag", "prerelease", "message"),
+    [
+        ("v1.2.0-beta.1", False, "Prerelease tag.*requires prerelease=true"),
+        ("v1.2.0b1", False, "Prerelease tag.*requires prerelease=true"),
+        ("v1.2.0", True, "Stable tag.*requires prerelease=false"),
+        ("v1.2.0.1", True, "Stable tag.*requires prerelease=false"),
+    ],
+)
+def test_validate_release_request_rejects_mismatched_classification(
+    tag: str, prerelease: bool, message: str
+) -> None:
+    """Reject release requests whose tag and prerelease input disagree.
+
+    Args:
+        tag (str): Supported release tag under test.
+        prerelease (bool): Mismatched prerelease selection.
+        message (str): Expected validation error.
+    """
+    with pytest.raises(ValueError, match=message):
+        prepare_release.validate_release_request(tag, prerelease)
+
+
+@pytest.mark.parametrize(
     ("bump_type", "expected_tag"),
     [
         ("patch", "v1.1.8"),
@@ -123,6 +167,30 @@ def test_check_only_cli_preserves_positional_tag_contract(
 
     assert prepare_release.main() == 0
     assert capsys.readouterr().out == ""
+
+
+def test_check_only_cli_rejects_prerelease_input_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a prerelease tag when the workflow input marks it stable.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing CLI arguments.
+    """
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(SCRIPT_PATH),
+            "--check-only",
+            "--expected-prerelease",
+            "false",
+            "v1.2.0-beta.1",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        prepare_release.main()
 
 
 def _write_version_file(repository: Path, content: str | None = None) -> Path:
