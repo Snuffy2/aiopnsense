@@ -22,6 +22,7 @@ KEA_LEASES6_SEARCH_ENDPOINT = "/api/kea/leases6/search"
 KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT = "/api/kea/dhcpv4/search_reservation"
 KEA_DHCPV4_SEARCH_RESERVATION_CAMELCASE_ENDPOINT = "/api/kea/dhcpv4/searchReservation"
 DNSMASQ_LEASES_SEARCH_ENDPOINT = "/api/dnsmasq/leases/search"
+DNSMASQ_RANGES_SEARCH_ENDPOINT = "/api/dnsmasq/settings/search_range"
 ISC_DHCPV4_LEASES_SEARCH_ENDPOINT = "/api/dhcpv4/leases/search_lease"
 ISC_DHCPV4_LEASES_SEARCH_CAMELCASE_ENDPOINT = "/api/dhcpv4/leases/searchLease"
 ISC_DHCPV6_LEASES_SEARCH_ENDPOINT = "/api/dhcpv6/leases/search_lease"
@@ -178,7 +179,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
         leases_raw += await self._get_dnsmasq_leases(opnsense_tz=opnsense_tz)
 
         leases: dict[str, Any] = {}
+        # ISC lease endpoints expose interface metadata only for interfaces with lease rows,
+        # and OPNsense has no ISC configuration endpoint that lists enabled DHCP interfaces.
+        # Therefore, zero-lease ISC scopes cannot be discovered without incorrectly treating
+        # every assigned interface as DHCP-capable.
         lease_interfaces: dict[str, Any] = await self._get_kea_interfaces()
+        lease_interfaces.update(await self._get_dnsmasq_interfaces())
         for lease in leases_raw:
             if (
                 not isinstance(lease, MutableMapping)
@@ -233,6 +239,35 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 continue
             if api_value_matches(iface.get("selected", 0), "1") and iface.get("value", None):
                 lease_interfaces[if_name] = iface.get("value")
+        return lease_interfaces
+
+    async def _get_dnsmasq_interfaces(self) -> dict[str, Any]:
+        """Return interfaces with configured Dnsmasq DHCP ranges.
+
+        Returns:
+            dict[str, Any]: Mapping of Dnsmasq range interface identifiers to
+                display names, including interfaces without active leases.
+        """
+        if not await self._is_get_endpoint_available(DNSMASQ_RANGES_SEARCH_ENDPOINT):
+            _LOGGER.debug("Dnsmasq DHCP range endpoint unavailable")
+            return {}
+
+        response = await self._safe_dict_get(DNSMASQ_RANGES_SEARCH_ENDPOINT)
+        ranges = response.get("rows", [])
+        if not isinstance(ranges, list):
+            return {}
+
+        lease_interfaces: dict[str, Any] = {}
+        for range_info in ranges:
+            if not isinstance(range_info, MutableMapping):
+                continue
+            if_name = range_info.get("interface")
+            if not isinstance(if_name, str) or not if_name:
+                continue
+            if_descr = range_info.get("%interface")
+            lease_interfaces[if_name] = (
+                if_descr if isinstance(if_descr, str) and if_descr else if_name
+            )
         return lease_interfaces
 
     async def _get_kea_dhcpv4_leases(self, opnsense_tz: tzinfo | None = None) -> list:

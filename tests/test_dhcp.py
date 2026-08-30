@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, MutableMapping
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -473,6 +474,7 @@ async def test_get_dhcp_leases_combined_structure(make_client: ClientType) -> No
         client._get_isc_dhcpv6_leases = AsyncMock(return_value=[])
         client._get_dnsmasq_leases = AsyncMock(return_value=[])
         client._get_kea_interfaces = AsyncMock(return_value={"em0": "eth0"})
+        client._get_dnsmasq_interfaces = AsyncMock(return_value={})
 
         combined = await client.get_dhcp_leases()
         assert isinstance(combined, MutableMapping)
@@ -499,6 +501,127 @@ async def test_get_dhcp_leases_combined_structure(make_client: ClientType) -> No
         client._get_isc_dhcpv4_leases.assert_awaited_once_with(opnsense_tz=local_tz)
         client._get_isc_dhcpv6_leases.assert_awaited_once_with(opnsense_tz=local_tz)
         client._get_dnsmasq_leases.assert_awaited_once_with(opnsense_tz=local_tz)
+        client._get_dnsmasq_interfaces.assert_awaited_once_with()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_dhcp_leases_includes_empty_dnsmasq_range_interface(
+    make_client: ClientType,
+) -> None:
+    """Configured Dnsmasq ranges should remain discoverable without active leases.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates empty Dnsmasq range interface discovery.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        local_tz = datetime.now().astimezone().tzinfo
+        assert local_tz is not None
+        client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
+        client._get_kea_dhcpv4_leases = AsyncMock(return_value=[])
+        client._get_kea_dhcpv6_leases = AsyncMock(return_value=[])
+        client._get_isc_dhcpv4_leases = AsyncMock(return_value=[])
+        client._get_isc_dhcpv6_leases = AsyncMock(return_value=[])
+        client._get_dnsmasq_leases = AsyncMock(return_value=[])
+        client._get_kea_interfaces = AsyncMock(return_value={})
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "interface": "opt8",
+                        "%interface": "Guest_150",
+                        "start_addr": "10.100.150.100",
+                        "end_addr": "10.100.150.254",
+                    },
+                    {
+                        "interface": "opt8",
+                        "%interface": "Guest_150",
+                        "constructor": "opt8",
+                        "start_addr": "::1000",
+                        "end_addr": "::2000",
+                    },
+                ]
+            }
+        )
+
+        combined = await client.get_dhcp_leases()
+
+        assert combined == {
+            "lease_interfaces": {"opt8": "Guest_150"},
+            "leases": {},
+        }
+        client._safe_dict_get.assert_awaited_once_with("/api/dnsmasq/settings/search_range")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_dnsmasq_interfaces_returns_empty_when_endpoint_unavailable(
+    make_client: ClientType,
+) -> None:
+    """Dnsmasq range discovery should fail closed when its endpoint is unavailable.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates endpoint availability gating.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_get = AsyncMock()
+
+        assert await client._get_dnsmasq_interfaces() == {}
+        client._safe_dict_get.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ({"rows": "invalid"}, {}),
+        (
+            {
+                "rows": [
+                    None,
+                    {"interface": "", "%interface": "Any"},
+                    {"interface": "opt9", "%interface": None},
+                ]
+            },
+            {"opt9": "opt9"},
+        ),
+    ],
+)
+async def test_get_dnsmasq_interfaces_handles_malformed_ranges(
+    make_client: ClientType,
+    response: dict[str, Any],
+    expected: dict[str, str],
+) -> None:
+    """Dnsmasq range discovery should skip malformed rows and retain stable identifiers.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        response (dict[str, Any]): Dnsmasq range endpoint response to parse.
+        expected (dict[str, str]): Expected valid interface mapping.
+
+    Returns:
+        None: This test validates malformed range handling.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value=response)
+
+        assert await client._get_dnsmasq_interfaces() == expected
     finally:
         await client.async_close()
 
