@@ -255,6 +255,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         response = await self._safe_dict_get(DNSMASQ_RANGES_SEARCH_ENDPOINT)
         ranges = response.get("rows", [])
         if not isinstance(ranges, list):
+            _LOGGER.debug("Dnsmasq DHCP range lookup returned invalid rows payload")
             return {}
 
         lease_interfaces: dict[str, Any] = {}
