@@ -222,6 +222,7 @@ jobs:
 
           arguments=(release create "$RELEASE_TAG" dist/*)
           arguments+=(--generate-notes --title "$RELEASE_TAG" --verify-tag)
+          arguments+=(--repo "$GITHUB_REPOSITORY")
           if [[ "$IS_PRERELEASE" == "true" ]]; then
             arguments+=(--prerelease)
           fi
