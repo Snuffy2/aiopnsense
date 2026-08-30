@@ -1,4 +1,4 @@
-name: pytest and coverage
+name: pytest check and post coverage
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   tests:
-    name: pytest and coverage report
+    name: pytest check and post coverage
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.user.login == 'prek-autoupdate-bot' ||
@@ -21,18 +21,18 @@ jobs:
       # comments in pull requests.
       pull-requests: write
       # Gives the action the necessary permissions for pushing data to the
-      # python-coverage-comment-action branch, and for editing existing
-      # comments (to avoid publishing multiple comments in the same PR)
+      # python-coverage-comment-action branch. In v4, the action passes the
+      # GITHUB_TOKEN directly to git instead of using persisted credentials.
       contents: write
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
         with:
-          persist-credentials: ${{ github.event_name == 'push' }}
+          persist-credentials: false
 
       - name: Setup uv (with caching)
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: "3.14"
           enable-cache: true
@@ -42,16 +42,17 @@ jobs:
       - name: Run pytest with coverage from the lock
         run: uv run --locked --group pytest pytest
 
-      - name: 'Generate coverage Comment (and possibly Post to PR)'
-        id: coverage_comment
+      - name: 'Generate coverage Comment'
         if: >-
-          github.event_name != 'workflow_dispatch' &&
+          (github.event_name != 'workflow_dispatch' ||
+          github.ref_name == github.event.repository.default_branch) &&
           (github.event_name != 'pull_request' ||
-          github.event.pull_request.user.login != 'prek-autoupdate-bot'
-          )
-        uses: py-cov-action/python-coverage-comment-action@v3
+          github.event.pull_request.user.login != 'prek-autoupdate-bot')
+        id: coverage_comment
+        uses: py-cov-action/python-coverage-comment-action@v4.3
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTIVITY: ${{ github.event_name == 'workflow_dispatch' && 'save_coverage_data_files' || '' }}
           MINIMUM_GREEN: 90
           MINIMUM_ORANGE: 70
 
