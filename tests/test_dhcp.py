@@ -540,9 +540,9 @@ async def test_get_dhcp_leases_includes_empty_dnsmasq_range_interface(
                         "end_addr": "10.100.150.254",
                     },
                     {
-                        "interface": "opt8",
-                        "%interface": "Guest_150",
+                        "interface": "",
                         "constructor": "opt8",
+                        "%constructor": "Guest_150",
                         "start_addr": "::1000",
                         "end_addr": "::2000",
                     },
@@ -595,9 +595,10 @@ async def test_get_dnsmasq_interfaces_returns_empty_when_endpoint_unavailable(
                     None,
                     {"interface": "", "%interface": "Any"},
                     {"interface": "opt9", "%interface": None},
+                    {"constructor": "opt10", "%constructor": "Guest IPv6"},
                 ]
             },
-            {"opt9": "opt9"},
+            {"opt9": "opt9", "opt10": "Guest IPv6"},
         ),
     ],
 )

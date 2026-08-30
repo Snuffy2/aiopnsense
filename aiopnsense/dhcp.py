@@ -261,13 +261,17 @@ class DHCPMixin(AiopnsenseClientProtocol):
         for range_info in ranges:
             if not isinstance(range_info, MutableMapping):
                 continue
-            if_name = range_info.get("interface")
-            if not isinstance(if_name, str) or not if_name:
-                continue
-            if_descr = range_info.get("%interface")
-            lease_interfaces[if_name] = (
-                if_descr if isinstance(if_descr, str) and if_descr else if_name
-            )
+            for interface_field in ("interface", "constructor"):
+                if_name = range_info.get(interface_field)
+                if not isinstance(if_name, str) or not if_name:
+                    continue
+                if_descr = range_info.get(f"%{interface_field}")
+                if if_name not in lease_interfaces or (
+                    lease_interfaces[if_name] == if_name and isinstance(if_descr, str) and if_descr
+                ):
+                    lease_interfaces[if_name] = (
+                        if_descr if isinstance(if_descr, str) and if_descr else if_name
+                    )
         return lease_interfaces
 
     async def _get_kea_dhcpv4_leases(self, opnsense_tz: tzinfo | None = None) -> list:
