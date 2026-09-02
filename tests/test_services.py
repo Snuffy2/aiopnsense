@@ -74,10 +74,12 @@ async def test_manage_service_and_restart_if_running(
         assert await client._manage_service("start", "svc1") is True
         assert client._safe_dict_post.await_args.args[0] == "/api/core/service/start/svc1"
 
-        # service identifiers are URL-encoded before endpoint construction
-        assert await client._manage_service("restart", "svc /name") is True
+        # Preserve the structural separator between a service name and instance
+        # while URL-encoding unsafe characters within each path component.
+        assert await client._manage_service("restart", "openvpn/vpn instance") is True
         assert (
-            client._safe_dict_post.await_args.args[0] == "/api/core/service/restart/svc%20%2Fname"
+            client._safe_dict_post.await_args.args[0]
+            == "/api/core/service/restart/openvpn/vpn%20instance"
         )
 
         # restart_service_if_running uses _get_service_running_state; test branch behavior
