@@ -74,10 +74,12 @@ async def test_manage_service_and_restart_if_running(
         assert await client._manage_service("start", "svc1") is True
         assert client._safe_dict_post.await_args.args[0] == "/api/core/service/start/svc1"
 
-        # service identifiers are URL-encoded before endpoint construction
-        assert await client._manage_service("restart", "svc /name") is True
+        # Preserve the structural separator between a service name and instance
+        # while URL-encoding unsafe characters within each path component.
+        assert await client._manage_service("restart", "openvpn/vpn instance") is True
         assert (
-            client._safe_dict_post.await_args.args[0] == "/api/core/service/restart/svc%20%2Fname"
+            client._safe_dict_post.await_args.args[0]
+            == "/api/core/service/restart/openvpn/vpn%20instance"
         )
 
         # restart_service_if_running uses _get_service_running_state; test branch behavior
@@ -91,6 +93,36 @@ async def test_manage_service_and_restart_if_running(
         client._get_service_running_state = AsyncMock(return_value=False)
         assert await client.restart_service_if_running("svc1") is True
         restart_service_mock.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_restart_service_if_running_matches_composite_service_identifier(
+    make_client: ClientType,
+) -> None:
+    """Restart a running instance service identified by its composite name and ID.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates composite service lookup and restart behavior.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={"rows": [{"name": "openvpn", "id": "INSTANCE_ID", "running": 1}]}
+        )
+        client._safe_dict_post = AsyncMock(return_value={"result": "ok"})
+
+        assert await client._get_service_running_state("openvpn") is True
+        assert await client._get_service_running_state("INSTANCE_ID") is True
+        assert await client.restart_service_if_running("openvpn/INSTANCE_ID") is True
+        client._safe_dict_post.assert_awaited_once_with(
+            "/api/core/service/restart/openvpn/INSTANCE_ID"
+        )
     finally:
         await client.async_close()
 

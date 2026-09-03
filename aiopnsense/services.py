@@ -84,7 +84,17 @@ class ServicesMixin(AiopnsenseClientProtocol):
         if services is None or not isinstance(services, list):
             return None
         for svc in services:
-            if svc.get("name", None) == service or svc.get("id", None) == service:
+            service_name = svc.get("name")
+            service_id = svc.get("id")
+            if (
+                service_name == service
+                or service_id == service
+                or (
+                    isinstance(service_name, str)
+                    and isinstance(service_id, str)
+                    and service == f"{service_name}/{service_id}"
+                )
+            ):
                 return bool(svc.get("status", False))
         return None
 
@@ -108,15 +118,18 @@ class ServicesMixin(AiopnsenseClientProtocol):
         Args:
             action (str): Core service action to perform, such as ``start``,
                 ``stop``, or ``restart``.
-            service (str): Service name or id to encode into the control
-                endpoint path.
+            service (str): Service name or composite ``name/id`` identifier to
+                encode into the control endpoint path.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
         """
         if not service:
             return False
-        encoded_service = quote(service, safe="")
+        service_name, separator, service_id = service.partition("/")
+        encoded_service = quote(service_name, safe="")
+        if separator:
+            encoded_service = f"{encoded_service}/{quote(service_id, safe='')}"
         api_addr: str = f"{CORE_SERVICE_ENDPOINT_PREFIX}{action}/{encoded_service}"
         response = await self._safe_dict_post(api_addr)
         _LOGGER.debug("[%s_service] service: %s, response: %s", action, service, response)
@@ -127,7 +140,8 @@ class ServicesMixin(AiopnsenseClientProtocol):
         """Start an OPNsense service.
 
         Args:
-            service (str): Service name as reported by OPNsense.
+            service (str): Service name or composite ``name/id`` identifier as
+                reported by OPNsense.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
@@ -139,7 +153,8 @@ class ServicesMixin(AiopnsenseClientProtocol):
         """Stop an OPNsense service.
 
         Args:
-            service (str): Service name as reported by OPNsense.
+            service (str): Service name or composite ``name/id`` identifier as
+                reported by OPNsense.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
@@ -151,7 +166,8 @@ class ServicesMixin(AiopnsenseClientProtocol):
         """Restart an OPNsense service.
 
         Args:
-            service (str): Service name as reported by OPNsense.
+            service (str): Service name or composite ``name/id`` identifier as
+                reported by OPNsense.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
@@ -163,7 +179,8 @@ class ServicesMixin(AiopnsenseClientProtocol):
         """Restart an OPNsense service only when it is currently running.
 
         Args:
-            service (str): Service name as reported by OPNsense.
+            service (str): Service name or composite ``name/id`` identifier as
+                reported by OPNsense.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
