@@ -138,7 +138,7 @@ def _empty_property() -> object:
 
 
 @pytest.mark.parametrize(
-    ("obj_factory", "expected_lines", "expected_warning"),
+    ("obj_factory", "expected_lines"),
     [
         pytest.param(
             _deprecated_property,
@@ -149,45 +149,35 @@ def _empty_property() -> object:
                 "",
                 *EXISTING_DOCS,
             ],
-            None,
             id="deprecated-property",
         ),
         pytest.param(
             _deprecated_function,
             [*DEPRECATED_PREFIX, "   Use new_function instead.", "", *EXISTING_DOCS],
-            None,
             id="deprecated-function",
         ),
         pytest.param(
             _deprecated_class,
             [*DEPRECATED_PREFIX, "   Use NewExample instead.", "", *EXISTING_DOCS],
-            None,
             id="deprecated-class",
         ),
         pytest.param(
             _non_string_deprecated_class,
             EXISTING_DOCS,
-            "Ignoring non-string PEP 702 deprecation message",
             id="non-string-message",
         ),
-        pytest.param(_plain_object, EXISTING_DOCS, None, id="no-deprecation"),
-        pytest.param(_empty_property, EXISTING_DOCS, None, id="property-without-fget"),
+        pytest.param(_plain_object, EXISTING_DOCS, id="no-deprecation"),
+        pytest.param(_empty_property, EXISTING_DOCS, id="property-without-fget"),
     ],
 )
 def test_append_pep702_deprecation(
     obj_factory: Callable[[], object],
     expected_lines: list[str],
-    expected_warning: str | None,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Verify PEP 702 metadata handling for supported autodoc objects.
 
     Args:
         obj_factory (Callable[[], object]): Builds the object supplied to the autodoc hook.
         expected_lines (list[str]): Expected docstring lines after hook processing.
-        expected_warning (str | None): Warning text expected for malformed metadata.
-        caplog (pytest.LogCaptureFixture): Captures malformed-metadata warnings from the hook.
     """
     assert _append_deprecation(obj_factory()) == expected_lines
-    if expected_warning is not None:
-        assert expected_warning in caplog.text

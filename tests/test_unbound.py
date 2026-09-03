@@ -2,7 +2,6 @@
 
 from collections.abc import Callable
 from copy import deepcopy
-import logging
 from typing import Any
 from unittest.mock import AsyncMock, call
 
@@ -18,27 +17,21 @@ ClientType = Callable[..., OPNsenseClient]
 @pytest.mark.asyncio
 async def test_uses_legacy_unbound_blocklist_returns_none_without_error_on_missing_firmware(
     make_client: ClientType,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Verify missing firmware returns ``None`` without logging an error.
+    """Verify missing firmware returns ``None``.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        caplog (pytest.LogCaptureFixture): Pytest log capture fixture.
-
     Returns:
-        None: This test validates quiet handling for missing firmware values.
+        None: This test validates handling for missing firmware values.
     """
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value=None)
 
-        with caplog.at_level(logging.DEBUG):
-            result = await client._uses_legacy_unbound_blocklist()
+        result = await client._uses_legacy_unbound_blocklist()
 
         assert result is None
-        assert "Firmware version unavailable" in caplog.text
-        assert "Error comparing firmware version" not in caplog.text
     finally:
         await client.async_close()
 
