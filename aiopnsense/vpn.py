@@ -623,10 +623,33 @@ class VPNMixin(AiopnsenseClientProtocol):
         """
         if vpn_type == "openvpn":
             success = await self._safe_dict_post(f"{OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX}{uuid}")
+            _LOGGER.debug(
+                "[toggle_vpn_instance] OpenVPN instance toggle response for UUID %s: %s",
+                uuid,
+                success,
+            )
             if not success.get("changed", False):
+                _LOGGER.debug(
+                    "[toggle_vpn_instance] OpenVPN instance toggle did not report a change for "
+                    "UUID %s",
+                    uuid,
+                )
                 return False
             reconfigure = await self._safe_dict_post(OPENVPN_SERVICE_RECONFIGURE_ENDPOINT)
-            return reconfigure.get("result", "") == "ok"
+            _LOGGER.debug(
+                "[toggle_vpn_instance] OpenVPN service reconfigure response after toggling UUID "
+                "%s: %s",
+                uuid,
+                reconfigure,
+            )
+            reconfigure_succeeded = reconfigure.get("result", "") == "ok"
+            if not reconfigure_succeeded:
+                _LOGGER.debug(
+                    "[toggle_vpn_instance] OpenVPN service reconfigure did not report success "
+                    "after toggling UUID %s",
+                    uuid,
+                )
+            return reconfigure_succeeded
         if vpn_type == "wireguard":
             if clients_servers == "clients":
                 endpoint = await self._get_endpoint_path(
