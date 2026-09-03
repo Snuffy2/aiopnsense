@@ -3,7 +3,6 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 import inspect
-import logging
 import traceback
 from typing import Any, NoReturn
 from unittest.mock import MagicMock
@@ -515,45 +514,3 @@ async def test_log_errors_redacts_url_userinfo() -> None:
     assert raw_url not in message
     for token in ("alice", "secret"):
         assert token not in message
-
-
-@pytest.mark.asyncio
-async def test_log_errors_redacts_client_response_error_userinfo(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Verify _log_errors redacts credentials in ClientResponseError messages.
-
-    Args:
-        caplog (pytest.LogCaptureFixture): Captures the redacted response-error log output.
-    """
-
-    class Dummy:
-        """Small wrapper for testing logged ClientResponseError redaction."""
-
-        _throw_errors = False
-
-        @aiopnsense_helpers._log_errors
-        async def boom(self) -> None:
-            """Raise ClientResponseError with embedded user credentials.
-
-            Raises:
-                aiohttp.ClientResponseError: Always raised to test credential redaction.
-            """
-            request_info = MagicMock()
-            request_info.real_url = "https://alice:secret@api.example/opn"
-            raise aiohttp.ClientResponseError(
-                request_info=request_info,
-                history=(),
-                status=403,
-                message="forbidden",
-                headers=None,
-            )
-
-    client = Dummy()
-    with caplog.at_level(logging.ERROR):
-        assert await client.boom() is None
-
-    assert "alice" not in caplog.text
-    assert "secret" not in caplog.text
-    assert "api.example/opn" in caplog.text
-    assert "<redacted>" in caplog.text

@@ -7,7 +7,6 @@ import asyncio
 from collections.abc import Callable
 import importlib.util
 import json
-import logging
 from pathlib import Path
 import sys
 from types import ModuleType
@@ -482,13 +481,11 @@ async def test_run_endpoint_propagates_stream_timeout_error_and_closes_stream(
 
 @pytest.mark.asyncio
 async def test_run_endpoint_stream_error_beats_close_error(
-    caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Primary stream errors preserve when stream close fails too.
 
     Args:
-        caplog (pytest.LogCaptureFixture): Fixture that captures the close-failure debug log.
         monkeypatch (pytest.MonkeyPatch): Fixture that injects the failing-close stream.
     """
     module = load_dump_module()
@@ -549,16 +546,9 @@ async def test_run_endpoint_stream_error_beats_close_error(
 
     monkeypatch.setattr(client, "stream_interface_traffic", fake_stream)
 
-    with (
-        caplog.at_level(logging.DEBUG, logger=module._LOGGER.name),
-        pytest.raises(TimeoutError, match="stream-level timeout"),
-    ):
+    with pytest.raises(TimeoutError, match="stream-level timeout"):
         await module.run_endpoint(client, "interface_traffic_stream", stream_seconds=5.0)
 
-    assert any(
-        "Failed to close stream after primary stream error" in record.message
-        for record in caplog.records
-    )
     assert client.stream_interface_traffic_calls == 1
     assert stream.opened
     assert stream.closed

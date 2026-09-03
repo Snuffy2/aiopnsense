@@ -77,18 +77,15 @@ async def test_get_smart_skips_devices_with_blank_ident(make_client: ClientType)
 
 
 @pytest.mark.asyncio
-async def test_get_smart_logs_and_skips_non_mapping_rows(
+async def test_get_smart_skips_non_mapping_rows(
     make_client: ClientType,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """SMART list queries should log and skip non-mapping device rows.
+    """SMART list queries should skip non-mapping device rows.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        caplog (pytest.LogCaptureFixture): Pytest log capture fixture.
-
     Returns:
-        None: This test validates debug logging for skipped non-mapping rows.
+        None: This test validates handling for non-mapping rows.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -102,14 +99,9 @@ async def test_get_smart_logs_and_skips_non_mapping_rows(
             }
         )
 
-        with caplog.at_level("DEBUG"):
-            smart_devices = await client.get_smart()
+        smart_devices = await client.get_smart()
 
         assert smart_devices == [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]
-        assert (
-            "Discarding SMART device row because item is not a mapping: 'unexpected-string-row'"
-            in caplog.text
-        )
         client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
         client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
     finally:

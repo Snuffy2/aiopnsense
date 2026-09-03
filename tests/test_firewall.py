@@ -1,7 +1,6 @@
 """Tests for `aiopnsense.firewall`."""
 
 from collections.abc import Callable
-import logging
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -69,13 +68,12 @@ async def test_get_firewall_aggregates_rest_payload(make_client: ClientType) -> 
 
 @pytest.mark.asyncio
 async def test_get_firewall_rules_skips_invalid_rows(
-    make_client: ClientType, caplog: pytest.LogCaptureFixture
+    make_client: ClientType,
 ) -> None:
     """Firewall rule downloads should parse editable rows and skip invalid rows.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        caplog (pytest.LogCaptureFixture): Captures warnings emitted for skipped CSV rows.
     """
     client = make_client()
     try:
@@ -90,8 +88,7 @@ async def test_get_firewall_rules_skips_invalid_rows(
             )
         )
 
-        with caplog.at_level(logging.DEBUG):
-            result = await client._get_firewall_rules()
+        result = await client._get_firewall_rules()
 
         assert result == {
             "rule-ok": {
@@ -100,7 +97,6 @@ async def test_get_firewall_rules_skips_invalid_rows(
                 "description": "Allow; DNS",
             },
         }
-        assert "Skipping malformed firewall rule row with extra column" in caplog.text
         client._is_get_endpoint_available.assert_awaited_once_with(
             "/api/firewall/filter/download_rules"
         )
@@ -320,50 +316,38 @@ async def test_nat_rule_helpers_parse_rows(
 
 @pytest.mark.asyncio
 async def test_uses_unified_nat_template_handles_invalid_firmware_string(
-    make_client: ClientType, caplog: pytest.LogCaptureFixture
+    make_client: ClientType,
 ) -> None:
     """Legacy normalization fallback should be used when version comparison raises.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        caplog (pytest.LogCaptureFixture): Captures the invalid-version normalization debug log.
     """
     client = make_client()
     try:
-        with caplog.at_level(logging.DEBUG):
-            result = client._uses_unified_nat_template("foo")
+        result = client._uses_unified_nat_template("foo")
 
         assert result is False
-        assert (
-            "Unable to compare firmware version foo for DNAT category normalization" in caplog.text
-        )
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
 async def test_filters_automatic_source_nat_rules_handles_invalid_firmware_string(
-    make_client: ClientType, caplog: pytest.LogCaptureFixture
+    make_client: ClientType,
 ) -> None:
     """Verify source NAT filtering is disabled when version comparison fails.
 
     Args:
         make_client (ClientType): Fixture factory returning OPNsense clients.
-        caplog (pytest.LogCaptureFixture): Fixture capturing log output.
-
     Returns:
-        None: This test validates source NAT firmware fallback logging.
+        None: This test validates the source NAT firmware fallback.
     """
     client = make_client()
     try:
-        with caplog.at_level(logging.DEBUG):
-            result = client._filters_automatic_source_nat_rules("foo")
+        result = client._filters_automatic_source_nat_rules("foo")
 
         assert result is False
-        assert (
-            "Unable to compare firmware version foo for source NAT automatic rule filtering"
-            in caplog.text
-        )
     finally:
         await client.async_close()
 

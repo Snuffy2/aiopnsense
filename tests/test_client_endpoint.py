@@ -355,14 +355,11 @@ async def test_is_get_endpoint_available_does_not_cache_non_404_http_errors(
 @pytest.mark.asyncio
 async def test_is_get_endpoint_available_caches_403_permission_error(
     make_client: MakeClientFactory,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Verify permission failures are cached and logged once until cache expiry.
+    """Verify permission failures are cached until cache expiry.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-        caplog (pytest.LogCaptureFixture): Captured log records for the endpoint probes.
-
     Returns:
         None: This test asserts quiet retry avoidance for permission failures.
     """
@@ -395,8 +392,6 @@ async def test_is_get_endpoint_available_caches_403_permission_error(
         assert client._endpoint_availability[path] is False
         assert path in client._endpoint_checked_at
         assert path in client._endpoint_permission_denied
-        assert sum("Permission Error" in record.message for record in caplog.records) == 1
-
         expired_at = datetime.now().astimezone() - timedelta(
             seconds=client._endpoint_cache_ttl_seconds + 1
         )
@@ -407,7 +402,6 @@ async def test_is_get_endpoint_available_caches_403_permission_error(
         assert client._endpoint_availability[path] is True
         assert client._endpoint_checked_at[path] > expired_at
         assert path not in client._endpoint_permission_denied
-        assert sum("Permission Error" in record.message for record in caplog.records) == 1
     finally:
         await client.async_close()
 

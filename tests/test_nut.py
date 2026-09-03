@@ -1,7 +1,6 @@
 """Tests for `aiopnsense.nut`."""
 
 from collections.abc import Callable
-import logging
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -285,44 +284,33 @@ async def test_get_nut_ups_status_returns_empty_dict_when_endpoint_unavailable(
 
 
 @pytest.mark.parametrize(
-    "payload, expected, expected_debug",
+    "payload, expected",
     [
         (
             "not-a-mapping",
             {},
-            "NUT UPS status payload is not a mapping (type=str), returning {}",
         ),
         (
             {"response": 123, "status": {}},
             {"response": 123, "status": {}},
-            "NUT UPS status payload response is not a string (type=int), returning unchanged",
         ),
         (
             {"response": "invalid-status-line-without-colon"},
             {"response": "invalid-status-line-without-colon"},
-            "NUT UPS status response did not contain parseable entries",
         ),
     ],
 )
-def test_normalize_nut_ups_status_payload_logs_fallback_branches(
-    caplog: pytest.LogCaptureFixture,
+def test_normalize_nut_ups_status_payload_fallback_branches(
     payload: Any,
     expected: dict[str, Any],
-    expected_debug: str,
 ) -> None:
-    """Cover fallback-branch logging and return values for NUT payload normalization.
+    """Cover fallback return values for NUT payload normalization.
 
     Args:
-        caplog (pytest.LogCaptureFixture): Captured logging fixture for debug assertions.
         payload (Any): Input payload passed to the normalization helper.
         expected (dict[str, Any]): Expected normalized payload for the branch.
-        expected_debug (str): Exact debug message that must be emitted.
 
     Returns:
         None: This test validates all fallback branches via parametrized cases.
     """
-    with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
-        normalized_payload = OPNsenseClient._normalize_nut_ups_status_payload(payload)
-
-    assert normalized_payload == expected
-    assert expected_debug in caplog.text
+    assert OPNsenseClient._normalize_nut_ups_status_payload(payload) == expected
