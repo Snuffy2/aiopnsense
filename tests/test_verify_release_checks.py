@@ -4,6 +4,7 @@ from collections.abc import Sequence
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 from types import SimpleNamespace
@@ -18,9 +19,50 @@ assert SCRIPT_SPEC.loader is not None
 verify = importlib.util.module_from_spec(SCRIPT_SPEC)
 SCRIPT_SPEC.loader.exec_module(verify)
 
+WORKFLOW_ROOT = Path(__file__).parents[1] / ".github" / "workflows"
 REPOSITORY = "owner/repository"
 REF = "release-validation/v1.0.6-123-1"
 SHA = "a" * 40
+
+
+def _workflow_text(name: str) -> str:
+    """Return one workflow as text for structural contract checks.
+
+    Args:
+        name (str): Workflow filename.
+
+    Returns:
+        str: Workflow source text.
+    """
+    return (WORKFLOW_ROOT / name).read_text(encoding="utf-8")
+
+
+def _step_containing(workflow: str, token: str) -> str:
+    """Return the unique workflow step containing a semantic token.
+
+    Args:
+        workflow (str): Workflow source text.
+        token (str): Stable command or expression that identifies the step.
+
+    Returns:
+        str: Matching workflow step source.
+    """
+    steps = re.split(r"(?m)(?=^      - )", workflow)
+    matches = [step for step in steps if token in step]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _normalized(value: str) -> str:
+    """Collapse insignificant whitespace for shell contract assertions.
+
+    Args:
+        value (str): Source text to normalize.
+
+    Returns:
+        str: Whitespace-collapsed text.
+    """
+    return " ".join(value.split())
 
 
 def test_dispatch_workflow_uses_expected_ref_sha_and_authoritative_run_id(
@@ -93,10 +135,13 @@ def test_wait_for_workflow_requires_exact_identity_and_successful_jobs(
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for replacing API and time helpers.
     """
-    responses = iter(
-        [
-            {"id": 7},
-            {
+
+    def fake_api(arguments: Sequence[str]) -> dict[str, Any]:
+        endpoint = arguments[0]
+        if endpoint.endswith("/actions/workflows/validate.yml"):
+            return {"id": 7}
+        if endpoint.endswith("/actions/runs/42"):
+            return {
                 "id": 42,
                 "workflow_id": 7,
                 "event": "workflow_dispatch",
@@ -105,15 +150,17 @@ def test_wait_for_workflow_requires_exact_identity_and_successful_jobs(
                 "status": "completed",
                 "conclusion": "success",
                 "check_suite_id": 99,
-            },
-            {"head_sha": SHA, "app": {"slug": "github-actions"}},
-            {
+            }
+        if endpoint.endswith("/check-suites/99"):
+            return {"head_sha": SHA, "app": {"slug": "github-actions"}}
+        if endpoint.endswith("/actions/runs/42/jobs?per_page=100"):
+            return {
                 "total_count": 1,
                 "jobs": [{"name": "HACS Validation", "conclusion": "success"}],
-            },
-        ]
-    )
-    monkeypatch.setattr(verify, "github_api", lambda _arguments: next(responses))
+            }
+        raise AssertionError(f"Unexpected GitHub API endpoint: {endpoint}")
+
+    monkeypatch.setattr(verify, "github_api", fake_api)
     monkeypatch.setattr(verify.time, "monotonic", lambda: 0.0)
 
     assert (
@@ -138,43 +185,48 @@ def test_wait_for_workflow_retries_a_transient_run_not_found(
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for replacing API and time helpers.
     """
-    responses: list[dict[str, Any] | RuntimeError] = [
-        {"id": 7},
-        verify.GitHubCommandError("HTTP 404 Not Found"),
-        {
-            "id": 42,
-            "workflow_id": 7,
-            "event": "workflow_dispatch",
-            "head_branch": REF,
-            "head_sha": SHA,
-            "status": "completed",
-            "conclusion": "success",
-            "check_suite_id": 99,
-        },
-        {"head_sha": SHA, "app": {"slug": "github-actions"}},
-        {
-            "total_count": 1,
-            "jobs": [{"name": "HACS Validation", "conclusion": "success"}],
-        },
-    ]
+    run_attempts = 0
     sleeps: list[int] = []
 
-    def fake_api(_arguments: Sequence[str]) -> dict[str, Any]:
-        """Return the next scripted API response.
+    def fake_api(arguments: Sequence[str]) -> dict[str, Any]:
+        """Return endpoint-specific responses with one transient run miss.
 
         Args:
-            _arguments (Sequence[str]): API request arguments, unused by this scripted response.
+            arguments (Sequence[str]): GitHub API request arguments.
 
         Returns:
-            dict[str, Any]: The scripted API response.
+            dict[str, Any]: Response fixture for the requested endpoint.
 
         Raises:
-            verify.GitHubCommandError: When simulating a transient run lookup failure.
+            verify.GitHubCommandError: On the first workflow-run lookup.
+            AssertionError: If the implementation requests an unexpected endpoint.
         """
-        response = responses.pop(0)
-        if isinstance(response, RuntimeError):
-            raise verify.GitHubCommandError(str(response))
-        return response
+        nonlocal run_attempts
+        endpoint = arguments[0]
+        if endpoint.endswith("/actions/workflows/validate.yml"):
+            return {"id": 7}
+        if endpoint.endswith("/actions/runs/42"):
+            run_attempts += 1
+            if run_attempts == 1:
+                raise verify.GitHubCommandError("HTTP 404 Not Found")
+            return {
+                "id": 42,
+                "workflow_id": 7,
+                "event": "workflow_dispatch",
+                "head_branch": REF,
+                "head_sha": SHA,
+                "status": "completed",
+                "conclusion": "success",
+                "check_suite_id": 99,
+            }
+        if endpoint.endswith("/check-suites/99"):
+            return {"head_sha": SHA, "app": {"slug": "github-actions"}}
+        if endpoint.endswith("/actions/runs/42/jobs?per_page=100"):
+            return {
+                "total_count": 1,
+                "jobs": [{"name": "HACS Validation", "conclusion": "success"}],
+            }
+        raise AssertionError(f"Unexpected GitHub API endpoint: {endpoint}")
 
     monkeypatch.setattr(verify, "github_api", fake_api)
     monkeypatch.setattr(verify.time, "monotonic", lambda: 0.0)
@@ -308,29 +360,33 @@ def test_verify_check_suite_rejects_mismatched_candidate_commit(
 
 def test_release_workflow_uses_published_event_and_guarded_package_promotion() -> None:
     """Require published releases, exact gates, and lease-guarded package promotion."""
-    workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "release.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = _workflow_text("release.yml")
 
-    assert "release:\n    types: [published]" in workflow
-    assert "inputs.tag" not in workflow
-    assert "python3 .github/scripts/verify_release_checks.py" in workflow
-    for check in (
+    assert re.search(r"(?ms)^on:\s+release:\s+types:\s*\[published\]", workflow)
+    dispatch = _step_containing(workflow, "verify_release_checks.py")
+    required_checks = set(re.findall(r"--required-check\s+['\"]([^'\"]+)", dispatch))
+    assert required_checks == {
         "pytest_check.yml::pytest check and post coverage",
         "docs.yml::build-docs",
         "uv-lock-check.yml::Validate uv lock consistency",
         "prek-autofix-review.yml::review",
-    ):
-        assert check in workflow
-    assert "git push --atomic" in workflow
-    assert '--force-with-lease="refs/heads/$RELEASE_TARGET:$TARGET_SHA"' in workflow
-    assert '--force-with-lease="refs/tags/$RELEASE_TAG:$ORIGINAL_TAG_OID"' in workflow
-    assert 'git show "$tag_sha:aiopnsense/const.py"' in workflow
-    assert 'git merge-base --is-ancestor "$tag_sha" "$target_sha"' in workflow
-    assert 'git checkout --detach "$source_sha"' in workflow
-    assert '"$expected_sha" "refs/remotes/origin/$RELEASE_TARGET"' in workflow
-    assert "git add aiopnsense/const.py docs/source/changelog.md" in workflow
-    assert 'gh release upload "$RELEASE_TAG" dist/* --clobber' in workflow
+    }
+
+    promotion = _normalized(_step_containing(workflow, "git push --atomic"))
+    assert '--force-with-lease="refs/heads/$RELEASE_TARGET:$TARGET_SHA"' in promotion
+    assert '--force-with-lease="refs/tags/$RELEASE_TAG:$ORIGINAL_TAG_OID"' in promotion
+
+    metadata = _normalized(_step_containing(workflow, 'tag_sha="$(git rev-parse'))
+    assert 'git show "$tag_sha:aiopnsense/const.py"' in metadata
+    assert 'git merge-base --is-ancestor "$tag_sha" "$target_sha"' in metadata
+    assert 'git checkout --detach "$source_sha"' in metadata
+
+    final_verification = _normalized(_step_containing(workflow, 'expected_sha="$STABLE_SHA"'))
+    assert '"$expected_sha" "refs/remotes/origin/$RELEASE_TARGET"' in final_verification
+    assert "git diff --quiet -- aiopnsense/const.py" in final_verification
+
+    upload = _normalized(_step_containing(workflow, "gh release upload"))
+    assert 'gh release upload "$RELEASE_TAG" dist/* --clobber' in upload
     assert "pypa/gh-action-pypi-publish@release/v1" in workflow
 
 
@@ -346,14 +402,16 @@ def test_release_gate_workflows_require_and_checkout_exact_sha(
     Args:
         workflow_name (str): Workflow filename under test.
     """
-    workflow = (Path(__file__).parents[1] / ".github" / "workflows" / workflow_name).read_text(
-        encoding="utf-8"
-    )
+    workflow = _workflow_text(workflow_name)
 
-    assert "expected_sha:" in workflow
-    assert "required: true" in workflow
-    assert '[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]' in workflow
-    assert 'test "$WORKFLOW_SHA" = "$EXPECTED_SHA"' in workflow
-    assert "ref:" in workflow
-    assert "inputs.expected_sha" in workflow
-    assert "persist-credentials: false" in workflow
+    assert re.search(
+        r"(?ms)^  workflow_dispatch:\s+inputs:\s+expected_sha:.*?"
+        r"^        required:\s*true\s+^        type:\s*string\s*$",
+        workflow,
+    )
+    guard = _normalized(_step_containing(workflow, "WORKFLOW_SHA:"))
+    assert '[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]' in guard
+    assert 'test "$WORKFLOW_SHA" = "$EXPECTED_SHA"' in guard
+    checkout = _normalized(_step_containing(workflow, "actions/checkout@"))
+    assert re.search(r"ref:\s*\$\{\{[^}]*inputs\.expected_sha[^}]*}}", checkout)
+    assert "persist-credentials: false" in checkout
