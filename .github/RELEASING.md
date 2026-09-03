@@ -1,67 +1,86 @@
 # Releasing aiopnsense
 
-## Normal release
+## Stable releases
 
 1. Merge the release-ready changes into the default branch.
-2. From that branch, run the **Release** workflow with one of these inputs:
+2. Create and publish a GitHub Release targeted at that default branch, using an
+   unused numeric, `v`-prefixed tag. The tag and target branch must initially
+   resolve to the same commit. Publishing the release starts the **Release**
+   workflow.
+3. The workflow validates the tag and target, generates
+   `docs/source/changelog.md`, creates a deterministic version-and-changelog
+   commit, and builds and checks the source and wheel distributions.
+4. The candidate is pushed to a temporary validation branch. The workflow
+   dispatches these gates for that exact commit SHA and waits up to 30 minutes
+   for their exact named jobs to pass:
 
-   - To release an explicit tag (including every prerelease), provide an unused,
-     valid `v`-prefixed tag, leave **bump** set to `none`, and set
-     **prerelease** to match the tag. Tags with a suffix are prereleases; tags
-     containing only numeric components are stable.
-   - To make a stable automatic bump, leave **tag** blank, set **prerelease** to
-     false, and choose `patch`, `minor`, or `major`. The workflow derives the
-     next tag from the published stable releases.
+   - `pytest check and post coverage`
+   - `build-docs`
+   - `Validate uv lock consistency`
+   - `review`
 
-3. Wait for the workflow to validate the tag, regenerate
-   `docs/source/changelog.md`, create a local version-and-changelog commit and
-   annotated tag, build and check the source and wheel distributions, push only
-   the tag, create the GitHub release with generated notes, and publish to PyPI.
-   The PyPI project description combines the README and generated changelog.
-   Prereleases are published to TestPyPI instead.
+5. After every gate passes, the workflow advances the default branch and
+   annotated release tag together with leases, verifies their identity, uploads
+   the distributions to the published GitHub Release, and publishes them to
+   PyPI. The PyPI description includes the generated changelog.
 
-No personal access token is needed. The workflow never pushes `main`.
+The gates receive the candidate as an `expected_sha` input. The release
+workflow verifies each workflow run ID, branch, SHA, GitHub Actions check suite,
+and required job outcome before promotion. No personal access token is needed.
 
-## Rare recovery after a tag push
+## Prereleases
 
-If the release job succeeds but GitHub release creation or package publishing
-fails, rerun only the failed `github-release` or `publish` job. Each reuses the
-distributions stored by the successful release job.
+Before publishing a prerelease, update `aiopnsense/const.py` to the intended
+prerelease version and merge that change into the default branch. Then publish
+a GitHub Release with the same explicit prerelease tag, targeted at the default
+branch.
 
-If a failed downstream job cannot be rerun, do not rerun the release job: it
-correctly rejects existing tags. Do not force-move the tag.
+The workflow requires the source version, tag, and target to match, builds and
+checks the distributions without changing the default branch or tag, uploads
+them to the GitHub Release, and publishes them to TestPyPI.
 
-1. Inspect the existing tag, package version, and documentation changelog:
+## Failure handling and safe retries
 
-   ```sh
-   git fetch --tags origin
-   git show --no-patch --decorate <tag>
-   git show <tag>:aiopnsense/const.py
-   git show <tag>:docs/source/changelog.md
-   ```
+A stable release stops before promotion when validation fails, a required check
+does not complete before the timeout, or the default branch changes after the
+candidate was selected. A failed stable run intentionally retains its temporary
+validation branch for diagnosis. Before deleting one, verify its exact name and
+candidate:
 
-2. If the tag and version are correct, build and check the distributions from
-   the tag in a clean checkout:
+```sh
+git fetch origin refs/heads/<temporary-ref>
+git show -s --format='%H%n%s%n%P' FETCH_HEAD
+git push origin --delete <temporary-ref>
+```
 
-   ```sh
-   git switch --detach <tag>
-   uv build
-   uvx --from twine twine check dist/*
-   ```
+The promotion uses an atomic push with leases. If it fails, inspect both remote
+refs before retrying instead of assuming neither changed:
 
-3. Inspect the GitHub release. If none exists, create it with the distributions;
-   if a matching draft exists, finish that draft and attach them. Do not create
-   a second release for the tag.
+```sh
+git fetch --tags origin
+git log -1 --decorate origin/main
+git show --no-patch --decorate <tag>
+git show <tag>:aiopnsense/const.py
+git show <tag>:docs/source/changelog.md
+```
 
-   ```sh
-   gh release view <tag>
-   gh release create <tag> dist/* --generate-notes --title <tag> --verify-tag
-   # Or, for an existing matching draft:
-   gh release upload <tag> dist/* --clobber
-   gh release edit <tag> --draft=false
-   ```
+- If the default branch moved or the tag and branch do not identify the same
+  release commit, stop and resolve that state before creating another release.
+- If validation failed, fix the cause and publish a new release. Do not push the
+  temporary candidate directly to bypass the required gates.
+- If the branch and tag already identify the matching single-parent
+  `Release <tag>` commit, rerunning the failed workflow resumes from that
+  commit without creating another one.
+- If only the package or asset publication failed, rerun the failed workflow
+  job when GitHub permits it. Do not create a second release or force-move the
+  tag manually.
 
-   Add `--prerelease` when the tag is a prerelease.
+For manual inspection or recovery, build from the existing tag in a clean
+checkout and verify the distributions before uploading or publishing them:
 
-If the tag points to the wrong commit or contains the wrong version or
-changelog, leave it unchanged and release a new, correct version instead.
+```sh
+git switch --detach <tag>
+uv build
+uvx --from twine twine check dist/*
+gh release upload <tag> dist/* --clobber
+```
