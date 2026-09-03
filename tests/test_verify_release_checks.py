@@ -325,6 +325,10 @@ def test_release_workflow_uses_published_event_and_guarded_package_promotion() -
     assert "git push --atomic" in workflow
     assert '--force-with-lease="refs/heads/$RELEASE_TARGET:$TARGET_SHA"' in workflow
     assert '--force-with-lease="refs/tags/$RELEASE_TAG:$ORIGINAL_TAG_OID"' in workflow
+    assert 'git show "$tag_sha:aiopnsense/const.py"' in workflow
+    assert 'git merge-base --is-ancestor "$tag_sha" "$target_sha"' in workflow
+    assert 'git checkout --detach "$source_sha"' in workflow
+    assert '"$expected_sha" "refs/remotes/origin/$RELEASE_TARGET"' in workflow
     assert "git add aiopnsense/const.py docs/source/changelog.md" in workflow
     assert 'gh release upload "$RELEASE_TAG" dist/* --clobber' in workflow
     assert "pypa/gh-action-pypi-publish@release/v1" in workflow

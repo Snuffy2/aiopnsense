@@ -65,26 +65,38 @@ jobs:
             --expected-prerelease "$IS_PRERELEASE" "$RELEASE_TAG"
           tag_sha="$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
           tag_oid="$(git rev-parse "refs/tags/$RELEASE_TAG")"
-          if [[ "$target_sha" != "$tag_sha" ]]; then
-            echo "Release tag and target branch must start at the same commit." >&2
-            exit 1
-          fi
           resume=false
-          if [[ "$(git log -1 --format=%s "$target_sha")" == "Release $RELEASE_TAG" ]]; then
-            if [[ "$(git rev-list --parents -n 1 "$target_sha" | wc -w)" -ne 2 ]] || \
-              ! grep -Fx "VERSION = \"$RELEASE_TAG\"" aiopnsense/const.py >/dev/null; then
+          source_sha="$target_sha"
+          if [[ "$IS_PRERELEASE" == true ]]; then
+            if ! git merge-base --is-ancestor "$tag_sha" "$target_sha" || \
+              ! git show "$tag_sha:aiopnsense/const.py" | \
+                grep -Fx "VERSION = \"$RELEASE_TAG\"" >/dev/null; then
+              echo "Prerelease tag must be a matching default-branch commit." >&2
+              exit 1
+            fi
+            source_sha="$tag_sha"
+          elif [[ "$(git log -1 --format=%s "$tag_sha")" == "Release $RELEASE_TAG" ]]; then
+            if [[ "$(git rev-list --parents -n 1 "$tag_sha" | wc -w)" -ne 2 ]] || \
+              ! git show "$tag_sha:aiopnsense/const.py" | \
+                grep -Fx "VERSION = \"$RELEASE_TAG\"" >/dev/null || \
+              ! git merge-base --is-ancestor "$tag_sha" "$target_sha"; then
               echo "Matching branch/tag release commit has invalid release contents." >&2
               exit 1
             fi
             resume=true
-            echo "candidate-sha=$target_sha" >> "$GITHUB_OUTPUT"
+            source_sha="$tag_sha"
+            echo "candidate-sha=$tag_sha" >> "$GITHUB_OUTPUT"
+          elif [[ "$target_sha" != "$tag_sha" ]]; then
+            echo "Release tag and target branch must start at the same commit." >&2
+            exit 1
           fi
           {
             echo "resume=$resume"
+            echo "source-sha=$source_sha"
             echo "target-sha=$target_sha"
             echo "tag-oid=$tag_oid"
           } >> "$GITHUB_OUTPUT"
-          git checkout --detach "$target_sha"
+          git checkout --detach "$source_sha"
 
       - name: Require prerelease source version
         if: github.event.release.prerelease
@@ -206,19 +218,20 @@ jobs:
           IS_PRERELEASE: ${{ github.event.release.prerelease }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           RELEASE_TARGET: ${{ steps.release.outputs.target }}
+          SOURCE_SHA: ${{ steps.base.outputs.source-sha }}
           STABLE_SHA: ${{ steps.candidate.outputs.sha }}
-          TARGET_SHA: ${{ steps.base.outputs.target-sha }}
         run: |
           set -euo pipefail
           expected_sha="$STABLE_SHA"
           if [[ "$IS_PRERELEASE" == true ]]; then
-            expected_sha="$TARGET_SHA"
+            expected_sha="$SOURCE_SHA"
           fi
           git fetch --force --no-tags origin \
             "refs/heads/$RELEASE_TARGET:refs/remotes/origin/$RELEASE_TARGET" \
             "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          [[ "$(git rev-parse "refs/remotes/origin/$RELEASE_TARGET")" == "$expected_sha" ]]
           [[ "$(git rev-parse "refs/tags/$RELEASE_TAG^{}")" == "$expected_sha" ]]
+          git merge-base --is-ancestor \
+            "$expected_sha" "refs/remotes/origin/$RELEASE_TARGET"
           grep -Fx "VERSION = \"$RELEASE_TAG\"" aiopnsense/const.py >/dev/null
           if [[ "$IS_PRERELEASE" == false ]]; then
             python3 .github/scripts/prepare_release.py "$RELEASE_TAG"

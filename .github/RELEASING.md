@@ -64,13 +64,15 @@ git show <tag>:aiopnsense/const.py
 git show <tag>:docs/source/changelog.md
 ```
 
-- If the default branch moved or the tag and branch do not identify the same
-  release commit, stop and resolve that state before creating another release.
+- If the tag no longer identifies the validated release commit, or that commit
+  is no longer in the default branch's history, stop and resolve that state
+  before creating another release.
 - If validation failed, fix the cause and publish a new release. Do not push the
   temporary candidate directly to bypass the required gates.
-- If the branch and tag already identify the matching single-parent
-  `Release <tag>` commit, rerunning the failed workflow resumes from that
-  commit without creating another one.
+- If the tag identifies the matching single-parent `Release <tag>` commit and
+  that commit remains in the default branch's history, rerunning the failed
+  workflow resumes from the tag without creating another commit. Later commits
+  on the default branch do not prevent this recovery.
 - If only the package or asset publication failed, rerun the failed workflow
   job when GitHub permits it. Do not create a second release or force-move the
   tag manually.
