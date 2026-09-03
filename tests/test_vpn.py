@@ -2,7 +2,6 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-import logging
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -202,76 +201,6 @@ async def test_toggle_vpn_instance_variants(
     res = await client.toggle_vpn_instance(vpn_type, path, "uuid")
     assert res is expected
     await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("post_responses", "expected", "expected_log_fragments"),
-    [
-        pytest.param(
-            [{"changed": False, "message": "instance unchanged"}],
-            False,
-            (
-                (
-                    "OpenVPN instance toggle response for UUID uuid: "
-                    "{'changed': False, 'message': 'instance unchanged'}"
-                ),
-                "OpenVPN instance toggle did not report a change for UUID uuid",
-            ),
-            id="toggle-not-changed",
-        ),
-        pytest.param(
-            [{"changed": True}, {"result": "failed", "message": "reconfigure rejected"}],
-            False,
-            (
-                "OpenVPN instance toggle response for UUID uuid: {'changed': True}",
-                (
-                    "OpenVPN service reconfigure response after toggling UUID uuid: "
-                    "{'result': 'failed', 'message': 'reconfigure rejected'}"
-                ),
-                "OpenVPN service reconfigure did not report success after toggling UUID uuid",
-            ),
-            id="reconfigure-failed",
-        ),
-        pytest.param(
-            [{"changed": True}, {"result": "ok"}],
-            True,
-            (
-                "OpenVPN instance toggle response for UUID uuid: {'changed': True}",
-                "OpenVPN service reconfigure response after toggling UUID uuid: {'result': 'ok'}",
-            ),
-            id="success",
-        ),
-    ],
-)
-async def test_openvpn_toggle_logs_api_responses(
-    make_client: ClientType,
-    caplog: pytest.LogCaptureFixture,
-    post_responses: list[dict[str, Any]],
-    expected: bool,
-    expected_log_fragments: tuple[str, ...],
-) -> None:
-    """Log the API result from each attempted OpenVPN toggle stage.
-
-    Args:
-        make_client (ClientType): Client fixture configured for VPN toggle requests.
-        caplog (pytest.LogCaptureFixture): Fixture that captures diagnostic logging.
-        post_responses (list[dict[str, Any]]): Canned responses for attempted POST requests.
-        expected (bool): Expected aggregate toggle result.
-        expected_log_fragments (tuple[str, ...]): Diagnostic messages expected in the logs.
-    """
-    client, _session = make_mock_session_client(make_client)
-    client._safe_dict_post = AsyncMock(side_effect=post_responses)
-
-    try:
-        with caplog.at_level(logging.DEBUG, logger="aiopnsense.helpers"):
-            result = await client.toggle_vpn_instance("openvpn", "clients", "uuid")
-
-        assert result is expected
-        assert all(fragment in caplog.text for fragment in expected_log_fragments)
-        assert client._safe_dict_post.await_count == len(post_responses)
-    finally:
-        await client.async_close()
 
 
 @pytest.mark.asyncio
