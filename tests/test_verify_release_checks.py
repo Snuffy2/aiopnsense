@@ -85,6 +85,7 @@ def test_dispatch_workflow_uses_expected_ref_sha_and_authoritative_run_id(
     arguments, status = calls[0]
     assert status == 200
     assert f"repos/{REPOSITORY}/actions/workflows/validate.yml/dispatches" in arguments
+    assert "return_run_details=true" in arguments
     assert f"ref={REF}" in arguments
     assert f"inputs[expected_sha]={SHA}" in arguments
 
