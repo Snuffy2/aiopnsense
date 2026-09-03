@@ -87,7 +87,7 @@ def dispatch_workflow(repository: str, workflow: str, ref: str, sha: str) -> int
             "-H",
             "X-GitHub-Api-Version: 2026-03-10",
             f"repos/{repository}/actions/workflows/{workflow}/dispatches",
-            "-f",
+            "-F",
             "return_run_details=true",
             "-f",
             f"ref={ref}",
