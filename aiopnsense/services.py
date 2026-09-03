@@ -84,7 +84,17 @@ class ServicesMixin(AiopnsenseClientProtocol):
         if services is None or not isinstance(services, list):
             return None
         for svc in services:
-            if svc.get("name", None) == service or svc.get("id", None) == service:
+            service_name = svc.get("name")
+            service_id = svc.get("id")
+            if (
+                service_name == service
+                or service_id == service
+                or (
+                    isinstance(service_name, str)
+                    and isinstance(service_id, str)
+                    and service == f"{service_name}/{service_id}"
+                )
+            ):
                 return bool(svc.get("status", False))
         return None
 
@@ -130,7 +140,8 @@ class ServicesMixin(AiopnsenseClientProtocol):
         """Start an OPNsense service.
 
         Args:
-            service (str): Service name as reported by OPNsense.
+            service (str): Service name or composite ``name/id`` identifier as
+                reported by OPNsense.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
@@ -142,7 +153,8 @@ class ServicesMixin(AiopnsenseClientProtocol):
         """Stop an OPNsense service.
 
         Args:
-            service (str): Service name as reported by OPNsense.
+            service (str): Service name or composite ``name/id`` identifier as
+                reported by OPNsense.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
@@ -154,7 +166,8 @@ class ServicesMixin(AiopnsenseClientProtocol):
         """Restart an OPNsense service.
 
         Args:
-            service (str): Service name as reported by OPNsense.
+            service (str): Service name or composite ``name/id`` identifier as
+                reported by OPNsense.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
@@ -166,7 +179,8 @@ class ServicesMixin(AiopnsenseClientProtocol):
         """Restart an OPNsense service only when it is currently running.
 
         Args:
-            service (str): Service name as reported by OPNsense.
+            service (str): Service name or composite ``name/id`` identifier as
+                reported by OPNsense.
 
         Returns:
             bool: True when the operation succeeds; otherwise, False.
