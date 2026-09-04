@@ -1,5 +1,35 @@
 # Changelog
 
+## [v1.1.9](https://github.com/Snuffy2/aiopnsense/tree/v1.1.9) (2026-09-04)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.8...v1.1.9)
+
+**Bug Fixes**
+
+- Fix empty Dnsmasq lease interface discovery [\#108](https://github.com/Snuffy2/aiopnsense/pull/108) ([Snuffy2](https://github.com/Snuffy2))
+
+**Code Quality**
+
+- Add OpenVPN toggle response logging [\#113](https://github.com/Snuffy2/aiopnsense/pull/113) ([Snuffy2](https://github.com/Snuffy2))
+- Modernize CI and release automation with uv [\#106](https://github.com/Snuffy2/aiopnsense/pull/106) ([Snuffy2](https://github.com/Snuffy2))
+
+**Maintenance**
+
+- Fix protected release promotion statuses [\#114](https://github.com/Snuffy2/aiopnsense/pull/114) ([Snuffy2](https://github.com/Snuffy2))
+- Migrate release workflow to published releases [\#112](https://github.com/Snuffy2/aiopnsense/pull/112) ([Snuffy2](https://github.com/Snuffy2))
+- Fix GitHub release repository detection [\#110](https://github.com/Snuffy2/aiopnsense/pull/110) ([Snuffy2](https://github.com/Snuffy2))
+- Update pytest coverage workflows for action v4 [\#109](https://github.com/Snuffy2/aiopnsense/pull/109) ([Snuffy2](https://github.com/Snuffy2))
+- Skip coverage comments for prek autoupdate bot [\#104](https://github.com/Snuffy2/aiopnsense/pull/104) ([Snuffy2](https://github.com/Snuffy2))
+- Add prek-autoupdate bot auto-merge workflow [\#102](https://github.com/Snuffy2/aiopnsense/pull/102) ([Snuffy2](https://github.com/Snuffy2))
+
+**Other Changes**
+
+- test: optimize and de-brittle test suite [\#100](https://github.com/Snuffy2/aiopnsense/pull/100) ([Snuffy2](https://github.com/Snuffy2))
+
+## [v1.1.8](https://github.com/Snuffy2/aiopnsense/tree/v1.1.8) (2026-08-30)
+
+[Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.7...v1.1.8)
+
 ## [v1.1.7](https://github.com/Snuffy2/aiopnsense/tree/v1.1.7) (2026-08-08)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.6...v1.1.7)
