@@ -199,6 +199,45 @@ def parse_required_checks(values: Sequence[str]) -> dict[str, set[str]]:
     return checks
 
 
+def publish_verified_status(repository: str, sha: str, check: str, run_id: int) -> None:
+    """Publish a successful commit status backed by one verified workflow run.
+
+    GitHub rulesets may not accept workflow-dispatch check runs created on a
+    validation branch when the same commit is promoted to a protected branch.
+    The commit status records the verified result on the immutable candidate.
+
+    Args:
+        repository: GitHub owner and repository name.
+        sha: Candidate commit SHA.
+        check: Exact required status-check context.
+        run_id: Authoritative workflow run ID that produced the result.
+
+    Raises:
+        GitHubCommandError: If GitHub does not confirm the successful status.
+    """
+    response = github_api(
+        [
+            "--method",
+            "POST",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "X-GitHub-Api-Version: 2026-03-10",
+            f"repos/{repository}/statuses/{sha}",
+            "-f",
+            "state=success",
+            "-f",
+            f"context={check}",
+            "-f",
+            f"description=Verified by release workflow run {run_id}",
+            "-f",
+            f"target_url=https://github.com/{repository}/actions/runs/{run_id}",
+        ]
+    )
+    if response.get("state") != "success" or response.get("context") != check:
+        raise GitHubCommandError(f"GitHub did not confirm verified status {check!r}.")
+
+
 def main() -> int:
     """Dispatch and verify all workflows named by required checks."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -218,6 +257,7 @@ def main() -> int:
             for workflow in workflows
         }
         deadline = time.monotonic() + args.timeout_seconds
+        verified_runs: dict[str, int] = {}
         for workflow in workflows:
             run_id = wait_for_workflow(
                 args.repository,
@@ -228,7 +268,12 @@ def main() -> int:
                 deadline,
                 dispatched[workflow],
             )
+            verified_runs[workflow] = run_id
             sys.stdout.write(f"Verified {workflow} run {run_id} for {args.sha}.\n")
+        for workflow, required_checks in checks.items():
+            for check in sorted(required_checks):
+                publish_verified_status(args.repository, args.sha, check, verified_runs[workflow])
+                sys.stdout.write(f"Published verified status {check!r} for {args.sha}.\n")
     except (GitHubCommandError, ValueError, json.JSONDecodeError) as error:
         sys.stderr.write(f"Release check verification failed: {error}\n")
         return 1

@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -360,11 +361,93 @@ def test_verify_check_suite_rejects_mismatched_candidate_commit(
         verify.verify_check_suite(REPOSITORY, {"check_suite_id": 99}, SHA)
 
 
+def test_publish_verified_status_attests_exact_check_and_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Publish a successful commit status only for a verified check and run.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing the API helper.
+    """
+    calls: list[list[str]] = []
+
+    def fake_api(arguments: Sequence[str]) -> dict[str, Any]:
+        calls.append(list(arguments))
+        return {"context": "required", "state": "success"}
+
+    monkeypatch.setattr(verify, "github_api", fake_api)
+
+    verify.publish_verified_status(REPOSITORY, SHA, "required", 42)
+
+    arguments = calls[0]
+    assert f"repos/{REPOSITORY}/statuses/{SHA}" in arguments
+    assert "state=success" in arguments
+    assert "context=required" in arguments
+    assert f"target_url=https://github.com/{REPOSITORY}/actions/runs/42" in arguments
+
+
+def test_main_publishes_no_status_until_every_workflow_is_verified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not attest any check when a later release-gate workflow fails.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing orchestration helpers.
+    """
+    published: list[tuple[str, str, str, int]] = []
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify_release_checks.py",
+            "--repository",
+            REPOSITORY,
+            "--ref",
+            REF,
+            "--sha",
+            SHA,
+            "--required-check",
+            "first.yml::first",
+            "--required-check",
+            "second.yml::second",
+        ],
+    )
+    monkeypatch.setattr(
+        verify,
+        "dispatch_workflow",
+        lambda _repository, workflow, _ref, _sha: 41 if workflow == "first.yml" else 42,
+    )
+
+    def fake_wait(
+        _repository: str,
+        workflow: str,
+        _ref: str,
+        _sha: str,
+        _required_checks: set[str],
+        _deadline: float,
+        expected_run_id: int,
+    ) -> int:
+        if workflow == "second.yml":
+            raise verify.GitHubCommandError("second gate failed")
+        return expected_run_id
+
+    monkeypatch.setattr(verify, "wait_for_workflow", fake_wait)
+    monkeypatch.setattr(
+        verify,
+        "publish_verified_status",
+        lambda repository, sha, check, run_id: published.append((repository, sha, check, run_id)),
+    )
+
+    assert verify.main() == 1
+    assert published == []
+
+
 def test_release_workflow_uses_published_event_and_guarded_package_promotion() -> None:
     """Require published releases, exact gates, and lease-guarded package promotion."""
     workflow = _workflow_text("release.yml")
 
     assert re.search(r"(?ms)^on:\s+release:\s+types:\s*\[published\]", workflow)
+    assert re.search(r"(?m)^      statuses:\s*write\s*$", workflow)
     dispatch = _step_containing(workflow, "verify_release_checks.py")
     required_checks = set(re.findall(r"--required-check\s+['\"]([^'\"]+)", dispatch))
     assert required_checks == {
