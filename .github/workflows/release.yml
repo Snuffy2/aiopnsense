@@ -21,7 +21,7 @@ jobs:
       actions: write
       checks: read
       contents: write
-      statuses: read
+      statuses: write
     runs-on: ubuntu-latest
     steps:
       - name: Require the default-branch release target

@@ -26,7 +26,9 @@
 
 The gates receive the candidate as an `expected_sha` input. The release
 workflow verifies each workflow run ID, branch, SHA, GitHub Actions check suite,
-and required job outcome before promotion. No personal access token is needed.
+and required job outcome before publishing matching commit-status attestations
+for the protected-branch ruleset and promoting the candidate. No personal
+access token is needed.
 
 ## Prereleases
 
