@@ -372,6 +372,14 @@ def test_publish_verified_status_attests_exact_check_and_run(
     calls: list[list[str]] = []
 
     def fake_api(arguments: Sequence[str]) -> dict[str, Any]:
+        """Record a status request and return GitHub's confirmation.
+
+        Args:
+            arguments (Sequence[str]): GitHub CLI API arguments.
+
+        Returns:
+            dict[str, Any]: Confirmed successful status context.
+        """
         calls.append(list(arguments))
         return {"context": "required", "state": "success"}
 
@@ -427,6 +435,23 @@ def test_main_publishes_no_status_until_every_workflow_is_verified(
         _deadline: float,
         expected_run_id: int,
     ) -> int:
+        """Return the first run ID and simulate a later gate failure.
+
+        Args:
+            _repository (str): Unused GitHub repository name.
+            workflow (str): Workflow filename being verified.
+            _ref (str): Unused validation branch name.
+            _sha (str): Unused candidate commit SHA.
+            _required_checks (set[str]): Unused required job names.
+            _deadline (float): Unused verification deadline.
+            expected_run_id (int): Authoritative dispatched workflow run ID.
+
+        Returns:
+            int: The authoritative run ID for the first workflow.
+
+        Raises:
+            verify.GitHubCommandError: When verifying the simulated second workflow.
+        """
         if workflow == "second.yml":
             raise verify.GitHubCommandError("second gate failed")
         return expected_run_id
