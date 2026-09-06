@@ -522,6 +522,13 @@ def test_release_gate_workflows_require_and_checkout_exact_sha(
     guard = _normalized(_step_containing(workflow, "WORKFLOW_SHA:"))
     assert '[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]' in guard
     assert 'test "$WORKFLOW_SHA" = "$EXPECTED_SHA"' in guard
-    checkout = _normalized(_step_containing(workflow, "actions/checkout@"))
-    assert re.search(r"ref:\s*\$\{\{[^}]*inputs\.expected_sha[^}]*}}", checkout)
-    assert "persist-credentials: false" in checkout
+    checkouts = [
+        _normalized(step)
+        for step in re.split(r"(?m)(?=^      - )", workflow)
+        if "actions/checkout@" in step
+    ]
+    assert any(
+        re.search(r"ref:\s*\$\{\{[^}]*inputs\.expected_sha[^}]*}}", checkout)
+        and "persist-credentials: false" in checkout
+        for checkout in checkouts
+    )
