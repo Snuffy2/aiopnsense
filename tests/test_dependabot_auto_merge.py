@@ -54,6 +54,7 @@ def _dependabot_commit(sha: str = HEAD_SHA) -> dict[str, object]:
     """
     return {
         "author": {"login": BOT},
+        "committer": {"login": "web-flow"},
         "commit": {"verification": {"verified": True}},
         "parents": [],
         "sha": sha,
@@ -137,6 +138,34 @@ def test_authorizer_accepts_reopened_verified_uv_lockfile_update(tmp_path: Path)
     )
 
     assert result.returncode == 0
+
+
+@pytest.mark.parametrize("committer", [None, "maintainer"])
+def test_authorizer_rejects_direct_history_without_web_flow_committer(
+    tmp_path: Path, committer: str | None
+) -> None:
+    """Reject a direct update whose verified root lacks the web-flow committer.
+
+    Args:
+        tmp_path (Path): Isolated trusted-base directory.
+        committer (str | None): Missing or maintainer committer identity.
+    """
+    _write_trusted_file(tmp_path, "uv.lock")
+    root_commit = _dependabot_commit()
+    if committer is None:
+        root_commit.pop("committer")
+    else:
+        root_commit["committer"] = {"login": committer}
+
+    result = _run_authorizer(
+        tmp_path,
+        actor=BOT,
+        changed_files=["uv.lock"],
+        commits=[root_commit],
+        event=_event(action="reopened", ref="dependabot/uv/dependency-update"),
+    )
+
+    assert result.returncode != 0
 
 
 def test_authorizer_rejects_uv_update_outside_lockfile_scope(tmp_path: Path) -> None:
@@ -256,6 +285,56 @@ def test_authorizer_accepts_verified_update_branch_history(tmp_path: Path) -> No
     )
 
     assert result.returncode == 0
+
+
+@pytest.mark.parametrize("committer", [None, "maintainer"])
+def test_authorizer_rejects_update_root_without_web_flow_committer(
+    tmp_path: Path, committer: str | None
+) -> None:
+    """Reject an update branch whose Dependabot root lacks web-flow provenance.
+
+    Args:
+        tmp_path (Path): Isolated trusted-base directory.
+        committer (str | None): Missing or maintainer committer identity.
+    """
+    _write_trusted_file(tmp_path, "uv.lock")
+    original_sha = "c" * 40
+    update_sha = "d" * 40
+    root_commit = _dependabot_commit(original_sha)
+    if committer is None:
+        root_commit.pop("committer")
+    else:
+        root_commit["committer"] = {"login": committer}
+    update_commit = {
+        "author": {"login": "maintainer"},
+        "commit": {"verification": {"verified": True}},
+        "committer": {"login": "web-flow"},
+        "parents": [{"sha": original_sha}, {"sha": BASE_SHA}],
+        "sha": update_sha,
+    }
+    event = _event(action="reopened", ref="dependabot/uv/dependency-update")
+    event["pull_request"]["head"]["sha"] = update_sha  # type: ignore[index]
+    result = _run_authorizer(
+        tmp_path,
+        actor="arbitrary-actor",
+        ancestry_proofs=[
+            {
+                "ahead_by": 0,
+                "base_commit": BASE_SHA,
+                "base_sha": BASE_SHA,
+                "behind_by": 0,
+                "head_commit": BASE_SHA,
+                "merge_base_commit": BASE_SHA,
+                "parent_sha": BASE_SHA,
+                "status": "identical",
+            }
+        ],
+        changed_files=["uv.lock"],
+        commits=[root_commit, update_commit],
+        event=event,
+    )
+
+    assert result.returncode != 0
 
 
 def test_authorizer_rejects_invalid_update_branch_history(tmp_path: Path) -> None:
@@ -587,6 +666,10 @@ def _assert_trusted_authorization(
     else:
         assert "if" not in trusted_checkout
     command = str(authorizer["run"])
+    environment = _mapping(authorizer["env"])
+    assert environment["BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
+    assert 'base_sha="${BASE_SHA}"' in command
+    assert 'base_sha="${{ github.event.pull_request.base.sha }}"' not in command
     for token in (
         "pulls/${PR_NUMBER}/files",
         "pulls/${PR_NUMBER}/commits",
