@@ -60,6 +60,18 @@ def _dependabot_commit(sha: str = HEAD_SHA) -> dict[str, object]:
     }
 
 
+def _write_trusted_file(tmp_path: Path, path: str) -> None:
+    """Create a file in the trusted-base fixture.
+
+    Args:
+        tmp_path (Path): Isolated trusted-base directory.
+        path (str): Relative file path to create.
+    """
+    trusted_file = tmp_path / path
+    trusted_file.parent.mkdir(parents=True, exist_ok=True)
+    trusted_file.write_text("fixture\n", encoding="utf-8")
+
+
 def _run_authorizer(
     tmp_path: Path,
     *,
@@ -103,6 +115,7 @@ def test_authorizer_accepts_verified_uv_lockfile_update(tmp_path: Path) -> None:
     Args:
         tmp_path (Path): Isolated trusted-base directory.
     """
+    _write_trusted_file(tmp_path, "uv.lock")
     result = _run_authorizer(
         tmp_path,
         actor=BOT,
@@ -120,6 +133,7 @@ def test_authorizer_rejects_uv_update_outside_lockfile_scope(tmp_path: Path) -> 
     Args:
         tmp_path (Path): Isolated trusted-base directory.
     """
+    _write_trusted_file(tmp_path, "uv.lock")
     result = _run_authorizer(
         tmp_path,
         actor=BOT,
@@ -131,22 +145,43 @@ def test_authorizer_rejects_uv_update_outside_lockfile_scope(tmp_path: Path) -> 
     assert result.returncode != 0
 
 
+def test_authorizer_rejects_npm_update_when_trusted_base_uses_uv(tmp_path: Path) -> None:
+    """Reject npm authorization when the trusted base lacks npm metadata.
+
+    Args:
+        tmp_path (Path): Isolated trusted-base directory.
+    """
+    _write_trusted_file(tmp_path, "uv.lock")
+    result = _run_authorizer(
+        tmp_path,
+        actor=BOT,
+        changed_files=["package-lock.json"],
+        commits=[_dependabot_commit()],
+        event=_event(
+            action="opened",
+            ref="dependabot/npm_and_yarn/dependency-update",
+        ),
+    )
+
+    assert result.returncode != 0
+
+
 @pytest.mark.parametrize(
     ("path", "present", "authorized"),
     [
         (".github/workflows/ci.yml", True, True),
         ("action.yml", True, True),
         (".github/workflows/new.yml", False, False),
-        (".github/actions/check/action.yml", True, False),
+        (".github/actions/check/action.yml", True, True),
     ],
 )
-def test_authorizer_trusts_only_existing_top_level_actions_files(
+def test_authorizer_trusts_only_existing_actions_files(
     tmp_path: Path,
     path: str,
     present: bool,
     authorized: bool,
 ) -> None:
-    """Authorize only an existing top-level Actions dependency target.
+    """Authorize only an existing trusted-base Actions dependency target.
 
     Args:
         tmp_path (Path): Isolated trusted-base directory.
@@ -155,9 +190,7 @@ def test_authorizer_trusts_only_existing_top_level_actions_files(
         authorized (bool): Expected authorization outcome.
     """
     if present:
-        trusted_file = tmp_path / path
-        trusted_file.parent.mkdir(parents=True, exist_ok=True)
-        trusted_file.write_text("fixture\n", encoding="utf-8")
+        _write_trusted_file(tmp_path, path)
     result = _run_authorizer(
         tmp_path,
         actor=BOT,
@@ -178,6 +211,7 @@ def test_authorizer_accepts_verified_update_branch_history(tmp_path: Path) -> No
     Args:
         tmp_path (Path): Isolated trusted-base directory.
     """
+    _write_trusted_file(tmp_path, "uv.lock")
     original_sha = "c" * 40
     update_sha = "d" * 40
     update_commit = {
@@ -198,3 +232,29 @@ def test_authorizer_accepts_verified_update_branch_history(tmp_path: Path) -> No
     )
 
     assert result.returncode == 0
+
+
+def test_authorizer_rejects_invalid_update_branch_history(tmp_path: Path) -> None:
+    """Reject an update branch whose merge commit is not trusted.
+
+    Args:
+        tmp_path (Path): Isolated trusted-base directory.
+    """
+    _write_trusted_file(tmp_path, "uv.lock")
+    original_sha = "c" * 40
+    invalid_update = {
+        "author": {"login": "maintainer"},
+        "commit": {"verification": {"verified": True}},
+        "committer": {"login": "web-flow"},
+        "parents": [{"sha": original_sha}],
+        "sha": HEAD_SHA,
+    }
+    result = _run_authorizer(
+        tmp_path,
+        actor="maintainer",
+        changed_files=["uv.lock"],
+        commits=[_dependabot_commit(original_sha), invalid_update],
+        event=_event(action="synchronize", ref="dependabot/uv/dependency-update"),
+    )
+
+    assert result.returncode != 0
