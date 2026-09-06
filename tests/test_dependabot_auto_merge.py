@@ -505,6 +505,19 @@ def _steps(job: dict[str, object]) -> list[dict[str, object]]:
     return [_mapping(step) for step in raw_steps]
 
 
+def _uses_major_action(step: dict[str, object], action: str) -> bool:
+    """Return whether a step invokes an action through its major release line.
+
+    Args:
+        step (dict[str, object]): Parsed workflow step.
+        action (str): Action owner/name without a release suffix.
+
+    Returns:
+        bool: Whether the step references the action through a major release line.
+    """
+    return str(step.get("uses", "")).startswith(f"{action}@v")
+
+
 def _job_items(workflow: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
     """Return named jobs from a parsed workflow.
 
@@ -669,12 +682,17 @@ def test_coverage_writes_run_after_pr_checks_without_pr_checkout() -> None:
     tests = next(
         job
         for _name, job in _job_items(_workflow("pytest_check.yml"))
-        if "uv run --locked --group pytest pytest" in str(job)
+        if any(
+            _mapping(step.get("with", {})).get("ACTIVITY") == "process_pr" for step in _steps(job)
+        )
     )
     permissions = _mapping(tests["permissions"])
-    assert permissions == {"contents": "read", "pull-requests": "read"}
+    assert permissions["contents"] == "read"
+    assert permissions["pull-requests"] == "read"
     coverage_step = next(
-        step for step in _steps(tests) if "python-coverage-comment-action" in str(step.get("uses"))
+        step
+        for step in _steps(tests)
+        if _uses_major_action(step, "py-cov-action/python-coverage-comment-action")
     )
     assert "github.event_name == 'pull_request'" in str(coverage_step["if"])
     assert _mapping(coverage_step["with"])["MINIMUM_GREEN"] == 90
@@ -685,6 +703,7 @@ def test_coverage_writes_run_after_pr_checks_without_pr_checkout() -> None:
     )
 
     post_jobs = _job_items(_workflow("pytest_post_coverage.yml"))
+    assert "concurrency" not in _workflow("pytest_post_coverage.yml")
     post_pr = next(
         job
         for _name, job in post_jobs
@@ -694,9 +713,10 @@ def test_coverage_writes_run_after_pr_checks_without_pr_checkout() -> None:
     assert post_permissions["actions"] == "read"
     assert post_permissions["contents"] == "read"
     assert post_permissions["pull-requests"] == "write"
-    assert not any(
-        str(step.get("uses", "")).startswith("actions/checkout@") for step in _steps(post_pr)
+    assert all(
+        permission in {"actions", "contents", "pull-requests"} for permission in post_permissions
     )
+    assert not any(_uses_major_action(step, "actions/checkout") for step in _steps(post_pr))
     assert "GITHUB_PR_RUN_ID" in str(post_pr)
 
     publish = next(job for _name, job in post_jobs if "save_coverage_data_files" in str(job))
@@ -704,10 +724,35 @@ def test_coverage_writes_run_after_pr_checks_without_pr_checkout() -> None:
     assert "workflow_run.head_branch == github.event.repository.default_branch" in str(
         publish["if"]
     )
-    assert _mapping(publish["permissions"])["contents"] == "write"
+    assert "workflow_run.head_repository.full_name == github.repository" in str(publish["if"])
+    publish_permissions = _mapping(publish["permissions"])
+    assert publish_permissions["actions"] == "read"
+    assert publish_permissions["contents"] == "write"
+    assert all(permission in {"actions", "contents"} for permission in publish_permissions)
+    concurrency = _mapping(publish["concurrency"])
+    assert "github.event.repository.default_branch" in str(concurrency["group"])
+    assert concurrency["cancel-in-progress"] is True
     checkout = next(
-        step
-        for step in _steps(publish)
-        if str(step.get("uses", "")).startswith("actions/checkout@")
+        step for step in _steps(publish) if _uses_major_action(step, "actions/checkout")
     )
     assert _mapping(checkout["with"])["persist-credentials"] is False
+    assert _mapping(checkout["with"])["ref"] == "${{ github.event.repository.default_branch }}"
+    assert "workflow_run.head_sha" not in str(checkout)
+    verification_index, verification = next(
+        (index, step)
+        for index, step in enumerate(_steps(publish))
+        if _mapping(step.get("env", {})).get("EXPECTED_SHA")
+        == "${{ github.event.workflow_run.head_sha }}"
+    )
+    assert "git rev-parse HEAD" in str(verification.get("run"))
+    download_index, download = next(
+        (index, step)
+        for index, step in enumerate(_steps(publish))
+        if _uses_major_action(step, "actions/download-artifact")
+    )
+    assert _steps(publish).index(checkout) < verification_index < download_index
+    download_with = _mapping(download["with"])
+    assert download_with["github-token"] == "${{ secrets.GITHUB_TOKEN }}"
+    assert download_with["name"] == "python-coverage-data"
+    assert download_with["path"] == "."
+    assert download_with["run-id"] == "${{ github.event.workflow_run.id }}"
