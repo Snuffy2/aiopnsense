@@ -17,7 +17,7 @@ SCRIPT_SPEC.loader.exec_module(prepare_release)
 
 @pytest.mark.parametrize(
     "tag",
-    ["v1.1.8", "v1.2.0-beta.1", "v1.1.7.1", "v1.2.0b1"],
+    ["v1.1", "v1.1.8", "v1.2.0-beta.1", "v1.1.7.1", "v1.2.0b1"],
 )
 def test_validate_release_tag_accepts_supported_formats(tag: str) -> None:
     """Accept version formats already used by the release workflow.
@@ -30,7 +30,7 @@ def test_validate_release_tag_accepts_supported_formats(tag: str) -> None:
 
 @pytest.mark.parametrize(
     "tag",
-    ["", "1.1.8", "v1", "v1.1.8 beta", "v1.1.8;echo-bad"],
+    ["", "1.1.8", "v1", "v01.2", "v01.2-beta.1", "v1.1.8 beta", "v1.1.8;echo-bad"],
 )
 def test_validate_release_tag_rejects_unsupported_formats(tag: str) -> None:
     """Reject malformed tags before they reach Git or GitHub commands.
@@ -43,8 +43,41 @@ def test_validate_release_tag_rejects_unsupported_formats(tag: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "tag",
+    [
+        "v01.2",
+        "v1.02",
+        "v01.2.3",
+        "v1.02.3",
+        "v1.2.03",
+        "v01.2.3.4",
+        "v1.02.3.4",
+        "v1.2.03.4",
+        "v1.2.3.04",
+        "v01.2-beta.1",
+        "v1.02-beta.1",
+        "v01.2.3-beta.1",
+        "v1.2.03-beta.1",
+        "v01.2.3.4-beta.1",
+        "v1.2.3.04-beta.1",
+    ],
+)
+@pytest.mark.parametrize("prerelease", [False, True])
+def test_validate_release_request_rejects_leading_zero_versions(tag: str, prerelease: bool) -> None:
+    """Reject leading-zero tags before prerelease classification.
+
+    Args:
+        tag (str): Invalid stable or prerelease tag.
+        prerelease (bool): Requested release classification.
+    """
+    with pytest.raises(ValueError, match="Invalid release tag"):
+        prepare_release.validate_release_request(tag, prerelease)
+
+
+@pytest.mark.parametrize(
     ("tag", "prerelease"),
     [
+        ("v1.1", False),
         ("v1.1.8", False),
         ("v1.1.7.1", False),
         ("v1.2.0-beta.1", True),
@@ -232,6 +265,26 @@ def test_default_cli_updates_version_in_working_directory(
     assert const_path.read_text(encoding="utf-8") == (
         'VERSION = "v1.1.8"\nOTHER_VERSION = "v1.0.0"\n'
     )
+
+
+def test_cli_updates_version_in_explicit_repository(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Update a version file under the explicit repository root.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing CLI arguments.
+        tmp_path (Path): Temporary repository root.
+    """
+    const_path = _write_version_file(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(SCRIPT_PATH), "--repository", str(tmp_path), "v1.1.8"],
+    )
+
+    assert prepare_release.main() == 0
+    assert 'VERSION = "v1.1.8"' in const_path.read_text(encoding="utf-8")
 
 
 def test_default_cli_rejects_expected_prerelease_without_check_only(

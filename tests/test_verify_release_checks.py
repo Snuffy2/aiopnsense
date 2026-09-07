@@ -1,10 +1,9 @@
-"""Tests for immutable release-check verification and workflow contracts."""
+"""Tests for immutable release-check verification."""
 
 from collections.abc import Sequence
 import importlib.util
 import json
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -20,50 +19,28 @@ assert SCRIPT_SPEC.loader is not None
 verify = importlib.util.module_from_spec(SCRIPT_SPEC)
 SCRIPT_SPEC.loader.exec_module(verify)
 
-WORKFLOW_ROOT = Path(__file__).parents[1] / ".github" / "workflows"
 REPOSITORY = "owner/repository"
-REF = "release-validation/v1.0.6-123-1"
+WORKFLOW_REF = "main"
+WORKFLOW_SHA = "b" * 40
 SHA = "a" * 40
 
 
-def _workflow_text(name: str) -> str:
-    """Return one workflow as text for structural contract checks.
-
-    Args:
-        name (str): Workflow filename.
+def _successful_run() -> dict[str, Any]:
+    """Return a completed workflow run for the immutable test candidate.
 
     Returns:
-        str: Workflow source text.
+        dict[str, Any]: GitHub workflow-run response fixture.
     """
-    return (WORKFLOW_ROOT / name).read_text(encoding="utf-8")
-
-
-def _step_containing(workflow: str, token: str) -> str:
-    """Return the unique workflow step containing a semantic token.
-
-    Args:
-        workflow (str): Workflow source text.
-        token (str): Stable command or expression that identifies the step.
-
-    Returns:
-        str: Matching workflow step source.
-    """
-    steps = re.split(r"(?m)(?=^      - )", workflow)
-    matches = [step for step in steps if token in step]
-    assert len(matches) == 1
-    return matches[0]
-
-
-def _normalized(value: str) -> str:
-    """Collapse insignificant whitespace for shell contract assertions.
-
-    Args:
-        value (str): Source text to normalize.
-
-    Returns:
-        str: Whitespace-collapsed text.
-    """
-    return " ".join(value.split())
+    return {
+        "id": 42,
+        "workflow_id": 7,
+        "event": "workflow_dispatch",
+        "head_branch": WORKFLOW_REF,
+        "head_sha": WORKFLOW_SHA,
+        "status": "completed",
+        "conclusion": "success",
+        "check_suite_id": 99,
+    }
 
 
 def test_dispatch_workflow_uses_expected_ref_sha_and_authoritative_run_id(
@@ -77,18 +54,30 @@ def test_dispatch_workflow_uses_expected_ref_sha_and_authoritative_run_id(
     calls: list[tuple[list[str], int | None]] = []
 
     def fake_api(arguments: Sequence[str], expected_status: int | None = None) -> dict[str, Any]:
+        """Record one API request and return a dispatched workflow run.
+
+        Args:
+            arguments (Sequence[str]): GitHub CLI API arguments.
+            expected_status (int | None): Required HTTP response status.
+
+        Returns:
+            dict[str, Any]: Dispatch response fixture.
+        """
         calls.append((list(arguments), expected_status))
         return {"workflow_run_id": 42}
 
     monkeypatch.setattr(verify, "github_api", fake_api)
 
-    assert verify.dispatch_workflow(REPOSITORY, "validate.yml", REF, SHA) == 42
+    assert verify.dispatch_workflow(REPOSITORY, "validation.yml", WORKFLOW_REF, SHA) == 42
     arguments, status = calls[0]
     assert status == 200
-    assert f"repos/{REPOSITORY}/actions/workflows/validate.yml/dispatches" in arguments
-    run_details_index = arguments.index("return_run_details=true")
-    assert arguments[run_details_index - 1] == "-F"
-    assert f"ref={REF}" in arguments
+    assert "--include" in arguments
+    assert arguments[arguments.index("--method") + 1] == "POST"
+    assert "Accept: application/vnd.github+json" in arguments
+    assert "X-GitHub-Api-Version: 2026-03-10" in arguments
+    assert f"repos/{REPOSITORY}/actions/workflows/validation.yml/dispatches" in arguments
+    assert "return_run_details=true" not in arguments
+    assert f"ref={WORKFLOW_REF}" in arguments
     assert f"inputs[expected_sha]={SHA}" in arguments
 
 
@@ -109,57 +98,69 @@ def test_dispatch_workflow_rejects_missing_or_invalid_run_id(
     )
 
     with pytest.raises(verify.GitHubCommandError):
-        verify.dispatch_workflow(REPOSITORY, "validate.yml", REF, SHA)
+        verify.dispatch_workflow(REPOSITORY, "validation.yml", WORKFLOW_REF, SHA)
 
 
 def test_parse_required_checks_derives_workflows_in_first_seen_order() -> None:
     """Group required jobs while preserving workflow dispatch order."""
     checks = verify.parse_required_checks(
         [
-            "pytest_check.yml::pytest and coverage report",
-            "validate.yml::HACS Validation",
-            "validate.yml::Hassfest Validation",
-            "pytest_check.yml::pytest and coverage report",
+            "validation.yml::Test and build",
+            "uv-lock-check.yml::Validate uv lock consistency",
+            "validation.yml::Test and build",
         ]
     )
 
-    assert list(checks) == ["pytest_check.yml", "validate.yml"]
+    assert list(checks) == ["validation.yml", "uv-lock-check.yml"]
     assert checks == {
-        "pytest_check.yml": {"pytest and coverage report"},
-        "validate.yml": {"HACS Validation", "Hassfest Validation"},
+        "validation.yml": {"Test and build"},
+        "uv-lock-check.yml": {"Validate uv lock consistency"},
     }
 
 
-def test_wait_for_workflow_requires_exact_identity_and_successful_jobs(
+@pytest.mark.parametrize("value", ["workflow", "::job", "workflow::"])
+def test_parse_required_checks_rejects_invalid_required_check(value: str) -> None:
+    """Reject malformed workflow and required-job mappings.
+
+    Args:
+        value (str): Invalid required-check value.
+    """
+    with pytest.raises(ValueError):
+        verify.parse_required_checks([value])
+
+
+def test_wait_for_workflow_requires_exact_identity_actions_suite_and_successful_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify the exact dispatched run, Actions suite, and exact required job.
+    """Verify the dispatched run, Actions suite, and exact required job.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for replacing API and time helpers.
     """
 
     def fake_api(arguments: Sequence[str]) -> dict[str, Any]:
+        """Return endpoint-specific GitHub responses for the valid run.
+
+        Args:
+            arguments (Sequence[str]): GitHub CLI API arguments.
+
+        Returns:
+            dict[str, Any]: Response fixture for the requested endpoint.
+
+        Raises:
+            AssertionError: If the verifier requests an unexpected endpoint.
+        """
         endpoint = arguments[0]
-        if endpoint.endswith("/actions/workflows/validate.yml"):
+        if endpoint.endswith("/actions/workflows/validation.yml"):
             return {"id": 7}
         if endpoint.endswith("/actions/runs/42"):
-            return {
-                "id": 42,
-                "workflow_id": 7,
-                "event": "workflow_dispatch",
-                "head_branch": REF,
-                "head_sha": SHA,
-                "status": "completed",
-                "conclusion": "success",
-                "check_suite_id": 99,
-            }
+            return _successful_run()
         if endpoint.endswith("/check-suites/99"):
-            return {"head_sha": SHA, "app": {"slug": "github-actions"}}
+            return {"head_sha": WORKFLOW_SHA, "app": {"slug": "github-actions"}}
         if endpoint.endswith("/actions/runs/42/jobs?per_page=100"):
             return {
                 "total_count": 1,
-                "jobs": [{"name": "HACS Validation", "conclusion": "success"}],
+                "jobs": [{"name": "Test and build", "conclusion": "success"}],
             }
         raise AssertionError(f"Unexpected GitHub API endpoint: {endpoint}")
 
@@ -169,10 +170,11 @@ def test_wait_for_workflow_requires_exact_identity_and_successful_jobs(
     assert (
         verify.wait_for_workflow(
             REPOSITORY,
-            "validate.yml",
-            REF,
+            "validation.yml",
+            WORKFLOW_REF,
+            WORKFLOW_SHA,
             SHA,
-            {"HACS Validation"},
+            {"Test and build"},
             deadline=1.0,
             expected_run_id=42,
         )
@@ -180,54 +182,43 @@ def test_wait_for_workflow_requires_exact_identity_and_successful_jobs(
     )
 
 
-def test_wait_for_workflow_retries_a_transient_run_not_found(
+def test_wait_for_workflow_completes_after_pending_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Retry a transient run lookup failure before verifying its completed checks.
+    """Poll an authoritative run until its completion before checking results.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for replacing API and time helpers.
     """
-    run_attempts = 0
-    sleeps: list[int] = []
+    pending_run = _successful_run()
+    pending_run["status"] = "in_progress"
+    pending_run.pop("conclusion")
+    responses = iter([pending_run, _successful_run()])
+    sleeps: list[float] = []
 
     def fake_api(arguments: Sequence[str]) -> dict[str, Any]:
-        """Return endpoint-specific responses with one transient run miss.
+        """Return one pending response before the completed run fixture.
 
         Args:
-            arguments (Sequence[str]): GitHub API request arguments.
+            arguments (Sequence[str]): GitHub CLI API arguments.
 
         Returns:
             dict[str, Any]: Response fixture for the requested endpoint.
 
         Raises:
-            verify.GitHubCommandError: On the first workflow-run lookup.
-            AssertionError: If the implementation requests an unexpected endpoint.
+            AssertionError: If the verifier requests an unexpected endpoint.
         """
-        nonlocal run_attempts
         endpoint = arguments[0]
-        if endpoint.endswith("/actions/workflows/validate.yml"):
+        if endpoint.endswith("/actions/workflows/validation.yml"):
             return {"id": 7}
         if endpoint.endswith("/actions/runs/42"):
-            run_attempts += 1
-            if run_attempts == 1:
-                raise verify.GitHubCommandError("HTTP 404 Not Found")
-            return {
-                "id": 42,
-                "workflow_id": 7,
-                "event": "workflow_dispatch",
-                "head_branch": REF,
-                "head_sha": SHA,
-                "status": "completed",
-                "conclusion": "success",
-                "check_suite_id": 99,
-            }
+            return next(responses)
         if endpoint.endswith("/check-suites/99"):
-            return {"head_sha": SHA, "app": {"slug": "github-actions"}}
+            return {"head_sha": WORKFLOW_SHA, "app": {"slug": "github-actions"}}
         if endpoint.endswith("/actions/runs/42/jobs?per_page=100"):
             return {
                 "total_count": 1,
-                "jobs": [{"name": "HACS Validation", "conclusion": "success"}],
+                "jobs": [{"name": "Test and build", "conclusion": "success"}],
             }
         raise AssertionError(f"Unexpected GitHub API endpoint: {endpoint}")
 
@@ -238,10 +229,201 @@ def test_wait_for_workflow_retries_a_transient_run_not_found(
     assert (
         verify.wait_for_workflow(
             REPOSITORY,
-            "validate.yml",
-            REF,
+            "validation.yml",
+            WORKFLOW_REF,
+            WORKFLOW_SHA,
             SHA,
-            {"HACS Validation"},
+            {"Test and build"},
+            deadline=1.0,
+            expected_run_id=42,
+        )
+        == 42
+    )
+    assert sleeps == [10]
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled"])
+def test_wait_for_workflow_rejects_unsuccessful_conclusion(
+    monkeypatch: pytest.MonkeyPatch, conclusion: str
+) -> None:
+    """Reject a completed run that did not conclude successfully.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing API and time helpers.
+        conclusion (str): Completed workflow conclusion to reject.
+    """
+    run = _successful_run()
+    run["conclusion"] = conclusion
+    monkeypatch.setattr(
+        verify,
+        "github_api",
+        lambda arguments: {"id": 7} if "/workflows/" in arguments[0] else run,
+    )
+    monkeypatch.setattr(verify.time, "monotonic", lambda: 0.0)
+
+    with pytest.raises(verify.GitHubCommandError, match=conclusion):
+        verify.wait_for_workflow(
+            REPOSITORY,
+            "validation.yml",
+            WORKFLOW_REF,
+            WORKFLOW_SHA,
+            SHA,
+            set(),
+            deadline=1.0,
+            expected_run_id=42,
+        )
+
+
+def test_wait_for_workflow_times_out_after_bounded_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stop retrying a transient run lookup when the shared deadline expires.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing API and time helpers.
+    """
+    clock = iter([0.0, 1.0])
+    sleeps: list[float] = []
+
+    def fake_api(arguments: Sequence[str]) -> dict[str, Any]:
+        """Return metadata and report that the run has not propagated yet.
+
+        Args:
+            arguments (Sequence[str]): GitHub CLI API arguments.
+
+        Returns:
+            dict[str, Any]: Workflow metadata.
+
+        Raises:
+            verify.GitHubCommandError: When the run has not propagated yet.
+        """
+        if "/workflows/" in arguments[0]:
+            return {"id": 7}
+        raise verify.GitHubCommandError("HTTP 404 Not Found")
+
+    monkeypatch.setattr(verify, "github_api", fake_api)
+    monkeypatch.setattr(verify.time, "monotonic", lambda: next(clock, 1.0))
+    monkeypatch.setattr(verify.time, "sleep", sleeps.append)
+
+    with pytest.raises(verify.GitHubCommandError, match="Timed out"):
+        verify.wait_for_workflow(
+            REPOSITORY,
+            "validation.yml",
+            WORKFLOW_REF,
+            WORKFLOW_SHA,
+            SHA,
+            set(),
+            deadline=1.0,
+            expected_run_id=42,
+        )
+    assert sleeps == [5]
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("id", 41),
+        ("workflow_id", 8),
+        ("event", "push"),
+        ("head_branch", "other"),
+        ("head_sha", "c" * 40),
+    ],
+)
+def test_wait_for_workflow_rejects_non_authoritative_identity(
+    monkeypatch: pytest.MonkeyPatch, key: str, value: object
+) -> None:
+    """Reject every mismatched run-identity field.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing API and time helpers.
+        key (str): Workflow-run field to replace.
+        value (object): Mismatched field value.
+    """
+    run = _successful_run()
+    run[key] = value
+    monkeypatch.setattr(
+        verify,
+        "github_api",
+        lambda arguments: {"id": 7} if "/workflows/" in arguments[0] else run,
+    )
+    monkeypatch.setattr(verify.time, "monotonic", lambda: 0.0)
+
+    with pytest.raises(verify.GitHubCommandError):
+        verify.wait_for_workflow(
+            REPOSITORY,
+            "validation.yml",
+            WORKFLOW_REF,
+            WORKFLOW_SHA,
+            SHA,
+            set(),
+            deadline=1.0,
+            expected_run_id=42,
+        )
+
+
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "HTTP 404 Not Found",
+        "HTTP 429 Too Many Requests",
+        "HTTP/2 503 Service Unavailable",
+    ],
+)
+def test_wait_for_workflow_retries_explicit_transient_run_lookup_errors(
+    monkeypatch: pytest.MonkeyPatch, error_message: str
+) -> None:
+    """Retry explicit transient run lookup failures before verifying completed checks.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing API and time helpers.
+        error_message (str): Explicit transient HTTP diagnostic returned by the CLI.
+    """
+    run_attempts = 0
+    sleeps: list[int] = []
+
+    def fake_api(arguments: Sequence[str]) -> dict[str, Any]:
+        """Return a transient run error followed by valid endpoint responses.
+
+        Args:
+            arguments (Sequence[str]): GitHub CLI API arguments.
+
+        Returns:
+            dict[str, Any]: Response fixture for the requested endpoint.
+
+        Raises:
+            verify.GitHubCommandError: For the transient workflow-run lookup.
+            AssertionError: If the verifier requests an unexpected endpoint.
+        """
+        nonlocal run_attempts
+        endpoint = arguments[0]
+        if endpoint.endswith("/actions/workflows/validation.yml"):
+            return {"id": 7}
+        if endpoint.endswith("/actions/runs/42"):
+            run_attempts += 1
+            if run_attempts == 1:
+                raise verify.GitHubCommandError(error_message)
+            return _successful_run()
+        if endpoint.endswith("/check-suites/99"):
+            return {"head_sha": WORKFLOW_SHA, "app": {"slug": "github-actions"}}
+        if endpoint.endswith("/actions/runs/42/jobs?per_page=100"):
+            return {
+                "total_count": 1,
+                "jobs": [{"name": "Test and build", "conclusion": "success"}],
+            }
+        raise AssertionError(f"Unexpected GitHub API endpoint: {endpoint}")
+
+    monkeypatch.setattr(verify, "github_api", fake_api)
+    monkeypatch.setattr(verify.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(verify.time, "sleep", sleeps.append)
+
+    assert (
+        verify.wait_for_workflow(
+            REPOSITORY,
+            "validation.yml",
+            WORKFLOW_REF,
+            WORKFLOW_SHA,
+            SHA,
+            {"Test and build"},
             deadline=1.0,
             expected_run_id=42,
         )
@@ -251,52 +433,74 @@ def test_wait_for_workflow_retries_a_transient_run_not_found(
 
 
 @pytest.mark.parametrize(
-    "run",
+    "error_message",
     [
-        {"id": 41},
-        {
-            "id": 42,
-            "workflow_id": 7,
-            "event": "push",
-            "head_branch": REF,
-            "head_sha": SHA,
-        },
+        "HTTP 401 Unauthorized",
+        "HTTP 403 Forbidden",
+        "HTTP 418 I'm a teapot",
+        "GitHub CLI exited after 503 retries",
     ],
 )
-def test_wait_for_workflow_rejects_non_authoritative_identity(
-    monkeypatch: pytest.MonkeyPatch, run: dict[str, Any]
+def test_wait_for_workflow_rejects_nonretryable_run_lookup_errors(
+    monkeypatch: pytest.MonkeyPatch, error_message: str
 ) -> None:
-    """Reject a mismatched run ID or workflow identity.
+    """Fail immediately for non-transient or non-HTTP run lookup failures.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for replacing API and time helpers.
-        run (dict[str, Any]): Invalid workflow run response.
+        error_message (str): GitHub CLI diagnostic that must not be retried.
     """
-    monkeypatch.setattr(
-        verify,
-        "github_api",
-        lambda _arguments: {"id": 7} if "/workflows/" in _arguments[0] else run,
-    )
-    monkeypatch.setattr(verify.time, "monotonic", lambda: 0.0)
+    run_attempts = 0
+    sleeps: list[int] = []
 
-    with pytest.raises(verify.GitHubCommandError):
+    def fake_api(arguments: Sequence[str]) -> dict[str, Any]:
+        """Return workflow metadata and fail the exact dispatched-run lookup.
+
+        Args:
+            arguments (Sequence[str]): GitHub API arguments.
+
+        Returns:
+            dict[str, Any]: Workflow metadata for the expected endpoint.
+
+        Raises:
+            verify.GitHubCommandError: For the exact workflow-run lookup.
+            AssertionError: If the verifier requests an unexpected endpoint.
+        """
+        nonlocal run_attempts
+        endpoint = arguments[0]
+        if endpoint.endswith("/actions/workflows/validation.yml"):
+            return {"id": 7}
+        if endpoint.endswith("/actions/runs/42"):
+            run_attempts += 1
+            raise verify.GitHubCommandError(error_message)
+        raise AssertionError(f"Unexpected GitHub API endpoint: {endpoint}")
+
+    monkeypatch.setattr(verify, "github_api", fake_api)
+    monkeypatch.setattr(verify.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(verify.time, "sleep", sleeps.append)
+
+    with pytest.raises(verify.GitHubCommandError) as raised:
         verify.wait_for_workflow(
-            REPOSITORY, "validate.yml", REF, SHA, set(), deadline=1.0, expected_run_id=42
+            REPOSITORY,
+            "validation.yml",
+            WORKFLOW_REF,
+            WORKFLOW_SHA,
+            SHA,
+            set(),
+            deadline=1.0,
+            expected_run_id=42,
         )
 
+    assert str(raised.value) == error_message
+    assert run_attempts == 1
+    assert not sleeps
 
-def test_verify_jobs_rejects_incomplete_required_check_results(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Reject required checks unless every requested job has one successful result.
 
-    Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture for replacing the API helper.
-    """
-    monkeypatch.setattr(
-        verify,
-        "github_api",
-        lambda _arguments: {
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"total_count": 2, "jobs": [{"name": "required", "conclusion": "success"}]},
+        {
             "total_count": 4,
             "jobs": [
                 {"name": "required", "conclusion": "success"},
@@ -305,10 +509,43 @@ def test_verify_jobs_rejects_incomplete_required_check_results(
                 {"name": "failed", "conclusion": "failure"},
             ],
         },
-    )
+    ],
+)
+def test_verify_jobs_rejects_truncated_or_invalid_required_results(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]
+) -> None:
+    """Reject truncated, missing, duplicate, or unsuccessful required jobs.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing the API helper.
+        payload (dict[str, Any]): Jobs API response fixture.
+    """
+    monkeypatch.setattr(verify, "github_api", lambda _arguments: payload)
 
     with pytest.raises(verify.GitHubCommandError):
         verify.verify_jobs(REPOSITORY, 42, {"required", "duplicate", "failed", "missing"})
+
+
+@pytest.mark.parametrize(
+    "suite",
+    [
+        {"head_sha": "c" * 40, "app": {"slug": "github-actions"}},
+        {"head_sha": WORKFLOW_SHA, "app": {"slug": "another-app"}},
+    ],
+)
+def test_verify_check_suite_rejects_mismatched_candidate_or_non_actions_suite(
+    monkeypatch: pytest.MonkeyPatch, suite: dict[str, Any]
+) -> None:
+    """Reject check suites that do not prove the candidate's Actions execution.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing the API helper.
+        suite (dict[str, Any]): Invalid check-suite response fixture.
+    """
+    monkeypatch.setattr(verify, "github_api", lambda _arguments: suite)
+
+    with pytest.raises(verify.GitHubCommandError):
+        verify.verify_check_suite(REPOSITORY, {"check_suite_id": 99}, WORKFLOW_SHA)
 
 
 def test_github_api_rejects_malformed_or_non_authoritative_http_response(
@@ -324,6 +561,14 @@ def test_github_api_rejects_malformed_or_non_authoritative_http_response(
         verify.github_api([])
 
     monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/gh")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout="", stderr="API failed"),
+    )
+    with pytest.raises(verify.GitHubCommandError, match="API failed"):
+        verify.github_api([])
+
     monkeypatch.setattr(
         subprocess,
         "run",
@@ -343,22 +588,88 @@ def test_github_api_rejects_malformed_or_non_authoritative_http_response(
         verify.github_api([])
 
 
-def test_verify_check_suite_rejects_mismatched_candidate_commit(
+def test_github_api_converts_timeout_to_github_command_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reject a check suite that is tied to a different candidate commit.
+    """Convert a timed-out GitHub CLI request into the script error type.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture for replacing the API helper.
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing CLI discovery and execution.
     """
-    monkeypatch.setattr(
-        verify,
-        "github_api",
-        lambda _arguments: {"head_sha": "b" * 40, "app": {"slug": "github-actions"}},
-    )
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/gh")
 
-    with pytest.raises(verify.GitHubCommandError):
-        verify.verify_check_suite(REPOSITORY, {"check_suite_id": 99}, SHA)
+    def raise_timeout(*_args: Any, **_kwargs: Any) -> None:
+        """Raise the subprocess timeout reported by a stalled CLI request.
+
+        Args:
+            _args (Any): Positional subprocess arguments.
+            _kwargs (Any): Keyword subprocess arguments.
+
+        Raises:
+            subprocess.TimeoutExpired: Always, to emulate a stalled command.
+        """
+        raise subprocess.TimeoutExpired("gh api", 30)
+
+    monkeypatch.setattr(subprocess, "run", raise_timeout)
+
+    with pytest.raises(verify.GitHubCommandError, match="timed out"):
+        verify.github_api([])
+
+
+def test_github_api_uses_bounded_request_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bound each GitHub request so polling cannot wait forever.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing CLI discovery and execution.
+    """
+    calls: list[dict[str, Any]] = []
+
+    def fake_run(*_args: object, **kwargs: Any) -> SimpleNamespace:
+        """Record the subprocess options and return an empty JSON object.
+
+        Args:
+            _args (object): Positional subprocess arguments.
+            kwargs (Any): Keyword subprocess arguments.
+
+        Returns:
+            SimpleNamespace: Successful subprocess result fixture.
+        """
+        calls.append(kwargs)
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/gh")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert verify.github_api(["repos/example/repository"]) == {}
+    assert calls[0]["timeout"] == 30
+
+
+def test_github_api_rejects_valid_json_non_object_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject valid JSON responses that cannot provide API object fields.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing CLI discovery and execution.
+    """
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/gh")
+
+    def return_scalar(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+        """Return a successful CLI response containing a JSON scalar.
+
+        Args:
+            _args (Any): Positional subprocess arguments.
+            _kwargs (Any): Keyword subprocess arguments.
+
+        Returns:
+            SimpleNamespace: Successful subprocess result fixture.
+        """
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", return_scalar)
+
+    with pytest.raises(verify.GitHubCommandError, match="not an object"):
+        verify.github_api([])
 
 
 def test_publish_verified_status_attests_exact_check_and_run(
@@ -394,15 +705,15 @@ def test_publish_verified_status_attests_exact_check_and_run(
     assert f"target_url=https://github.com/{REPOSITORY}/actions/runs/42" in arguments
 
 
-def test_main_publishes_no_status_until_every_workflow_is_verified(
+def test_main_publishes_statuses_only_after_every_workflow_is_verified(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Do not attest any check when a later release-gate workflow fails.
+    """Wait for all gate verifications before publishing any required status.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for replacing orchestration helpers.
     """
-    published: list[tuple[str, str, str, int]] = []
+    events: list[tuple[str, str]] = []
     monkeypatch.setattr(
         sys,
         "argv",
@@ -410,8 +721,10 @@ def test_main_publishes_no_status_until_every_workflow_is_verified(
             "verify_release_checks.py",
             "--repository",
             REPOSITORY,
-            "--ref",
-            REF,
+            "--workflow-ref",
+            WORKFLOW_REF,
+            "--workflow-sha",
+            WORKFLOW_SHA,
             "--sha",
             SHA,
             "--required-check",
@@ -430,17 +743,105 @@ def test_main_publishes_no_status_until_every_workflow_is_verified(
         _repository: str,
         workflow: str,
         _ref: str,
+        _workflow_sha: str,
         _sha: str,
         _required_checks: set[str],
         _deadline: float,
-        expected_run_id: int,
+        run_id: int,
     ) -> int:
-        """Return the first run ID and simulate a later gate failure.
+        """Record a completed verification and return its authoritative run ID.
 
         Args:
             _repository (str): Unused GitHub repository name.
             workflow (str): Workflow filename being verified.
             _ref (str): Unused validation branch name.
+            _workflow_sha (str): Unused trusted workflow commit SHA.
+            _sha (str): Unused candidate commit SHA.
+            _required_checks (set[str]): Unused required job names.
+            _deadline (float): Unused verification deadline.
+            run_id (int): Authoritative dispatched workflow run ID.
+
+        Returns:
+            int: The authoritative workflow run ID.
+        """
+        events.append(("verify", workflow))
+        return run_id
+
+    monkeypatch.setattr(
+        verify,
+        "wait_for_workflow",
+        fake_wait,
+    )
+    monkeypatch.setattr(
+        verify,
+        "publish_verified_status",
+        lambda _repository, _sha, check, _run_id: events.append(("publish", check)),
+    )
+
+    assert verify.main() == 0
+    assert len(events) == 4
+    assert set(events) == {
+        ("verify", "first.yml"),
+        ("verify", "second.yml"),
+        ("publish", "first"),
+        ("publish", "second"),
+    }
+    verification_indices = [index for index, event in enumerate(events) if event[0] == "verify"]
+    publication_indices = [index for index, event in enumerate(events) if event[0] == "publish"]
+    assert max(verification_indices) < min(publication_indices)
+
+
+def test_main_withholds_all_statuses_when_a_later_workflow_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Withhold every status when any required release gate fails.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing orchestration helpers.
+    """
+    published: list[tuple[str, str, str, int]] = []
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify_release_checks.py",
+            "--repository",
+            REPOSITORY,
+            "--workflow-ref",
+            WORKFLOW_REF,
+            "--workflow-sha",
+            WORKFLOW_SHA,
+            "--sha",
+            SHA,
+            "--required-check",
+            "first.yml::first",
+            "--required-check",
+            "second.yml::second",
+        ],
+    )
+    monkeypatch.setattr(
+        verify,
+        "dispatch_workflow",
+        lambda _repository, workflow, _ref, _sha: 41 if workflow == "first.yml" else 42,
+    )
+
+    def fake_wait(
+        _repository: str,
+        workflow: str,
+        _ref: str,
+        _workflow_sha: str,
+        _sha: str,
+        _required_checks: set[str],
+        _deadline: float,
+        expected_run_id: int,
+    ) -> int:
+        """Return the first run ID and fail the second workflow verification.
+
+        Args:
+            _repository (str): Unused GitHub repository name.
+            workflow (str): Workflow filename being verified.
+            _ref (str): Unused validation branch name.
+            _workflow_sha (str): Unused trusted workflow commit SHA.
             _sha (str): Unused candidate commit SHA.
             _required_checks (set[str]): Unused required job names.
             _deadline (float): Unused verification deadline.
@@ -465,70 +866,3 @@ def test_main_publishes_no_status_until_every_workflow_is_verified(
 
     assert verify.main() == 1
     assert published == []
-
-
-def test_release_workflow_uses_published_event_and_guarded_package_promotion() -> None:
-    """Require published releases, exact gates, and lease-guarded package promotion."""
-    workflow = _workflow_text("release.yml")
-
-    assert re.search(r"(?ms)^on:\s+release:\s+types:\s*\[published\]", workflow)
-    assert re.search(r"(?m)^      statuses:\s*write\s*$", workflow)
-    dispatch = _step_containing(workflow, "verify_release_checks.py")
-    required_checks = set(re.findall(r"--required-check\s+['\"]([^'\"]+)", dispatch))
-    assert required_checks == {
-        "pytest_check.yml::pytest check and post coverage",
-        "docs.yml::build-docs",
-        "uv-lock-check.yml::Validate uv lock consistency",
-        "prek-autofix-review.yml::review",
-    }
-
-    promotion = _normalized(_step_containing(workflow, "git push --atomic"))
-    assert '--force-with-lease="refs/heads/$RELEASE_TARGET:$TARGET_SHA"' in promotion
-    assert '--force-with-lease="refs/tags/$RELEASE_TAG:$ORIGINAL_TAG_OID"' in promotion
-
-    metadata = _normalized(_step_containing(workflow, 'tag_sha="$(git rev-parse'))
-    assert 'git show "$tag_sha:aiopnsense/const.py"' in metadata
-    assert 'git merge-base --is-ancestor "$tag_sha" "$target_sha"' in metadata
-    assert 'git checkout --detach "$source_sha"' in metadata
-
-    final_verification = _normalized(_step_containing(workflow, 'expected_sha="$STABLE_SHA"'))
-    assert '"$expected_sha" "refs/remotes/origin/$RELEASE_TARGET"' in final_verification
-    assert "git diff --quiet -- aiopnsense/const.py" in final_verification
-
-    upload = _normalized(_step_containing(workflow, "gh release upload"))
-    assert 'gh release upload "$RELEASE_TAG" dist/* --clobber' in upload
-    assert "pypa/gh-action-pypi-publish@release/v1" in workflow
-
-
-@pytest.mark.parametrize(
-    "workflow_name",
-    ["pytest_check.yml", "docs.yml", "uv-lock-check.yml", "prek-autofix-review.yml"],
-)
-def test_release_gate_workflows_require_and_checkout_exact_sha(
-    workflow_name: str,
-) -> None:
-    """Require every dispatched gate to validate and check out the candidate SHA.
-
-    Args:
-        workflow_name (str): Workflow filename under test.
-    """
-    workflow = _workflow_text(workflow_name)
-
-    assert re.search(
-        r"(?ms)^  workflow_dispatch:\s+inputs:\s+expected_sha:.*?"
-        r"^        required:\s*true\s+^        type:\s*string\s*$",
-        workflow,
-    )
-    guard = _normalized(_step_containing(workflow, "WORKFLOW_SHA:"))
-    assert '[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]' in guard
-    assert 'test "$WORKFLOW_SHA" = "$EXPECTED_SHA"' in guard
-    checkouts = [
-        _normalized(step)
-        for step in re.split(r"(?m)(?=^      - )", workflow)
-        if "actions/checkout@" in step
-    ]
-    assert any(
-        re.search(r"ref:\s*\$\{\{[^}]*inputs\.expected_sha[^}]*}}", checkout)
-        and "persist-credentials: false" in checkout
-        for checkout in checkouts
-    )

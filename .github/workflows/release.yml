@@ -76,13 +76,26 @@ jobs:
             fi
             source_sha="$tag_sha"
           elif [[ "$(git log -1 --format=%s "$tag_sha")" == "Release $RELEASE_TAG" ]]; then
+            expected_changes=$'aiopnsense/const.py\ndocs/source/changelog.md'
+            changed_paths="$(git diff --name-only "$tag_sha^" "$tag_sha")"
             if [[ "$(git rev-list --parents -n 1 "$tag_sha" | wc -w)" -ne 2 ]] || \
+              [[ "$changed_paths" != "$expected_changes" ]] || \
               ! git show "$tag_sha:aiopnsense/const.py" | \
                 grep -Fx "VERSION = \"$RELEASE_TAG\"" >/dev/null || \
+              ! git show "$tag_sha:docs/source/changelog.md" >/dev/null || \
+              ! git show "$tag_sha:docs/source/changelog.md" | \
+                grep -F "## [$RELEASE_TAG](" >/dev/null || \
               ! git merge-base --is-ancestor "$tag_sha" "$target_sha"; then
               echo "Matching branch/tag release commit has invalid release contents." >&2
               exit 1
             fi
+            resume_root="${RUNNER_TEMP}/release-parent"
+            mkdir -p "${resume_root}/aiopnsense"
+            git show "$tag_sha^:aiopnsense/const.py" > "${resume_root}/aiopnsense/const.py"
+            python3 .github/scripts/prepare_release.py --repository "$resume_root" "$RELEASE_TAG"
+            git show "$tag_sha:aiopnsense/const.py" > "${RUNNER_TEMP}/release-candidate-const.py"
+            cmp --silent "${resume_root}/aiopnsense/const.py" \
+              "${RUNNER_TEMP}/release-candidate-const.py"
             resume=true
             source_sha="$tag_sha"
             echo "candidate-sha=$tag_sha" >> "$GITHUB_OUTPUT"
@@ -94,6 +107,7 @@ jobs:
             echo "resume=$resume"
             echo "source-sha=$source_sha"
             echo "target-sha=$target_sha"
+            echo "trusted-sha=$trusted_sha"
             echo "tag-oid=$tag_oid"
           } >> "$GITHUB_OUTPUT"
           git checkout --detach "$source_sha"
@@ -134,9 +148,20 @@ jobs:
             echo "sha=$RESUME_SHA" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          changed_before_version="$(git diff --name-only)"
+          if [[ "$changed_before_version" != "docs/source/changelog.md" ]]; then
+            echo "Changelog generation changed unexpected paths." >&2
+            exit 1
+          fi
           python3 .github/scripts/prepare_release.py "$RELEASE_TAG"
           git add aiopnsense/const.py docs/source/changelog.md
           git diff --cached --check
+          expected_changes=$'aiopnsense/const.py\ndocs/source/changelog.md'
+          if [[ "$(git diff --cached --name-only)" != "$expected_changes" ]] || \
+            ! git diff --quiet; then
+            echo "Stable release candidate must contain only its version and changelog." >&2
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "Release $RELEASE_TAG"
@@ -152,6 +177,7 @@ jobs:
           set -euo pipefail
           uv build
           uvx --from twine twine check dist/*
+          python3 .github/scripts/verify_aiopnsense_distributions.py "$RELEASE_TAG" --dist-dir dist
 
       - name: Store distributions for trusted publishing
         uses: actions/upload-artifact@v7
@@ -179,11 +205,13 @@ jobs:
         env:
           CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
-          TEMP_REF: ${{ steps.validation_ref.outputs.name }}
+          TRUSTED_REF: ${{ steps.release.outputs.target }}
+          TRUSTED_SHA: ${{ steps.base.outputs.trusted-sha }}
         run: |
           set -euo pipefail
           python3 .github/scripts/verify_release_checks.py \
-            --repository "$GITHUB_REPOSITORY" --ref "$TEMP_REF" --sha "$CANDIDATE_SHA" \
+            --repository "$GITHUB_REPOSITORY" --workflow-ref "$TRUSTED_REF" \
+            --workflow-sha "$TRUSTED_SHA" --sha "$CANDIDATE_SHA" \
             --required-check 'pytest_check.yml::pytest check and post coverage' \
             --required-check 'docs.yml::build-docs' \
             --required-check 'uv-lock-check.yml::Validate uv lock consistency' \
@@ -247,11 +275,13 @@ jobs:
       - name: Delete validated temporary branch
         if: github.event.release.prerelease == false && success()
         env:
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
           TEMP_REF: ${{ steps.validation_ref.outputs.name }}
         run: |
           gh auth setup-git --hostname github.com
-          git push origin --delete "$TEMP_REF"
+          git push --force-with-lease="refs/heads/$TEMP_REF:$CANDIDATE_SHA" \
+            origin --delete "$TEMP_REF"
 
   publish:
     needs: release

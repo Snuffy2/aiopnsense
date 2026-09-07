@@ -6,15 +6,35 @@ import argparse
 from collections import defaultdict
 from collections.abc import Sequence
 import json
+import re
 import shutil
 import subprocess
 import sys
 import time
 from typing import Any
 
+GIT_OID_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+HTTP_STATUS_PATTERN = re.compile(r"\bHTTP(?:/\d+(?:\.\d+)?)?\s+(?P<status>\d{3})\b", re.IGNORECASE)
+
 
 class GitHubCommandError(RuntimeError):
     """Raised when a GitHub CLI request fails."""
+
+
+def is_retryable_run_lookup_error(error: GitHubCommandError) -> bool:
+    """Return whether a run-lookup failure is an explicit transient HTTP response.
+
+    Args:
+        error: GitHub CLI failure raised while reading the dispatched workflow run.
+
+    Returns:
+        Whether the diagnostic explicitly reports HTTP 404, 429, or a 5xx status.
+    """
+    match = HTTP_STATUS_PATTERN.search(str(error))
+    if match is None:
+        return False
+    status = int(match.group("status"))
+    return status in {404, 429} or 500 <= status <= 599
 
 
 def github_api(arguments: Sequence[str], expected_status: int | None = None) -> dict[str, Any]:
@@ -62,13 +82,13 @@ def github_api(arguments: Sequence[str], expected_status: int | None = None) -> 
     return payload
 
 
-def dispatch_workflow(repository: str, workflow: str, ref: str, sha: str) -> int:
-    """Dispatch one workflow for the validated temporary branch.
+def dispatch_workflow(repository: str, workflow: str, workflow_ref: str, sha: str) -> int:
+    """Dispatch one trusted workflow to validate the candidate commit.
 
     Args:
         repository: GitHub owner and repository name.
         workflow: Workflow filename.
-        ref: Temporary branch containing the candidate.
+        workflow_ref: Trusted branch containing the workflow definition.
         sha: Candidate commit SHA.
 
     Returns:
@@ -87,10 +107,8 @@ def dispatch_workflow(repository: str, workflow: str, ref: str, sha: str) -> int
             "-H",
             "X-GitHub-Api-Version: 2026-03-10",
             f"repos/{repository}/actions/workflows/{workflow}/dispatches",
-            "-F",
-            "return_run_details=true",
             "-f",
-            f"ref={ref}",
+            f"ref={workflow_ref}",
             "-f",
             f"inputs[expected_sha]={sha}",
         ],
@@ -102,15 +120,24 @@ def dispatch_workflow(repository: str, workflow: str, ref: str, sha: str) -> int
     return run_id
 
 
-def verify_check_suite(repository: str, run: dict[str, Any], sha: str) -> None:
-    """Require the workflow run's GitHub Actions check suite to use the candidate SHA."""
+def verify_check_suite(repository: str, run: dict[str, Any], workflow_sha: str) -> None:
+    """Require the check suite to use the trusted workflow revision.
+
+    Args:
+        repository: GitHub owner and repository name.
+        run: Workflow run returned by GitHub.
+        workflow_sha: Trusted commit SHA containing the workflow definition.
+
+    Raises:
+        GitHubCommandError: If the workflow check suite is not from GitHub Actions.
+    """
     suite_id = run.get("check_suite_id")
-    if not isinstance(suite_id, int):
-        raise GitHubCommandError("Workflow run did not expose a check suite ID.")
+    if type(suite_id) is not int or suite_id <= 0:
+        raise GitHubCommandError("Workflow run did not expose a valid check suite ID.")
     suite = github_api([f"repos/{repository}/check-suites/{suite_id}"])
     app = suite.get("app")
     if (
-        suite.get("head_sha") != sha
+        suite.get("head_sha") != workflow_sha
         or not isinstance(app, dict)
         or app.get("slug") != "github-actions"
     ):
@@ -120,11 +147,20 @@ def verify_check_suite(repository: str, run: dict[str, Any], sha: str) -> None:
 
 
 def verify_jobs(repository: str, run_id: int, required_checks: set[str]) -> None:
-    """Require every named job to have passed in the selected workflow run."""
+    """Require each exact required job to have one successful result.
+
+    Args:
+        repository: GitHub owner and repository name.
+        run_id: Authoritative workflow run ID.
+        required_checks: Exact required job names.
+
+    Raises:
+        GitHubCommandError: If jobs are truncated, missing, duplicate, or unsuccessful.
+    """
     payload = github_api([f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100"])
     jobs = payload.get("jobs", [])
     total_count = payload.get("total_count")
-    if not isinstance(jobs, list) or not isinstance(total_count, int) or total_count > len(jobs):
+    if not isinstance(jobs, list) or type(total_count) is not int or total_count > len(jobs):
         raise GitHubCommandError("Workflow job list was truncated or unverifiable.")
     outcomes: dict[str, list[Any]] = defaultdict(list)
     for job in jobs:
@@ -147,22 +183,40 @@ def verify_jobs(repository: str, run_id: int, required_checks: set[str]) -> None
 def wait_for_workflow(
     repository: str,
     workflow: str,
-    ref: str,
+    workflow_ref: str,
+    workflow_sha: str,
     sha: str,
     required_checks: set[str],
     deadline: float,
     expected_run_id: int,
 ) -> int:
-    """Wait for a dispatched workflow and verify its completed checks."""
+    """Wait for a dispatched workflow and verify its completed checks.
+
+    Args:
+        repository: GitHub owner and repository name.
+        workflow: Workflow filename.
+        workflow_ref: Trusted branch containing the workflow definition.
+        workflow_sha: Trusted commit SHA containing the workflow definition.
+        sha: Candidate commit SHA.
+        required_checks: Exact required job names for the workflow.
+        deadline: Monotonic timestamp at which verification expires.
+        expected_run_id: Run ID returned by the dispatch endpoint.
+
+    Returns:
+        The verified authoritative workflow run ID.
+
+    Raises:
+        GitHubCommandError: If the selected workflow cannot verify before the deadline.
+    """
     metadata = github_api([f"repos/{repository}/actions/workflows/{workflow}"])
     workflow_id = metadata.get("id")
-    if not isinstance(workflow_id, int):
-        raise GitHubCommandError(f"Workflow {workflow!r} has no numeric ID.")
+    if type(workflow_id) is not int or workflow_id <= 0:
+        raise GitHubCommandError(f"Workflow {workflow!r} has no valid numeric ID.")
     while time.monotonic() < deadline:
         try:
             run = github_api([f"repos/{repository}/actions/runs/{expected_run_id}"])
         except GitHubCommandError as error:
-            if "404" not in str(error):
+            if not is_retryable_run_lookup_error(error):
                 raise
             time.sleep(5)
             continue
@@ -171,8 +225,8 @@ def wait_for_workflow(
         if (
             run.get("workflow_id") != workflow_id
             or run.get("event") != "workflow_dispatch"
-            or run.get("head_branch") != ref
-            or run.get("head_sha") != sha
+            or run.get("head_branch") != workflow_ref
+            or run.get("head_sha") != workflow_sha
         ):
             raise GitHubCommandError("Workflow run does not match the dispatched identity.")
         if run.get("status") != "completed":
@@ -182,14 +236,24 @@ def wait_for_workflow(
             raise GitHubCommandError(
                 f"Workflow {workflow!r} run {expected_run_id} concluded {run.get('conclusion')!r}."
             )
-        verify_check_suite(repository, run, sha)
+        verify_check_suite(repository, run, workflow_sha)
         verify_jobs(repository, expected_run_id, required_checks)
         return expected_run_id
     raise GitHubCommandError(f"Timed out waiting for workflow {workflow!r}.")
 
 
 def parse_required_checks(values: Sequence[str]) -> dict[str, set[str]]:
-    """Group exact required check names by workflow filename."""
+    """Group exact required check names by workflow filename.
+
+    Args:
+        values: Values in ``workflow::exact job name`` format.
+
+    Returns:
+        Required job names grouped by first-seen workflow order.
+
+    Raises:
+        ValueError: If a required check does not use the required format.
+    """
     checks: dict[str, set[str]] = defaultdict(set)
     for value in values:
         workflow, separator, check = value.partition("::")
@@ -239,10 +303,15 @@ def publish_verified_status(repository: str, sha: str, check: str, run_id: int) 
 
 
 def main() -> int:
-    """Dispatch and verify all workflows named by required checks."""
+    """Dispatch and verify all workflows named by required checks.
+
+    Returns:
+        Zero when every release gate verifies and statuses are published; otherwise one.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", required=True)
-    parser.add_argument("--ref", required=True)
+    parser.add_argument("--workflow-ref", required=True)
+    parser.add_argument("--workflow-sha", required=True)
     parser.add_argument("--sha", required=True)
     parser.add_argument("--required-check", action="append", required=True)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
@@ -252,8 +321,14 @@ def main() -> int:
         workflows = list(checks)
         if args.timeout_seconds <= 0:
             raise ValueError("timeout-seconds must be positive.")
+        if not args.workflow_ref:
+            raise ValueError("workflow-ref must not be empty.")
+        if GIT_OID_PATTERN.fullmatch(args.workflow_sha) is None:
+            raise ValueError("workflow-sha must be a Git object ID.")
+        if GIT_OID_PATTERN.fullmatch(args.sha) is None:
+            raise ValueError("sha must be a Git object ID.")
         dispatched = {
-            workflow: dispatch_workflow(args.repository, workflow, args.ref, args.sha)
+            workflow: dispatch_workflow(args.repository, workflow, args.workflow_ref, args.sha)
             for workflow in workflows
         }
         deadline = time.monotonic() + args.timeout_seconds
@@ -262,7 +337,8 @@ def main() -> int:
             run_id = wait_for_workflow(
                 args.repository,
                 workflow,
-                args.ref,
+                args.workflow_ref,
+                args.workflow_sha,
                 args.sha,
                 checks[workflow],
                 deadline,

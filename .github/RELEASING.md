@@ -8,8 +8,9 @@
    resolve to the same commit. Publishing the release starts the **Release**
    workflow.
 3. The workflow validates the tag and target, generates
-   `docs/source/changelog.md`, creates a deterministic version-and-changelog
-   commit, and builds and checks the source and wheel distributions.
+   `docs/source/changelog.md`, creates a bounded version-and-changelog
+   commit, and builds, checks, and verifies the exact wheel and source
+   distribution before it crosses the artifact boundary.
 4. The candidate is pushed to a temporary validation branch. The workflow
    dispatches these gates for that exact commit SHA and waits up to 30 minutes
    for their exact named jobs to pass:
@@ -24,11 +25,12 @@
    the distributions to the published GitHub Release, and publishes them to
    PyPI. The PyPI description includes the generated changelog.
 
-The gates receive the candidate as an `expected_sha` input. The release
-workflow verifies each workflow run ID, branch, SHA, GitHub Actions check suite,
-and required job outcome before publishing matching commit-status attestations
-for the protected-branch ruleset and promoting the candidate. No personal
-access token is needed.
+The stable candidate may change only `aiopnsense/const.py` and
+`docs/source/changelog.md`. The gates receive the candidate as an `expected_sha`
+input. The release workflow verifies each workflow run ID, workflow revision,
+branch, SHA, GitHub Actions check suite, and required job outcome before
+publishing matching commit-status attestations for the protected-branch ruleset
+and promoting the candidate. No personal access token is needed.
 
 ## Prereleases
 
@@ -38,8 +40,10 @@ a GitHub Release with the same explicit prerelease tag, targeted at the default
 branch.
 
 The workflow requires the source version, tag, and target to match, builds and
-checks the distributions without changing the default branch or tag, uploads
-them to the GitHub Release, and publishes them to TestPyPI.
+verifies the distributions without changing the default branch or tag, uploads
+them to the GitHub Release, and publishes them to TestPyPI. The publish job
+receives only the verified artifact and its OIDC identity; it does not check out
+or execute release source code.
 
 ## Failure handling and safe retries
 
@@ -72,9 +76,12 @@ git show <tag>:docs/source/changelog.md
 - If validation failed, fix the cause and publish a new release. Do not push the
   temporary candidate directly to bypass the required gates.
 - If the tag identifies the matching single-parent `Release <tag>` commit and
-  that commit remains in the default branch's history, rerunning the failed
-  workflow resumes from the tag without creating another commit. Later commits
-  on the default branch do not prevent this recovery.
+  that commit contains only the version and changelog changes,
+  and that commit remains in the default branch's history, rerunning the failed
+  workflow resumes that exact tag without creating another commit. The retry
+  does not regenerate the changelog from mutable GitHub issue and pull-request
+  data; it verifies the tagged version and release-heading contract instead.
+  Later commits on the default branch do not prevent this recovery.
 - If only the package or asset publication failed, rerun the failed workflow
   job when GitHub permits it. Do not create a second release or force-move the
   tag manually.

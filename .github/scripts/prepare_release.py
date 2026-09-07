@@ -8,14 +8,13 @@ from pathlib import Path
 import re
 import sys
 
-TAG_PATTERN = re.compile(
-    r"^v[0-9]+(?:\.[0-9]+){1,3}(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:[A-Za-z]+[0-9]+)?$"
-)
 CONST_VERSION_PATTERN = re.compile(r'^(VERSION\s*=\s*)"[^"]*"', re.MULTILINE)
-STABLE_TAG_PATTERN = re.compile(
-    r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?$"
+_NUMERIC_COMPONENT = r"(?:0|[1-9][0-9]*)"
+_NUMERIC_RELEASE = rf"v{_NUMERIC_COMPONENT}(?:\.{_NUMERIC_COMPONENT}){{1,3}}"
+TAG_PATTERN = re.compile(
+    rf"^{_NUMERIC_RELEASE}(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:[A-Za-z]+[0-9]+)?$"
 )
-NUMERIC_TAG_PATTERN = re.compile(r"^v[0-9]+(?:\.[0-9]+){1,3}$")
+STABLE_TAG_PATTERN = re.compile(rf"^{_NUMERIC_RELEASE}$")
 
 
 def validate_release_tag(tag: str) -> None:
@@ -43,7 +42,7 @@ def validate_release_request(tag: str, prerelease: bool) -> None:
         ValueError: If the tag format and prerelease selection disagree.
     """
     validate_release_tag(tag)
-    tag_is_prerelease = NUMERIC_TAG_PATTERN.fullmatch(tag) is None
+    tag_is_prerelease = STABLE_TAG_PATTERN.fullmatch(tag) is None
     if tag_is_prerelease != prerelease:
         tag_kind = "Prerelease" if tag_is_prerelease else "Stable"
         required_value = str(tag_is_prerelease).lower()
@@ -69,9 +68,10 @@ def next_stable_release_tag(tags: Iterable[str], bump_type: str) -> str:
         raise ValueError(msg)
 
     versions = [
-        tuple(int(component or 0) for component in match.groups())
+        tuple(int(component) for component in tag.removeprefix("v").split("."))
+        + (0,) * (4 - len(tag.removeprefix("v").split(".")))
         for tag in tags
-        if (match := STABLE_TAG_PATTERN.fullmatch(tag)) is not None
+        if STABLE_TAG_PATTERN.fullmatch(tag) is not None
     ]
     if not versions:
         msg = "No stable released tag found."
@@ -135,6 +135,12 @@ def main() -> int:
         choices=("true", "false"),
         help="Require the tag to match the workflow prerelease selection",
     )
+    parser.add_argument(
+        "--repository",
+        type=Path,
+        default=Path.cwd(),
+        help="Repository root containing the package version file",
+    )
     args = parser.parse_args()
 
     try:
@@ -157,7 +163,7 @@ def main() -> int:
             if args.expected_prerelease is not None:
                 msg = "--expected-prerelease requires --check-only."
                 raise ValueError(msg)
-            update_release_version(Path.cwd(), args.tag)
+            update_release_version(args.repository, args.tag)
     except (OSError, ValueError) as error:
         parser.error(str(error))
 
