@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: prek-autofix-${{ github.event.pull_request.number || github.ref }}
+  group: prek-autofix-${{ github.event.pull_request.number || inputs.expected_sha || github.ref }}
   cancel-in-progress: true
 
 jobs:

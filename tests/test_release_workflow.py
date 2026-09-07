@@ -55,12 +55,15 @@ def _run_workflow_shell(
     )
 
 
-def _release_fixture(tmp_path: Path, tag: str) -> tuple[Path, Path]:
+def _release_fixture(
+    tmp_path: Path, tag: str, *, legacy_helpers: bool = False
+) -> tuple[Path, Path]:
     """Create a pushed default branch and annotated stable-release tag fixture.
 
     Args:
         tmp_path (Path): Temporary pytest directory.
         tag (str): Stable release tag initially pointing at the default branch.
+        legacy_helpers (bool): Whether the release source predates the staged package helpers.
 
     Returns:
         tuple[Path, Path]: Repository checkout and its bare origin remote.
@@ -80,6 +83,13 @@ def _release_fixture(tmp_path: Path, tag: str) -> tuple[Path, Path]:
     helper = repository / ".github" / "scripts"
     helper.mkdir(parents=True)
     shutil.copy2(SCRIPT_ROOT / "prepare_release.py", helper / "prepare_release.py")
+    if not legacy_helpers:
+        for name in (
+            "release_version.py",
+            "verify_aiopnsense_distributions.py",
+            "verify_python_distributions.py",
+        ):
+            shutil.copy2(SCRIPT_ROOT / name, helper / name)
     shutil.copy2(SCRIPT_ROOT / "verify_release_checks.py", helper / "verify_release_checks.py")
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Initial release source")
@@ -157,6 +167,31 @@ def _publish_resume_candidate(
     return candidate_sha
 
 
+def _restore_trusted_package_helpers(repository: Path) -> str:
+    """Advance the trusted default branch with package helpers absent from the release source.
+
+    Args:
+        repository (Path): Fixture repository whose release source predates the helpers.
+
+    Returns:
+        str: SHA of the default-branch commit that owns the restored helpers.
+    """
+    helper = repository / ".github" / "scripts"
+    for name in (
+        "release_version.py",
+        "verify_aiopnsense_distributions.py",
+        "verify_python_distributions.py",
+    ):
+        shutil.copy2(SCRIPT_ROOT / name, helper / name)
+    _git(repository, "add", ".github/scripts")
+    _git(repository, "commit", "-m", "Add trusted release package helpers")
+    trusted_sha = _git(repository, "rev-parse", "HEAD")
+    _git(repository, "push", "origin", "HEAD:refs/heads/main")
+    _git(repository, "fetch", "origin", "main")
+    _git(repository, "checkout", "--detach", "origin/main")
+    return trusted_sha
+
+
 def _workflow_text(name: str) -> str:
     """Return a workflow source file.
 
@@ -209,6 +244,10 @@ def test_stable_candidate_shell_creates_only_version_and_changelog(tmp_path: Pat
 
     assert base.returncode == 0, base.stderr
     assert "resume=false" in (tmp_path / "base-output").read_text(encoding="utf-8")
+    base_outputs = dict(
+        line.split("=", maxsplit=1)
+        for line in (tmp_path / "base-output").read_text(encoding="utf-8").splitlines()
+    )
     (repository / "docs" / "source" / "changelog.md").write_text(
         f"# Changelog\n\n## [{tag}](https://example.invalid/{tag})\n", encoding="utf-8"
     )
@@ -223,6 +262,7 @@ def test_stable_candidate_shell_creates_only_version_and_changelog(tmp_path: Pat
             "RELEASE_TAG": tag,
             "RESUME": "false",
             "RESUME_SHA": "",
+            "TRUSTED_HELPERS": base_outputs["trusted-helpers"],
         },
     )
 
@@ -252,6 +292,39 @@ def test_stable_resume_shell_reuses_the_exact_candidate(tmp_path: Path) -> None:
     output = (tmp_path / "base-output").read_text(encoding="utf-8")
     assert "resume=true" in output
     assert f"candidate-sha={candidate_sha}" in output
+
+
+def test_stable_resume_shell_stages_new_helpers_before_detaching_old_candidate(
+    tmp_path: Path,
+) -> None:
+    """Resume an old candidate with helpers supplied only by trusted main.
+
+    Args:
+        tmp_path (Path): Temporary release-fixture directory.
+    """
+    tag = "v1.2.3"
+    repository, _remote = _release_fixture(tmp_path, tag, legacy_helpers=True)
+    candidate_sha = _publish_resume_candidate(repository, tag)
+    trusted_sha = _restore_trusted_package_helpers(repository)
+
+    base = _run_base_step(repository, tmp_path, tag)
+
+    assert base.returncode == 0, base.stderr
+    outputs = dict(
+        line.split("=", maxsplit=1)
+        for line in (tmp_path / "base-output").read_text(encoding="utf-8").splitlines()
+    )
+    assert outputs["candidate-sha"] == candidate_sha
+    assert outputs["trusted-sha"] == trusted_sha
+    assert not (repository / ".github" / "scripts" / "release_version.py").exists()
+    trusted_helpers = Path(outputs["trusted-helpers"])
+    assert {
+        "prepare_release.py",
+        "release_version.py",
+        "verify_aiopnsense_distributions.py",
+        "verify_python_distributions.py",
+        "verify_release_checks.py",
+    }.issubset({path.name for path in trusted_helpers.iterdir()})
 
 
 @pytest.mark.parametrize(
@@ -328,20 +401,14 @@ def test_prerelease_metadata_shell_uses_tag_source_and_newer_trusted_workflow(
         tmp_path (Path): Temporary release-fixture directory.
     """
     tag = "v1.2.3-beta.1"
-    repository, _remote = _release_fixture(tmp_path, tag)
+    repository, _remote = _release_fixture(tmp_path, tag, legacy_helpers=True)
     (repository / "aiopnsense" / "const.py").write_text(f'VERSION = "{tag}"\n', encoding="utf-8")
     _git(repository, "add", "aiopnsense/const.py")
     _git(repository, "commit", "-m", "Prepare prerelease")
     source_sha = _git(repository, "rev-parse", "HEAD")
     _git(repository, "tag", "-fa", tag, "-m", tag)
     _git(repository, "push", "--force", "origin", "HEAD:refs/heads/main", f"refs/tags/{tag}")
-    (repository / "trusted-workflow-marker").write_text("newer default branch\n", encoding="utf-8")
-    _git(repository, "add", "trusted-workflow-marker")
-    _git(repository, "commit", "-m", "Advance trusted default branch")
-    trusted_sha = _git(repository, "rev-parse", "HEAD")
-    _git(repository, "push", "origin", "HEAD:refs/heads/main")
-    _git(repository, "fetch", "origin", "main")
-    _git(repository, "checkout", "--detach", "origin/main")
+    trusted_sha = _restore_trusted_package_helpers(repository)
 
     base = _run_base_step(repository, tmp_path, tag, prerelease=True)
 
@@ -351,7 +418,9 @@ def test_prerelease_metadata_shell_uses_tag_source_and_newer_trusted_workflow(
     assert f"trusted-sha={trusted_sha}" in output
     assert source_sha != trusted_sha
     assert "trusted-helper=" in output
+    assert "trusted-helpers=" in output
     assert _git(repository, "rev-parse", "HEAD") == source_sha
+    assert not (repository / ".github" / "scripts" / "release_version.py").exists()
 
 
 @pytest.mark.parametrize("moved_ref", ["branch", "tag"])
@@ -437,9 +506,17 @@ def test_release_workflow_uses_published_event_and_guarded_package_promotion() -
     assert 'git show "$tag_sha:aiopnsense/const.py"' in metadata
     assert 'git show "$tag_sha:docs/source/changelog.md"' in metadata
     assert 'grep -F "## [$RELEASE_TAG]("' in metadata
-    assert 'prepare_release.py --repository "$resume_root" "$RELEASE_TAG"' in metadata
-    assert 'cp .github/scripts/verify_release_checks.py "$trusted_helper"' in metadata
+    for helper in (
+        "prepare_release.py",
+        "release_version.py",
+        "verify_aiopnsense_distributions.py",
+        "verify_python_distributions.py",
+        "verify_release_checks.py",
+    ):
+        assert helper in metadata
+    assert 'python3 "$trusted_prepare" --repository "$resume_root" "$RELEASE_TAG"' in metadata
     assert 'echo "trusted-helper=$trusted_helper"' in metadata
+    assert 'echo "trusted-helpers=$trusted_helpers"' in metadata
     assert 'git checkout --detach "$source_sha"' in metadata
 
     candidate = _normalized(_step_containing(workflow, "Stable release candidate must contain"))
@@ -447,10 +524,14 @@ def test_release_workflow_uses_published_event_and_guarded_package_promotion() -
     assert "git diff --cached --name-only" in candidate
     assert "! git diff --quiet" in candidate
 
-    build = _normalized(_step_containing(workflow, "verify_aiopnsense_distributions.py"))
+    build = _normalized(_step_containing(workflow, "Build and check distributions"))
     assert "uv build" in build
+    assert "rm -f dist/.gitignore" in build
     assert "twine check dist/*" in build
-    assert 'verify_aiopnsense_distributions.py "$RELEASE_TAG" --dist-dir dist' in build
+    assert (
+        '"$TRUSTED_HELPERS/verify_aiopnsense_distributions.py" "$RELEASE_TAG" --dist-dir dist'
+        in build
+    )
 
     cleanup = _normalized(_step_containing(workflow, "Delete validated temporary branch"))
     assert "if: github.event.release.prerelease == false && success()" in cleanup
@@ -506,6 +587,37 @@ def test_release_gate_workflows_require_and_checkout_exact_sha(workflow_name: st
     )
     verification = _normalized(_step_containing(workflow, "Verify checked out release commit"))
     assert 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' in verification
+
+
+def test_release_gate_dispatch_concurrency_isolated_by_candidate_sha() -> None:
+    """Dispatches isolate candidates while preserving pull-request and push grouping."""
+    workflow = _workflow_text("prek-autofix-review.yml")
+
+    assert (
+        "group: prek-autofix-${{ github.event.pull_request.number || "
+        "inputs.expected_sha || github.ref }}" in workflow
+    )
+    assert "cancel-in-progress: true" in workflow
+
+    def group(pull_request: str = "", expected_sha: str = "", ref: str = "") -> str:
+        """Resolve the ordered GitHub expression used by the asserted workflow text.
+
+        Args:
+            pull_request (str): Optional pull request number.
+            expected_sha (str): Optional immutable dispatched candidate SHA.
+            ref (str): Fallback branch or tag ref.
+
+        Returns:
+            str: The rendered concurrency key.
+        """
+        return "prek-autofix-" + (pull_request or expected_sha or ref)
+
+    assert group(expected_sha="a" * 40) != group(expected_sha="b" * 40)
+    assert group(expected_sha="a" * 40) == group(expected_sha="a" * 40)
+    assert (
+        group(pull_request="37", expected_sha="a" * 40, ref="refs/heads/main") == "prek-autofix-37"
+    )
+    assert group(ref="refs/heads/main") == "prek-autofix-refs/heads/main"
 
 
 @pytest.mark.parametrize(

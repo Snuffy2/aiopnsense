@@ -39,6 +39,13 @@ prerelease version and merge that change into the default branch. Then publish
 a GitHub Release with the same explicit prerelease tag, targeted at the default
 branch.
 
+Package tags use a `v`-prefixed two-, three-, or four-component ASCII numeric
+base. Supported non-stable forms include `-a.N`, `-alpha.N`, `-b.N`,
+`-beta.N`, `-rc.N`, compact `aN`/`bN`/`rcN`, development `-dev.N`, and
+postrelease `postN`. The workflow normalizes these forms once for wheel and
+source-distribution filenames and metadata while retaining the literal tag in
+`aiopnsense/const.py`.
+
 The workflow requires the source version, tag, and target to match, builds and
 verifies the distributions without changing the default branch or tag, uploads
 them to the GitHub Release, and publishes them to TestPyPI. The publish job

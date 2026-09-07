@@ -4,17 +4,31 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Iterable
+import importlib.util
 from pathlib import Path
 import re
 import sys
+from typing import Any
 
 CONST_VERSION_PATTERN = re.compile(r'^(VERSION\s*=\s*)"[^"]*"', re.MULTILINE)
-_NUMERIC_COMPONENT = r"(?:0|[1-9][0-9]*)"
-_NUMERIC_RELEASE = rf"v{_NUMERIC_COMPONENT}(?:\.{_NUMERIC_COMPONENT}){{1,3}}"
-TAG_PATTERN = re.compile(
-    rf"^{_NUMERIC_RELEASE}(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:[A-Za-z]+[0-9]+)?$"
-)
-STABLE_TAG_PATTERN = re.compile(rf"^{_NUMERIC_RELEASE}$")
+
+
+def release_version_module() -> Any:
+    """Load the adjacent tag-policy module without packaging workflow scripts.
+
+    Returns:
+        Loaded release-version policy module.
+
+    Raises:
+        ValueError: If the adjacent policy module cannot be loaded.
+    """
+    policy_path = Path(__file__).with_name("release_version.py")
+    spec = importlib.util.spec_from_file_location("release_version", policy_path)
+    if spec is None or spec.loader is None:
+        raise ValueError("Could not load the release version policy.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def validate_release_tag(tag: str) -> None:
@@ -26,9 +40,12 @@ def validate_release_tag(tag: str) -> None:
     Raises:
         ValueError: If the tag does not use a supported version format.
     """
-    if TAG_PATTERN.fullmatch(tag) is None:
+    policy = release_version_module()
+    try:
+        policy.normalized_version(tag)
+    except policy.ReleaseTagError as error:
         msg = f"Invalid release tag: {tag}"
-        raise ValueError(msg)
+        raise ValueError(msg) from error
 
 
 def validate_release_request(tag: str, prerelease: bool) -> None:
@@ -41,8 +58,12 @@ def validate_release_request(tag: str, prerelease: bool) -> None:
     Raises:
         ValueError: If the tag format and prerelease selection disagree.
     """
-    validate_release_tag(tag)
-    tag_is_prerelease = STABLE_TAG_PATTERN.fullmatch(tag) is None
+    policy = release_version_module()
+    try:
+        tag_is_prerelease = policy.is_prerelease_tag(tag)
+    except policy.ReleaseTagError as error:
+        msg = f"Invalid release tag: {tag}"
+        raise ValueError(msg) from error
     if tag_is_prerelease != prerelease:
         tag_kind = "Prerelease" if tag_is_prerelease else "Stable"
         required_value = str(tag_is_prerelease).lower()
@@ -67,12 +88,17 @@ def next_stable_release_tag(tags: Iterable[str], bump_type: str) -> str:
         msg = f"Unsupported bump type: {bump_type}"
         raise ValueError(msg)
 
-    versions = [
-        tuple(int(component) for component in tag.removeprefix("v").split("."))
-        + (0,) * (4 - len(tag.removeprefix("v").split(".")))
-        for tag in tags
-        if STABLE_TAG_PATTERN.fullmatch(tag) is not None
-    ]
+    policy = release_version_module()
+    versions = []
+    for tag in tags:
+        try:
+            if policy.is_prerelease_tag(tag):
+                continue
+            version = policy.normalized_version(tag)
+        except policy.ReleaseTagError:
+            continue
+        parts = tuple(int(component) for component in version.split("."))
+        versions.append(parts + (0,) * (4 - len(parts)))
     if not versions:
         msg = "No stable released tag found."
         raise ValueError(msg)

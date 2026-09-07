@@ -17,7 +17,15 @@ SCRIPT_SPEC.loader.exec_module(prepare_release)
 
 @pytest.mark.parametrize(
     "tag",
-    ["v1.1", "v1.1.8", "v1.2.0-beta.1", "v1.1.7.1", "v1.2.0b1"],
+    [
+        "v1.1",
+        "v1.1.8",
+        "v1.2.0-beta.1",
+        "v1.1.7.1",
+        "v1.2.0b1",
+        "v1.2.0-dev.1",
+        "v1.2.0post1",
+    ],
 )
 def test_validate_release_tag_accepts_supported_formats(tag: str) -> None:
     """Accept version formats already used by the release workflow.
@@ -30,7 +38,16 @@ def test_validate_release_tag_accepts_supported_formats(tag: str) -> None:
 
 @pytest.mark.parametrize(
     "tag",
-    ["", "1.1.8", "v1", "v01.2", "v01.2-beta.1", "v1.1.8 beta", "v1.1.8;echo-bad"],
+    [
+        "",
+        "1.1.8",
+        "v1",
+        "v01.2",
+        "v01.2-beta.1",
+        "v1.1.8 beta",
+        "v1.1.8;echo-bad",
+        "v1.1.8-foo.1",
+    ],
 )
 def test_validate_release_tag_rejects_unsupported_formats(tag: str) -> None:
     """Reject malformed tags before they reach Git or GitHub commands.
@@ -82,6 +99,8 @@ def test_validate_release_request_rejects_leading_zero_versions(tag: str, prerel
         ("v1.1.7.1", False),
         ("v1.2.0-beta.1", True),
         ("v1.2.0b1", True),
+        ("v1.2.0-dev.1", True),
+        ("v1.2.0post1", True),
     ],
 )
 def test_validate_release_request_accepts_matching_classification(

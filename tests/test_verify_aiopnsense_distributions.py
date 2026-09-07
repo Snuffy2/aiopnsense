@@ -115,6 +115,8 @@ def write_distributions(
         ("v1.2.3.4", "1.2.3.4"),
         ("v1.2.3-beta.4", "1.2.3b4"),
         ("v1.2.3rc4", "1.2.3rc4"),
+        ("v1.2.3-dev.1", "1.2.3.dev1"),
+        ("v1.2.3post1", "1.2.3.post1"),
     ],
 )
 def test_verify_aiopnsense_distributions_accepts_supported_tags(
@@ -181,6 +183,7 @@ def test_verify_aiopnsense_distributions_rejects_missing_const_version(
         "v1.2.3.04-beta.1",
         "v1",
         "v1.2.3.4.5",
+        "v1.2.3-foo.1",
     ],
 )
 def test_normalized_version_rejects_invalid_component_shapes(tag: str) -> None:

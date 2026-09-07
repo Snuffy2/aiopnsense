@@ -61,7 +61,18 @@ jobs:
             echo "Default branch moved before trusted helper execution." >&2
             exit 1
           fi
-          python3 .github/scripts/prepare_release.py --check-only \
+          trusted_helpers="${RUNNER_TEMP}/trusted-release-helpers"
+          mkdir -p "$trusted_helpers"
+          cp \
+            .github/scripts/prepare_release.py \
+            .github/scripts/release_version.py \
+            .github/scripts/verify_aiopnsense_distributions.py \
+            .github/scripts/verify_python_distributions.py \
+            .github/scripts/verify_release_checks.py \
+            "$trusted_helpers/"
+          trusted_prepare="$trusted_helpers/prepare_release.py"
+          trusted_helper="$trusted_helpers/verify_release_checks.py"
+          python3 "$trusted_prepare" --check-only \
             --expected-prerelease "$IS_PRERELEASE" "$RELEASE_TAG"
           tag_sha="$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
           tag_oid="$(git rev-parse "refs/tags/$RELEASE_TAG")"
@@ -92,7 +103,7 @@ jobs:
             resume_root="${RUNNER_TEMP}/release-parent"
             mkdir -p "${resume_root}/aiopnsense"
             git show "$tag_sha^:aiopnsense/const.py" > "${resume_root}/aiopnsense/const.py"
-            python3 .github/scripts/prepare_release.py --repository "$resume_root" "$RELEASE_TAG"
+            python3 "$trusted_prepare" --repository "$resume_root" "$RELEASE_TAG"
             git show "$tag_sha:aiopnsense/const.py" > "${RUNNER_TEMP}/release-candidate-const.py"
             cmp --silent "${resume_root}/aiopnsense/const.py" \
               "${RUNNER_TEMP}/release-candidate-const.py"
@@ -109,10 +120,9 @@ jobs:
             echo "target-sha=$target_sha"
             echo "trusted-sha=$trusted_sha"
             echo "tag-oid=$tag_oid"
+            echo "trusted-helper=$trusted_helper"
+            echo "trusted-helpers=$trusted_helpers"
           } >> "$GITHUB_OUTPUT"
-          trusted_helper="${RUNNER_TEMP}/verify_release_checks.py"
-          cp .github/scripts/verify_release_checks.py "$trusted_helper"
-          echo "trusted-helper=$trusted_helper" >> "$GITHUB_OUTPUT"
           git checkout --detach "$source_sha"
 
       - name: Require prerelease source version
@@ -145,6 +155,7 @@ jobs:
           RESUME: ${{ steps.base.outputs.resume }}
           RESUME_SHA: ${{ steps.base.outputs.candidate-sha }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          TRUSTED_HELPERS: ${{ steps.base.outputs.trusted-helpers }}
         run: |
           set -euo pipefail
           if [[ "$RESUME" == true ]]; then
@@ -156,7 +167,7 @@ jobs:
             echo "Changelog generation changed unexpected paths." >&2
             exit 1
           fi
-          python3 .github/scripts/prepare_release.py "$RELEASE_TAG"
+          python3 "$TRUSTED_HELPERS/prepare_release.py" "$RELEASE_TAG"
           git add aiopnsense/const.py docs/source/changelog.md
           git diff --cached --check
           expected_changes=$'aiopnsense/const.py\ndocs/source/changelog.md'
@@ -176,11 +187,15 @@ jobs:
           python-version: "3.14"
 
       - name: Build and check distributions
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          TRUSTED_HELPERS: ${{ steps.base.outputs.trusted-helpers }}
         run: |
           set -euo pipefail
           uv build
+          rm -f dist/.gitignore
           uvx --from twine twine check dist/*
-          python3 .github/scripts/verify_aiopnsense_distributions.py "$RELEASE_TAG" --dist-dir dist
+          python3 "$TRUSTED_HELPERS/verify_aiopnsense_distributions.py" "$RELEASE_TAG" --dist-dir dist
 
       - name: Store distributions for trusted publishing
         uses: actions/upload-artifact@v7
@@ -251,6 +266,7 @@ jobs:
           RELEASE_TARGET: ${{ steps.release.outputs.target }}
           SOURCE_SHA: ${{ steps.base.outputs.source-sha }}
           STABLE_SHA: ${{ steps.candidate.outputs.sha }}
+          TRUSTED_HELPERS: ${{ steps.base.outputs.trusted-helpers }}
         run: |
           set -euo pipefail
           expected_sha="$STABLE_SHA"
@@ -265,7 +281,7 @@ jobs:
             "$expected_sha" "refs/remotes/origin/$RELEASE_TARGET"
           grep -Fx "VERSION = \"$RELEASE_TAG\"" aiopnsense/const.py >/dev/null
           if [[ "$IS_PRERELEASE" == false ]]; then
-            python3 .github/scripts/prepare_release.py "$RELEASE_TAG"
+            python3 "$TRUSTED_HELPERS/prepare_release.py" "$RELEASE_TAG"
             git diff --quiet -- aiopnsense/const.py
           fi
 

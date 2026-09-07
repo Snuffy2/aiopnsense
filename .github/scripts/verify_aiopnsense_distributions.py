@@ -11,8 +11,6 @@ from typing import Any
 import zipfile
 
 PROJECT_NAME = "aiopnsense"
-_NUMERIC_COMPONENT = r"(?:0|[1-9][0-9]*)"
-_STABLE_VERSION = rf"{_NUMERIC_COMPONENT}(?:\.{_NUMERIC_COMPONENT}){{1,3}}"
 VERSION_PATTERN = re.compile(r'^VERSION = "([^"]+)"$', re.MULTILINE)
 
 
@@ -38,6 +36,24 @@ def shared_core() -> Any:
     return module
 
 
+def release_version_module() -> Any:
+    """Load the adjacent tag-policy module without packaging workflow scripts.
+
+    Returns:
+        Loaded release-version policy module.
+
+    Raises:
+        AiopnsenseDistributionError: If the release version policy cannot be loaded.
+    """
+    policy_path = Path(__file__).with_name("release_version.py")
+    spec = importlib.util.spec_from_file_location("release_version", policy_path)
+    if spec is None or spec.loader is None:
+        raise AiopnsenseDistributionError("Could not load the release version policy.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def normalized_version(release_tag: str) -> str:
     """Normalize one allowed aiopnsense release tag to PEP 440.
 
@@ -50,17 +66,11 @@ def normalized_version(release_tag: str) -> str:
     Raises:
         AiopnsenseDistributionError: If the tag is outside the supported grammar.
     """
-    if re.fullmatch(rf"v{_STABLE_VERSION}", release_tag):
-        return release_tag.removeprefix("v")
-    match = re.fullmatch(rf"v({_STABLE_VERSION})-(a|alpha|b|beta|rc)\.([0-9]+)", release_tag)
-    if match is not None:
-        release, label, serial = match.groups()
-        abbreviation = {"a": "a", "alpha": "a", "b": "b", "beta": "b", "rc": "rc"}[label]
-        return f"{release}{abbreviation}{serial}"
-    match = re.fullmatch(rf"v({_STABLE_VERSION})(a|b|rc)([0-9]+)", release_tag)
-    if match is not None:
-        return "".join(match.groups())
-    raise AiopnsenseDistributionError(f"Unsupported package release tag: {release_tag!r}.")
+    policy = release_version_module()
+    try:
+        return policy.normalized_version(release_tag)
+    except policy.ReleaseTagError as error:
+        raise AiopnsenseDistributionError(str(error)) from error
 
 
 def _require_literal_version(contents: bytes, release_tag: str, source: str) -> None:
