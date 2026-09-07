@@ -73,16 +73,20 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
-          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$WORKFLOW_SHA" = "$EXPECTED_SHA"
 
       - name: Checkout Repository
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.expected_sha || github.sha }}
           persist-credentials: false
+
+      - name: Verify checked out release commit
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Setup uv (with caching)
         uses: astral-sh/setup-uv@v10.0.1

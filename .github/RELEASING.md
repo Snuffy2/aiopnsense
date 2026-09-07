@@ -43,7 +43,10 @@ The workflow requires the source version, tag, and target to match, builds and
 verifies the distributions without changing the default branch or tag, uploads
 them to the GitHub Release, and publishes them to TestPyPI. The publish job
 receives only the verified artifact and its OIDC identity; it does not check out
-or execute release source code.
+or execute release source code. Before upload, it dispatches the same four
+existing release gates against the tagged source SHA. Their workflow definition
+and verification helper come from the trusted current default branch, so an
+older prerelease tag cannot supply release-validation code.
 
 ## Failure handling and safe retries
 

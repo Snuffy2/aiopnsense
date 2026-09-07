@@ -110,6 +110,9 @@ jobs:
             echo "trusted-sha=$trusted_sha"
             echo "tag-oid=$tag_oid"
           } >> "$GITHUB_OUTPUT"
+          trusted_helper="${RUNNER_TEMP}/verify_release_checks.py"
+          cp .github/scripts/verify_release_checks.py "$trusted_helper"
+          echo "trusted-helper=$trusted_helper" >> "$GITHUB_OUTPUT"
           git checkout --detach "$source_sha"
 
       - name: Require prerelease source version
@@ -201,15 +204,15 @@ jobs:
           echo "name=$temp_ref" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch and verify immutable release gates
-        if: github.event.release.prerelease == false
         env:
-          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+          CANDIDATE_SHA: ${{ github.event.release.prerelease == true && steps.base.outputs.source-sha || steps.candidate.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
           TRUSTED_REF: ${{ steps.release.outputs.target }}
+          TRUSTED_HELPER: ${{ steps.base.outputs.trusted-helper }}
           TRUSTED_SHA: ${{ steps.base.outputs.trusted-sha }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/verify_release_checks.py \
+          python3 "$TRUSTED_HELPER" \
             --repository "$GITHUB_REPOSITORY" --workflow-ref "$TRUSTED_REF" \
             --workflow-sha "$TRUSTED_SHA" --sha "$CANDIDATE_SHA" \
             --required-check 'pytest_check.yml::pytest check and post coverage' \

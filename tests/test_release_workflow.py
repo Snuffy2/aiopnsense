@@ -80,6 +80,7 @@ def _release_fixture(tmp_path: Path, tag: str) -> tuple[Path, Path]:
     helper = repository / ".github" / "scripts"
     helper.mkdir(parents=True)
     shutil.copy2(SCRIPT_ROOT / "prepare_release.py", helper / "prepare_release.py")
+    shutil.copy2(SCRIPT_ROOT / "verify_release_checks.py", helper / "verify_release_checks.py")
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Initial release source")
     _git(repository, "remote", "add", "origin", str(remote))
@@ -89,13 +90,16 @@ def _release_fixture(tmp_path: Path, tag: str) -> tuple[Path, Path]:
     return repository, remote
 
 
-def _run_base_step(repository: Path, tmp_path: Path, tag: str) -> subprocess.CompletedProcess[str]:
+def _run_base_step(
+    repository: Path, tmp_path: Path, tag: str, *, prerelease: bool = False
+) -> subprocess.CompletedProcess[str]:
     """Run release metadata validation for a stable tag fixture.
 
     Args:
         repository (Path): Fixture repository root.
         tmp_path (Path): Temporary pytest directory.
-        tag (str): Stable release tag under validation.
+        tag (str): Release tag under validation.
+        prerelease (bool): Whether the fixture models a prerelease.
 
     Returns:
         subprocess.CompletedProcess[str]: Completed metadata-validation shell process.
@@ -106,7 +110,7 @@ def _run_base_step(repository: Path, tmp_path: Path, tag: str) -> subprocess.Com
         _step_containing(_workflow_text("release.yml"), "trusted_sha=").split("run: |", 1)[-1],
         {
             "GITHUB_OUTPUT": str(output),
-            "IS_PRERELEASE": "false",
+            "IS_PRERELEASE": str(prerelease).lower(),
             "RELEASE_TAG": tag,
             "RELEASE_TARGET": "main",
             "RUNNER_TEMP": str(tmp_path),
@@ -315,6 +319,41 @@ def test_stable_resume_shell_rejects_merge_candidate(tmp_path: Path) -> None:
     assert "invalid release contents" in base.stderr
 
 
+def test_prerelease_metadata_shell_uses_tag_source_and_newer_trusted_workflow(
+    tmp_path: Path,
+) -> None:
+    """Keep prerelease validation code at trusted main while testing the tagged source.
+
+    Args:
+        tmp_path (Path): Temporary release-fixture directory.
+    """
+    tag = "v1.2.3-beta.1"
+    repository, _remote = _release_fixture(tmp_path, tag)
+    (repository / "aiopnsense" / "const.py").write_text(f'VERSION = "{tag}"\n', encoding="utf-8")
+    _git(repository, "add", "aiopnsense/const.py")
+    _git(repository, "commit", "-m", "Prepare prerelease")
+    source_sha = _git(repository, "rev-parse", "HEAD")
+    _git(repository, "tag", "-fa", tag, "-m", tag)
+    _git(repository, "push", "--force", "origin", "HEAD:refs/heads/main", f"refs/tags/{tag}")
+    (repository / "trusted-workflow-marker").write_text("newer default branch\n", encoding="utf-8")
+    _git(repository, "add", "trusted-workflow-marker")
+    _git(repository, "commit", "-m", "Advance trusted default branch")
+    trusted_sha = _git(repository, "rev-parse", "HEAD")
+    _git(repository, "push", "origin", "HEAD:refs/heads/main")
+    _git(repository, "fetch", "origin", "main")
+    _git(repository, "checkout", "--detach", "origin/main")
+
+    base = _run_base_step(repository, tmp_path, tag, prerelease=True)
+
+    assert base.returncode == 0, base.stderr
+    output = (tmp_path / "base-output").read_text(encoding="utf-8")
+    assert f"source-sha={source_sha}" in output
+    assert f"trusted-sha={trusted_sha}" in output
+    assert source_sha != trusted_sha
+    assert "trusted-helper=" in output
+    assert _git(repository, "rev-parse", "HEAD") == source_sha
+
+
 @pytest.mark.parametrize("moved_ref", ["branch", "tag"])
 def test_promotion_shell_refuses_moved_branch_or_tag_lease(tmp_path: Path, moved_ref: str) -> None:
     """Reject promotion before GitHub authentication when either protected ref moved.
@@ -367,7 +406,7 @@ def test_release_workflow_uses_published_event_and_guarded_package_promotion() -
 
     assert re.search(r"(?ms)^on:\s+release:\s+types:\s*\[published\]", workflow)
     assert re.search(r"(?m)^      statuses:\s*write\s*$", workflow)
-    dispatch = _step_containing(workflow, "verify_release_checks.py")
+    dispatch = _step_containing(workflow, 'python3 "$TRUSTED_HELPER"')
     required_checks = set(re.findall(r"--required-check\s+['\"]([^'\"]+)", dispatch))
     assert required_checks == {
         "pytest_check.yml::pytest check and post coverage",
@@ -377,6 +416,17 @@ def test_release_workflow_uses_published_event_and_guarded_package_promotion() -
     }
     assert '--workflow-ref "$TRUSTED_REF"' in dispatch
     assert '--workflow-sha "$TRUSTED_SHA"' in dispatch
+    assert (
+        "CANDIDATE_SHA: ${{ github.event.release.prerelease == true && steps.base.outputs.source-sha || steps.candidate.outputs.sha }}"
+        in dispatch
+    )
+    assert 'python3 "$TRUSTED_HELPER"' in dispatch
+    assert "if: github.event.release.prerelease == false" not in dispatch
+
+    validation_branch = _step_containing(
+        workflow, "Publish candidate to an isolated validation branch"
+    )
+    assert "if: github.event.release.prerelease == false" in validation_branch
 
     promotion = _normalized(_step_containing(workflow, "git push --atomic"))
     assert '--force-with-lease="refs/heads/$RELEASE_TARGET:$TARGET_SHA"' in promotion
@@ -388,6 +438,8 @@ def test_release_workflow_uses_published_event_and_guarded_package_promotion() -
     assert 'git show "$tag_sha:docs/source/changelog.md"' in metadata
     assert 'grep -F "## [$RELEASE_TAG]("' in metadata
     assert 'prepare_release.py --repository "$resume_root" "$RELEASE_TAG"' in metadata
+    assert 'cp .github/scripts/verify_release_checks.py "$trusted_helper"' in metadata
+    assert 'echo "trusted-helper=$trusted_helper"' in metadata
     assert 'git checkout --detach "$source_sha"' in metadata
 
     candidate = _normalized(_step_containing(workflow, "Stable release candidate must contain"))
@@ -439,9 +491,9 @@ def test_release_gate_workflows_require_and_checkout_exact_sha(workflow_name: st
         r"^        required:\s*true\s+^        type:\s*string\s*$",
         workflow,
     )
-    guard = _normalized(_step_containing(workflow, "WORKFLOW_SHA:"))
+    guard = _normalized(_step_containing(workflow, "Require expected release commit"))
     assert '[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]' in guard
-    assert 'test "$WORKFLOW_SHA" = "$EXPECTED_SHA"' in guard
+    assert "WORKFLOW_SHA" not in guard
     checkouts = [
         _normalized(step)
         for step in re.split(r"(?m)(?=^      - )", workflow)
@@ -452,3 +504,60 @@ def test_release_gate_workflows_require_and_checkout_exact_sha(workflow_name: st
         and "persist-credentials: false" in checkout
         for checkout in checkouts
     )
+    verification = _normalized(_step_containing(workflow, "Verify checked out release commit"))
+    assert 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' in verification
+
+
+@pytest.mark.parametrize(
+    "workflow_name",
+    ["pytest_check.yml", "docs.yml", "uv-lock-check.yml", "prek-autofix-review.yml"],
+)
+def test_release_gate_shells_accept_trusted_controller_and_verify_candidate_checkout(
+    tmp_path: Path, workflow_name: str
+) -> None:
+    """Allow a trusted controller SHA while requiring the checked-out candidate SHA.
+
+    Args:
+        tmp_path (Path): Temporary repository used to execute the workflow shell guards.
+        workflow_name (str): Existing release-gate workflow under test.
+    """
+    repository = tmp_path / "repository"
+    _git(tmp_path, "init", "-b", "main", str(repository))
+    _git(repository, "config", "user.name", "Release Test")
+    _git(repository, "config", "user.email", "release-test@example.invalid")
+    (repository / "candidate.txt").write_text("candidate\n", encoding="utf-8")
+    _git(repository, "add", "candidate.txt")
+    _git(repository, "commit", "-m", "Candidate")
+    candidate_sha = _git(repository, "rev-parse", "HEAD")
+    (repository / "controller.txt").write_text("trusted controller\n", encoding="utf-8")
+    _git(repository, "add", "controller.txt")
+    _git(repository, "commit", "-m", "Trusted controller")
+    controller_sha = _git(repository, "rev-parse", "HEAD")
+    assert controller_sha != candidate_sha
+
+    workflow = _workflow_text(workflow_name)
+    guard = _step_containing(workflow, "Require expected release commit").split("run: |", 1)[-1]
+    guard_result = _run_workflow_shell(
+        repository,
+        guard,
+        {"EXPECTED_SHA": candidate_sha, "WORKFLOW_SHA": controller_sha},
+    )
+    assert guard_result.returncode == 0, guard_result.stderr
+
+    malformed_result = _run_workflow_shell(
+        repository,
+        guard,
+        {"EXPECTED_SHA": "not-a-git-object", "WORKFLOW_SHA": controller_sha},
+    )
+    assert malformed_result.returncode != 0
+
+    _git(repository, "checkout", "--detach", candidate_sha)
+    verification = _step_containing(workflow, "Verify checked out release commit").split(
+        "run: ", 1
+    )[-1]
+    verified = _run_workflow_shell(repository, verification, {"EXPECTED_SHA": candidate_sha})
+    assert verified.returncode == 0, verified.stderr
+
+    _git(repository, "checkout", "--detach", controller_sha)
+    wrong_head = _run_workflow_shell(repository, verification, {"EXPECTED_SHA": candidate_sha})
+    assert wrong_head.returncode != 0
