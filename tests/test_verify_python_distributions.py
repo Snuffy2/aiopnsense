@@ -328,11 +328,20 @@ def test_verify_python_distributions_rejects_missing_sdist_metadata(tmp_path: Pa
         verify_pair(dist_dir)
 
 
-def test_verify_python_distributions_bounds_all_sdist_headers(tmp_path: Path) -> None:
-    """Reject an sdist with too many directory headers before metadata extraction.
+@pytest.mark.parametrize(
+    ("header_count", "accepted"),
+    [(verify.MAX_ARCHIVE_MEMBERS, True), (verify.MAX_ARCHIVE_MEMBERS + 1, False)],
+    ids=["at-limit", "over-limit"],
+)
+def test_verify_python_distributions_bounds_all_sdist_headers(
+    tmp_path: Path, header_count: int, accepted: bool
+) -> None:
+    """Accept exactly the header limit and reject one additional directory header.
 
     Args:
         tmp_path (Path): Temporary fixture root.
+        header_count (int): Total source-distribution headers to create.
+        accepted (bool): Whether the public verifier should accept this header count.
     """
     dist_dir = tmp_path / "dist"
     write_distributions(dist_dir)
@@ -344,13 +353,16 @@ def test_verify_python_distributions_bounds_all_sdist_headers(tmp_path: Path) ->
         package_info = tarfile.TarInfo(f"{root}/PKG-INFO")
         package_info.size = len(metadata_contents)
         archive.addfile(package_info, BytesIO(metadata_contents))
-        for index in range(verify.MAX_ARCHIVE_MEMBERS):
+        for index in range(header_count - 1):
             directory = tarfile.TarInfo(f"{root}/directory-{index}")
             directory.type = tarfile.DIRTYPE
             archive.addfile(directory)
 
-    with pytest.raises(verify.DistributionVerificationError, match="too many members"):
+    if accepted:
         verify_pair(dist_dir)
+    else:
+        with pytest.raises(verify.DistributionVerificationError, match="too many members"):
+            verify_pair(dist_dir)
 
 
 def test_verify_python_distributions_rejects_unsafe_sdist_member_type(tmp_path: Path) -> None:
