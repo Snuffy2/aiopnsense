@@ -82,6 +82,14 @@ async def test_manage_service_and_restart_if_running(
             == "/api/core/service/restart/openvpn/vpn%20instance"
         )
 
+        # Instance service switches pass the composite identifier returned by
+        # OPNsense and require the separator to remain part of the API route.
+        assert await client.stop_service("openvpn/INSTANCE_ID") is True
+        assert (
+            client._safe_dict_post.await_args.args[0]
+            == "/api/core/service/stop/openvpn/INSTANCE_ID"
+        )
+
         # restart_service_if_running uses _get_service_running_state; test branch behavior
         restart_service_mock = AsyncMock(return_value=True)
         monkeypatch.setattr(client, "restart_service", restart_service_mock, raising=False)
