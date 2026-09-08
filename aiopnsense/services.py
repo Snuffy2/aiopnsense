@@ -84,17 +84,7 @@ class ServicesMixin(AiopnsenseClientProtocol):
         if services is None or not isinstance(services, list):
             return None
         for svc in services:
-            service_name = svc.get("name")
-            service_id = svc.get("id")
-            if (
-                service_name == service
-                or service_id == service
-                or (
-                    isinstance(service_name, str)
-                    and isinstance(service_id, str)
-                    and service == f"{service_name}/{service_id}"
-                )
-            ):
+            if svc.get("name") == service or svc.get("id") == service:
                 return bool(svc.get("status", False))
         return None
 

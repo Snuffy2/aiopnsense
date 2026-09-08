@@ -121,12 +121,12 @@ async def test_restart_service_if_running_matches_composite_service_identifier(
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(
-            return_value={"rows": [{"name": "openvpn", "id": "INSTANCE_ID", "running": 1}]}
+            return_value={"rows": [{"name": "openvpn", "id": "openvpn/INSTANCE_ID", "running": 1}]}
         )
         client._safe_dict_post = AsyncMock(return_value={"result": "ok"})
 
         assert await client._get_service_running_state("openvpn") is True
-        assert await client._get_service_running_state("INSTANCE_ID") is True
+        assert await client._get_service_running_state("openvpn/INSTANCE_ID") is True
         assert await client.restart_service_if_running("openvpn/INSTANCE_ID") is True
         client._safe_dict_post.assert_awaited_once_with(
             "/api/core/service/restart/openvpn/INSTANCE_ID"
