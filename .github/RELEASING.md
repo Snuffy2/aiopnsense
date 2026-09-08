@@ -1,86 +1,70 @@
 # Releasing aiopnsense
 
+Release Please owns stable version selection, changelog updates, release tags,
+and GitHub Releases. Publishing a GitHub Release starts a separate workflow that
+builds and publishes the Python distributions.
+
+## One-time repository setup
+
+Configure a fine-grained personal access token as the
+`RELEASE_PLEASE_TOKEN` Actions secret. Limit the token to this repository and
+grant it these repository permissions:
+
+- Contents: read and write
+- Issues: read and write
+- Pull requests: read and write
+
+The separate credential allows pull requests and releases created by Release
+Please to trigger the repository's normal workflows. Keep the release pull
+request on the normal protected-branch path; do not grant it a branch-ruleset
+bypass. If a tag ruleset blocks Release Please from creating `v*` tags, add the
+token's actor only to that tag ruleset's bypass list.
+
+Update the Trusted Publisher for `aiopnsense` on both PyPI and TestPyPI to use
+the `publish-pypi.yml` workflow filename. Retain the `pypi` environment on PyPI
+and the `testpypi` environment on TestPyPI. Remove the old `release.yml`
+publisher registrations after the replacements are active.
+
 ## Stable releases
 
-1. Merge the release-ready changes into the default branch.
-2. Create and publish a GitHub Release targeted at that default branch, using an
-   unused numeric, `v`-prefixed tag. The tag and target branch must initially
-   resolve to the same commit. Publishing the release starts the **Release**
-   workflow.
-3. The workflow validates the tag and target, generates
-   `docs/source/changelog.md`, creates a deterministic version-and-changelog
-   commit, and builds and checks the source and wheel distributions.
-4. The candidate is pushed to a temporary validation branch. The workflow
-   dispatches these gates for that exact commit SHA and waits up to 30 minutes
-   for their exact named jobs to pass:
+1. Merge release-ready changes into `main`.
+2. Release Please creates or updates one release pull request. It updates
+   `aiopnsense/const.py`, `.release-please-manifest.json`, and
+   `docs/source/changelog.md`.
+3. Review the generated version and changelog and let the normal required
+   checks pass.
+4. Merge the release pull request.
+5. Release Please creates the matching `v`-prefixed tag and GitHub Release.
+6. The **Publish Python Distribution** workflow builds and checks the source
+   and wheel distributions, verifies that the tag, package version, and
+   default-branch source agree, uploads them to the GitHub Release, and
+   publishes them to PyPI through trusted publishing.
 
-   - `pytest check and post coverage`
-   - `build-docs`
-   - `Validate uv lock consistency`
-   - `review`
-
-5. After every gate passes, the workflow advances the default branch and
-   annotated release tag together with leases, verifies their identity, uploads
-   the distributions to the published GitHub Release, and publishes them to
-   PyPI. The PyPI description includes the generated changelog.
-
-The gates receive the candidate as an `expected_sha` input. The release
-workflow verifies each workflow run ID, branch, SHA, GitHub Actions check suite,
-and required job outcome before publishing matching commit-status attestations
-for the protected-branch ruleset and promoting the candidate. No personal
-access token is needed.
+Release Please derives version bumps and changelog entries from Conventional
+Commit subjects. Use `fix:` for a patch, `feat:` for a minor release, and a
+breaking-change marker for a major release. With squash merging, the pull
+request title becomes the relevant commit subject. To force an occasional
+version, include a `Release-As: X.Y.Z` footer in the squash commit message.
 
 ## Prereleases
 
-Before publishing a prerelease, update `aiopnsense/const.py` to the intended
-prerelease version and merge that change into the default branch. Then publish
-a GitHub Release with the same explicit prerelease tag, targeted at the default
-branch.
+The Release Please configuration is intended for stable releases. A manually
+published prerelease still starts **Publish Python Distribution**, which builds
+from the published tag, uploads the distributions to that GitHub Release, and
+publishes them to TestPyPI. Ensure `aiopnsense/const.py` already contains the
+matching prerelease version before creating the tag.
 
-The workflow requires the source version, tag, and target to match, builds and
-checks the distributions without changing the default branch or tag, uploads
-them to the GitHub Release, and publishes them to TestPyPI.
+## Failure handling
 
-## Failure handling and safe retries
+If Release Please cannot create or update its pull request, verify that the
+`RELEASE_PLEASE_TOKEN` secret exists, has not expired, is authorized for this
+repository, and has the documented contents, issues, and pull-request
+permissions. Then rerun the failed workflow.
 
-A stable release stops before promotion when validation fails, a required check
-does not complete before the timeout, or the default branch changes after the
-candidate was selected. A failed stable run intentionally retains its temporary
-validation branch for diagnosis. Before deleting one, verify its exact name and
-candidate:
-
-```sh
-git fetch origin refs/heads/<temporary-ref>
-git show -s --format='%H%n%s%n%P' FETCH_HEAD
-git push origin --delete <temporary-ref>
-```
-
-The promotion uses an atomic push with leases. If it fails, inspect both remote
-refs before retrying instead of assuming neither changed:
-
-```sh
-git fetch --tags origin
-git log -1 --decorate origin/main
-git show --no-patch --decorate <tag>
-git show <tag>:aiopnsense/const.py
-git show <tag>:docs/source/changelog.md
-```
-
-- If the tag no longer identifies the validated release commit, or that commit
-  is no longer in the default branch's history, stop and resolve that state
-  before creating another release.
-- If validation failed, fix the cause and publish a new release. Do not push the
-  temporary candidate directly to bypass the required gates.
-- If the tag identifies the matching single-parent `Release <tag>` commit and
-  that commit remains in the default branch's history, rerunning the failed
-  workflow resumes from the tag without creating another commit. Later commits
-  on the default branch do not prevent this recovery.
-- If only the package or asset publication failed, rerun the failed workflow
-  job when GitHub permits it. Do not create a second release or force-move the
-  tag manually.
-
-For manual inspection or recovery, build from the existing tag in a clean
-checkout and verify the distributions before uploading or publishing them:
+If release asset or package publication fails, rerun the failed workflow job.
+The asset upload is idempotent and replaces matching files. Before any manual
+recovery, inspect the published tag and release and build from that exact tag in
+a clean checkout:
 
 ```sh
 git switch --detach <tag>
