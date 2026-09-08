@@ -59,29 +59,14 @@ def test_normalized_version_canonicalizes_accepted_ascii_serials(
         "v1.2b١",
         "v1.2-dev.١",
         "v1.2-post.١",
-    ],
-)
-def test_normalized_version_rejects_unicode_suffix_serials(release_tag: str) -> None:
-    """Unicode digits do not reach accepted serial canonicalization.
-
-    Args:
-        release_tag (str): Tag containing a non-ASCII suffix serial.
-    """
-    with pytest.raises(policy.ReleaseTagError, match="Unsupported package release tag"):
-        policy.normalized_version(release_tag)
-
-
-@pytest.mark.parametrize(
-    "release_tag",
-    [
         "v01.2",
         "v1",
         "v1.2.3.4.5",
         "v1.2.3-foo.1",
     ],
 )
-def test_normalized_version_rejects_invalid_component_shapes(release_tag: str) -> None:
-    """Reject leading-zero, unsupported-length, and unknown-suffix tags.
+def test_normalized_version_rejects_unsupported_tags(release_tag: str) -> None:
+    """Reject Unicode serials, leading zeroes, invalid lengths, and unknown suffixes.
 
     Args:
         release_tag (str): Tag outside the supported release grammar.
