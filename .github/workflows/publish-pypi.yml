@@ -1,0 +1,75 @@
+name: Publish Python Distribution
+
+run-name: Publish ${{ github.event.release.tag_name }}
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the released revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.14"
+
+      - name: Build and check distributions
+        run: |
+          set -euo pipefail
+          uv build
+          uvx --from twine twine check dist/*
+
+      - name: Store distributions for trusted publishing
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
+
+      - name: Upload distributions to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: ${{ github.event.release.prerelease && 'testpypi' || 'pypi' }}
+      url: ${{ github.event.release.prerelease && 'https://test.pypi.org/project/aiopnsense/' || 'https://pypi.org/project/aiopnsense/' }}
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-distributions
+          path: dist/
+
+      - name: Publish prerelease to TestPyPI
+        if: github.event.release.prerelease
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+      - name: Publish stable release to PyPI
+        if: github.event.release.prerelease == false
+        uses: pypa/gh-action-pypi-publish@release/v1
