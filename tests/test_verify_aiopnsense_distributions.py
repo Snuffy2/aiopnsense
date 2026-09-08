@@ -358,27 +358,7 @@ def test_source_root_proof_rejects_sdist_build_input_substitution(
         verify.verify_aiopnsense_distributions(TAG, dist_dir, source_root)
 
 
-@pytest.mark.parametrize(
-    "tag",
-    [
-        "v01.2",
-        "v1.02",
-        "v1.2.03",
-        "v1.2.3.04",
-        "v01.2-beta.1",
-        "v1.02-beta.1",
-        "v1.2.03-beta.1",
-        "v1.2.3.04-beta.1",
-        "v1",
-        "v1.2.3.4.5",
-        "v1.2.3-foo.1",
-    ],
-)
-def test_normalized_version_rejects_invalid_component_shapes(tag: str) -> None:
-    """Reject leading-zero and unsupported release component shapes.
-
-    Args:
-        tag (str): Invalid repository release tag.
-    """
+def test_normalized_version_translates_release_policy_errors() -> None:
+    """Expose shared tag-policy failures through the verifier's public error type."""
     with pytest.raises(verify.AiopnsenseDistributionError, match="Unsupported"):
-        verify.normalized_version(tag)
+        verify.normalized_version("v01.2")

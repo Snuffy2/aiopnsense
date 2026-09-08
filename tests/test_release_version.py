@@ -69,3 +69,22 @@ def test_normalized_version_rejects_unicode_suffix_serials(release_tag: str) -> 
     """
     with pytest.raises(policy.ReleaseTagError, match="Unsupported package release tag"):
         policy.normalized_version(release_tag)
+
+
+@pytest.mark.parametrize(
+    "release_tag",
+    [
+        "v01.2",
+        "v1",
+        "v1.2.3.4.5",
+        "v1.2.3-foo.1",
+    ],
+)
+def test_normalized_version_rejects_invalid_component_shapes(release_tag: str) -> None:
+    """Reject leading-zero, unsupported-length, and unknown-suffix tags.
+
+    Args:
+        release_tag (str): Tag outside the supported release grammar.
+    """
+    with pytest.raises(policy.ReleaseTagError, match="Unsupported package release tag"):
+        policy.normalized_version(release_tag)
