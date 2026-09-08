@@ -20,6 +20,11 @@ request on the normal protected-branch path; do not grant it a branch-ruleset
 bypass. If a tag ruleset blocks Release Please from creating `v*` tags, add the
 token's actor only to that tag ruleset's bypass list.
 
+Update the Trusted Publisher for `aiopnsense` on both PyPI and TestPyPI to use
+the `publish-pypi.yml` workflow filename. Retain the `pypi` environment on PyPI
+and the `testpypi` environment on TestPyPI. Remove the old `release.yml`
+publisher registrations after the replacements are active.
+
 ## Stable releases
 
 1. Merge release-ready changes into `main`.
@@ -31,8 +36,9 @@ token's actor only to that tag ruleset's bypass list.
 4. Merge the release pull request.
 5. Release Please creates the matching `v`-prefixed tag and GitHub Release.
 6. The **Publish Python Distribution** workflow builds and checks the source
-   and wheel distributions, uploads them to the GitHub Release, and publishes
-   them to PyPI through trusted publishing.
+   and wheel distributions, verifies that the tag, package version, and
+   default-branch source agree, uploads them to the GitHub Release, and
+   publishes them to PyPI through trusted publishing.
 
 Release Please derives version bumps and changelog entries from Conventional
 Commit subjects. Use `fix:` for a patch, `feat:` for a minor release, and a
