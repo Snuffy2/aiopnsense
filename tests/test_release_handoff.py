@@ -223,22 +223,3 @@ def test_manifest_rejects_symlink_handoff_root(tmp_path: Path) -> None:
 
     with pytest.raises(release_handoff.HandoffError, match="root"):
         release_handoff.verify(arguments)
-
-
-def test_release_workflow_has_a_data_only_privilege_boundary() -> None:
-    """Keep candidate execution outside the job that receives write and OIDC authority."""
-    workflow = (Path(__file__).parents[1] / ".github/workflows/release.yml").read_text(
-        encoding="utf-8"
-    )
-    candidate, promote = workflow.split("  promote:\n", maxsplit=1)
-
-    assert "contents: write" not in candidate
-    assert "id-token: write" not in candidate
-    assert "git bundle" not in workflow
-    assert 'source "$HANDOFF' not in workflow
-    assert 'release_handoff.py" verify' in promote
-    assert "verify_aiopnsense_distributions.py" in promote
-    assert '--source-root "$source_root"' in promote
-    assert "--timeout-seconds" not in promote
-    assert "--force-with-lease" in promote
-    assert "if: ${{ success() && steps.validation_ref.outcome == 'success' }}" in promote

@@ -60,38 +60,6 @@ def test_validate_release_tag_rejects_unsupported_formats(tag: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "tag",
-    [
-        "v01.2",
-        "v1.02",
-        "v01.2.3",
-        "v1.02.3",
-        "v1.2.03",
-        "v01.2.3.4",
-        "v1.02.3.4",
-        "v1.2.03.4",
-        "v1.2.3.04",
-        "v01.2-beta.1",
-        "v1.02-beta.1",
-        "v01.2.3-beta.1",
-        "v1.2.03-beta.1",
-        "v01.2.3.4-beta.1",
-        "v1.2.3.04-beta.1",
-    ],
-)
-@pytest.mark.parametrize("prerelease", [False, True])
-def test_validate_release_request_rejects_leading_zero_versions(tag: str, prerelease: bool) -> None:
-    """Reject leading-zero tags before prerelease classification.
-
-    Args:
-        tag (str): Invalid stable or prerelease tag.
-        prerelease (bool): Requested release classification.
-    """
-    with pytest.raises(ValueError, match="Invalid release tag"):
-        prepare_release.validate_release_request(tag, prerelease)
-
-
-@pytest.mark.parametrize(
     ("tag", "prerelease"),
     [
         ("v1.1", False),

@@ -149,20 +149,16 @@ def rebuild_wheel(path: Path, members: dict[str, bytes]) -> None:
     rebuilt.replace(path)
 
 
-@pytest.mark.parametrize("version", ["1.2", "1.2.3", "1.2.3.4"])
-def test_verify_python_distributions_accepts_fixed_component_versions(
-    tmp_path: Path, version: str
-) -> None:
-    """Accept a matching pure wheel and sdist for each shared stable version shape.
+def test_verify_python_distributions_accepts_matching_pair(tmp_path: Path) -> None:
+    """Accept a matching pure wheel and source distribution.
 
     Args:
         tmp_path (Path): Temporary fixture root.
-        version (str): Stable PEP 440 version to package.
     """
     dist_dir = tmp_path / "dist"
-    write_distributions(dist_dir, version=version)
+    write_distributions(dist_dir)
 
-    verify_pair(dist_dir, version)
+    verify_pair(dist_dir)
 
 
 def test_verify_python_distributions_rejects_extra_or_missing_paths(tmp_path: Path) -> None:

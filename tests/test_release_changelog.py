@@ -27,47 +27,16 @@ def load_release_changelog() -> ModuleType:
 release_changelog = load_release_changelog()
 
 
-@pytest.mark.parametrize(
-    ("tags", "release_tag", "expected_tag"),
-    [
-        (
-            ["v1.9", "v2.0.0-beta.2", "v2.0.0.1", "v2.0.1rc1", "invalid"],
-            "v2.1",
-            "v2.0.0.1",
-        ),
-    ],
-)
-def test_previous_stable_release_tag_uses_shared_policy(
-    tags: list[str], release_tag: str, expected_tag: str
-) -> None:
-    """Select a stable 2-to-4 component predecessor and skip prerelease tags.
-
-    Args:
-        tags (list[str]): Reachable repository tags for the candidate source.
-        release_tag (str): Requested stable release tag.
-        expected_tag (str): Changelog baseline selected by shared tag policy.
-    """
-    assert release_changelog.previous_stable_release_tag(tags, release_tag) == expected_tag
+def test_previous_stable_release_tag_uses_shared_policy() -> None:
+    """Select a stable 2-to-4 component predecessor and skip prerelease tags."""
+    tags = ["v1.9", "v2.0.0-beta.2", "v2.0.0.1", "v2.0.1rc1", "invalid"]
+    assert release_changelog.previous_stable_release_tag(tags, "v2.1") == "v2.0.0.1"
 
 
-@pytest.mark.parametrize(
-    ("tags", "release_tag", "message"),
-    [
-        (["v1.0.0"], "v1.0.0-rc.1", "Stable release tag required"),
-    ],
-)
-def test_previous_stable_release_tag_rejects_prerelease_targets(
-    tags: list[str], release_tag: str, message: str
-) -> None:
-    """Reject prerelease targets that do not own stable changelog generation.
-
-    Args:
-        tags (list[str]): Reachable repository tags for the candidate source.
-        release_tag (str): Requested release tag.
-        message (str): Expected policy failure text.
-    """
-    with pytest.raises(ValueError, match=message):
-        release_changelog.previous_stable_release_tag(tags, release_tag)
+def test_previous_stable_release_tag_rejects_prerelease_targets() -> None:
+    """Reject prerelease targets that do not own stable changelog generation."""
+    with pytest.raises(ValueError, match="Stable release tag required"):
+        release_changelog.previous_stable_release_tag(["v1.0.0"], "v1.0.0-rc.1")
 
 
 def test_previous_stable_release_tag_returns_none_for_the_first_stable_release() -> None:

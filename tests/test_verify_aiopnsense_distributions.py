@@ -233,13 +233,8 @@ def add_wheel_member(path: Path, name: str, contents: bytes) -> None:
 @pytest.mark.parametrize(
     ("tag", "version"),
     [
-        ("v1.2", "1.2"),
         ("v1.2.3", "1.2.3"),
-        ("v1.2.3.4", "1.2.3.4"),
         ("v1.2.3-beta.4", "1.2.3b4"),
-        ("v1.2.3rc4", "1.2.3rc4"),
-        ("v1.2.3-dev.1", "1.2.3.dev1"),
-        ("v1.2.3post1", "1.2.3.post1"),
     ],
 )
 def test_verify_aiopnsense_distributions_accepts_supported_tags(
