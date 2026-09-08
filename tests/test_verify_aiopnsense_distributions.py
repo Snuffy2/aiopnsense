@@ -23,6 +23,10 @@ SCRIPT_SPEC.loader.exec_module(verify)
 TAG = "v1.2.3"
 VERSION = "1.2.3"
 PROJECT = "aiopnsense"
+README = b"README\n"
+CHANGELOG = b"CHANGELOG\n"
+LICENSE = b"test license\n"
+PYPROJECT = b'[project]\nname = "aiopnsense"\ndescription = "Test package"\ndependencies = []\n'
 
 
 def metadata(version: str = VERSION) -> bytes:
@@ -35,7 +39,9 @@ def metadata(version: str = VERSION) -> bytes:
         bytes: Metadata bytes with the expected distribution name.
     """
     return (
-        f"Metadata-Version: 2.4\nName: {PROJECT}\nVersion: {version}\nRequires-Python: >=3.14\n\n"
+        f"Metadata-Version: 2.4\nName: {PROJECT}\nVersion: {version}\n"
+        "Summary: Test package\nRequires-Python: >=3.14\n"
+        "Description-Content-Type: text/markdown\n\nREADME\n\nCHANGELOG\n"
     ).encode()
 
 
@@ -81,6 +87,8 @@ def write_distributions(
         f"{PROJECT}/__init__.py": b"",
         f"{dist_info}/METADATA": metadata(version),
         f"{dist_info}/WHEEL": b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n\n",
+        f"{dist_info}/licenses/LICENSE": LICENSE,
+        f"{dist_info}/top_level.txt": b"aiopnsense\n",
     }
     if include_wheel_const:
         wheel_members[f"{PROJECT}/const.py"] = f'VERSION = "{declared_wheel_tag}"\n'.encode()
@@ -96,7 +104,48 @@ def write_distributions(
 
     root = f"{PROJECT}-{version}"
     with tarfile.open(directory / f"{PROJECT}-{version}.tar.gz", "w:gz") as archive:
-        source_members = {f"{root}/PKG-INFO": metadata(version)}
+        for path in (
+            root,
+            f"{root}/{PROJECT}",
+            f"{root}/{PROJECT}.egg-info",
+            f"{root}/docs",
+            f"{root}/docs/source",
+        ):
+            directory_info = tarfile.TarInfo(path)
+            directory_info.type = tarfile.DIRTYPE
+            archive.addfile(directory_info)
+        sources = [
+            "LICENSE",
+            "README.md",
+            "pyproject.toml",
+            f"{PROJECT}/__init__.py",
+        ]
+        if include_sdist_const:
+            sources.append(f"{PROJECT}/const.py")
+        sources.extend(
+            [
+                f"{PROJECT}.egg-info/PKG-INFO",
+                f"{PROJECT}.egg-info/SOURCES.txt",
+                f"{PROJECT}.egg-info/dependency_links.txt",
+                f"{PROJECT}.egg-info/requires.txt",
+                f"{PROJECT}.egg-info/top_level.txt",
+                "docs/source/changelog.md",
+            ]
+        )
+        source_members = {
+            f"{root}/PKG-INFO": metadata(version),
+            f"{root}/LICENSE": LICENSE,
+            f"{root}/README.md": README,
+            f"{root}/pyproject.toml": PYPROJECT,
+            f"{root}/setup.cfg": b"[egg_info]\ntag_build = \ntag_date = 0\n\n",
+            f"{root}/{PROJECT}/__init__.py": b"",
+            f"{root}/{PROJECT}.egg-info/PKG-INFO": metadata(version),
+            f"{root}/{PROJECT}.egg-info/SOURCES.txt": "\n".join(sources).encode(),
+            f"{root}/{PROJECT}.egg-info/dependency_links.txt": b"\n",
+            f"{root}/{PROJECT}.egg-info/requires.txt": b"\n",
+            f"{root}/{PROJECT}.egg-info/top_level.txt": b"aiopnsense\n",
+            f"{root}/docs/source/changelog.md": CHANGELOG,
+        }
         if include_sdist_const:
             source_members[f"{root}/{PROJECT}/const.py"] = (
                 f'VERSION = "{declared_sdist_tag}"\n'.encode()
@@ -105,6 +154,80 @@ def write_distributions(
             info = tarfile.TarInfo(path)
             info.size = len(contents)
             archive.addfile(info, BytesIO(contents))
+
+
+def write_source_root(source_root: Path, tag: str = TAG) -> None:
+    """Write the trusted source inputs used for exact artifact comparison.
+
+    Args:
+        source_root (Path): Destination source tree.
+        tag (str): Literal package release tag.
+    """
+    package = source_root / PROJECT
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_bytes(b"")
+    (package / "const.py").write_text(f'VERSION = "{tag}"\n', encoding="utf-8")
+    (source_root / "README.md").write_bytes(README)
+    (source_root / "LICENSE").write_bytes(LICENSE)
+    changelog = source_root / "docs" / "source" / "changelog.md"
+    changelog.parent.mkdir(parents=True)
+    changelog.write_bytes(CHANGELOG)
+    (source_root / "pyproject.toml").write_bytes(PYPROJECT)
+
+
+def rewrite_sdist(path: Path, name: str, contents: bytes) -> None:
+    """Replace or inject one regular sdist member while retaining valid tar structure.
+
+    Args:
+        path (Path): Source distribution archive.
+        name (str): Archive member to replace or inject.
+        contents (bytes): Replacement member bytes.
+    """
+    with tarfile.open(path, "r:gz") as archive:
+        members = []
+        for member in archive.getmembers():
+            data = archive.extractfile(member).read() if member.isfile() else None
+            members.append((member, data))
+    found = False
+    for member, _data in members:
+        if member.name == name:
+            member.size = len(contents)
+            found = True
+    if not found:
+        member = tarfile.TarInfo(name)
+        member.size = len(contents)
+        members.append((member, contents))
+    with tarfile.open(path, "w:gz") as archive:
+        for member, data in members:
+            if member.name == name:
+                data = contents
+            archive.addfile(member, BytesIO(data) if data is not None else None)
+
+
+def add_wheel_member(path: Path, name: str, contents: bytes) -> None:
+    """Inject a RECORD-covered wheel member to isolate provenance enforcement.
+
+    Args:
+        path (Path): Wheel archive.
+        name (str): Archive member to inject.
+        contents (bytes): Injected member bytes.
+    """
+    with zipfile.ZipFile(path) as archive:
+        members = {
+            member: archive.read(member)
+            for member in archive.namelist()
+            if not member.endswith("/RECORD")
+        }
+        record_path = next(member for member in archive.namelist() if member.endswith("/RECORD"))
+    members[name] = contents
+    rows = [record_entry(member, data) for member, data in members.items()]
+    rows.append([record_path, "", ""])
+    record = StringIO()
+    csv.writer(record, lineterminator="\n").writerows(rows)
+    with zipfile.ZipFile(path, "w") as archive:
+        for member, data in members.items():
+            archive.writestr(member, data)
+        archive.writestr(record_path, record.getvalue())
 
 
 @pytest.mark.parametrize(
@@ -168,6 +291,76 @@ def test_verify_aiopnsense_distributions_rejects_missing_const_version(
 
     with pytest.raises(verify.AiopnsenseDistributionError, match="const.py"):
         verify.verify_aiopnsense_distributions(TAG, dist_dir)
+
+
+def test_source_root_proof_rejects_payload_drift_after_generic_validation(tmp_path: Path) -> None:
+    """Trusted static verification rejects a package tree that differs from either archive.
+
+    Args:
+        tmp_path (Path): Temporary test directory.
+    """
+    dist_dir = tmp_path / "dist"
+    write_distributions(dist_dir)
+    source_root = tmp_path / "candidate"
+    write_source_root(source_root)
+
+    verify.verify_aiopnsense_distributions(TAG, dist_dir, source_root)
+
+    (source_root / PROJECT / "const.py").write_text('VERSION = "v9.9.9"\n', encoding="utf-8")
+    with pytest.raises(verify.AiopnsenseDistributionError, match="payload"):
+        verify.verify_aiopnsense_distributions(TAG, dist_dir, source_root)
+
+
+@pytest.mark.parametrize("member", ["unexpected.pth", "aiopnsense-1.2.3.data/scripts/tool"])
+def test_source_root_proof_rejects_record_covered_wheel_installer_payload(
+    tmp_path: Path, member: str
+) -> None:
+    """Reject undeclared wheel import hooks and installed scripts despite a valid RECORD.
+
+    Args:
+        tmp_path (Path): Temporary test directory.
+        member (str): Undeclared installer path to add.
+    """
+    dist_dir = tmp_path / "dist"
+    write_distributions(dist_dir)
+    source_root = tmp_path / "candidate"
+    write_source_root(source_root)
+    add_wheel_member(dist_dir / f"{PROJECT}-{VERSION}-py3-none-any.whl", member, b"payload\n")
+
+    with pytest.raises(verify.AiopnsenseDistributionError, match="installer payload"):
+        verify.verify_aiopnsense_distributions(TAG, dist_dir, source_root)
+
+
+@pytest.mark.parametrize(
+    ("member", "contents"),
+    [
+        (f"{PROJECT}-{VERSION}/setup.py", b"raise SystemExit\n"),
+        (
+            f"{PROJECT}-{VERSION}/pyproject.toml",
+            b'[build-system]\nrequires=["attacker"]\nbuild-backend="attacker.build"\n',
+        ),
+    ],
+)
+def test_source_root_proof_rejects_sdist_build_input_substitution(
+    tmp_path: Path, member: str, contents: bytes
+) -> None:
+    """Reject executable or altered sdist build inputs with otherwise valid metadata.
+
+    Args:
+        tmp_path (Path): Temporary test directory.
+        member (str): Sdist build-input member to replace or add.
+        contents (bytes): Malicious replacement bytes.
+    """
+    dist_dir = tmp_path / "dist"
+    write_distributions(dist_dir)
+    source_root = tmp_path / "candidate"
+    write_source_root(source_root)
+    rewrite_sdist(dist_dir / f"{PROJECT}-{VERSION}.tar.gz", member, contents)
+
+    with pytest.raises(
+        verify.AiopnsenseDistributionError, match="installer payload|trusted source"
+    ):
+        verify.verify_aiopnsense_distributions(TAG, dist_dir, source_root)
 
 
 @pytest.mark.parametrize(

@@ -1,213 +1,263 @@
 name: Release
-
 run-name: Release ${{ github.event.release.tag_name }}
-
 on:
   release:
     types: [published]
-
 permissions:
   contents: read
-
 concurrency:
-  group: release
+  group: release-${{ github.repository }}
+  queue: max
   cancel-in-progress: false
 
 jobs:
-  release:
-    outputs:
-      is-prerelease: ${{ github.event.release.prerelease }}
-    permissions:
-      actions: write
-      checks: read
-      contents: write
-      statuses: write
+  candidate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      prerelease: ${{ github.event.release.prerelease }}
     steps:
-      - name: Require the default-branch release target
-        id: release
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          RELEASE_TARGET: ${{ github.event.release.target_commitish }}
-        run: |
-          set -euo pipefail
-          if [[ "$RELEASE_TARGET" != "$DEFAULT_BRANCH" ]]; then
-            echo "Release target must be the default branch." >&2
-            exit 1
-          fi
-          echo "target=$RELEASE_TARGET" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout trusted default-branch workflow revision
+      - name: Checkout trusted release policy
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Validate trusted release metadata and immutable starting refs
-        id: base
-        env:
-          IS_PRERELEASE: ${{ github.event.release.prerelease }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_TARGET: ${{ steps.release.outputs.target }}
-        run: |
-          set -euo pipefail
-          trusted_sha="$(git rev-parse HEAD)"
-          git fetch --force --no-tags origin \
-            "refs/heads/$RELEASE_TARGET:refs/remotes/origin/$RELEASE_TARGET" \
-            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          target_sha="$(git rev-parse "refs/remotes/origin/$RELEASE_TARGET")"
-          if [[ "$target_sha" != "$trusted_sha" ]]; then
-            echo "Default branch moved before trusted helper execution." >&2
-            exit 1
-          fi
-          trusted_helpers="${RUNNER_TEMP}/trusted-release-helpers"
-          mkdir -p "$trusted_helpers"
-          cp \
-            .github/scripts/prepare_release.py \
-            .github/scripts/release_version.py \
-            .github/scripts/verify_aiopnsense_distributions.py \
-            .github/scripts/verify_python_distributions.py \
-            .github/scripts/verify_release_checks.py \
-            "$trusted_helpers/"
-          trusted_prepare="$trusted_helpers/prepare_release.py"
-          trusted_helper="$trusted_helpers/verify_release_checks.py"
-          python3 "$trusted_prepare" --check-only \
-            --expected-prerelease "$IS_PRERELEASE" "$RELEASE_TAG"
-          tag_sha="$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
-          tag_oid="$(git rev-parse "refs/tags/$RELEASE_TAG")"
-          resume=false
-          source_sha="$target_sha"
-          if [[ "$IS_PRERELEASE" == true ]]; then
-            if ! git merge-base --is-ancestor "$tag_sha" "$target_sha" || \
-              ! git show "$tag_sha:aiopnsense/const.py" | \
-                grep -Fx "VERSION = \"$RELEASE_TAG\"" >/dev/null; then
-              echo "Prerelease tag must be a matching default-branch commit." >&2
-              exit 1
-            fi
-            source_sha="$tag_sha"
-          elif [[ "$(git log -1 --format=%s "$tag_sha")" == "Release $RELEASE_TAG" ]]; then
-            expected_changes=$'aiopnsense/const.py\ndocs/source/changelog.md'
-            changed_paths="$(git diff --name-only "$tag_sha^" "$tag_sha")"
-            if [[ "$(git rev-list --parents -n 1 "$tag_sha" | wc -w)" -ne 2 ]] || \
-              [[ "$changed_paths" != "$expected_changes" ]] || \
-              ! git show "$tag_sha:aiopnsense/const.py" | \
-                grep -Fx "VERSION = \"$RELEASE_TAG\"" >/dev/null || \
-              ! git show "$tag_sha:docs/source/changelog.md" >/dev/null || \
-              ! git show "$tag_sha:docs/source/changelog.md" | \
-                grep -F "## [$RELEASE_TAG](" >/dev/null || \
-              ! git merge-base --is-ancestor "$tag_sha" "$target_sha"; then
-              echo "Matching branch/tag release commit has invalid release contents." >&2
-              exit 1
-            fi
-            resume_root="${RUNNER_TEMP}/release-parent"
-            mkdir -p "${resume_root}/aiopnsense"
-            git show "$tag_sha^:aiopnsense/const.py" > "${resume_root}/aiopnsense/const.py"
-            python3 "$trusted_prepare" --repository "$resume_root" "$RELEASE_TAG"
-            git show "$tag_sha:aiopnsense/const.py" > "${RUNNER_TEMP}/release-candidate-const.py"
-            cmp --silent "${resume_root}/aiopnsense/const.py" \
-              "${RUNNER_TEMP}/release-candidate-const.py"
-            resume=true
-            source_sha="$tag_sha"
-            echo "candidate-sha=$tag_sha" >> "$GITHUB_OUTPUT"
-          elif [[ "$target_sha" != "$tag_sha" ]]; then
-            echo "Release tag and target branch must start at the same commit." >&2
-            exit 1
-          fi
-          {
-            echo "resume=$resume"
-            echo "source-sha=$source_sha"
-            echo "target-sha=$target_sha"
-            echo "trusted-sha=$trusted_sha"
-            echo "tag-oid=$tag_oid"
-            echo "trusted-helper=$trusted_helper"
-            echo "trusted-helpers=$trusted_helpers"
-          } >> "$GITHUB_OUTPUT"
-          git checkout --detach "$source_sha"
-
-      - name: Require prerelease source version
-        if: github.event.release.prerelease
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: grep -Fx "VERSION = \"$RELEASE_TAG\"" aiopnsense/const.py
-
-      - name: Setup Ruby
-        if: github.event.release.prerelease == false && steps.base.outputs.resume != 'true'
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: ruby
-
-      - name: Install github-changelog-generator
-        if: github.event.release.prerelease == false && steps.base.outputs.resume != 'true'
-        run: gem install github_changelog_generator --no-document
-
-      - name: Generate documentation changelog
-        if: github.event.release.prerelease == false && steps.base.outputs.resume != 'true'
-        env:
-          CHANGELOG_GITHUB_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: github_changelog_generator --future-release "$RELEASE_TAG"
-
-      - name: Create deterministic stable release commit
-        if: github.event.release.prerelease == false
-        id: candidate
-        env:
-          RESUME: ${{ steps.base.outputs.resume }}
-          RESUME_SHA: ${{ steps.base.outputs.candidate-sha }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          TRUSTED_HELPERS: ${{ steps.base.outputs.trusted-helpers }}
-        run: |
-          set -euo pipefail
-          if [[ "$RESUME" == true ]]; then
-            echo "sha=$RESUME_SHA" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          changed_before_version="$(git diff --name-only)"
-          if [[ "$changed_before_version" != "docs/source/changelog.md" ]]; then
-            echo "Changelog generation changed unexpected paths." >&2
-            exit 1
-          fi
-          python3 "$TRUSTED_HELPERS/prepare_release.py" "$RELEASE_TAG"
-          git add aiopnsense/const.py docs/source/changelog.md
-          git diff --cached --check
-          expected_changes=$'aiopnsense/const.py\ndocs/source/changelog.md'
-          if [[ "$(git diff --cached --name-only)" != "$expected_changes" ]] || \
-            ! git diff --quiet; then
-            echo "Stable release candidate must contain only its version and changelog." >&2
-            exit 1
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Release $RELEASE_TAG"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-
-      - name: Build and check distributions
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          ignore-nothing-to-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Setup locked changelog tooling
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - name: Snapshot trusted policy and locked tools
+        id: trusted
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          TRUSTED_HELPERS: ${{ steps.base.outputs.trusted-helpers }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          uv build
-          rm -f dist/.gitignore
-          uvx --from twine twine check dist/*
-          python3 "$TRUSTED_HELPERS/verify_aiopnsense_distributions.py" "$RELEASE_TAG" --dist-dir dist
-
-      - name: Store distributions for trusted publishing
+          git fetch --force --no-tags origin "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          trusted_sha="$(git rev-parse HEAD)"
+          [[ "$trusted_sha" == "$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")" ]]
+          helpers="$RUNNER_TEMP/trusted-release-helpers"
+          mkdir -p "$helpers"
+          cp .github/scripts/{prepare_release.py,release_version.py,release_handoff.py} "$helpers/"
+          cp Gemfile Gemfile.lock "$RUNNER_TEMP/"
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/release-tools" uv sync --locked --only-group dev --no-install-project
+          echo "sha=$trusted_sha" >> "$GITHUB_OUTPUT"
+          echo "helpers=$helpers" >> "$GITHUB_OUTPUT"
+      - name: Construct and build candidate without write credentials
+        env:
+          BUNDLE_GEMFILE: ${{ runner.temp }}/Gemfile
+          CHANGELOG_GITHUB_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_SHA: ${{ github.sha }}
+          HELPERS: ${{ steps.trusted.outputs.helpers }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          [[ "$EVENT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          python3 "$HELPERS/prepare_release.py" --check-only --expected-prerelease "$PRERELEASE" "$RELEASE_TAG"
+          git fetch --force --no-tags origin \
+            "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" \
+            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          target_sha="$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")"
+          tag_oid="$(git rev-parse "refs/tags/$RELEASE_TAG")"
+          tag_sha="$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
+          [[ "$tag_sha" == "$EVENT_SHA" ]]
+          source_sha="$EVENT_SHA"
+          candidate_sha="$EVENT_SHA"
+          git checkout --detach "$EVENT_SHA"
+          if [[ "$PRERELEASE" == true ]]; then
+            git merge-base --is-ancestor "$EVENT_SHA" "$target_sha"
+            grep -Fx "VERSION = \"$RELEASE_TAG\"" aiopnsense/const.py >/dev/null
+          elif [[ "$(git show -s --format=%s "$EVENT_SHA")" == "Release $RELEASE_TAG" ]]; then
+            source_sha="$(git rev-parse "$EVENT_SHA^")"
+            [[ "$(git rev-list --parents -n 1 "$EVENT_SHA" | wc -w | tr -d ' ')" == 2 ]]
+            [[ "$(git diff --name-only "$source_sha" "$EVENT_SHA")" == $'aiopnsense/const.py\ndocs/source/changelog.md' ]]
+            git merge-base --is-ancestor "$EVENT_SHA" "$target_sha"
+            grep -Fx "VERSION = \"$RELEASE_TAG\"" aiopnsense/const.py >/dev/null
+            [[ "$(grep -Fc "## [$RELEASE_TAG](" docs/source/changelog.md)" == 1 ]]
+          else
+            [[ "$target_sha" == "$EVENT_SHA" ]]
+            bundle exec github_changelog_generator --future-release "$RELEASE_TAG"
+            python3 "$HELPERS/prepare_release.py" "$RELEASE_TAG"
+            git add aiopnsense/const.py docs/source/changelog.md
+            git diff --cached --check
+            [[ "$(git diff --cached --name-only)" == $'aiopnsense/const.py\ndocs/source/changelog.md' ]]
+            [[ "$(git status --porcelain --untracked-files=all)" == $'M  aiopnsense/const.py\nM  docs/source/changelog.md' ]]
+            [[ "$(grep -Fc "## [$RELEASE_TAG](" docs/source/changelog.md)" == 1 ]]
+            commit_epoch="$(git show -s --format=%ct "$source_sha")"
+            GIT_AUTHOR_NAME='github-actions[bot]'
+            GIT_AUTHOR_EMAIL='41898282+github-actions[bot]@users.noreply.github.com'
+            GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+            GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+            GIT_AUTHOR_DATE="@$commit_epoch +0000"
+            GIT_COMMITTER_DATE="$GIT_AUTHOR_DATE"
+            export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+            export GIT_AUTHOR_DATE GIT_COMMITTER_DATE
+            git commit -m "Release $RELEASE_TAG"
+            candidate_sha="$(git rev-parse HEAD)"
+          fi
+          handoff="$RUNNER_TEMP/release-candidate"
+          mkdir -p "$handoff/dist"
+          cp aiopnsense/const.py "$handoff/candidate-const.py"
+          cp docs/source/changelog.md "$handoff/changelog.md"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$candidate_sha")"
+          export SOURCE_DATE_EPOCH
+          "$RUNNER_TEMP/release-tools/bin/python" -m build --no-isolation --outdir "$handoff/dist"
+          python3 "$HELPERS/release_handoff.py" canonicalize-sdist \
+            --sdist "$handoff/dist/"*.tar.gz --epoch "$SOURCE_DATE_EPOCH"
+          "$RUNNER_TEMP/release-tools/bin/twine" check "$handoff"/dist/*
+          python3 "$HELPERS/release_handoff.py" create --handoff "$handoff" \
+            --release-tag "$RELEASE_TAG" --release-id "$RELEASE_ID" --prerelease "$PRERELEASE" \
+            --source-sha "$source_sha" --candidate-sha "$candidate_sha" \
+            --target-sha "$target_sha" --tag-oid "$tag_oid"
+      - name: Upload bounded candidate handoff
         uses: actions/upload-artifact@v7
         with:
-          name: python-distributions
-          path: dist/
+          name: release-candidate
+          path: |
+            ${{ runner.temp }}/release-candidate/manifest.json
+            ${{ runner.temp }}/release-candidate/candidate-const.py
+            ${{ runner.temp }}/release-candidate/changelog.md
+            ${{ runner.temp }}/release-candidate/dist/*.whl
+            ${{ runner.temp }}/release-candidate/dist/*.tar.gz
           if-no-files-found: error
+          retention-days: 30
 
+  promote:
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      actions: write
+      checks: read
+      contents: write
+      statuses: write
+    outputs:
+      prerelease: ${{ needs.candidate.outputs.prerelease }}
+    steps:
+      - name: Checkout trusted release policy
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Snapshot trusted helpers
+        id: trusted
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags origin "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          trusted_sha="$(git rev-parse HEAD)"
+          [[ "$trusted_sha" == "$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")" ]]
+          helpers="$RUNNER_TEMP/trusted-release-helpers"
+          mkdir -p "$helpers"
+          cp .github/scripts/{prepare_release.py,release_version.py,release_handoff.py,verify_aiopnsense_distributions.py,verify_python_distributions.py,verify_release_checks.py,upload_release_asset.py} "$helpers/"
+          echo "sha=$trusted_sha" >> "$GITHUB_OUTPUT"
+          echo "helpers=$helpers" >> "$GITHUB_OUTPUT"
+      - name: Download bounded candidate handoff
+        uses: actions/download-artifact@v8
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/release-candidate
+      - name: Independently prove refs and reconstruct candidate
+        id: release
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_SHA: ${{ github.sha }}
+          HANDOFF: ${{ runner.temp }}/release-candidate
+          HELPERS: ${{ steps.trusted.outputs.helpers }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TARGET: ${{ github.event.release.target_commitish }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TARGET" == "$DEFAULT_BRANCH" && "$EVENT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          python3 "$HELPERS/prepare_release.py" --check-only --expected-prerelease "$PRERELEASE" "$RELEASE_TAG"
+          git fetch --force --no-tags origin \
+            "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" \
+            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          target_sha="$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")"
+          tag_oid="$(git rev-parse "refs/tags/$RELEASE_TAG")"
+          tag_sha="$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
+          [[ "$tag_sha" == "$EVENT_SHA" ]]
+          source_sha="$EVENT_SHA"; candidate_sha="$EVENT_SHA"; resume=false
+          python3 "$HELPERS/release_handoff.py" preflight \
+            --handoff "$HANDOFF" --release-tag "$RELEASE_TAG"
+          if [[ "$PRERELEASE" == true ]]; then
+            git merge-base --is-ancestor "$EVENT_SHA" "$target_sha"
+          elif [[ "$(git show -s --format=%s "$EVENT_SHA")" == "Release $RELEASE_TAG" ]]; then
+            resume=true; source_sha="$(git rev-parse "$EVENT_SHA^")"
+            [[ "$(git rev-list --parents -n 1 "$EVENT_SHA" | wc -w | tr -d ' ')" == 2 ]]
+            [[ "$(git diff --name-only "$source_sha" "$EVENT_SHA")" == $'aiopnsense/const.py\ndocs/source/changelog.md' ]]
+            git merge-base --is-ancestor "$EVENT_SHA" "$target_sha"
+            expected_version="$RUNNER_TEMP/expected-version"
+            git worktree add --detach "$expected_version" "$source_sha"
+            python3 "$HELPERS/prepare_release.py" --repository "$expected_version" "$RELEASE_TAG"
+            cmp --silent "$HANDOFF/candidate-const.py" "$expected_version/aiopnsense/const.py"
+          else
+            [[ "$target_sha" == "$EVENT_SHA" ]]
+            reconstructed="$RUNNER_TEMP/reconstructed-candidate"
+            git worktree add --detach "$reconstructed" "$source_sha"
+            python3 "$HELPERS/prepare_release.py" --repository "$reconstructed" "$RELEASE_TAG"
+            cmp --silent "$HANDOFF/candidate-const.py" "$reconstructed/aiopnsense/const.py"
+            cp "$HANDOFF/candidate-const.py" "$reconstructed/aiopnsense/const.py"
+            cp "$HANDOFF/changelog.md" "$reconstructed/docs/source/changelog.md"
+            git -C "$reconstructed" add aiopnsense/const.py docs/source/changelog.md
+            git -C "$reconstructed" diff --cached --check
+            [[ "$(git -C "$reconstructed" diff --cached --name-only)" == $'aiopnsense/const.py\ndocs/source/changelog.md' ]]
+            [[ "$(git -C "$reconstructed" status --porcelain --untracked-files=all)" == $'M  aiopnsense/const.py\nM  docs/source/changelog.md' ]]
+            commit_epoch="$(git show -s --format=%ct "$source_sha")"
+            GIT_AUTHOR_NAME='github-actions[bot]' GIT_AUTHOR_EMAIL='41898282+github-actions[bot]@users.noreply.github.com' \
+            GIT_COMMITTER_NAME='github-actions[bot]' GIT_COMMITTER_EMAIL='41898282+github-actions[bot]@users.noreply.github.com' \
+            GIT_AUTHOR_DATE="@$commit_epoch +0000" GIT_COMMITTER_DATE="@$commit_epoch +0000" \
+              git -C "$reconstructed" commit -m "Release $RELEASE_TAG"
+            candidate_sha="$(git -C "$reconstructed" rev-parse HEAD)"
+          fi
+          source_root="$RUNNER_TEMP/reconstructed-source"
+          if [[ "$PRERELEASE" == false && "$resume" == false ]]; then
+            source_root="$RUNNER_TEMP/reconstructed-candidate"
+          else
+            git worktree add --detach "$source_root" "$candidate_sha"
+          fi
+          grep -Fx "VERSION = \"$RELEASE_TAG\"" "$source_root/aiopnsense/const.py" >/dev/null
+          if [[ "$PRERELEASE" == false ]]; then
+            [[ "$(grep -Fc "## [$RELEASE_TAG](" "$source_root/docs/source/changelog.md")" == 1 ]]
+          fi
+          python3 "$HELPERS/release_handoff.py" verify --handoff "$HANDOFF" \
+            --release-tag "$RELEASE_TAG" --release-id "$RELEASE_ID" --prerelease "$PRERELEASE" \
+            --source-sha "$source_sha" --candidate-sha "$candidate_sha" \
+            --target-sha "$target_sha" --tag-oid "$tag_oid"
+          cmp --silent "$HANDOFF/candidate-const.py" "$source_root/aiopnsense/const.py"
+          cmp --silent "$HANDOFF/changelog.md" "$source_root/docs/source/changelog.md"
+          python3 "$HELPERS/verify_aiopnsense_distributions.py" "$RELEASE_TAG" \
+            --dist-dir "$HANDOFF/dist" --source-root "$source_root"
+          {
+            echo "candidate-sha=$candidate_sha"
+            echo "target-sha=$target_sha"
+            echo "tag-oid=$tag_oid"
+            echo "resume=$resume"
+          } >> "$GITHUB_OUTPUT"
       - name: Publish candidate to an isolated validation branch
         if: github.event.release.prerelease == false
         id: validation_ref
         env:
+          CANDIDATE_SHA: ${{ steps.release.outputs.candidate-sha }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
@@ -215,114 +265,103 @@ jobs:
           temp_ref="release-validation/${RELEASE_TAG}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           git check-ref-format --branch "$temp_ref"
           gh auth setup-git --hostname github.com
-          git push origin "HEAD:refs/heads/$temp_ref"
+          git push origin "$CANDIDATE_SHA:refs/heads/$temp_ref"
           echo "name=$temp_ref" >> "$GITHUB_OUTPUT"
-
       - name: Dispatch and verify immutable release gates
         env:
-          CANDIDATE_SHA: ${{ github.event.release.prerelease == true && steps.base.outputs.source-sha || steps.candidate.outputs.sha }}
+          CANDIDATE_SHA: ${{ steps.release.outputs.candidate-sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
-          TRUSTED_REF: ${{ steps.release.outputs.target }}
-          TRUSTED_HELPER: ${{ steps.base.outputs.trusted-helper }}
-          TRUSTED_SHA: ${{ steps.base.outputs.trusted-sha }}
+          HELPERS: ${{ steps.trusted.outputs.helpers }}
+          TRUSTED_SHA: ${{ steps.trusted.outputs.sha }}
         run: |
           set -euo pipefail
-          python3 "$TRUSTED_HELPER" \
-            --repository "$GITHUB_REPOSITORY" --workflow-ref "$TRUSTED_REF" \
-            --workflow-sha "$TRUSTED_SHA" --sha "$CANDIDATE_SHA" \
+          python3 "$HELPERS/verify_release_checks.py" --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$DEFAULT_BRANCH" --workflow-sha "$TRUSTED_SHA" --sha "$CANDIDATE_SHA" \
             --required-check 'pytest_check.yml::pytest check and post coverage' \
             --required-check 'docs.yml::build-docs' \
             --required-check 'uv-lock-check.yml::Validate uv lock consistency' \
             --required-check 'prek-autofix-review.yml::review'
-
       - name: Atomically advance target and guarded release tag
-        if: github.event.release.prerelease == false && steps.base.outputs.resume != 'true'
+        if: github.event.release.prerelease == false && steps.release.outputs.resume != 'true'
         env:
+          CANDIDATE_SHA: ${{ steps.release.outputs.candidate-sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
-          ORIGINAL_TAG_OID: ${{ steps.base.outputs.tag-oid }}
+          ORIGINAL_TAG_OID: ${{ steps.release.outputs.tag-oid }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_TARGET: ${{ steps.release.outputs.target }}
-          TARGET_SHA: ${{ steps.base.outputs.target-sha }}
+          TARGET_SHA: ${{ steps.release.outputs.target-sha }}
         run: |
           set -euo pipefail
-          git fetch --force --no-tags origin \
-            "refs/heads/$RELEASE_TARGET:refs/remotes/origin/$RELEASE_TARGET" \
-            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          [[ "$(git rev-parse "refs/remotes/origin/$RELEASE_TARGET")" == "$TARGET_SHA" ]]
+          git fetch --force --no-tags origin "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          [[ "$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")" == "$TARGET_SHA" ]]
           [[ "$(git rev-parse "refs/tags/$RELEASE_TAG")" == "$ORIGINAL_TAG_OID" ]]
-          [[ "$(git rev-parse HEAD^)" == "$TARGET_SHA" ]]
-          git tag -fa "$RELEASE_TAG" -m "Release $RELEASE_TAG" HEAD
+          [[ "$(git rev-parse "$CANDIDATE_SHA^")" == "$TARGET_SHA" ]]
+          git tag -fa "$RELEASE_TAG" -m "Release $RELEASE_TAG" "$CANDIDATE_SHA"
           gh auth setup-git --hostname github.com
-          git push --atomic \
-            --force-with-lease="refs/heads/$RELEASE_TARGET:$TARGET_SHA" \
-            --force-with-lease="refs/tags/$RELEASE_TAG:$ORIGINAL_TAG_OID" \
-            origin "HEAD:refs/heads/$RELEASE_TARGET" \
-            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-
-      - name: Verify final release identity
+          git push --atomic --force-with-lease="refs/heads/$DEFAULT_BRANCH:$TARGET_SHA" \
+            --force-with-lease="refs/tags/$RELEASE_TAG:$ORIGINAL_TAG_OID" origin \
+            "$CANDIDATE_SHA:refs/heads/$DEFAULT_BRANCH" "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+      - name: Verify final identity and upload release assets
         env:
-          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+          CANDIDATE_SHA: ${{ steps.release.outputs.candidate-sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_TOKEN: ${{ github.token }}
+          HANDOFF: ${{ runner.temp }}/release-candidate
+          HELPERS: ${{ steps.trusted.outputs.helpers }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_ID: ${{ github.event.release.id }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_TARGET: ${{ steps.release.outputs.target }}
-          SOURCE_SHA: ${{ steps.base.outputs.source-sha }}
-          STABLE_SHA: ${{ steps.candidate.outputs.sha }}
-          TRUSTED_HELPERS: ${{ steps.base.outputs.trusted-helpers }}
         run: |
           set -euo pipefail
-          expected_sha="$STABLE_SHA"
-          if [[ "$IS_PRERELEASE" == true ]]; then
-            expected_sha="$SOURCE_SHA"
-          fi
-          git fetch --force --no-tags origin \
-            "refs/heads/$RELEASE_TARGET:refs/remotes/origin/$RELEASE_TARGET" \
-            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          [[ "$(git rev-parse "refs/tags/$RELEASE_TAG^{}")" == "$expected_sha" ]]
-          git merge-base --is-ancestor \
-            "$expected_sha" "refs/remotes/origin/$RELEASE_TARGET"
-          grep -Fx "VERSION = \"$RELEASE_TAG\"" aiopnsense/const.py >/dev/null
-          if [[ "$IS_PRERELEASE" == false ]]; then
-            python3 "$TRUSTED_HELPERS/prepare_release.py" "$RELEASE_TAG"
-            git diff --quiet -- aiopnsense/const.py
-          fi
-
-      - name: Upload distributions to the published GitHub release
+          git fetch --force --no-tags origin "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          [[ "$(git rev-parse "refs/tags/$RELEASE_TAG^{}")" == "$CANDIDATE_SHA" ]]
+          git merge-base --is-ancestor "$CANDIDATE_SHA" "refs/remotes/origin/$DEFAULT_BRANCH"
+          for asset in "$HANDOFF"/dist/*; do
+            python3 "$HELPERS/upload_release_asset.py" --repository "$GITHUB_REPOSITORY" \
+              --release-id "$RELEASE_ID" --expected-tag "$RELEASE_TAG" \
+              --expected-prerelease "$PRERELEASE" --asset "$asset" \
+              --asset-name "$(basename "$asset")" --content-type application/octet-stream
+          done
+      - name: Store verified distributions for trusted publishing
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-distributions
+          path: ${{ runner.temp }}/release-candidate/dist/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Delete successful validation branch with its candidate lease
+        if: ${{ success() && steps.validation_ref.outcome == 'success' }}
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" dist/* --clobber
-
-      - name: Delete validated temporary branch
-        if: github.event.release.prerelease == false && success()
-        env:
-          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+          CANDIDATE_SHA: ${{ steps.release.outputs.candidate-sha }}
           GH_TOKEN: ${{ github.token }}
           TEMP_REF: ${{ steps.validation_ref.outputs.name }}
         run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/heads/$TEMP_REF:refs/remotes/origin/$TEMP_REF"
+          [[ "$(git rev-parse "refs/remotes/origin/$TEMP_REF")" == "$CANDIDATE_SHA" ]]
           gh auth setup-git --hostname github.com
-          git push --force-with-lease="refs/heads/$TEMP_REF:$CANDIDATE_SHA" \
-            origin --delete "$TEMP_REF"
+          git push --force-with-lease="refs/heads/$TEMP_REF:$CANDIDATE_SHA" origin --delete "$TEMP_REF"
 
   publish:
-    needs: release
+    needs: promote
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       id-token: write
     environment:
-      name: ${{ needs.release.outputs.is-prerelease == 'true' && 'testpypi' || 'pypi' }}
-      url: ${{ needs.release.outputs.is-prerelease == 'true' && 'https://test.pypi.org/project/aiopnsense/' || 'https://pypi.org/project/aiopnsense/' }}
+      name: ${{ needs.promote.outputs.prerelease == 'true' && 'testpypi' || 'pypi' }}
+      url: ${{ needs.promote.outputs.prerelease == 'true' && 'https://test.pypi.org/project/aiopnsense/' || 'https://pypi.org/project/aiopnsense/' }}
     steps:
-      - name: Download distributions
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8
         with:
           name: python-distributions
           path: dist/
-
       - name: Publish prerelease to TestPyPI
-        if: needs.release.outputs.is-prerelease == 'true'
+        if: needs.promote.outputs.prerelease == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
-
       - name: Publish stable release to PyPI
-        if: needs.release.outputs.is-prerelease != 'true'
+        if: needs.promote.outputs.prerelease != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1

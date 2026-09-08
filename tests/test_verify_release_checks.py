@@ -791,6 +791,70 @@ def test_main_publishes_statuses_only_after_every_workflow_is_verified(
     assert max(verification_indices) < min(publication_indices)
 
 
+def test_main_uses_a_4200_second_default_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the release-gate default deadline while retaining bounded API calls.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing orchestration helpers.
+    """
+    deadlines: list[float] = []
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify_release_checks.py",
+            "--repository",
+            REPOSITORY,
+            "--workflow-ref",
+            WORKFLOW_REF,
+            "--workflow-sha",
+            WORKFLOW_SHA,
+            "--sha",
+            SHA,
+            "--required-check",
+            "validation.yml::Test and build",
+        ],
+    )
+    monkeypatch.setattr(verify, "dispatch_workflow", lambda *_args: 42)
+    monkeypatch.setattr(verify.time, "monotonic", lambda: 100.0)
+
+    def fake_wait(
+        _repository: str,
+        _workflow: str,
+        _workflow_ref: str,
+        _workflow_sha: str,
+        _sha: str,
+        _required_checks: set[str],
+        deadline: float,
+        expected_run_id: int,
+    ) -> int:
+        """Record the release-gate deadline and return the verified run.
+
+        Args:
+            _repository (str): Unused GitHub repository name.
+            _workflow (str): Unused workflow filename.
+            _workflow_ref (str): Unused trusted workflow branch.
+            _workflow_sha (str): Unused trusted workflow SHA.
+            _sha (str): Unused candidate SHA.
+            _required_checks (set[str]): Unused exact required job names.
+            deadline (float): Monotonic deadline passed to the workflow verifier.
+            expected_run_id (int): Authoritative workflow run ID.
+
+        Returns:
+            int: The verified authoritative workflow run ID.
+        """
+        deadlines.append(deadline)
+        return expected_run_id
+
+    monkeypatch.setattr(verify, "wait_for_workflow", fake_wait)
+    monkeypatch.setattr(verify, "publish_verified_status", lambda *_args: None)
+
+    assert verify.main() == 0
+    assert deadlines == [4300.0]
+
+
 def test_main_withholds_all_statuses_when_a_later_workflow_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

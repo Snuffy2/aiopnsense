@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: prek-autofix-${{ github.event.pull_request.number || inputs.expected_sha || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number || 'push' }}-${{ github.event.pull_request.head.ref || inputs.expected_sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -27,6 +27,7 @@ jobs:
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
+          set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
 
       - uses: actions/checkout@v7
@@ -40,7 +41,9 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
 
       - name: Setup uv (with caching)
         uses: astral-sh/setup-uv@v10.0.1
@@ -60,5 +63,5 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
-          UV_LOCKED=1 uv run --locked prek run --all-files
-          git diff --exit-code
+          UV_LOCKED=1 uv run --locked --group dev prek run --all-files
+          test -z "$(git status --porcelain)"

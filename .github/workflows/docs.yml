@@ -17,9 +17,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.number || 'push' }}-${{ github.event.pull_request.head.ref || inputs.expected_sha || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-docs:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Require expected release commit
@@ -27,6 +32,7 @@ jobs:
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
+          set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
 
       - name: Checkout
@@ -39,7 +45,9 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
 
       - name: Setup uv (with caching)
         uses: astral-sh/setup-uv@v10.0.1

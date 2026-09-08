@@ -20,6 +20,18 @@ class ReleaseTagError(ValueError):
     """Raised when a repository tag cannot be represented as a package version."""
 
 
+def canonical_serial(serial: str) -> str:
+    """Return a PEP 440 canonical decimal serial from an accepted ASCII serial.
+
+    Args:
+        serial: Decimal serial already validated against the fixed ASCII grammar.
+
+    Returns:
+        Decimal serial without leading zeroes, except for zero itself.
+    """
+    return str(int(serial))
+
+
 def normalized_version(release_tag: str) -> str:
     """Return the normalized PEP 440 version represented by one repository tag.
 
@@ -37,16 +49,21 @@ def normalized_version(release_tag: str) -> str:
         return stable["release"]
     prerelease = _HYPHEN_PRE_RELEASE.fullmatch(release_tag)
     if prerelease is not None:
-        return f"{prerelease['release']}{_PRE_RELEASE_LABELS[prerelease['label']]}{prerelease['serial']}"
+        return (
+            f"{prerelease['release']}{_PRE_RELEASE_LABELS[prerelease['label']]}"
+            f"{canonical_serial(prerelease['serial'])}"
+        )
     prerelease = _COMPACT_PRE_RELEASE.fullmatch(release_tag)
     if prerelease is not None:
-        return f"{prerelease['release']}{prerelease['label']}{prerelease['serial']}"
+        return (
+            f"{prerelease['release']}{prerelease['label']}{canonical_serial(prerelease['serial'])}"
+        )
     development = _DEV_RELEASE.fullmatch(release_tag)
     if development is not None:
-        return f"{development['release']}.dev{development['serial']}"
+        return f"{development['release']}.dev{canonical_serial(development['serial'])}"
     postrelease = _POST_RELEASE.fullmatch(release_tag)
     if postrelease is not None:
-        return f"{postrelease['release']}.post{postrelease['serial']}"
+        return f"{postrelease['release']}.post{canonical_serial(postrelease['serial'])}"
     raise ReleaseTagError(f"Unsupported package release tag: {release_tag!r}.")
 
 

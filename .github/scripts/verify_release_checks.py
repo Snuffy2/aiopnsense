@@ -314,7 +314,7 @@ def main() -> int:
     parser.add_argument("--workflow-sha", required=True)
     parser.add_argument("--sha", required=True)
     parser.add_argument("--required-check", action="append", required=True)
-    parser.add_argument("--timeout-seconds", type=int, default=1800)
+    parser.add_argument("--timeout-seconds", type=int, default=4200)
     args = parser.parse_args()
     try:
         checks = parse_required_checks(args.required_check)

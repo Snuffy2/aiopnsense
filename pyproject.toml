@@ -54,6 +54,10 @@ pytest = [
 dev = [
     { include-group = "lint" },
     { include-group = "pytest" },
+    "build",
+    "setuptools>=69",
+    "twine",
+    "wheel",
 ]
 
 [tool.uv]
