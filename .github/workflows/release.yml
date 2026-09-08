@@ -16,6 +16,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       prerelease: ${{ github.event.release.prerelease }}
     steps:
@@ -34,11 +35,6 @@ jobs:
           enable-cache: true
           ignore-nothing-to-cache: true
           cache-dependency-glob: uv.lock
-      - name: Setup locked changelog tooling
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.4"
-          bundler-cache: true
       - name: Snapshot trusted policy and locked tools
         id: trusted
         env:
@@ -50,15 +46,13 @@ jobs:
           [[ "$trusted_sha" == "$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")" ]]
           helpers="$RUNNER_TEMP/trusted-release-helpers"
           mkdir -p "$helpers"
-          cp .github/scripts/{prepare_release.py,release_version.py,release_handoff.py} "$helpers/"
-          cp Gemfile Gemfile.lock "$RUNNER_TEMP/"
+          cp .github/scripts/{prepare_release.py,release_version.py,release_handoff.py,release_changelog.py} "$helpers/"
           UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/release-tools" uv sync --locked --only-group dev --no-install-project
           echo "sha=$trusted_sha" >> "$GITHUB_OUTPUT"
           echo "helpers=$helpers" >> "$GITHUB_OUTPUT"
-      - name: Construct and build candidate without write credentials
+      - name: Determine candidate source and changelog range
+        id: source
         env:
-          BUNDLE_GEMFILE: ${{ runner.temp }}/Gemfile
-          CHANGELOG_GITHUB_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_SHA: ${{ github.sha }}
           HELPERS: ${{ steps.trusted.outputs.helpers }}
@@ -72,12 +66,13 @@ jobs:
           git fetch --force --no-tags origin \
             "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" \
             "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          git fetch --force --tags origin
           target_sha="$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")"
           tag_oid="$(git rev-parse "refs/tags/$RELEASE_TAG")"
           tag_sha="$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
           [[ "$tag_sha" == "$EVENT_SHA" ]]
           source_sha="$EVENT_SHA"
-          candidate_sha="$EVENT_SHA"
+          generate_changelog=false
           git checkout --detach "$EVENT_SHA"
           if [[ "$PRERELEASE" == true ]]; then
             git merge-base --is-ancestor "$EVENT_SHA" "$target_sha"
@@ -91,14 +86,79 @@ jobs:
             [[ "$(grep -Fc "## [$RELEASE_TAG](" docs/source/changelog.md)" == 1 ]]
           else
             [[ "$target_sha" == "$EVENT_SHA" ]]
-            bundle exec github_changelog_generator --future-release "$RELEASE_TAG"
+            previous_tag="$(git tag --merged "$source_sha" | python3 "$HELPERS/release_changelog.py" --previous-stable-tag "$RELEASE_TAG")"
+            if [[ -z "$previous_tag" ]]; then
+              previous_tag="$(git rev-list --max-parents=0 "$source_sha")"
+              [[ "$previous_tag" =~ ^[0-9a-f]{40}$ ]]
+            fi
+            printf 'previous-tag=%s\n' "$previous_tag" >> "$GITHUB_OUTPUT"
+            generate_changelog=true
+          fi
+          {
+            echo "source-sha=$source_sha"
+            echo "target-sha=$target_sha"
+            echo "tag-oid=$tag_oid"
+            echo "generate-changelog=$generate_changelog"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build fresh stable changelog
+        id: changelog
+        if: steps.source.outputs.generate-changelog == 'true'
+        uses: mikepenz/release-changelog-builder-action@v6
+        with:
+          fromTag: ${{ steps.source.outputs.previous-tag }}
+          toTag: ${{ steps.source.outputs.source-sha }}
+          outputFile: .release-changelog.md
+          failOnError: true
+          configurationJson: |
+            {
+              "template": "#{{CHANGELOG}}",
+              "pr_template": "- #{{TITLE}} [\\##{{NUMBER}}](#{{URL}}) ([#{{AUTHOR}}](https://github.com/#{{AUTHOR}}))",
+              "empty_template": "",
+              "categories": [
+                {"title": "**Breaking Changes**", "labels": ["Semver-Major", "breaking-change"], "consume": true},
+                {"title": "**New Features**", "labels": ["feature"], "consume": true},
+                {"title": "**Enhancements**", "labels": ["Semver-Minor", "enhancement"], "consume": true},
+                {"title": "**Bug Fixes**", "labels": ["fix", "bug", "bugfix"], "consume": true},
+                {"title": "**Documentation**", "labels": ["documentation"], "consume": true},
+                {"title": "**Code Quality**", "labels": ["code-quality"], "consume": true},
+                {"title": "**Maintenance**", "labels": ["chore", "github_actions"], "consume": true},
+                {"title": "**Other Changes**", "labels": [], "consume": true}
+              ],
+              "ignore_labels": ["ignore-for-release", "dependencies"]
+            }
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Construct and build candidate without write credentials
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_SHA: ${{ github.sha }}
+          HELPERS: ${{ steps.trusted.outputs.helpers }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          SOURCE_SHA: ${{ steps.source.outputs.source-sha }}
+          TARGET_SHA: ${{ steps.source.outputs.target-sha }}
+          TAG_OID: ${{ steps.source.outputs.tag-oid }}
+          GENERATE_CHANGELOG: ${{ steps.source.outputs.generate-changelog }}
+          PREVIOUS_TAG: ${{ steps.source.outputs.previous-tag }}
+        run: |
+          set -euo pipefail
+          candidate_sha="$SOURCE_SHA"
+          if [[ "$GENERATE_CHANGELOG" == true ]]; then
+            fragment=.release-changelog.md
+            release_date="$(git show -s --format=%cs "$SOURCE_SHA")"
+            python3 "$HELPERS/release_changelog.py" \
+              --fragment "$fragment" --release-tag "$RELEASE_TAG" \
+              --previous-tag "$PREVIOUS_TAG" --release-date "$release_date" \
+              --github-repository "$GITHUB_REPOSITORY"
+            rm "$fragment"
             python3 "$HELPERS/prepare_release.py" "$RELEASE_TAG"
             git add aiopnsense/const.py docs/source/changelog.md
             git diff --cached --check
             [[ "$(git diff --cached --name-only)" == $'aiopnsense/const.py\ndocs/source/changelog.md' ]]
             [[ "$(git status --porcelain --untracked-files=all)" == $'M  aiopnsense/const.py\nM  docs/source/changelog.md' ]]
             [[ "$(grep -Fc "## [$RELEASE_TAG](" docs/source/changelog.md)" == 1 ]]
-            commit_epoch="$(git show -s --format=%ct "$source_sha")"
+            commit_epoch="$(git show -s --format=%ct "$SOURCE_SHA")"
             GIT_AUTHOR_NAME='github-actions[bot]'
             GIT_AUTHOR_EMAIL='41898282+github-actions[bot]@users.noreply.github.com'
             GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
@@ -122,8 +182,8 @@ jobs:
           "$RUNNER_TEMP/release-tools/bin/twine" check "$handoff"/dist/*
           python3 "$HELPERS/release_handoff.py" create --handoff "$handoff" \
             --release-tag "$RELEASE_TAG" --release-id "$RELEASE_ID" --prerelease "$PRERELEASE" \
-            --source-sha "$source_sha" --candidate-sha "$candidate_sha" \
-            --target-sha "$target_sha" --tag-oid "$tag_oid"
+            --source-sha "$SOURCE_SHA" --candidate-sha "$candidate_sha" \
+            --target-sha "$TARGET_SHA" --tag-oid "$TAG_OID"
       - name: Upload bounded candidate handoff
         uses: actions/upload-artifact@v7
         with:

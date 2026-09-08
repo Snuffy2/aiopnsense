@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import re
@@ -126,7 +127,10 @@ def test_release_workflow_separates_read_only_candidate_from_promotion() -> None
     assert "queue: max" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "timeout-minutes: 30" in candidate
-    assert re.search(r"(?m)^    permissions:\s+      contents: read\s*$", candidate)
+    assert re.search(
+        r"(?m)^    permissions:\s+      contents: read\s+      pull-requests: read\s*$",
+        candidate,
+    )
     assert "contents: write" not in candidate
     assert "actions: write" not in candidate
     assert "git push " not in candidate
@@ -143,6 +147,7 @@ def test_candidate_uses_trusted_locked_tools_then_hands_off_bounded_artifacts() 
     """Require candidate construction to use trusted tools before detached source execution."""
     candidate = _job_block(_workflow_text(), "candidate")
     snapshot = _step_containing(candidate, "Snapshot trusted policy and locked tools")
+    source = _step_containing(candidate, "Determine candidate source and changelog range")
     construct = _step_containing(
         candidate, "Construct and build candidate without write credentials"
     )
@@ -154,10 +159,11 @@ def test_candidate_uses_trusted_locked_tools_then_hands_off_bounded_artifacts() 
         'UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/release-tools" uv sync --locked --only-group dev'
     )
     assert (
-        "cp .github/scripts/{prepare_release.py,release_version.py,release_handoff.py}" in snapshot
+        "cp .github/scripts/{prepare_release.py,release_version.py,release_handoff.py,release_changelog.py}"
+        in snapshot
     )
-    assert 'git checkout --detach "$EVENT_SHA"' in construct
-    assert candidate.index(snapshot) < candidate.index(construct)
+    assert 'git checkout --detach "$EVENT_SHA"' in source
+    assert candidate.index(snapshot) < candidate.index(source) < candidate.index(construct)
     assert '"$RUNNER_TEMP/release-tools/bin/python" -m build --no-isolation' in construct
     assert '"$RUNNER_TEMP/release-tools/bin/twine" check "$handoff"/dist/*' in construct
     assert 'release_handoff.py" create' in construct
@@ -170,6 +176,60 @@ def test_candidate_uses_trusted_locked_tools_then_hands_off_bounded_artifacts() 
     ):
         assert artifact in upload
     assert "if-no-files-found: error" in upload
+
+
+def test_fresh_stable_changelog_uses_explicit_range_and_safe_file_handoff() -> None:
+    """Require only fresh stable releases to prepend action output to existing history."""
+    candidate = _job_block(_workflow_text(), "candidate")
+    source = _step_containing(candidate, "Determine candidate source and changelog range")
+    changelog = _step_containing(candidate, "Build fresh stable changelog")
+    construct = _step_containing(
+        candidate, "Construct and build candidate without write credentials"
+    )
+
+    assert "ruby/setup-ruby" not in candidate
+    assert "bundler-cache" not in candidate
+    assert "Gemfile" not in candidate
+    assert "github_changelog_generator" not in candidate
+    assert 'git tag --merged "$source_sha" | python3 "$HELPERS/release_changelog.py"' in source
+    assert '--previous-stable-tag "$RELEASE_TAG"' in source
+    assert 'git rev-list --max-parents=0 "$source_sha"' in source
+    assert "generate_changelog=true" in source
+    assert 'elif [[ "$(git show -s --format=%s "$EVENT_SHA")"' in source
+    assert "if: steps.source.outputs.generate-changelog == 'true'" in changelog
+    assert "mikepenz/release-changelog-builder-action@v6" in changelog
+    assert "fromTag: ${{ steps.source.outputs.previous-tag }}" in changelog
+    assert "toTag: ${{ steps.source.outputs.source-sha }}" in changelog
+    assert "outputFile: .release-changelog.md" in changelog
+    assert "failOnError: true" in changelog
+    assert "configurationJson:" in changelog
+    assert "**Bug Fixes**" in changelog
+    assert "**Other Changes**" in changelog
+    assert "GITHUB_TOKEN: ${{ github.token }}" in changelog
+    configuration = changelog.split("configurationJson: |\n", maxsplit=1)[1].split(
+        "        env:", maxsplit=1
+    )[0]
+    categories = json.loads(
+        "\n".join(line.removeprefix("            ") for line in configuration.splitlines())
+    )["categories"]
+    assert [category["title"] for category in categories] == [
+        "**Breaking Changes**",
+        "**New Features**",
+        "**Enhancements**",
+        "**Bug Fixes**",
+        "**Documentation**",
+        "**Code Quality**",
+        "**Maintenance**",
+        "**Other Changes**",
+    ]
+    assert all(category["consume"] is True for category in categories)
+    assert "outputs.changelog" not in candidate
+    assert 'python3 "$HELPERS/release_changelog.py"' in construct
+    assert '--fragment "$fragment" --release-tag "$RELEASE_TAG"' in construct
+    assert '--previous-tag "$PREVIOUS_TAG" --release-date "$release_date"' in construct
+    assert '--github-repository "$GITHUB_REPOSITORY"' in construct
+    assert 'rm "$fragment"' in construct
+    assert '[[ "$(grep -Fc "## [$RELEASE_TAG](" docs/source/changelog.md)" == 1 ]]' in construct
 
 
 def test_promote_reconstructs_and_verifies_handoff_with_trusted_helpers() -> None:
