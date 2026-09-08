@@ -620,6 +620,16 @@ def test_release_gate_dispatch_concurrency_isolated_by_candidate_sha() -> None:
     assert group(ref="refs/heads/main") == "prek-autofix-refs/heads/main"
 
 
+def test_release_gate_prek_dispatch_inherits_locked_uv() -> None:
+    """The dispatch path locks nested uv commands and retains the clean-tree proof."""
+    workflow = _workflow_text("prek-autofix-review.yml")
+    dispatch = _normalized(_step_containing(workflow, "Verify prek without pull-request context"))
+
+    assert "if: github.event_name == 'workflow_dispatch'" in dispatch
+    assert "UV_LOCKED=1 uv run --locked prek run --all-files" in dispatch
+    assert "git diff --exit-code" in dispatch
+
+
 @pytest.mark.parametrize(
     "workflow_name",
     ["pytest_check.yml", "docs.yml", "uv-lock-check.yml", "prek-autofix-review.yml"],
