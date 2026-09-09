@@ -713,7 +713,7 @@ def test_dependabot_workflows_authorize_history_before_pr_head_checkout() -> Non
         index
         for index, step in enumerate(steps)
         if str(step.get("uses", "")).startswith("actions/checkout@")
-        and _mapping(step["with"])["ref"] == "${{ inputs.expected_sha || github.sha }}"
+        and _mapping(step["with"])["ref"] == "${{ github.sha }}"
     )
     assert head_checkout_index > steps.index(_authorization_step(tests))
 
@@ -819,8 +819,7 @@ def test_coverage_writes_run_after_pr_checks_without_pr_checkout() -> None:
         step for step in _steps(publish) if _uses_major_action(step, "actions/checkout")
     )
     assert _mapping(checkout["with"])["persist-credentials"] is False
-    assert _mapping(checkout["with"])["ref"] == "${{ github.event.repository.default_branch }}"
-    assert "workflow_run.head_sha" not in str(checkout)
+    assert _mapping(checkout["with"])["ref"] == "${{ github.event.workflow_run.head_sha }}"
     verification_index, verification = next(
         (index, step)
         for index, step in enumerate(_steps(publish))
