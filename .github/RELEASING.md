@@ -44,10 +44,11 @@ Release Please derives version bumps and changelog entries from Conventional
 Commit subjects. Use `fix:` for a patch, `feat:` for a minor release, and a
 breaking-change marker for a major release. With squash merging, the pull
 request title becomes the relevant commit subject, so the **Lint PR title**
-workflow accepts Release Please's commit types, including non-releasable types
-such as `build:`, `chore:`, and `ci:`. Dependabot and prek hook update pull
-requests use the releasable `deps:` type. To force an occasional version,
-include a `Release-As: X.Y.Z` footer in the squash commit message.
+workflow accepts the same commit types configured for Release Please. The
+generated changelog includes every accepted type and identifies each commit
+author, so any accepted type can open a release pull request. Dependabot and
+prek hook updates use the `deps:` type. To force an occasional version, include
+a `Release-As: X.Y.Z` footer in the squash commit message.
 
 ## Prereleases
 
