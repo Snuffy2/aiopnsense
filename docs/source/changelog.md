@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.1.10](https://github.com/Snuffy2/aiopnsense/compare/v1.1.9...v1.1.10) (2026-09-10)
+
+
+### Bug Fixes
+
+* include all Release Please changelog types ([#128](https://github.com/Snuffy2/aiopnsense/issues/128)) ([3317a8b](https://github.com/Snuffy2/aiopnsense/commit/3317a8b5ce71ee2f4ac4a3625118cc1796198125))
+* recognize releasable dependency updates ([#126](https://github.com/Snuffy2/aiopnsense/issues/126)) ([a5e4a22](https://github.com/Snuffy2/aiopnsense/commit/a5e4a2232ae099002ac3988e0d34699b2250ed02))
+
+
+### Dependencies
+
+* bump actions/download-artifact from 7 to 8 ([fc2e871](https://github.com/Snuffy2/aiopnsense/commit/fc2e871f3b16147a67c6772b4a5d023d0fc57f47))
+
+
+### Miscellaneous Chores
+
+* **deps:** bump the python-dependencies group with 2 updates ([#125](https://github.com/Snuffy2/aiopnsense/issues/125)) ([433148a](https://github.com/Snuffy2/aiopnsense/commit/433148a453c56dd08fe47b800c7726f89ee8a40b))
+* update prek hooks ([#118](https://github.com/Snuffy2/aiopnsense/issues/118)) ([73a9985](https://github.com/Snuffy2/aiopnsense/commit/73a99859325c876b2de53ad020c4f012bee764e8))
+
+
+### Continuous Integration
+
+* bump Release Please action to v5 ([#122](https://github.com/Snuffy2/aiopnsense/issues/122)) ([6e629ba](https://github.com/Snuffy2/aiopnsense/commit/6e629ba9cd24afe1b061bc9d0a80494a832c4713))
+* enforce semantic pull request titles ([#123](https://github.com/Snuffy2/aiopnsense/issues/123)) ([4c4285e](https://github.com/Snuffy2/aiopnsense/commit/4c4285e23b887fb0e8bcbcf55d3bd624623432ee))
+* harden release workflow execution ([#129](https://github.com/Snuffy2/aiopnsense/issues/129)) ([2bcd02f](https://github.com/Snuffy2/aiopnsense/commit/2bcd02f116b6ce92c173b4804345a451972b7aaf))
+
 ## [v1.1.9](https://github.com/Snuffy2/aiopnsense/tree/v1.1.9) (2026-09-04)
 
 [Full Changelog](https://github.com/Snuffy2/aiopnsense/compare/v1.1.8...v1.1.9)
