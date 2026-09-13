@@ -189,49 +189,40 @@ async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> No
         ({}, None),
         ({"rows": None}, None),
         ({"rows": {}}, None),
+        pytest.param(TimeoutError("ARP request timed out"), None, id="transport-timeout"),
     ],
 )
-async def test_get_arp_table_distinguishes_empty_and_missing_rows(
+async def test_get_arp_table_distinguishes_empty_and_failed_lookups(
     make_client: ClientType,
-    response: dict[str, Any],
+    response: dict[str, Any] | TimeoutError,
     expected: list[dict[str, str]] | None,
 ) -> None:
-    """Only an explicit list of ARP rows is an authoritative inventory.
+    """Only a successful response with list rows is an authoritative inventory.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        response (dict[str, Any]): Simulated ARP endpoint payload.
-        expected (list[dict[str, str]] | None): Public result for the payload.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._safe_dict_get = AsyncMock(return_value=response)
-
-        assert await client.get_arp_table() == expected
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_arp_table_timeout_is_not_an_empty_inventory(make_client: ClientType) -> None:
-    """A swallowed transport timeout must reach callers as missing ARP data.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        response (dict[str, Any] | TimeoutError): Endpoint payload or transport failure.
+        expected (list[dict[str, str]] | None): Public result for the lookup.
     """
     client, session = make_mock_session_client(make_client)
+    get_mock: AsyncMock | None = None
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._get = AsyncMock(side_effect=client._do_get)
-        session.get.side_effect = TimeoutError("ARP request timed out")
+        if isinstance(response, TimeoutError):
+            client._is_get_endpoint_available = AsyncMock(return_value=True)
+            get_mock = AsyncMock(side_effect=client._do_get)
+            client._get = get_mock
+            session.get.side_effect = response
+        else:
+            client._safe_dict_get = AsyncMock(return_value=response)
 
-        assert await client.get_arp_table(resolve_hostnames=True) is None
-        client._get.assert_awaited_once_with(
-            path="/api/diagnostics/interface/search_arp?resolve=yes"
-        )
-        assert session.get.call_args.args[0].endswith(
-            "/api/diagnostics/interface/search_arp?resolve=yes"
-        )
+        assert await client.get_arp_table(resolve_hostnames=True) == expected
+        if get_mock is not None:
+            get_mock.assert_awaited_once_with(
+                path="/api/diagnostics/interface/search_arp?resolve=yes"
+            )
+            assert session.get.call_args.args[0].endswith(
+                "/api/diagnostics/interface/search_arp?resolve=yes"
+            )
     finally:
         await client.async_close()
 
