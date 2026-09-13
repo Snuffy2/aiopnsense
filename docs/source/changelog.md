@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.11](https://github.com/Snuffy2/aiopnsense/compare/v1.1.10...v1.1.11) (2026-09-13)
+
+
+### Bug Fixes
+
+* accept release commit SHA as publish target ([#131](https://github.com/Snuffy2/aiopnsense/issues/131)) ([869f88f](https://github.com/Snuffy2/aiopnsense/commit/869f88f4d2db85f9072f593451a13fea60777ad8))
+* distinguish failed ARP lookups from empty tables ([#133](https://github.com/Snuffy2/aiopnsense/issues/133)) ([8c1b5c1](https://github.com/Snuffy2/aiopnsense/commit/8c1b5c11633ce687ea193f01862da4994dae6e42))
+
 ## [1.1.10](https://github.com/Snuffy2/aiopnsense/compare/v1.1.9...v1.1.10) (2026-09-13)
 
 
