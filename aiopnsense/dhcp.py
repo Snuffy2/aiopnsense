@@ -132,16 +132,18 @@ class DHCPMixin(AiopnsenseClientProtocol):
             lease["reserved_by"] = list(raw_reserved)
 
     @_log_errors
-    async def get_arp_table(self, resolve_hostnames: bool = False) -> list:
+    async def get_arp_table(self, resolve_hostnames: bool = False) -> list | None:
         """Return active ARP table entries.
 
         Args:
             resolve_hostnames (bool): Whether reverse DNS lookups should be requested.
 
         Returns:
-            list: ARP rows from OPNsense, optionally with resolved hostnames,
+            list | None: ARP rows from OPNsense, optionally with resolved hostnames,
                 including fields such as IP address, MAC address, interface,
-                expiration, and entry type when provided by the endpoint.
+                expiration, and entry type when provided by the endpoint. An
+                absent or malformed rows field returns None rather than an
+                authoritative empty table.
         """
         # [{'hostname': '?', 'ip-address': '<ip>', 'mac-address': '<mac>', 'interface': 'em0', 'expires': 1199, 'type': 'ethernet'}, ...]
         resolve_flag = "yes" if resolve_hostnames else "no"
@@ -151,8 +153,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
 
         arp_endpoint_resolve = f"{ARP_TABLE_ENDPOINT}?resolve={resolve_flag}"
         arp_table_info = await self._safe_dict_get(arp_endpoint_resolve)
-        arp_table: list = arp_table_info.get("rows", [])
-        return arp_table
+        arp_table = arp_table_info.get("rows")
+        return arp_table if isinstance(arp_table, list) else None
 
     @_log_errors
     async def get_dhcp_leases(self, opnsense_tz: tzinfo | None = None) -> dict[str, Any]:
