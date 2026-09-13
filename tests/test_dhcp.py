@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, MutableMapping
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock
 
 import pytest
@@ -182,20 +182,24 @@ async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> No
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("response", "expected"),
+    ("response", "expected", "failure_stage"),
     [
-        ({"rows": []}, []),
-        ({"rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}, [{"mac": "aa:bb:cc:dd:ee:ff"}]),
-        ({}, None),
-        ({"rows": None}, None),
-        ({"rows": {}}, None),
-        pytest.param(TimeoutError("ARP request timed out"), None, id="transport-timeout"),
+        ({"rows": []}, [], None),
+        ({"rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}, [{"mac": "aa:bb:cc:dd:ee:ff"}], None),
+        ({}, None, None),
+        ({"rows": None}, None, None),
+        ({"rows": {}}, None, None),
+        pytest.param(TimeoutError("ARP request timed out"), None, "request", id="request-timeout"),
+        pytest.param(
+            TimeoutError("ARP endpoint probe timed out"), None, "probe", id="probe-timeout"
+        ),
     ],
 )
 async def test_get_arp_table_distinguishes_empty_and_failed_lookups(
     make_client: ClientType,
     response: dict[str, Any] | TimeoutError,
     expected: list[dict[str, str]] | None,
+    failure_stage: Literal["request", "probe"] | None,
 ) -> None:
     """Only a successful response with list rows is an authoritative inventory.
 
@@ -203,14 +207,17 @@ async def test_get_arp_table_distinguishes_empty_and_failed_lookups(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         response (dict[str, Any] | TimeoutError): Endpoint payload or transport failure.
         expected (list[dict[str, str]] | None): Public result for the lookup.
+        failure_stage (Literal["request", "probe"] | None): Stage where a timeout occurs.
     """
     client, session = make_mock_session_client(make_client)
     get_mock: AsyncMock | None = None
     try:
-        if isinstance(response, TimeoutError):
+        if failure_stage == "request":
             client._is_get_endpoint_available = AsyncMock(return_value=True)
             get_mock = AsyncMock(side_effect=client._do_get)
             client._get = get_mock
+            session.get.side_effect = response
+        elif failure_stage == "probe":
             session.get.side_effect = response
         else:
             client._safe_dict_get = AsyncMock(return_value=response)
@@ -223,26 +230,9 @@ async def test_get_arp_table_distinguishes_empty_and_failed_lookups(
             assert session.get.call_args.args[0].endswith(
                 "/api/diagnostics/interface/search_arp?resolve=yes"
             )
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_arp_table_probe_timeout_is_not_an_empty_inventory(
-    make_client: ClientType,
-) -> None:
-    """An endpoint-probe timeout must not look like an empty ARP table.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    try:
-        session.get.side_effect = TimeoutError("ARP endpoint probe timed out")
-
-        assert await client.get_arp_table(resolve_hostnames=True) is None
-        session.get.assert_called_once()
-        assert session.get.call_args.args[0].endswith("/api/diagnostics/interface/search_arp")
+        elif failure_stage == "probe":
+            session.get.assert_called_once()
+            assert session.get.call_args.args[0].endswith("/api/diagnostics/interface/search_arp")
     finally:
         await client.async_close()
 
