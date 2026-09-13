@@ -228,6 +228,26 @@ async def test_get_arp_table_distinguishes_empty_and_failed_lookups(
 
 
 @pytest.mark.asyncio
+async def test_get_arp_table_probe_timeout_is_not_an_empty_inventory(
+    make_client: ClientType,
+) -> None:
+    """An endpoint-probe timeout must not look like an empty ARP table.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    try:
+        session.get.side_effect = TimeoutError("ARP endpoint probe timed out")
+
+        assert await client.get_arp_table(resolve_hostnames=True) is None
+        session.get.assert_called_once()
+        assert session.get.call_args.args[0].endswith("/api/diagnostics/interface/search_arp")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method_name", "endpoint"),
     [
@@ -1528,7 +1548,7 @@ async def test_dhcp_switched_endpoints_follow_selected_case(
 async def test_version_switched_get_arp_table_endpoint_unavailable(
     make_client: ClientType,
 ) -> None:
-    """Verify ARP table helper fails closed when endpoint becomes unavailable.
+    """Verify an unavailable ARP endpoint is not an authoritative empty table.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1552,7 +1572,7 @@ async def test_version_switched_get_arp_table_endpoint_unavailable(
         )
 
         client._safe_dict_get = AsyncMock()
-        assert await client.get_arp_table(resolve_hostnames=False) == []
+        assert await client.get_arp_table(resolve_hostnames=False) is None
         client._safe_dict_get.assert_not_awaited()
         assert client._is_get_endpoint_available.await_count == 2
         assert (

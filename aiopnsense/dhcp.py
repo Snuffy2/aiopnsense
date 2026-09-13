@@ -142,14 +142,14 @@ class DHCPMixin(AiopnsenseClientProtocol):
             list | None: ARP rows from OPNsense, optionally with resolved hostnames,
                 including fields such as IP address, MAC address, interface,
                 expiration, and entry type when provided by the endpoint. An
-                absent or malformed rows field returns None rather than an
-                authoritative empty table.
+                unavailable endpoint, or an absent or malformed rows field,
+                returns None rather than an authoritative empty table.
         """
         # [{'hostname': '?', 'ip-address': '<ip>', 'mac-address': '<mac>', 'interface': 'em0', 'expires': 1199, 'type': 'ethernet'}, ...]
         resolve_flag = "yes" if resolve_hostnames else "no"
         if not await self._is_get_endpoint_available(ARP_TABLE_ENDPOINT):
             _LOGGER.debug("ARP endpoint unavailable")
-            return []
+            return None
 
         arp_endpoint_resolve = f"{ARP_TABLE_ENDPOINT}?resolve={resolve_flag}"
         arp_table_info = await self._safe_dict_get(arp_endpoint_resolve)
