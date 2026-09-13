@@ -34,10 +34,6 @@ jobs:
           RELEASE_TARGET: ${{ github.event.release.target_commitish }}
         run: |
           set -euo pipefail
-          if [[ "$RELEASE_TARGET" != "$DEFAULT_BRANCH" ]]; then
-            echo "Release target must be the default branch." >&2
-            exit 1
-          fi
           if [[ "$IS_PRERELEASE" == "false" ]]; then
             if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "Stable release tag must be a v-prefixed semantic version." >&2
@@ -50,6 +46,10 @@ jobs:
           git fetch --force --no-tags origin \
             "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
           tag_sha="$(git rev-parse "$RELEASE_TAG^{}")"
+          if [[ "$RELEASE_TARGET" != "$DEFAULT_BRANCH" && "$RELEASE_TARGET" != "$tag_sha" ]]; then
+            echo "Release target must be the default branch or the release commit." >&2
+            exit 1
+          fi
           if [[ "$(git rev-parse HEAD)" != "$tag_sha" ]]; then
             echo "Checked-out revision does not match the release tag." >&2
             exit 1
