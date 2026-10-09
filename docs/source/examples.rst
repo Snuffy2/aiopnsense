@@ -88,30 +88,3 @@ Check firmware or control a service
                print(f"Restarted unbound: {restarted}")
 
    asyncio.run(main())
-
-Toggle an interface
--------------------
-
-Requires OPNsense >= 26.7.6. Pass ``"on"`` to enable, ``"off"`` to disable,
-or omit the target to toggle. The method saves and applies the setting in one
-call and refuses to proceed if interface changes are already pending.
-
-.. code-block:: python
-
-   import asyncio
-   import aiohttp
-   from aiopnsense import OPNsenseClient
-
-   async def main() -> None:
-       async with aiohttp.ClientSession() as session:
-           async with OPNsenseClient(
-               url="https://opnsense.example.com",
-               username="YOUR_API_KEY",
-               password="YOUR_API_SECRET",
-               session=session,
-               throw_errors=True,
-           ) as client:
-               if not await client.toggle_interface("opt8", "on"):
-                   raise RuntimeError("Interface enable change was not applied")
-
-   asyncio.run(main())
