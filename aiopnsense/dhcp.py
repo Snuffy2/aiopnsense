@@ -1,4 +1,4 @@
-"""DHCP and ARP methods for OPNsenseClient."""
+"""DHCP, ARP, and NDP methods for OPNsenseClient."""
 
 from collections.abc import MutableMapping
 from datetime import datetime, tzinfo
@@ -16,6 +16,7 @@ from .helpers import (
 )
 
 ARP_TABLE_ENDPOINT = "/api/diagnostics/interface/search_arp"
+NDP_TABLE_ENDPOINT = "/api/diagnostics/interface/search_ndp"
 KEA_DHCPV4_GET_ENDPOINT = "/api/kea/dhcpv4/get"
 KEA_LEASES4_SEARCH_ENDPOINT = "/api/kea/leases4/search"
 KEA_LEASES6_SEARCH_ENDPOINT = "/api/kea/leases6/search"
@@ -30,7 +31,7 @@ ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT = "/api/dhcpv6/leases/searchLease"
 
 
 class DHCPMixin(AiopnsenseClientProtocol):
-    """DHCP methods for OPNsenseClient."""
+    """DHCP and neighbor-table methods for OPNsenseClient."""
 
     def _normalize_lease_key_value(self, value: Any) -> Any:
         """Convert nested lease values into stable, hashable objects.
@@ -155,6 +156,27 @@ class DHCPMixin(AiopnsenseClientProtocol):
         arp_table_info = await self._safe_dict_get(arp_endpoint_resolve)
         arp_table = arp_table_info.get("rows")
         return arp_table if isinstance(arp_table, list) else None
+
+    @_log_errors
+    async def get_ndp_table(self) -> list | None:
+        """Return IPv6 neighbors from the OPNsense NDP table.
+
+        Returns:
+            list | None: Unmodified neighbor rows containing ``ip``, ``mac``,
+                ``intf``, ``intf_description``, and ``manufacturer`` when supplied.
+                IPv6 addresses may include an interface scope suffix. Multiple
+                addresses for the same MAC are preserved, including SLAAC and
+                privacy addresses; DHCPv6 is not required. An empty list means
+                a successful lookup found no neighbors. An unavailable endpoint
+                or absent or malformed rows field returns ``None``.
+        """
+        if not await self._is_get_endpoint_available(NDP_TABLE_ENDPOINT):
+            _LOGGER.debug("NDP endpoint unavailable")
+            return None
+
+        ndp_table_info = await self._safe_dict_get(NDP_TABLE_ENDPOINT)
+        ndp_table = ndp_table_info.get("rows")
+        return ndp_table if isinstance(ndp_table, list) else None
 
     @_log_errors
     async def get_dhcp_leases(self, opnsense_tz: tzinfo | None = None) -> dict[str, Any]:

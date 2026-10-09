@@ -20,7 +20,7 @@ The client currently includes helpers for:
 - firmware version checks, update status, and upgrade actions
 - interface, gateway, CPU, memory, filesystem, and temperature telemetry
 - diagnostics traffic snapshots and live interface traffic stream samples
-- DHCP lease and ARP table access
+- DHCP lease, IPv4 ARP table, and IPv6 NDP table access
 - firewall rules, NAT rules, alias toggling, and state killing
 - service status lookup and service start/stop/restart operations
 - SMART device listing and per-device SMART detail queries

@@ -2,15 +2,119 @@
 
 from collections.abc import Callable, MutableMapping
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any, Literal
 from unittest.mock import AsyncMock
 
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import make_mock_session_client
+from aiopnsense.exceptions import (
+    OPNsenseConnectionError,
+    OPNsensePrivilegeMissing,
+    OPNsenseTimeoutError,
+)
+from tests.conftest import FakeResponse, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "status", "failure_stage", "expected"),
+    [
+        ({"rows": []}, 200, None, []),
+        (
+            {
+                "rows": [
+                    {"mac": "aa:bb:cc:dd:ee:ff", "ip": "2001:db8::1", "intf": "em0"},
+                    {"mac": "aa:bb:cc:dd:ee:ff", "ip": "fe80::1%em0", "intf": "em0"},
+                ]
+            },
+            200,
+            None,
+            [
+                {"mac": "aa:bb:cc:dd:ee:ff", "ip": "2001:db8::1", "intf": "em0"},
+                {"mac": "aa:bb:cc:dd:ee:ff", "ip": "fe80::1%em0", "intf": "em0"},
+            ],
+        ),
+        ({}, 200, None, None),
+        ({"rows": None}, 200, None, None),
+        ({"rows": {}}, 200, None, None),
+        ([], 200, None, None),
+        (None, 403, "probe", None),
+        (None, 404, "probe", None),
+        (None, 500, "request", None),
+        (TimeoutError("NDP request timed out"), 200, "request", None),
+        (TimeoutError("NDP probe timed out"), 200, "probe", None),
+    ],
+)
+async def test_get_ndp_table_http_results(
+    make_client: ClientType,
+    payload: object,
+    status: int,
+    failure_stage: Literal["request", "probe"] | None,
+    expected: list[dict[str, str]] | None,
+) -> None:
+    """Preserve IPv6 neighbor rows and distinguish absence from failed discovery.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        payload (object): JSON response or simulated transport error.
+        status (int): HTTP status of the table lookup or failed probe.
+        failure_stage (Literal["request", "probe"] | None): Stage that fails.
+        expected (list[dict[str, str]] | None): Public inventory result.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._get = AsyncMock(side_effect=client._do_get)
+    response = FakeResponse(status=status, ok=status == 200, json_payload=payload)
+    result = payload if isinstance(payload, TimeoutError) else response
+    session.get.side_effect = [result] if failure_stage == "probe" else [FakeResponse(), result]
+
+    assert await client.get_ndp_table() == expected
+    assert all(
+        call.args[0] == "http://localhost/api/diagnostics/interface/search_ndp"
+        for call in session.get.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["probe", "request"])
+@pytest.mark.parametrize(
+    ("status", "timeout", "expected_error"),
+    [
+        (403, False, OPNsensePrivilegeMissing),
+        (500, False, OPNsenseConnectionError),
+        (200, True, OPNsenseTimeoutError),
+    ],
+    ids=["permission", "server", "timeout"],
+)
+async def test_get_ndp_table_propagates_public_errors(
+    make_client: ClientType,
+    failure_stage: Literal["probe", "request"],
+    status: int,
+    timeout: bool,
+    expected_error: type[OPNsenseConnectionError],
+) -> None:
+    """Throwing clients expose public errors from either NDP HTTP stage.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        failure_stage (Literal["probe", "request"]): HTTP stage that fails.
+        status (int): Response status for simulated HTTP failures.
+        timeout (bool): Whether to simulate a transport timeout instead of a response.
+        expected_error (type[OPNsenseConnectionError]): Expected public exception type.
+    """
+    client, session = make_mock_session_client(partial(make_client, throw_errors=True))
+    client._get = AsyncMock(side_effect=client._do_get)
+    result = TimeoutError("NDP timed out") if timeout else FakeResponse(status=status, ok=False)
+    session.get.side_effect = [result] if failure_stage == "probe" else [FakeResponse(), result]
+
+    with pytest.raises(expected_error) as raised:
+        await client.get_ndp_table()
+
+    assert type(raised.value) is expected_error
+    assert raised.value.status == (None if timeout else status)
 
 
 @pytest.mark.asyncio
