@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.2.0](https://github.com/Snuffy2/aiopnsense/compare/v1.1.11...v1.2.0) (2026-10-09)
+
+
+### Features
+
+* add interface toggling API ([#143](https://github.com/Snuffy2/aiopnsense/issues/143)) ([9792320](https://github.com/Snuffy2/aiopnsense/commit/979232052d9f582a8c69307edbf8b1409dc64334))
+* add IPv6 NDP neighbor table support ([#144](https://github.com/Snuffy2/aiopnsense/issues/144)) ([4ab17a1](https://github.com/Snuffy2/aiopnsense/commit/4ab17a1f1092b62ed68c909936a47017e4b6aa21))
+
+
+### Bug Fixes
+
+* group Dependabot GitHub Actions updates ([#140](https://github.com/Snuffy2/aiopnsense/issues/140)) ([b28f2b6](https://github.com/Snuffy2/aiopnsense/commit/b28f2b6eeb5e406ebbe5ab61e01f761a8235d22a))
+
+
+### Dependencies
+
+* bump astral-sh/setup-uv from 10.0.1 to 10.1.0 ([#134](https://github.com/Snuffy2/aiopnsense/issues/134)) ([19a184b](https://github.com/Snuffy2/aiopnsense/commit/19a184b1e65826d895c83094417ffd04a53e52d1))
+* bump astral-sh/setup-uv from 10.1.0 to 10.2.0 ([#138](https://github.com/Snuffy2/aiopnsense/issues/138)) ([0f5ce2c](https://github.com/Snuffy2/aiopnsense/commit/0f5ce2c38dd253adb8e6ef1cb7ca0f16ce9f08b4))
+* bump py-cov-action/python-coverage-comment-action from 4.3 to 4.5 ([#137](https://github.com/Snuffy2/aiopnsense/issues/137)) ([0092a0f](https://github.com/Snuffy2/aiopnsense/commit/0092a0fd77e3ebaf177404e21f3fd94b55aa6b6f))
+* bump the python-dependencies group with 4 updates ([#135](https://github.com/Snuffy2/aiopnsense/issues/135)) ([310fbe9](https://github.com/Snuffy2/aiopnsense/commit/310fbe9ec034cedc5faae79407daeeb0194ee1cd))
+* bump the python-dependencies group with 4 updates ([#136](https://github.com/Snuffy2/aiopnsense/issues/136)) ([853b217](https://github.com/Snuffy2/aiopnsense/commit/853b217aea55903a318f75ce9156e7571d07a7da))
+* bump the python-dependencies group with 4 updates ([#139](https://github.com/Snuffy2/aiopnsense/issues/139)) ([c4ce98b](https://github.com/Snuffy2/aiopnsense/commit/c4ce98b079fc7960b739119a457ad6b28cd4fce0))
+* bump the python-dependencies group with 4 updates ([#142](https://github.com/Snuffy2/aiopnsense/issues/142)) ([ec4e056](https://github.com/Snuffy2/aiopnsense/commit/ec4e0565404e9495daff3ebb6e75454747843061))
+
+
+### Miscellaneous Chores
+
+* **deps:** patch vulnerable multidict and urllib3 ([#145](https://github.com/Snuffy2/aiopnsense/issues/145)) ([0195d41](https://github.com/Snuffy2/aiopnsense/commit/0195d41661efca7701af8ecfb7fbb49c26b07c1e))
+
 ## [1.1.11](https://github.com/Snuffy2/aiopnsense/compare/v1.1.10...v1.1.11) (2026-09-13)
 
 
