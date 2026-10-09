@@ -116,20 +116,27 @@ class SystemMixin(AiopnsenseClientProtocol):
         return dict(interface)
 
     @_log_errors
-    async def toggle_interface(self, if_name: str, toggle_on_off: str | None = None) -> bool:
+    async def toggle_interface(self, if_name: str, toggle_on_off: str | None = None) -> bool | None:
         """Toggle an interface's enabled state and apply the resulting configuration.
 
         Only the ``enable`` field is sent; other API settings are not
         resubmitted. The method refuses to proceed if the global interface
         queue already has pending or unreadable changes. The pending check is
         not atomic, so coordinate interface changes with other clients and
-        OPNsense UI users. A failed save or apply can leave a queued change.
-        Cancelling this coroutine does not stop an in-flight queued request.
-        Cancellation during the save can therefore leave the interface change
-        pending without reconfiguration.
-        Reconfiguration on OPNsense 26.7.6 also migrates legacy interface
-        settings, including resetting advanced/file-based DHCP modes on save;
-        review the 26.7.6 release notes before applying changes.
+        OPNsense UI users. A failed or interrupted save or reconfiguration can
+        leave changes pending. Later toggles refuse while the global queue is
+        pending or unreadable. Review and resolve pending configuration in the
+        OPNsense UI before retrying. Do not blindly retry the global
+        reconfiguration: queued changes may belong to other interfaces or
+        users, and this client cannot determine their ownership. Cancelling
+        this coroutine does not stop an in-flight queued request, so
+        cancellation during save or apply can leave pending work or an
+        uncertain apply outcome.
+
+        On OPNsense 26.7.6, reconfiguration rewrites queued interfaces' legacy
+        settings and removes advanced and file-based DHCP fields during apply,
+        not save. Toggling an interface carrying this API connection can
+        disconnect the client and leave the apply outcome uncertain.
 
         Args:
             if_name (str): Logical interface identifier such as ``wan``, ``lan``, or ``opt8``.
@@ -137,12 +144,17 @@ class SystemMixin(AiopnsenseClientProtocol):
                 enable, ``off`` to disable, or ``None`` to invert the current state.
 
         Returns:
-            bool: True when the setting already matches or was saved and applied;
-                False when unsupported, pending work exists, the item is unreadable,
-                or OPNsense rejects the save or apply.
+            bool | None: True when the setting already matches or was saved and
+                applied. False when unsupported, pending work exists, the item
+                is unreadable, or the save or apply does not succeed. In
+                non-throwing mode, a request failure handled by the client
+                returns False, while invalid arguments return None. With
+                ``throw_errors`` enabled, invalid arguments and mapped request
+                errors raise exceptions.
 
         Raises:
-            OPNsenseInvalidArgument: The identifier or explicit target is invalid.
+            OPNsenseInvalidArgument: The identifier or explicit target is invalid
+                and ``throw_errors`` is enabled.
         """
         self._validate_interface_identifier(if_name)
         if toggle_on_off is not None and (
@@ -156,7 +168,8 @@ class SystemMixin(AiopnsenseClientProtocol):
         pending_status = pending_response.get("status")
         if not isinstance(pending_status, str) or pending_status.strip().lower() != "ok":
             _LOGGER.debug(
-                "Refusing to change interface %s because pending interface state is not clear",
+                "Refusing to change interface %s because pending interface state is not clear. "
+                "Review and resolve pending configuration in the OPNsense UI before retrying",
                 if_name,
             )
             return False
@@ -187,7 +200,15 @@ class SystemMixin(AiopnsenseClientProtocol):
         apply_response = await self._safe_dict_post(
             INTERFACE_ASSIGNMENT_RECONFIGURE_ENDPOINT, payload={}
         )
-        return str(apply_response.get("status", "")).strip().lower() == "ok"
+        apply_succeeded = str(apply_response.get("status", "")).strip().lower() == "ok"
+        if not apply_succeeded:
+            _LOGGER.warning(
+                "Interface %s was saved, but reconfiguration did not report success; the "
+                "apply outcome may be uncertain. Review pending configuration in the "
+                "OPNsense UI before retrying, and do not blindly repeat the global reconfigure",
+                if_name,
+            )
+        return apply_succeeded
 
     def _handle_missing_device_unique_id(self) -> None:
         """Raise when device unique ID resolution failed in throwing mode.

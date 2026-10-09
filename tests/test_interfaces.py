@@ -389,27 +389,41 @@ async def test_toggle_interface_cancellation_during_save_leaves_change_pending(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("apply_response", [{}, {"status": "failed"}])
+@pytest.mark.parametrize(
+    "apply_response",
+    [{}, {"status": "failed"}, aiohttp.ServerTimeoutError("apply timed out")],
+)
 async def test_toggle_interface_reports_apply_failure(
-    make_client: ClientType, apply_response: dict[str, str]
+    make_client: ClientType,
+    apply_response: dict[str, Any] | aiohttp.ServerTimeoutError,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Report failed apply while leaving any queued state for operator handling.
+    """Refuse retry while failed apply leaves pending work for operator review.
 
     Args:
         make_client (ClientType): Fixture factory returning OPNsense clients.
-        apply_response (dict[str, str]): Response returned when applying interface changes.
+        apply_response (dict[str, Any] | aiohttp.ServerTimeoutError): Apply response or timeout.
+        caplog (pytest.LogCaptureFixture): Captured warning logs from the client.
     """
     client, session = make_mock_session_client(make_client)
     client.get_host_firmware_version = AsyncMock(return_value="26.7.6")
     requests = install_responses(
         client,
         session,
-        get_payloads=[{"status": "ok"}, INTERFACE_ITEM],
+        get_payloads=[{"status": "ok"}, INTERFACE_ITEM, {"status": "pending"}],
         post_payloads=[{"result": "saved"}, apply_response],
     )
     try:
         assert await client.toggle_interface("opt8", "off") is False
-        assert any(url.endswith("/reconfigure") for _method, url, _body in requests)
+        assert await client.toggle_interface("opt8", "off") is False
+        assert [url.removeprefix("http://localhost") for _method, url, _body in requests] == [
+            "/api/interfaces/assignment/pending",
+            "/api/interfaces/assignment/get_item/opt8",
+            "/api/interfaces/assignment/set_item/opt8",
+            "/api/interfaces/assignment/reconfigure",
+            "/api/interfaces/assignment/pending",
+        ]
+        assert "Review pending configuration in the OPNsense UI before retrying" in caplog.text
     finally:
         await client.async_close()
 
@@ -426,22 +440,27 @@ async def test_toggle_interface_reports_apply_failure(
         ("opt8", []),
     ],
 )
+@pytest.mark.parametrize("throw_errors", [False, True])
 async def test_toggle_interface_rejects_invalid_arguments(
-    make_client: ClientType, if_name: str, target: Any
+    make_client: ClientType, if_name: str, target: Any, throw_errors: bool
 ) -> None:
-    """Reject physical names, path content, and malformed targets without toggling.
+    """Apply the client error convention to invalid arguments without requests.
 
     Args:
         make_client (ClientType): Fixture factory returning OPNsense clients.
         if_name (str): Interface identifier supplied to the public method.
         target (Any): Explicit target state or omitted toggle action.
+        throw_errors (bool): Whether the client propagates public errors.
     """
     client, session = make_mock_session_client(make_client)
     requests = install_responses(client, session)
-    client.toggle_throwing_errors(True)
+    client.toggle_throwing_errors(throw_errors)
     try:
-        with pytest.raises(OPNsenseInvalidArgument):
-            await client.toggle_interface(if_name, target)
+        if throw_errors:
+            with pytest.raises(OPNsenseInvalidArgument):
+                await client.toggle_interface(if_name, target)
+        else:
+            assert await client.toggle_interface(if_name, target) is None
         assert requests == []
     finally:
         await client.async_close()
@@ -460,29 +479,35 @@ async def test_toggle_interface_rejects_invalid_arguments(
         ),
     ],
 )
+@pytest.mark.parametrize("throw_errors", [False, True])
 async def test_toggle_interface_transport_failures_stop_at_the_failed_step(
     make_client: ClientType,
     get_payloads: list[Any],
     post_payloads: list[Any],
     expected_reconfigure_count: int,
+    throw_errors: bool,
 ) -> None:
-    """Propagate transport errors and avoid progressing after a failed save.
+    """Respect error mode and stop progressing after a transport failure.
 
     Args:
         make_client (ClientType): Fixture factory returning OPNsense clients.
         get_payloads (list[Any]): Configured GET response payloads or transport errors.
         post_payloads (list[Any]): Configured POST response payloads or transport errors.
         expected_reconfigure_count (int): Expected number of attempted apply requests.
+        throw_errors (bool): Whether the client propagates public errors.
     """
     client, session = make_mock_session_client(make_client)
     client.get_host_firmware_version = AsyncMock(return_value="26.7.6")
     requests = install_responses(
         client, session, get_payloads=get_payloads, post_payloads=post_payloads
     )
-    client.toggle_throwing_errors(True)
+    client.toggle_throwing_errors(throw_errors)
     try:
-        with pytest.raises(OPNsenseConnectionError):
-            await client.toggle_interface("opt8", "off")
+        if throw_errors:
+            with pytest.raises(OPNsenseConnectionError):
+                await client.toggle_interface("opt8", "off")
+        else:
+            assert await client.toggle_interface("opt8", "off") is False
         reconfigure_count = sum(url.endswith("/reconfigure") for _method, url, _body in requests)
         assert reconfigure_count == expected_reconfigure_count
     finally:
