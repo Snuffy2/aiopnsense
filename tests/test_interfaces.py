@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Callable, MutableMapping
+import logging
 from types import TracebackType
 from typing import Any, Self
 from unittest.mock import AsyncMock
@@ -423,7 +424,12 @@ async def test_toggle_interface_reports_apply_failure(
             "/api/interfaces/assignment/reconfigure",
             "/api/interfaces/assignment/pending",
         ]
-        assert "Review pending configuration in the OPNsense UI before retrying" in caplog.text
+        assert any(
+            record.levelno == logging.WARNING
+            and "opt8" in record.getMessage()
+            and "OPNsense UI" in record.getMessage()
+            for record in caplog.records
+        )
     finally:
         await client.async_close()
 
