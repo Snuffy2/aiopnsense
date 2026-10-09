@@ -110,6 +110,7 @@ def test_endpoint_registry_contains_expected_read_only_entries() -> None:
     endpoint_map = {entry["endpoint"]: (entry["method"], entry["warning"]) for entry in entries}
     expected_entries = {
         "arp_table": ("get_arp_table", None),
+        "ndp_table": ("get_ndp_table", None),
         "carp": ("get_carp", None),
         "certificates": ("get_certificates", None),
         "device_unique_id": ("get_device_unique_id", None),

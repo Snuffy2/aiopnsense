@@ -56,6 +56,7 @@ ENDPOINTS: dict[str, EndpointSpec] = {
     "interfaces": EndpointSpec("get_interfaces"),
     "interface_traffic": EndpointSpec("get_interface_traffic"),
     "interface_traffic_stream": EndpointSpec("stream_interface_traffic"),
+    "ndp_table": EndpointSpec("get_ndp_table"),
     "notices": EndpointSpec("get_notices"),
     "nut_ups_status": EndpointSpec("get_nut_ups_status"),
     "openvpn": EndpointSpec("get_openvpn"),
