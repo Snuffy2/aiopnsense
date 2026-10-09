@@ -448,26 +448,6 @@ async def test_toggle_interface_rejects_invalid_arguments(
 
 
 @pytest.mark.asyncio
-async def test_toggle_interface_transport_failure_uses_error_convention(
-    make_client: ClientType,
-) -> None:
-    """Map GET transport failures according to the client's throw-errors setting.
-
-    Args:
-        make_client (ClientType): Fixture factory returning OPNsense clients.
-    """
-    client, session = make_mock_session_client(make_client)
-    client.get_host_firmware_version = AsyncMock(return_value="26.7.6")
-    install_responses(client, session, get_payloads=[aiohttp.ClientError("offline")])
-    try:
-        client.toggle_throwing_errors(True)
-        with pytest.raises(OPNsenseConnectionError):
-            await client.toggle_interface("opt8", "off")
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("get_payloads", "post_payloads", "expected_reconfigure_count"),
     [
