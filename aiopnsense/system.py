@@ -119,24 +119,11 @@ class SystemMixin(AiopnsenseClientProtocol):
     async def toggle_interface(self, if_name: str, toggle_on_off: str | None = None) -> bool | None:
         """Toggle an interface's enabled state and apply the resulting configuration.
 
-        Only the ``enable`` field is sent; other API settings are not
-        resubmitted. The method refuses to proceed if the global interface
-        queue already has pending or unreadable changes. The pending check is
-        not atomic, so coordinate interface changes with other clients and
-        OPNsense UI users. A failed or interrupted save or reconfiguration can
-        leave changes pending. Later toggles refuse while the global queue is
-        pending or unreadable. Review and resolve pending configuration in the
-        OPNsense UI before retrying. Do not blindly retry the global
-        reconfiguration: queued changes may belong to other interfaces or
-        users, and this client cannot determine their ownership. Cancelling
-        this coroutine does not stop an in-flight queued request, so
-        cancellation during save or apply can leave pending work or an
-        uncertain apply outcome.
-
-        On OPNsense 26.7.6, reconfiguration rewrites queued interfaces' legacy
-        settings and removes advanced and file-based DHCP fields during apply,
-        not save. Toggling an interface carrying this API connection can
-        disconnect the client and leave the apply outcome uncertain.
+        Requires firmware >= 26.7.6 and sends only the enable flag. Refuses
+        pending or unreadable interface work; coordinate concurrent changes.
+        Failure or cancellation can leave pending work: resolve it in the
+        OPNsense UI before retrying. Applying changes can reset queued
+        interfaces' advanced/file-based DHCP settings or disconnect this client.
 
         Args:
             if_name (str): Logical interface identifier such as ``wan``, ``lan``, or ``opt8``.
@@ -144,13 +131,9 @@ class SystemMixin(AiopnsenseClientProtocol):
                 enable, ``off`` to disable, or ``None`` to invert the current state.
 
         Returns:
-            bool | None: True when the setting already matches or was saved and
-                applied. False when unsupported, pending work exists, the item
-                is unreadable, or the save or apply does not succeed. In
-                non-throwing mode, a request failure handled by the client
-                returns False, while invalid arguments return None. With
-                ``throw_errors`` enabled, invalid arguments and mapped request
-                errors raise exceptions.
+            bool | None: True when already matching or saved and applied;
+                False when refused or unsuccessful. Suppressed validation errors
+                return None; ``throw_errors`` enables exception propagation.
 
         Raises:
             OPNsenseInvalidArgument: The identifier or explicit target is invalid
