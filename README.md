@@ -16,7 +16,7 @@
 
 The client currently includes helpers for:
 
-- system information, notices, certificates, CARP, Wake-on-LAN, reboot, and interface reloads
+- system information, notices, certificates, CARP, Wake-on-LAN, reboot, interface reloads, and interface toggling
 - firmware version checks, update status, and upgrade actions
 - interface, gateway, CPU, memory, filesystem, and temperature telemetry
 - diagnostics traffic snapshots and live interface traffic stream samples
@@ -35,6 +35,10 @@ The client currently includes helpers for:
 * #### Recommended OPNsense Firmware >= 26.1.1
 
   - For firmware < 26.1.1, the `Firewall and NAT` methods will return empty data.
+
+- Interface toggling requires OPNsense >= 26.7.6.
+  `toggle_interface(if_name, toggle_on_off=None)` saves and applies the change
+  in one call, following the existing toggle methods. See the [system API documentation](https://aiopnsense.readthedocs.io/en/stable/api/system.html).
 
 ## Documentation
 
