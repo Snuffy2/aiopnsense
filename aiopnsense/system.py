@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, MutableMapping
 from datetime import datetime, timedelta, timezone, tzinfo
+import re
 from typing import Any, NamedTuple
 import warnings
 
@@ -9,8 +10,12 @@ import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
-from .const import AMBIGUOUS_TZINFOS, OPNSENSE_26_1_11_COMPAT_FIRMWARE
-from .exceptions import OPNsenseError, OPNsenseMissingDeviceUniqueID
+from .const import (
+    AMBIGUOUS_TZINFOS,
+    OPNSENSE_26_1_11_COMPAT_FIRMWARE,
+    OPNSENSE_INTERFACE_ASSIGNMENT_FIRMWARE,
+)
+from .exceptions import OPNsenseError, OPNsenseInvalidArgument, OPNsenseMissingDeviceUniqueID
 from .helpers import (
     _LOGGER,
     _log_errors,
@@ -41,6 +46,12 @@ CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT = "/api/core/system/dismissStatus"
 INTERFACE_OVERVIEW_RELOAD_SNAKE_PREFIX = "/api/interfaces/overview/reload_interface/"
 INTERFACE_OVERVIEW_RELOAD_CAMELCASE_PREFIX = "/api/interfaces/overview/reloadInterface/"
 CERT_SEARCH_ENDPOINT = "/api/trust/cert/search"
+INTERFACE_ASSIGNMENT_GET_ITEM_ENDPOINT_PREFIX = "/api/interfaces/assignment/get_item/"
+INTERFACE_ASSIGNMENT_SET_ITEM_ENDPOINT_PREFIX = "/api/interfaces/assignment/set_item/"
+INTERFACE_ASSIGNMENT_PENDING_ENDPOINT = "/api/interfaces/assignment/pending"
+INTERFACE_ASSIGNMENT_RECONFIGURE_ENDPOINT = "/api/interfaces/assignment/reconfigure"
+
+_INTERFACE_IDENTIFIER_PATTERN = re.compile(r"(?:wan|lan|opt[1-9][0-9]*)\Z")
 
 
 class _CarpSettingsIndexes(NamedTuple):
@@ -55,6 +66,132 @@ class _CarpSettingsIndexes(NamedTuple):
 
 class SystemMixin(AiopnsenseClientProtocol):
     """System methods for OPNsenseClient."""
+
+    @staticmethod
+    def _validate_interface_identifier(if_name: str) -> None:
+        """Reject interface identifiers that cannot safely address an assignment item.
+
+        Args:
+            if_name (str): Logical OPNsense interface identifier.
+
+        Raises:
+            OPNsenseInvalidArgument: The value is not ``wan``, ``lan``, or ``optN``.
+        """
+        if not isinstance(if_name, str) or _INTERFACE_IDENTIFIER_PATTERN.fullmatch(if_name) is None:
+            raise OPNsenseInvalidArgument(
+                "`if_name` must be a logical interface identifier such as 'wan', 'lan', or 'opt1'."
+            )
+
+    async def _interface_assignment_is_supported(self) -> bool:
+        """Return whether the firmware supports interface assignment updates.
+
+        Returns:
+            bool: True only when the installed version is known to be 26.7.6 or newer.
+        """
+        firmware_version = await self.get_host_firmware_version()
+        supported = firmware_is_at_least(firmware_version, OPNSENSE_INTERFACE_ASSIGNMENT_FIRMWARE)
+        if supported is None:
+            _LOGGER.debug(
+                "Unable to compare firmware version %s for interface assignment API",
+                firmware_version,
+            )
+            return False
+        return supported
+
+    async def _read_interface_config(self, if_name: str) -> dict[str, Any]:
+        """Fetch raw settings only when the API confirms the requested item identity.
+
+        Args:
+            if_name (str): Logical OPNsense interface identifier.
+
+        Returns:
+            dict[str, Any]: Raw interface settings, or an empty mapping when unreadable.
+        """
+        response = await self._safe_dict_get(
+            f"{INTERFACE_ASSIGNMENT_GET_ITEM_ENDPOINT_PREFIX}{if_name}"
+        )
+        interface = response.get("interface")
+        if not isinstance(interface, MutableMapping) or interface.get("identifier") != if_name:
+            return {}
+        return dict(interface)
+
+    @_log_errors
+    async def toggle_interface(self, if_name: str, toggle_on_off: str | None = None) -> bool | None:
+        """Toggle an interface's enabled state and apply the resulting configuration.
+
+        Requires firmware >= 26.7.6 and sends only the enable flag. Refuses
+        pending or unreadable interface work; coordinate concurrent changes.
+        Failure or cancellation can leave pending work: resolve it in the
+        OPNsense UI before retrying. Applying changes can reset queued
+        interfaces' advanced/file-based DHCP settings or disconnect this client.
+
+        Args:
+            if_name (str): Logical interface identifier such as ``wan``, ``lan``, or ``opt8``.
+            toggle_on_off (str | None, optional): Target state. Use ``on`` to
+                enable, ``off`` to disable, or ``None`` to invert the current state.
+
+        Returns:
+            bool | None: True when already matching or saved and applied;
+                False when refused or unsuccessful. Suppressed validation errors
+                return None; ``throw_errors`` enables exception propagation.
+
+        Raises:
+            OPNsenseInvalidArgument: The identifier or explicit target is invalid
+                and ``throw_errors`` is enabled.
+        """
+        self._validate_interface_identifier(if_name)
+        if toggle_on_off is not None and (
+            not isinstance(toggle_on_off, str) or toggle_on_off not in {"on", "off"}
+        ):
+            raise OPNsenseInvalidArgument("`toggle_on_off` must be 'on', 'off', or None.")
+        if not await self._interface_assignment_is_supported():
+            return False
+
+        pending_response = await self._safe_dict_get(INTERFACE_ASSIGNMENT_PENDING_ENDPOINT)
+        pending_status = pending_response.get("status")
+        if not isinstance(pending_status, str) or pending_status.strip().lower() != "ok":
+            _LOGGER.debug(
+                "Refusing to change interface %s because pending interface state is not clear. "
+                "Review and resolve pending configuration in the OPNsense UI before retrying",
+                if_name,
+            )
+            return False
+
+        interface = await self._read_interface_config(if_name)
+        current_enabled = interface.get("enable")
+        if not interface or not (
+            api_value_matches(current_enabled, "0") or api_value_matches(current_enabled, "1")
+        ):
+            _LOGGER.debug("Unable to read enabled state for interface %s", if_name)
+            return False
+        if toggle_on_off == "on":
+            desired_value = "1"
+        elif toggle_on_off == "off":
+            desired_value = "0"
+        else:
+            desired_value = "0" if api_value_matches(current_enabled, "1") else "1"
+        if api_value_matches(current_enabled, desired_value):
+            return True
+
+        response = await self._safe_dict_post(
+            f"{INTERFACE_ASSIGNMENT_SET_ITEM_ENDPOINT_PREFIX}{if_name}",
+            payload={"interface": {"enable": desired_value}},
+        )
+        if str(response.get("result", "")).strip().lower() != "saved":
+            return False
+
+        apply_response = await self._safe_dict_post(
+            INTERFACE_ASSIGNMENT_RECONFIGURE_ENDPOINT, payload={}
+        )
+        apply_succeeded = str(apply_response.get("status", "")).strip().lower() == "ok"
+        if not apply_succeeded:
+            _LOGGER.warning(
+                "Interface %s was saved, but reconfiguration did not report success; the "
+                "apply outcome may be uncertain. Review pending configuration in the "
+                "OPNsense UI before retrying, and do not blindly repeat the global reconfigure",
+                if_name,
+            )
+        return apply_succeeded
 
     def _handle_missing_device_unique_id(self) -> None:
         """Raise when device unique ID resolution failed in throwing mode.
