@@ -1,7 +1,9 @@
 """Tests for OPNsense interface assignment updates."""
 
+import asyncio
 from collections.abc import Callable, MutableMapping
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 from unittest.mock import AsyncMock
 
 import aiohttp
@@ -275,6 +277,115 @@ async def test_toggle_interface_does_not_apply_failed_save(
         assert all(not url.endswith("/reconfigure") for _method, url, _body in requests)
     finally:
         await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_toggle_interface_cancellation_during_save_leaves_change_pending(
+    make_client: ClientType,
+) -> None:
+    """Finish an in-flight save after cancellation without queuing reconfigure.
+
+    Args:
+        make_client (ClientType): Fixture factory returning OPNsense clients.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.get_host_firmware_version = AsyncMock(return_value="26.7.6")
+    loop = asyncio.get_running_loop()
+    save_started = asyncio.Event()
+    release_save = asyncio.Event()
+    save_finished = asyncio.Event()
+    requests: list[str] = []
+
+    class BlockedSaveResponse(FakeResponse):
+        """Pause the save response until the test releases the transport."""
+
+        async def __aenter__(self) -> Self:
+            """Signal that the save is in flight, then wait for release.
+
+            Returns:
+                Self: This response after the test releases the transport.
+            """
+            save_started.set()
+            await release_save.wait()
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            """Signal that the save transport context has completed.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type from the context.
+                exc (BaseException | None): Exception raised in the context, if any.
+                tb (TracebackType | None): Traceback for an exception from the context.
+
+            Returns:
+                bool: False so exceptions are not suppressed.
+            """
+            save_finished.set()
+            return False
+
+    def get(url: str, **kwargs: Any) -> FakeResponse:
+        """Return the pending state or interface item through real transport.
+
+        Args:
+            url (str): Requested endpoint URL.
+            kwargs (Any): Request options passed by the HTTP transport.
+
+        Returns:
+            FakeResponse: Configured response for the endpoint.
+        """
+        del kwargs
+        path = url.removeprefix("http://localhost")
+        requests.append(path)
+        if path.endswith("/pending"):
+            return FakeResponse(json_payload={"status": "ok"})
+        return FakeResponse(json_payload=INTERFACE_ITEM)
+
+    def post(url: str, **kwargs: Any) -> FakeResponse:
+        """Record the queued save and return its blocked response.
+
+        Args:
+            url (str): Requested endpoint URL.
+            kwargs (Any): Request options passed by the HTTP transport.
+
+        Returns:
+            FakeResponse: Response blocked until the test releases the save.
+        """
+        del kwargs
+        path = url.removeprefix("http://localhost")
+        requests.append(path)
+        return BlockedSaveResponse(json_payload={"result": "saved"})
+
+    session.get = get
+    session.post = post
+    client._max_workers = 1
+    worker = loop.create_task(client._process_queue())
+    client._workers = [worker]
+    caller = loop.create_task(client.toggle_interface("opt8", "off"))
+    try:
+        await asyncio.wait_for(save_started.wait(), timeout=2)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+
+        release_save.set()
+        await asyncio.wait_for(save_finished.wait(), timeout=2)
+
+        assert requests == [
+            "/api/interfaces/assignment/pending",
+            "/api/interfaces/assignment/get_item/opt8",
+            "/api/interfaces/assignment/set_item/opt8",
+        ]
+    finally:
+        release_save.set()
+        if not caller.done():
+            caller.cancel()
+        await asyncio.gather(caller, return_exceptions=True)
+        await asyncio.wait_for(client.async_close(), timeout=2)
 
 
 @pytest.mark.asyncio

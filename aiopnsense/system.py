@@ -124,6 +124,9 @@ class SystemMixin(AiopnsenseClientProtocol):
         queue already has pending or unreadable changes. The pending check is
         not atomic, so coordinate interface changes with other clients and
         OPNsense UI users. A failed save or apply can leave a queued change.
+        Cancelling this coroutine does not stop an in-flight queued request.
+        Cancellation during the save can therefore leave the interface change
+        pending without reconfiguration.
         Reconfiguration on OPNsense 26.7.6 also migrates legacy interface
         settings, including resetting advanced/file-based DHCP modes on save;
         review the 26.7.6 release notes before applying changes.
