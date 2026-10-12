@@ -101,21 +101,33 @@ async def test_get_firmware_update_info_triggers_check_when_last_check_is_stale(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("product_version", "product_latest"),
+    [
+        pytest.param("26.1.1", "26.1.1", id="equal-base-versions"),
+        pytest.param("26.7.6_3", "26.7.6", id="installed-hotfix-ahead-of-base"),
+        pytest.param("26.7.6_3", "26.7.6_3", id="equal-hotfix-versions"),
+        pytest.param("26.7.6_10", "26.7.6_9", id="installed-hotfix-ahead-of-revision"),
+        pytest.param("26.7.7", "26.7.6_9", id="installed-base-ahead-of-hotfix"),
+    ],
+)
 async def test_get_firmware_update_info_does_not_trigger_check_for_recent_healthy_status(
-    make_client: Callable[..., Any],
+    make_client: Callable[..., Any], product_version: str, product_latest: str
 ) -> None:
-    """A complete, recent firmware status should not trigger a refresh.
+    """Healthy firmware status should not trigger checks across repeated polls.
 
     Args:
         make_client (Callable[..., Any]): Factory used to configure a healthy recent firmware status.
+        product_version (str): Installed firmware version in the status response.
+        product_latest (str): Equal or older advertised firmware version.
     """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         status = {
             "product": {
-                "product_version": "26.1.1",
-                "product_latest": "26.1.1",
+                "product_version": product_version,
+                "product_latest": product_latest,
                 "product_check": {"status": "ok"},
             },
             "status_msg": "There are no updates available on the selected mirror.",
@@ -125,9 +137,9 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
         client._post = AsyncMock(return_value={})
 
-        result = await client.get_firmware_update_info()
-
-        assert result == status
+        for _ in range(3):
+            result = await client.get_firmware_update_info()
+            assert result == status
         client._post.assert_not_awaited()
     finally:
         await client.async_close()
@@ -140,6 +152,8 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
         pytest.param("26.1.2", "26.1.3_1", id="suffixed-latest-version"),
         pytest.param("25.7_9", "25.7.1", id="underscore-revision-version"),
         pytest.param("26.1.11_1", "26.1.11_2", id="hotfix-only-latest-revision"),
+        pytest.param("26.7.6", "26.7.6_3", id="first-hotfix-available"),
+        pytest.param("26.7.6_9", "26.7.6_10", id="numeric-hotfix-ordering"),
     ],
 )
 async def test_get_firmware_update_info_triggers_check_for_newer_latest_versions(

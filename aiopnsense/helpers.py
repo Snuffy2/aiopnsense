@@ -206,7 +206,7 @@ def firmware_is_at_least(firmware_version: str | None, minimum_version: str) -> 
 
 
 def firmware_is_newer(firmware_version: str | None, comparison_version: str | None) -> bool | None:
-    """Compare whether one firmware version is newer than another.
+    """Compare firmware bases, then numeric hotfix revisions for equal bases.
 
     Args:
         firmware_version (str | None): Raw firmware version reported by OPNsense.
@@ -218,15 +218,15 @@ def firmware_is_newer(firmware_version: str | None, comparison_version: str | No
             when either version cannot be compared.
     """
 
-    def _normalize_firmware_version_for_update(version: str | None) -> str | None:
-        """Normalize firmware versions for update comparisons.
+    def _normalize_firmware_version_for_update(version: str | None) -> tuple[str, int] | None:
+        """Separate the base version from its optional numeric hotfix revision.
 
         Args:
             version (str | None): Raw firmware version from OPNsense.
 
         Returns:
-            str | None: Revision-aware version, or ``None`` if the suffix is
-                malformed for comparison.
+            tuple[str, int] | None: Base version and revision, using zero when
+                no suffix is present, or ``None`` for malformed versions.
         """
         if not version:
             return None
@@ -235,21 +235,27 @@ def firmware_is_newer(firmware_version: str | None, comparison_version: str | No
             return None
 
         if "_" not in trimmed_version:
-            return trimmed_version
+            return trimmed_version, 0
 
         base_version, revision = trimmed_version.split("_", 1)
-        if not revision.isdigit():
+        if not base_version or not revision.isdecimal():
             return None
-        return f"{base_version}.post{revision}"
+        return base_version, int(revision)
 
-    comparable_firmware = _normalize_firmware_version_for_update(firmware_version)
-    comparable_version = _normalize_firmware_version_for_update(comparison_version)
-    if comparable_firmware is None or comparable_version is None:
-        return None
     try:
-        return awesomeversion.AwesomeVersion(comparable_firmware) > awesomeversion.AwesomeVersion(
-            comparable_version
-        )
+        comparable_firmware = _normalize_firmware_version_for_update(firmware_version)
+        comparable_version = _normalize_firmware_version_for_update(comparison_version)
+        if comparable_firmware is None or comparable_version is None:
+            return None
+        firmware_base, firmware_revision = comparable_firmware
+        comparison_base, comparison_revision = comparable_version
+        firmware = awesomeversion.AwesomeVersion(firmware_base)
+        comparison = awesomeversion.AwesomeVersion(comparison_base)
+        if not firmware.valid or not comparison.valid:
+            return None
+        if firmware == comparison:
+            return firmware_revision > comparison_revision
+        return firmware > comparison
     except (
         awesomeversion.exceptions.AwesomeVersionCompareException,
         TypeError,

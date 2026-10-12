@@ -141,12 +141,46 @@ def test_trim_firmware_suffix_handles_empty_and_suffixed_versions(
 
 
 @pytest.mark.parametrize(
+    ("firmware_version", "comparison_version", "expected"),
+    [
+        ("26.7.6", "26.7.6_3", False),
+        ("26.7.6_3", "26.7.6", True),
+        ("26.7.6_3", "26.7.6_3", False),
+        ("26.7.6_10", "26.7.6_9", True),
+        ("26.7.6_9", "26.7.6_10", False),
+        ("26.7.7", "26.7.6_9", True),
+        ("26.7.6_9", "26.7.7", False),
+        ("26.7.6_0", "26.7.6", False),
+        (" 26.7.6_3 ", " 26.7.6 ", True),
+        ("26.7_9", "26.7.1", False),
+    ],
+)
+def test_firmware_is_newer_orders_base_versions_and_hotfix_revisions(
+    firmware_version: str, comparison_version: str, expected: bool
+) -> None:
+    """Order firmware bases before numeric hotfix revisions.
+
+    Args:
+        firmware_version (str): Candidate firmware version.
+        comparison_version (str): Firmware version to compare against.
+        expected (bool): Whether the candidate is newer.
+    """
+    assert aiopnsense_helpers.firmware_is_newer(firmware_version, comparison_version) is expected
+
+
+@pytest.mark.parametrize(
     ("firmware_version", "comparison_version"),
     [
         (None, "26.1.11"),
         ("   ", "26.1.11"),
         ("26.1.11_bad", "26.1.10"),
         ("26.1.11", "   "),
+        ("26.1.11", None),
+        ("26.1.11", "26.1.11_bad"),
+        ("26.1.11_", "26.1.11"),
+        ("_1", "26.1.11"),
+        ("invalid_3", "invalid_2"),
+        ("26.1.11", "invalid_2"),
     ],
 )
 def test_firmware_is_newer_returns_none_for_uncomparable_versions(
