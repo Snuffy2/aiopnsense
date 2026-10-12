@@ -151,8 +151,12 @@ def test_trim_firmware_suffix_handles_empty_and_suffixed_versions(
         ("26.7.7", "26.7.6_9", True),
         ("26.7.6_9", "26.7.7", False),
         ("26.7.6_0", "26.7.6", False),
+        ("26.7.6_3", "26.7.6.0", True),
+        ("26.7.6.0", "26.7.6_3", False),
         (" 26.7.6_3 ", " 26.7.6 ", True),
         ("26.7_9", "26.7.1", False),
+        ("26.7.6rc1", "26.7.6", False),
+        ("26.7.6", "26.7.6rc1", True),
     ],
 )
 def test_firmware_is_newer_orders_base_versions_and_hotfix_revisions(

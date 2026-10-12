@@ -106,6 +106,7 @@ async def test_get_firmware_update_info_triggers_check_when_last_check_is_stale(
     [
         pytest.param("26.1.1", "26.1.1", id="equal-base-versions"),
         pytest.param("26.7.6_3", "26.7.6", id="installed-hotfix-ahead-of-base"),
+        pytest.param("26.7.6_3", "26.7.6.0", id="installed-hotfix-ahead-of-zero-component-base"),
         pytest.param("26.7.6_3", "26.7.6_3", id="equal-hotfix-versions"),
         pytest.param("26.7.6_10", "26.7.6_9", id="installed-hotfix-ahead-of-revision"),
         pytest.param("26.7.7", "26.7.6_9", id="installed-base-ahead-of-hotfix"),
@@ -153,6 +154,7 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
         pytest.param("25.7_9", "25.7.1", id="underscore-revision-version"),
         pytest.param("26.1.11_1", "26.1.11_2", id="hotfix-only-latest-revision"),
         pytest.param("26.7.6", "26.7.6_3", id="first-hotfix-available"),
+        pytest.param("26.7.6.0", "26.7.6_3", id="hotfix-available-with-zero-component-base"),
         pytest.param("26.7.6_9", "26.7.6_10", id="numeric-hotfix-ordering"),
     ],
 )

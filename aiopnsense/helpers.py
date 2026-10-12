@@ -206,7 +206,11 @@ def firmware_is_at_least(firmware_version: str | None, minimum_version: str) -> 
 
 
 def firmware_is_newer(firmware_version: str | None, comparison_version: str | None) -> bool | None:
-    """Compare firmware bases, then numeric hotfix revisions for equal bases.
+    """Compare firmware versions with numeric hotfix revisions.
+
+    Numeric base versions that differ only by trailing zero components are
+    treated as equivalent before comparing their hotfix revisions. Other base
+    versions retain AwesomeVersion's ordering, including release suffixes.
 
     Args:
         firmware_version (str | None): Raw firmware version reported by OPNsense.
@@ -242,6 +246,24 @@ def firmware_is_newer(firmware_version: str | None, comparison_version: str | No
             return None
         return base_version, int(revision)
 
+    def _numeric_base_components(base_version: str) -> tuple[int, ...] | None:
+        """Return numeric components with insignificant trailing zeros removed.
+
+        Args:
+            base_version (str): Firmware base version without a hotfix suffix.
+
+        Returns:
+            tuple[int, ...] | None: Numeric components for a dotted numeric
+                version, or ``None`` when the base contains a release suffix.
+        """
+        components = base_version.split(".")
+        if not all(component.isascii() and component.isdecimal() for component in components):
+            return None
+        numeric_components = tuple(int(component) for component in components)
+        while len(numeric_components) > 1 and numeric_components[-1] == 0:
+            numeric_components = numeric_components[:-1]
+        return numeric_components
+
     try:
         comparable_firmware = _normalize_firmware_version_for_update(firmware_version)
         comparable_version = _normalize_firmware_version_for_update(comparison_version)
@@ -254,6 +276,10 @@ def firmware_is_newer(firmware_version: str | None, comparison_version: str | No
         if not firmware.valid or not comparison.valid:
             return None
         if firmware == comparison:
+            return firmware_revision > comparison_revision
+        firmware_components = _numeric_base_components(firmware_base)
+        comparison_components = _numeric_base_components(comparison_base)
+        if firmware_components is not None and firmware_components == comparison_components:
             return firmware_revision > comparison_revision
         return firmware > comparison
     except (
