@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/Snuffy2/aiopnsense/compare/v1.2.0...v1.2.1) (2026-10-12)
+
+
+### Bug Fixes
+
+* correct firmware hotfix version ordering ([#146](https://github.com/Snuffy2/aiopnsense/issues/146)) ([82fd517](https://github.com/Snuffy2/aiopnsense/commit/82fd517f9709f3d158784e62ff0fc0eece98b6ce))
+
 ## [1.2.0](https://github.com/Snuffy2/aiopnsense/compare/v1.1.11...v1.2.0) (2026-10-09)
 
 
