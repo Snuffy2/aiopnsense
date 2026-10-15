@@ -1,4 +1,4 @@
-"""OpenVPN and WireGuard methods for OPNsenseClient."""
+"""OpenVPN, WireGuard, and IPsec methods for OPNsenseClient."""
 
 from collections.abc import MutableMapping
 from datetime import datetime, timedelta
@@ -24,6 +24,8 @@ OPENVPN_INSTANCE_DETAILS_ENDPOINT_PREFIX = "/api/openvpn/instances/get/"
 WIREGUARD_SUMMARY_ENDPOINT = "/api/wireguard/service/show"
 WIREGUARD_CLIENTS_ENDPOINT = "/api/wireguard/client/get"
 WIREGUARD_SERVERS_ENDPOINT = "/api/wireguard/server/get"
+IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT = "/api/ipsec/sessions/search_phase1"
+IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT = "/api/ipsec/sessions/searchPhase1"
 OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX = "/api/openvpn/instances/toggle/"
 OPENVPN_SERVICE_RECONFIGURE_ENDPOINT = "/api/openvpn/service/reconfigure"
 WIREGUARD_CLIENT_TOGGLE_SNAKE_ENDPOINT_PREFIX = "/api/wireguard/client/toggle_client/"
@@ -669,3 +671,100 @@ class VPNMixin(AiopnsenseClientProtocol):
             reconfigure = await self._safe_dict_post(WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT)
             return reconfigure.get("result", "") == "ok"
         return False
+
+    @staticmethod
+    def _ipsec_flag(value: Any) -> bool:
+        """Interpret a boolean-like IPsec session field.
+
+        Args:
+            value (Any): Raw field value, which the IPsec sessions API reports
+                as a JSON boolean, a ``"0"``/``"1"`` string, or a textual
+                ``"true"``/``"false"`` value depending on the firmware version.
+
+        Returns:
+            bool: True when the field represents an enabled or true state.
+        """
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).strip().lower() in {"1", "true", "yes"}
+
+    @staticmethod
+    def _process_ipsec_connection(
+        row: MutableMapping[str, Any],
+    ) -> MutableMapping[str, Any] | None:
+        """Normalize a single IPsec phase 1 session row.
+
+        Args:
+            row (MutableMapping[str, Any]): Raw row from the OPNsense IPsec
+                ``search_phase1`` sessions API.
+
+        Returns:
+            MutableMapping[str, Any] | None: Normalized connection mapping keyed
+                for the ``connections`` collection, or ``None`` when the row has
+                no usable connection identifier.
+        """
+        uuid = row.get("ikeid") or row.get("name")
+        if not isinstance(uuid, str) or not uuid:
+            return None
+        connected = VPNMixin._ipsec_flag(row.get("connected"))
+        description = row.get("phase1desc")
+        name = description if isinstance(description, str) and description else uuid
+        return {
+            "uuid": uuid,
+            "name": name,
+            "connected": connected,
+            "status": "connected" if connected else "disconnected",
+            "version": row.get("version"),
+            "local_addrs": row.get("local-addrs"),
+            "remote_addrs": row.get("remote-addrs"),
+            "local_id": row.get("local-id"),
+            "remote_id": row.get("remote-id"),
+            "routed": VPNMixin._ipsec_flag(row.get("routed")),
+            "install_time": try_to_int(row.get("install-time")) if connected else None,
+            "total_bytes_recv": try_to_int(row.get("bytes-in"), 0),
+            "total_bytes_sent": try_to_int(row.get("bytes-out"), 0),
+            "total_packets_recv": try_to_int(row.get("packets-in"), 0),
+            "total_packets_sent": try_to_int(row.get("packets-out"), 0),
+        }
+
+    @_log_errors
+    async def get_ipsec(self) -> MutableMapping[str, Any]:
+        """Return IPsec phase 1 (IKE) connection status information.
+
+        Returns:
+            MutableMapping[str, Any]: Mapping with ``connections`` keyed by the
+                IKE connection UUID. Entries combine the connection description,
+                IKE version, local and remote addresses and identities, the
+                connected state, install age, routing state, and byte and packet
+                counters reported by the OPNsense IPsec sessions API. Returns an
+                empty ``connections`` mapping when the endpoint is unavailable or
+                the payload is malformed.
+        """
+        # https://docs.opnsense.org/development/api/core/ipsec.html
+        ipsec: dict[str, Any] = {"connections": {}}
+        sessions_endpoint = await self._get_endpoint_path(
+            snake_case_path=IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT,
+            camel_case_path=IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT,
+        )
+        if not await self._is_get_endpoint_available(sessions_endpoint):
+            _LOGGER.debug("IPsec phase 1 sessions endpoint unavailable")
+            return ipsec
+
+        sessions_info = await self._safe_dict_get(sessions_endpoint)
+        rows = sessions_info.get("rows", [])
+        if not isinstance(rows, list):
+            _LOGGER.debug("[get_ipsec] connections: 0 (malformed rows)")
+            return ipsec
+
+        for row in rows:
+            if not isinstance(row, MutableMapping):
+                continue
+            connection = self._process_ipsec_connection(row)
+            if connection is None:
+                continue
+            ipsec["connections"][connection["uuid"]] = connection
+
+        _LOGGER.debug("[get_ipsec] connections: %s", len(ipsec["connections"]))
+        return ipsec

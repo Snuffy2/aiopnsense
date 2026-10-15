@@ -26,6 +26,7 @@ The client currently includes helpers for:
 - SMART device listing and per-device SMART detail queries
 - Unbound blocklist management
 - OpenVPN and WireGuard status plus VPN instance toggling
+- IPsec phase 1 (IKE) connection status
 - vnStat metrics, captive portal vouchers, and speed test data
 
 ## Requirements
