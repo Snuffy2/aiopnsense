@@ -1747,6 +1747,36 @@ async def test_host_observations_normalizes_packet_sightings(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("total", [1.9, 1.0, True, False, "1", "1.9", None, -1, 2])
+async def test_host_observations_rejects_invalid_totals(
+    make_client: ClientType, total: object
+) -> None:
+    """Reject malformed or mismatched counts even when the observation is valid.
+
+    Args:
+        make_client (ClientType): Factory for a client with a mocked HTTP session.
+        total (object): Invalid count supplied by the search endpoint.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._post = AsyncMock(side_effect=client._do_post)
+    session.post.return_value = FakeResponse(
+        json_payload={
+            "total": total,
+            "rows": [
+                {
+                    "source": "discovery",
+                    "ether_address": "aa:bb:cc:dd:ee:01",
+                    "ip_address": "192.0.2.1",
+                    "last_seen": "2026-01-01T00:00:00Z",
+                }
+            ],
+        }
+    )
+
+    assert await client.get_host_observations() is None
+
+
+@pytest.mark.asyncio
 async def test_host_observations_requests_all_rows_through_post_json(
     make_client: ClientType,
 ) -> None:

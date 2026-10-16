@@ -198,8 +198,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
         rows = payload.get("rows")
         if not isinstance(rows, list) or not rows:
             return None
-        total = try_to_int(payload.get("total"))
-        if total is None or total != len(rows):
+        total = payload.get("total")
+        if isinstance(total, bool) or not isinstance(total, int) or total != len(rows):
             return None
         if any(
             not isinstance(row, MutableMapping) or not isinstance(row.get("source"), str)
