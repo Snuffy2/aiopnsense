@@ -122,6 +122,7 @@ def test_endpoint_registry_contains_expected_read_only_entries() -> None:
         ),
         "gateways": ("get_gateways", None),
         "host_firmware_version": ("get_host_firmware_version", None),
+        "host_observations": ("get_host_observations", None),
         "interfaces": ("get_interfaces", None),
         "interface_traffic": ("get_interface_traffic", None),
         "interface_traffic_stream": ("stream_interface_traffic", None),

@@ -1706,3 +1706,221 @@ async def test_version_switched_get_kea_interfaces_endpoint_unavailable(
         assert client._is_get_endpoint_available.await_args_list[1].args[0] == "/api/kea/dhcpv4/get"
     finally:
         await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("family_ip", ["192.0.2.1", "2001:0db8::1", "fe80::1%igc1"])
+async def test_host_observations_normalizes_packet_sightings(
+    make_client: ClientType, family_ip: str
+) -> None:
+    """Expose timestamped MAC observations from either address family over HTTP.
+
+    Args:
+        make_client (ClientType): Factory for a client with a mocked HTTP session.
+        family_ip (str): IPv4 or IPv6 address observed by hostwatch.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._post = AsyncMock(side_effect=client._do_post)
+    session.post.return_value = FakeResponse(
+        json_payload={
+            "total": 1,
+            "rows": [
+                {
+                    "source": "discovery",
+                    "ether_address": "AA-BB-CC-DD-EE-01",
+                    "ip_address": family_ip,
+                    "last_seen": "2026-01-01T02:00:00+02:00",
+                }
+            ],
+        }
+    )
+    result = await client.get_host_observations()
+    assert result is not None
+    assert result["source"] == "discovery"
+    assert result["rows"][0]["mac"] == "aa:bb:cc:dd:ee:01"
+    assert result["rows"][0]["last_seen"] == datetime(2026, 1, 1, tzinfo=UTC)
+    assert result["rows"][0]["ip"] == family_ip.replace("0db8", "db8")
+    assert all(
+        call.args[0] == "http://localhost/api/hostdiscovery/service/search"
+        for call in session.post.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total", [1.9, 1.0, True, False, "1", "1.9", None, -1, 2])
+async def test_host_observations_rejects_invalid_totals(
+    make_client: ClientType, total: object
+) -> None:
+    """Reject malformed or mismatched counts even when the observation is valid.
+
+    Args:
+        make_client (ClientType): Factory for a client with a mocked HTTP session.
+        total (object): Invalid count supplied by the search endpoint.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._post = AsyncMock(side_effect=client._do_post)
+    session.post.return_value = FakeResponse(
+        json_payload={
+            "total": total,
+            "rows": [
+                {
+                    "source": "discovery",
+                    "ether_address": "aa:bb:cc:dd:ee:01",
+                    "ip_address": "192.0.2.1",
+                    "last_seen": "2026-01-01T00:00:00Z",
+                }
+            ],
+        }
+    )
+
+    assert await client.get_host_observations() is None
+
+
+@pytest.mark.asyncio
+async def test_host_observations_requests_all_rows_through_post_json(
+    make_client: ClientType,
+) -> None:
+    """Request every host observation beyond the server's default 9,999-row page.
+
+    Args:
+        make_client (ClientType): Factory for a client with a mocked HTTP session.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._post = AsyncMock(side_effect=client._do_post)
+    observation = {
+        "source": "discovery",
+        "ether_address": "aa:bb:cc:dd:ee:01",
+        "ip_address": "192.0.2.1",
+        "last_seen": datetime.now(UTC).isoformat(),
+    }
+    observations = [observation.copy() for _ in range(10_000)]
+
+    def search_response(*args: object, **kwargs: object) -> FakeResponse:
+        """Model searchRecordsetBase rowCount handling for the host search endpoint.
+
+        Args:
+            args (object): Positional HTTP request arguments, including the URL.
+            kwargs (object): Keyword HTTP request arguments, including JSON payload.
+
+        Returns:
+            FakeResponse: Search results limited by the POST body's rowCount value.
+        """
+        del args
+        request_payload = kwargs.get("json")
+        row_count = (
+            request_payload.get("rowCount", 9999)
+            if isinstance(request_payload, MutableMapping)
+            else 9999
+        )
+        rows = observations if row_count == -1 else observations[:row_count]
+        return FakeResponse(json_payload={"total": len(observations), "rows": rows})
+
+    session.post.side_effect = search_response
+    session.get.side_effect = search_response
+
+    result = await client.get_host_observations()
+
+    assert result is not None
+    assert len(result["rows"]) == 10_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"total": 0, "rows": []},
+        {"total": 2, "rows": [{}]},
+        {"total": 1, "rows": [None]},
+        {
+            "total": 2,
+            "rows": [
+                {
+                    "source": "discovery",
+                    "ether_address": "aa:bb:cc:dd:ee:01",
+                    "ip_address": "192.0.2.1",
+                    "last_seen": "2026-01-01T00:00:00Z",
+                },
+                {
+                    "source": "arp-ndp",
+                    "ether_address": "aa:bb:cc:dd:ee:02",
+                    "ip_address": "192.0.2.2",
+                    "last_seen": "2026-01-01T00:00:00Z",
+                },
+            ],
+        },
+        *[
+            {
+                "total": 1,
+                "rows": [
+                    {
+                        "source": "discovery",
+                        "ether_address": "aa:bb:cc:dd:ee:01",
+                        "ip_address": "2001:db8::1",
+                        "last_seen": "2026-01-01T00:00:00Z",
+                    }
+                    | changes
+                ],
+            }
+            for changes in [
+                {"source": []},
+                {"source": "unknown"},
+                {"ether_address": "incomplete"},
+                {"ether_address": None},
+                {"ip_address": "invalid"},
+                {"ip_address": 192},
+                {"last_seen": None},
+                {"last_seen": "invalid"},
+                {"last_seen": "2026-01-01T00:00:00"},
+                {"last_seen": "2999-01-01T00:00:00Z"},
+            ]
+        ],
+    ],
+)
+async def test_host_observations_rejects_non_authoritative_payloads(
+    make_client: ClientType, payload: object
+) -> None:
+    """Malformed or partial observations must not become successful empty scans.
+
+    Args:
+        make_client (ClientType): Factory for a client with a mocked HTTP session.
+        payload (object): Unusable host-observation response.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._post = AsyncMock(side_effect=client._do_post)
+    session.post.return_value = FakeResponse(json_payload=payload)
+    assert await client.get_host_observations() is None
+
+
+@pytest.mark.asyncio
+async def test_host_observations_distinguishes_disabled_service(make_client: ClientType) -> None:
+    """Hostwatch's timestamp-free fallback must not masquerade as discovery observations.
+
+    Args:
+        make_client (ClientType): Factory for a client with a mocked HTTP session.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._post = AsyncMock(side_effect=client._do_post)
+    session.post.return_value = FakeResponse(
+        json_payload={
+            "total": 1,
+            "rows": [{"source": "arp-ndp", "last_seen": ""}],
+        }
+    )
+    assert await client.get_host_observations() == {"source": "arp-ndp", "rows": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [403, 404, 500])
+async def test_host_observations_http_failure_is_unavailable(
+    make_client: ClientType, status: int
+) -> None:
+    """Unavailable discovery never provides an authoritative empty observation set.
+
+    Args:
+        make_client (ClientType): Factory for a client with a mocked HTTP session.
+        status (int): HTTP failure status of the endpoint probe.
+    """
+    client, session = make_mock_session_client(make_client)
+    session.post.return_value = FakeResponse(status=status, ok=False)
+    assert await client.get_host_observations() is None

@@ -1,7 +1,9 @@
 """DHCP, ARP, and NDP methods for OPNsenseClient."""
 
 from collections.abc import MutableMapping
-from datetime import datetime, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
+import ipaddress
+import re
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
@@ -17,6 +19,7 @@ from .helpers import (
 
 ARP_TABLE_ENDPOINT = "/api/diagnostics/interface/search_arp"
 NDP_TABLE_ENDPOINT = "/api/diagnostics/interface/search_ndp"
+HOST_OBSERVATIONS_ENDPOINT = "/api/hostdiscovery/service/search"
 KEA_DHCPV4_GET_ENDPOINT = "/api/kea/dhcpv4/get"
 KEA_LEASES4_SEARCH_ENDPOINT = "/api/kea/leases4/search"
 KEA_LEASES6_SEARCH_ENDPOINT = "/api/kea/leases6/search"
@@ -177,6 +180,65 @@ class DHCPMixin(AiopnsenseClientProtocol):
         ndp_table_info = await self._safe_dict_get(NDP_TABLE_ENDPOINT)
         ndp_table = ndp_table_info.get("rows")
         return ndp_table if isinstance(ndp_table, list) else None
+
+    @_log_errors
+    async def get_host_observations(self) -> dict[str, Any] | None:
+        """Return timestamped MAC observations without changing neighbor inventories.
+
+        Returns:
+            dict[str, Any] | None: Source and normalized rows containing ``mac``, ``ip``,
+                and UTC ``last_seen`` datetimes. ``discovery`` identifies packet observations;
+                ``arp-ndp`` identifies the timestamp-free fallback when hostwatch is disabled.
+                An unavailable endpoint, incomplete response, empty source, or malformed
+                discovery row returns ``None`` rather than an authoritative empty inventory.
+        """
+        if not await self._is_post_endpoint_available(HOST_OBSERVATIONS_ENDPOINT):
+            return None
+        payload = await self._safe_dict_post(HOST_OBSERVATIONS_ENDPOINT, {"rowCount": -1})
+        rows = payload.get("rows")
+        if not isinstance(rows, list) or not rows:
+            return None
+        total = payload.get("total")
+        if isinstance(total, bool) or not isinstance(total, int) or total != len(rows):
+            return None
+        if any(
+            not isinstance(row, MutableMapping) or not isinstance(row.get("source"), str)
+            for row in rows
+        ):
+            return None
+        sources = {row.get("source") for row in rows}
+        if sources == {"arp-ndp"}:
+            return {"source": "arp-ndp", "rows": []}
+        if sources != {"discovery"}:
+            return None
+
+        observations: list[dict[str, Any]] = []
+        latest_allowed = datetime.now(UTC) + timedelta(minutes=5)
+        for row in rows:
+            mac = row.get("ether_address")
+            address = row.get("ip_address")
+            last_seen = row.get("last_seen")
+            if (
+                not isinstance(mac, str)
+                or not isinstance(address, str)
+                or not isinstance(last_seen, str)
+            ):
+                return None
+            mac = mac.strip().lower().replace("-", ":")
+            if re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac) is None:
+                return None
+            try:
+                ip = ipaddress.ip_address(address.strip()).compressed
+                observed = datetime.fromisoformat(last_seen)
+            except ValueError:
+                return None
+            if observed.tzinfo is None or observed.utcoffset() is None:
+                return None
+            observed = observed.astimezone(UTC)
+            if observed > latest_allowed:
+                return None
+            observations.append({"mac": mac, "ip": ip, "last_seen": observed})
+        return {"source": "discovery", "rows": observations}
 
     @_log_errors
     async def get_dhcp_leases(self, opnsense_tz: tzinfo | None = None) -> dict[str, Any]:
