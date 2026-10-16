@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0](https://github.com/Snuffy2/aiopnsense/compare/v1.2.1...v1.3.0) (2026-10-16)
+
+
+### Features
+
+* add IPsec phase 1 connection status via get_ipsec ([#149](https://github.com/Snuffy2/aiopnsense/issues/149)) ([97902cd](https://github.com/Snuffy2/aiopnsense/commit/97902cd93fd8d7a3e8d6e228f982bfc3b5eb084d))
+* expose timestamped MAC host observations ([#148](https://github.com/Snuffy2/aiopnsense/issues/148)) ([0480523](https://github.com/Snuffy2/aiopnsense/commit/0480523e0016813808744688fb931c066aaa9c59))
+
 ## [1.2.1](https://github.com/Snuffy2/aiopnsense/compare/v1.2.0...v1.2.1) (2026-10-12)
 
 
