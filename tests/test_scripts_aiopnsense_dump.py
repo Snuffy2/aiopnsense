@@ -126,6 +126,7 @@ def test_endpoint_registry_contains_expected_read_only_entries() -> None:
         "interfaces": ("get_interfaces", None),
         "interface_traffic": ("get_interface_traffic", None),
         "interface_traffic_stream": ("stream_interface_traffic", None),
+        "ipsec": ("get_ipsec", None),
         "notices": ("get_notices", None),
         "nut_ups_status": ("get_nut_ups_status", None),
         "openvpn": ("get_openvpn", None),

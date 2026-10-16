@@ -757,3 +757,162 @@ async def test_update_wireguard_peer_details_latest_handshake() -> None:
     assert server.get("latest_handshake") == new_time
     assert server.get("connected_clients") == 1
     assert peer.get("connected") is True
+
+
+@pytest.mark.asyncio
+async def test_get_ipsec_success_normalizes_rows(make_client: ClientType) -> None:
+    """Normalize connected, disconnected, and malformed IPsec phase 1 rows.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            return_value={
+                "rows": [
+                    {
+                        "ikeid": "uuid-up",
+                        "name": "uuid-up",
+                        "phase1desc": "Site A",
+                        "version": "IKEv2",
+                        "local-addrs": "198.51.100.1",
+                        "remote-addrs": "203.0.113.5",
+                        "local-id": "198.51.100.1",
+                        "remote-id": "203.0.113.5",
+                        "connected": True,
+                        "routed": True,
+                        "install-time": 1234,
+                        "bytes-in": 100,
+                        "bytes-out": "200",
+                        "packets-in": 3,
+                        "packets-out": "4",
+                    },
+                    {
+                        "ikeid": "uuid-down",
+                        "phase1desc": "",
+                        "version": "IKEv1",
+                        "connected": "0",
+                        "routed": "0",
+                        "install-time": 99,
+                        "bytes-in": "bad",
+                    },
+                    {"phase1desc": "no identifier"},
+                    "not-a-mapping",
+                ]
+            }
+        )
+
+        ipsec = await client.get_ipsec()
+
+        assert set(ipsec) == {"connections"}
+        assert set(ipsec["connections"]) == {"uuid-up", "uuid-down"}
+        up = ipsec["connections"]["uuid-up"]
+        assert up == {
+            "uuid": "uuid-up",
+            "name": "Site A",
+            "connected": True,
+            "status": "connected",
+            "version": "IKEv2",
+            "local_addrs": "198.51.100.1",
+            "remote_addrs": "203.0.113.5",
+            "local_id": "198.51.100.1",
+            "remote_id": "203.0.113.5",
+            "routed": True,
+            "install_time": 1234,
+            "total_bytes_recv": 100,
+            "total_bytes_sent": 200,
+            "total_packets_recv": 3,
+            "total_packets_sent": 4,
+        }
+        down = ipsec["connections"]["uuid-down"]
+        assert down["name"] == "uuid-down"
+        assert down["connected"] is False
+        assert down["status"] == "disconnected"
+        assert down["routed"] is False
+        assert down["install_time"] is None
+        assert down["total_bytes_recv"] == 0
+        assert down["total_packets_sent"] == 0
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT
+        )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"rows": {"not": "a list"}},
+        {"rows": "nope"},
+        {},
+    ],
+)
+async def test_get_ipsec_malformed_payload_returns_empty(
+    make_client: ClientType, payload: dict[str, Any]
+) -> None:
+    """Return an empty connections mapping when the sessions payload is malformed.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        payload (dict[str, Any]): Malformed sessions payload returned by the API.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value=payload)
+
+        assert await client.get_ipsec() == {"connections": {}}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_ipsec_endpoint_unavailable_fails_closed(make_client: ClientType) -> None:
+    """Skip the sessions request entirely when the endpoint is unavailable.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = False
+        client._is_get_endpoint_available = AsyncMock(return_value=False)
+        client._safe_dict_get = AsyncMock()
+
+        assert await client.get_ipsec() == {"connections": {}}
+        client._is_get_endpoint_available.assert_awaited_once_with(
+            aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT
+        )
+        client._safe_dict_get.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (True, True),
+        (False, False),
+        (None, False),
+        ("1", True),
+        ("0", False),
+        ("true", True),
+        ("False", False),
+        (" yes ", True),
+        (1, True),
+        (0, False),
+    ],
+)
+def test_ipsec_flag_variants(value: Any, expected: bool) -> None:
+    """Interpret boolean-like IPsec session fields consistently.
+
+    Args:
+        value (Any): Raw field value reported by the IPsec sessions API.
+        expected (bool): Expected normalized boolean.
+    """
+    assert aiopnsense_vpn.VPNMixin._ipsec_flag(value) is expected
