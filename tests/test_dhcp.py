@@ -1802,6 +1802,23 @@ async def test_host_observations_requests_all_rows_through_post_json(
         {"total": 0, "rows": []},
         {"total": 2, "rows": [{}]},
         {"total": 1, "rows": [None]},
+        {
+            "total": 2,
+            "rows": [
+                {
+                    "source": "discovery",
+                    "ether_address": "aa:bb:cc:dd:ee:01",
+                    "ip_address": "192.0.2.1",
+                    "last_seen": "2026-01-01T00:00:00Z",
+                },
+                {
+                    "source": "arp-ndp",
+                    "ether_address": "aa:bb:cc:dd:ee:02",
+                    "ip_address": "192.0.2.2",
+                    "last_seen": "2026-01-01T00:00:00Z",
+                },
+            ],
+        },
         *[
             {
                 "total": 1,
@@ -1817,8 +1834,12 @@ async def test_host_observations_requests_all_rows_through_post_json(
             }
             for changes in [
                 {"source": []},
+                {"source": "unknown"},
                 {"ether_address": "incomplete"},
+                {"ether_address": None},
                 {"ip_address": "invalid"},
+                {"ip_address": 192},
+                {"last_seen": None},
                 {"last_seen": "invalid"},
                 {"last_seen": "2026-01-01T00:00:00"},
                 {"last_seen": "2999-01-01T00:00:00Z"},
