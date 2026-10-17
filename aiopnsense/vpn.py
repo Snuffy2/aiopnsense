@@ -28,6 +28,11 @@ IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT = "/api/ipsec/sessions/search_phase1"
 IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT = "/api/ipsec/sessions/searchPhase1"
 IPSEC_CONNECTIONS_SNAKE_ENDPOINT = "/api/ipsec/connections/search_connection"
 IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT = "/api/ipsec/connections/searchConnection"
+IPSEC_CHILDREN_SNAKE_ENDPOINT = "/api/ipsec/connections/search_child"
+IPSEC_CHILDREN_CAMELCASE_ENDPOINT = "/api/ipsec/connections/searchChild"
+IPSEC_PHASE2_SESSIONS_SNAKE_ENDPOINT = "/api/ipsec/sessions/search_phase2"
+IPSEC_PHASE2_SESSIONS_CAMELCASE_ENDPOINT = "/api/ipsec/sessions/searchPhase2"
+IPSEC_CHILD_SA_INSTALLED_STATE = "INSTALLED"
 IPSEC_CONNECTION_TOGGLE_SNAKE_ENDPOINT_PREFIX = "/api/ipsec/connections/toggle_connection/"
 IPSEC_CONNECTION_TOGGLE_CAMELCASE_ENDPOINT_PREFIX = "/api/ipsec/connections/toggleConnection/"
 IPSEC_SERVICE_RECONFIGURE_ENDPOINT = "/api/ipsec/service/reconfigure"
@@ -820,38 +825,167 @@ class VPNMixin(AiopnsenseClientProtocol):
             connection["enabled"] = enabled
         return connection
 
-    async def _get_ipsec_configured_connections(
-        self,
+    async def _get_ipsec_configured_rows(
+        self, snake_case_path: str, camel_case_path: str
     ) -> dict[str, MutableMapping[str, Any]] | None:
-        """Return configured IPsec connections keyed by UUID.
+        """Return IPsec configuration rows keyed by UUID.
+
+        Args:
+            snake_case_path (str): Snake case search endpoint for the configuration items.
+            camel_case_path (str): Camel case search endpoint for the configuration items.
 
         Returns:
             dict[str, MutableMapping[str, Any]] | None: Raw configuration rows
-                keyed by connection UUID. Empty when the endpoint is known to be
-                missing or not permitted for the API user, so no connection can
-                be toggled. ``None`` when the configuration could not be read
-                this time (transient failure or malformed payload).
+                keyed by UUID. Empty when the endpoint is known to be missing or
+                not permitted for the API user. ``None`` when the configuration
+                could not be read this time (transient failure or malformed
+                payload).
         """
         endpoint = await self._get_endpoint_path(
-            snake_case_path=IPSEC_CONNECTIONS_SNAKE_ENDPOINT,
-            camel_case_path=IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT,
+            snake_case_path=snake_case_path,
+            camel_case_path=camel_case_path,
         )
         if not await self._is_get_endpoint_available(endpoint):
             if self._endpoint_availability.get(endpoint) is False:
-                _LOGGER.debug("IPsec connections endpoint missing or not permitted")
+                _LOGGER.debug("IPsec configuration endpoint missing or not permitted: %s", endpoint)
                 return {}
-            _LOGGER.debug("IPsec connections endpoint temporarily unavailable")
+            _LOGGER.debug("IPsec configuration endpoint temporarily unavailable: %s", endpoint)
             return None
         payload = await self._safe_dict_get(endpoint)
         rows = payload.get("rows")
         if not isinstance(rows, list):
-            _LOGGER.debug("[get_ipsec] configured connections unavailable (malformed rows)")
+            _LOGGER.debug("[get_ipsec] configuration unavailable (malformed rows): %s", endpoint)
             return None
         configured: dict[str, MutableMapping[str, Any]] = {}
         for row in rows:
             if isinstance(row, MutableMapping) and isinstance(row.get("uuid"), str) and row["uuid"]:
                 configured[row["uuid"]] = row
         return configured
+
+    @staticmethod
+    def _new_ipsec_child(
+        uuid: str, configured_row: MutableMapping[str, Any] | None
+    ) -> dict[str, Any]:
+        """Build a disconnected IPsec child (phase 2) entry.
+
+        Args:
+            uuid (str): Child identifier, the configured child UUID when known.
+            configured_row (MutableMapping[str, Any] | None): Raw row from the
+                OPNsense IPsec ``search_child`` configuration API, or ``None``
+                for a child seen only in the sessions API.
+
+        Returns:
+            dict[str, Any]: Child mapping with zeroed counters and no installed SAs.
+                ``local_ts``/``remote_ts`` are the configured traffic selectors;
+                ``active_local_ts``/``active_remote_ts`` collect the selectors of
+                installed SAs, which can be narrower when the peer narrows them.
+        """
+        row = configured_row or {}
+        description = row.get("description")
+        connection = row.get("connection")
+        return {
+            "uuid": uuid,
+            "name": description if isinstance(description, str) and description else uuid,
+            "connection": connection if isinstance(connection, str) and connection else None,
+            "enabled": (
+                VPNMixin._ipsec_config_enabled(row) if configured_row is not None else None
+            ),
+            "connected": False,
+            "status": "disconnected",
+            "installed_sas": 0,
+            "local_ts": row.get("local_ts"),
+            "remote_ts": row.get("remote_ts"),
+            "active_local_ts": [],
+            "active_remote_ts": [],
+            "install_time": None,
+            "total_bytes_recv": 0,
+            "total_bytes_sent": 0,
+            "total_packets_recv": 0,
+            "total_packets_sent": 0,
+        }
+
+    @staticmethod
+    def _add_ipsec_child_sa(child: dict[str, Any], sa_row: MutableMapping[str, Any]) -> None:
+        """Aggregate one phase 2 security association into its child entry.
+
+        Args:
+            child (dict[str, Any]): Child entry updated in place.
+            sa_row (MutableMapping[str, Any]): Raw row from the OPNsense IPsec
+                ``search_phase2`` sessions API.
+        """
+        child["total_bytes_recv"] += try_to_int(sa_row.get("bytes-in"), 0)
+        child["total_bytes_sent"] += try_to_int(sa_row.get("bytes-out"), 0)
+        child["total_packets_recv"] += try_to_int(sa_row.get("packets-in"), 0)
+        child["total_packets_sent"] += try_to_int(sa_row.get("packets-out"), 0)
+        if sa_row.get("state") != IPSEC_CHILD_SA_INSTALLED_STATE:
+            return
+        child["installed_sas"] += 1
+        child["connected"] = True
+        child["status"] = "connected"
+        for field, key in (("local-ts", "active_local_ts"), ("remote-ts", "active_remote_ts")):
+            selector = sa_row.get(field)
+            if isinstance(selector, str) and selector and selector not in child[key]:
+                child[key].append(selector)
+                child[key].sort()
+        install_time = try_to_int(sa_row.get("install-time"))
+        if install_time is not None and (
+            child["install_time"] is None or install_time > child["install_time"]
+        ):
+            child["install_time"] = install_time
+
+    async def _get_ipsec_children(
+        self, connected_session_names: list[str]
+    ) -> dict[str, dict[str, Any]] | None:
+        """Return IPsec child (phase 2) status keyed by child UUID.
+
+        Args:
+            connected_session_names (list[str]): Phase 1 session names of the
+                connected connections, used to query their phase 2 SAs.
+
+        Returns:
+            dict[str, dict[str, Any]] | None: Children from the configuration,
+                plus children seen only in the sessions API, with installed SA
+                counts and aggregated counters. ``None`` when the child
+                configuration or any phase 2 session list could not be read this
+                time, so a missing reply is never reported as a down child.
+        """
+        configured = await self._get_ipsec_configured_rows(
+            IPSEC_CHILDREN_SNAKE_ENDPOINT, IPSEC_CHILDREN_CAMELCASE_ENDPOINT
+        )
+        if configured is None:
+            return None
+        children: dict[str, dict[str, Any]] = {
+            uuid: self._new_ipsec_child(uuid, row) for uuid, row in configured.items()
+        }
+        if not connected_session_names:
+            return children
+        phase2_endpoint = await self._get_endpoint_path(
+            snake_case_path=IPSEC_PHASE2_SESSIONS_SNAKE_ENDPOINT,
+            camel_case_path=IPSEC_PHASE2_SESSIONS_CAMELCASE_ENDPOINT,
+        )
+        for session_name in connected_session_names:
+            payload = await self._safe_dict_post(phase2_endpoint, {"id": session_name})
+            sa_rows = payload.get("rows")
+            if not isinstance(sa_rows, list):
+                _LOGGER.debug(
+                    "[get_ipsec] phase 2 sessions unavailable for %s (malformed rows)",
+                    session_name,
+                )
+                return None
+            for sa_row in sa_rows:
+                if not isinstance(sa_row, MutableMapping):
+                    continue
+                child_uuid = sa_row.get("name")
+                if not isinstance(child_uuid, str) or not child_uuid:
+                    continue
+                if child_uuid not in children:
+                    children[child_uuid] = self._new_ipsec_child(child_uuid, None)
+                    description = sa_row.get("phase2desc")
+                    if isinstance(description, str) and description:
+                        children[child_uuid]["name"] = description
+                    children[child_uuid]["connection"] = sa_row.get("ikeid") or None
+                self._add_ipsec_child_sa(children[child_uuid], sa_row)
+        return children
 
     @_log_errors
     async def get_ipsec(self) -> MutableMapping[str, Any]:
@@ -869,12 +1003,14 @@ class VPNMixin(AiopnsenseClientProtocol):
                 the key is omitted when the configuration could not be read this
                 time or reports an unrecognized value.
                 Configured connections without a session, including disabled
-                ones, are reported as disconnected. Returns an empty
-                ``connections`` mapping when the sessions endpoint is unavailable
-                or the payload is malformed.
+                ones, are reported as disconnected. ``children`` holds phase 2
+                status keyed by child UUID and is omitted when it could not be
+                read completely. Returns empty ``connections`` and ``children``
+                mappings when the sessions endpoint is unavailable or the payload
+                is malformed.
         """
         # https://docs.opnsense.org/development/api/core/ipsec.html
-        ipsec: dict[str, Any] = {"connections": {}}
+        ipsec: dict[str, Any] = {"connections": {}, "children": {}}
         sessions_endpoint = await self._get_endpoint_path(
             snake_case_path=IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT,
             camel_case_path=IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT,
@@ -889,7 +1025,10 @@ class VPNMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("[get_ipsec] connections: 0 (malformed rows)")
             return ipsec
 
-        configured = await self._get_ipsec_configured_connections()
+        configured = await self._get_ipsec_configured_rows(
+            IPSEC_CONNECTIONS_SNAKE_ENDPOINT, IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT
+        )
+        connected_session_names: list[str] = []
         for row in rows:
             if not isinstance(row, MutableMapping):
                 continue
@@ -905,6 +1044,9 @@ class VPNMixin(AiopnsenseClientProtocol):
                     if enabled is not None:
                         connection["enabled"] = enabled
             ipsec["connections"][connection["uuid"]] = connection
+            session_name = row.get("name")
+            if connection["connected"] and isinstance(session_name, str) and session_name:
+                connected_session_names.append(session_name)
 
         for uuid, configured_row in (configured or {}).items():
             if uuid in ipsec["connections"]:
@@ -914,4 +1056,10 @@ class VPNMixin(AiopnsenseClientProtocol):
                 ipsec["connections"][uuid] = connection
 
         _LOGGER.debug("[get_ipsec] connections: %s", len(ipsec["connections"]))
+        children = await self._get_ipsec_children(connected_session_names)
+        if children is None:
+            del ipsec["children"]
+        else:
+            ipsec["children"] = children
+            _LOGGER.debug("[get_ipsec] children: %s", len(children))
         return ipsec
