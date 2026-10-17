@@ -80,14 +80,17 @@ class VPNMixin(AiopnsenseClientProtocol):
         return datetime.now().astimezone() - past_time <= timedelta(minutes=3)
 
     @_log_errors
-    async def get_openvpn(self) -> MutableMapping[str, Any]:
+    async def get_openvpn(self) -> MutableMapping[str, Any] | None:
         """Return OpenVPN server and client status information.
 
         Returns:
-            MutableMapping[str, Any]: Mapping with ``servers`` and ``clients``
+            MutableMapping[str, Any] | None: Mapping with ``servers`` and ``clients``
                 keyed by UUID. Server entries combine instance, provider,
                 session, route, tunnel-address, DNS, status, byte-counter, and
-                connected-client data when available.
+                connected-client data when available. Returns ``None`` when the sessions
+                endpoint is unavailable or its rows are missing or malformed.
+                Route-derived ``clients`` and ``connected_clients`` are omitted
+                when routes are unavailable, rather than reporting zero clients.
         """
         # https://docs.opnsense.org/development/api/core/openvpn.html
         # https://github.com/opnsense/core/blob/master/src/opnsense/www/js/widgets/OpenVPNClients.js
@@ -103,7 +106,10 @@ class VPNMixin(AiopnsenseClientProtocol):
             sessions_info = await self._safe_dict_get(sessions_endpoint)
         else:
             _LOGGER.debug("OpenVPN sessions endpoint unavailable")
-            sessions_info = {}
+            return None
+        if not isinstance(sessions_info.get("rows"), list):
+            _LOGGER.debug("[get_openvpn] sessions unavailable (malformed rows)")
+            return None
 
         routes_endpoint = await self._get_endpoint_path(
             snake_case_path=OPENVPN_ROUTES_SNAKE_ENDPOINT,
@@ -132,8 +138,15 @@ class VPNMixin(AiopnsenseClientProtocol):
         self._process_openvpn_instances(instances_info, openvpn)
         self._process_openvpn_providers(providers_info, openvpn)
         self._process_openvpn_sessions(sessions_info, openvpn)
-        self._process_openvpn_routes(routes_info, openvpn)
+        routes_available = isinstance(routes_info.get("rows"), list)
+        if routes_available:
+            self._process_openvpn_routes(routes_info, openvpn)
         await self._fetch_openvpn_server_details(openvpn)
+        if not routes_available:
+            _LOGGER.debug("[get_openvpn] routes unavailable (missing or malformed rows)")
+            for server in openvpn["servers"].values():
+                server.pop("clients", None)
+                server.pop("connected_clients", None)
         _LOGGER.debug(
             "[get_openvpn] servers: %s, clients: %s",
             len(openvpn["servers"]),
@@ -312,14 +325,17 @@ class VPNMixin(AiopnsenseClientProtocol):
             ]
 
     @_log_errors
-    async def get_wireguard(self) -> MutableMapping[str, Any]:
+    async def get_wireguard(self) -> MutableMapping[str, Any] | None:
         """Return WireGuard server and client status information.
 
         Returns:
-            MutableMapping[str, Any]: Mapping with ``servers`` and ``clients``
+            MutableMapping[str, Any] | None: Mapping with ``servers`` and ``clients``
                 keyed by UUID. Entries combine configured tunnel addresses,
                 peer links, enabled state, interface names, handshake status,
-                byte counters, and connected peer counts where available.
+                byte counters, and connected peer counts where available. Returns
+                ``None`` when the summary endpoint is unavailable or its rows
+                are missing or malformed. A valid empty summary still reports
+                configured peers as disconnected with zero counters.
         """
         data_sources = {
             "summary_raw": WIREGUARD_SUMMARY_ENDPOINT,
@@ -334,7 +350,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 _LOGGER.debug("WireGuard endpoint unavailable: %s", path)
                 data[key] = {}
 
-        summary = data["summary_raw"].get("rows", [])
+        summary = data["summary_raw"].get("rows")
         client_summ = dict_get(data["clients_raw"], "client.clients.client", {})
         server_summ = dict_get(data["servers_raw"], "server.servers.server", {})
 
@@ -343,8 +359,8 @@ class VPNMixin(AiopnsenseClientProtocol):
             or not isinstance(client_summ, MutableMapping)
             or not isinstance(server_summ, MutableMapping)
         ):
-            _LOGGER.debug("[get_wireguard] servers: 0, clients: 0")
-            return {"servers": {}, "clients": {}}
+            _LOGGER.debug("[get_wireguard] status unavailable (malformed payload)")
+            return None
 
         servers = {
             uid: self._process_wireguard_server(uid, srv, client_summ)
@@ -1008,11 +1024,11 @@ class VPNMixin(AiopnsenseClientProtocol):
         return children
 
     @_log_errors
-    async def get_ipsec(self) -> MutableMapping[str, Any]:
+    async def get_ipsec(self) -> MutableMapping[str, Any] | None:
         """Return IPsec phase 1 (IKE) connection status information.
 
         Returns:
-            MutableMapping[str, Any]: Mapping with ``connections`` keyed by the
+            MutableMapping[str, Any] | None: Mapping with ``connections`` keyed by the
                 IKE connection UUID. Entries combine the connection description,
                 IKE version, local and remote addresses and identities, the
                 connected state, install age, routing state, and byte and packet
@@ -1026,9 +1042,10 @@ class VPNMixin(AiopnsenseClientProtocol):
                 ones, are reported as disconnected. ``children`` holds phase 2
                 status keyed by child UUID, with ``install_time`` as the age of
                 the oldest installed SA, and is omitted when it could not be
-                read completely. Returns empty ``connections`` and ``children``
-                mappings when the sessions endpoint is unavailable or the payload
-                is malformed.
+                read completely. Returns ``None`` when the phase 1 sessions endpoint
+                is unavailable or its rows are missing or malformed. A valid
+                empty session list still reports configured connections and
+                children as disconnected with zero counters.
         """
         # https://docs.opnsense.org/development/api/core/ipsec.html
         ipsec: dict[str, Any] = {"connections": {}, "children": {}}
@@ -1038,13 +1055,13 @@ class VPNMixin(AiopnsenseClientProtocol):
         )
         if not await self._is_get_endpoint_available(sessions_endpoint):
             _LOGGER.debug("IPsec phase 1 sessions endpoint unavailable")
-            return ipsec
+            return None
 
         sessions_info = await self._safe_dict_get(sessions_endpoint)
-        rows = sessions_info.get("rows", [])
+        rows = sessions_info.get("rows")
         if not isinstance(rows, list):
-            _LOGGER.debug("[get_ipsec] connections: 0 (malformed rows)")
-            return ipsec
+            _LOGGER.debug("[get_ipsec] phase 1 sessions unavailable (malformed rows)")
+            return None
 
         configured = await self._get_ipsec_configured_rows(
             IPSEC_CONNECTIONS_SNAKE_ENDPOINT, IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT
