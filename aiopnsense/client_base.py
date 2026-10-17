@@ -82,6 +82,7 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
         self._endpoint_availability: dict[str, bool] = {}
         self._endpoint_checked_at: dict[str, datetime] = {}
         self._endpoint_permission_denied: set[str] = set()
+        self._request_outages: set[tuple[str, str, str]] = set()
         self._endpoint_cache_ttl_seconds = DEFAULT_CACHE_TTL_SECONDS
         self._rest_api_query_count = 0
         self._request_queue: asyncio.Queue = asyncio.Queue()

@@ -1924,3 +1924,176 @@ async def test_host_observations_http_failure_is_unavailable(
     client, session = make_mock_session_client(make_client)
     session.post.return_value = FakeResponse(status=status, ok=False)
     assert await client.get_host_observations() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lookup_name", "payload", "expected"),
+    [
+        ("arp", {"rows": []}, []),
+        ("ndp", {"rows": []}, []),
+        (
+            "host_observations",
+            {"total": 1, "rows": [{"source": "arp-ndp", "last_seen": ""}]},
+            {"source": "arp-ndp", "rows": []},
+        ),
+    ],
+)
+async def test_neighbor_lookup_logs_failure_once_until_recovery_then_again(
+    make_client: ClientType,
+    caplog: pytest.LogCaptureFixture,
+    lookup_name: Literal["arp", "ndp", "host_observations"],
+    payload: object,
+    expected: object,
+) -> None:
+    """Throttle outage logs across probes and real neighbor table requests.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        caplog (pytest.LogCaptureFixture): Captured log records for the lookup sequence.
+        lookup_name (Literal["arp", "ndp", "host_observations"]): Public lookup to exercise.
+        payload (object): Successful response payload for the final recovery request.
+        expected (object): Public lookup result after recovery.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._endpoint_cache_ttl_seconds = 0
+
+    async def lookup() -> object:
+        """Call the selected public neighbor lookup method.
+
+        Returns:
+            object: Result returned by the selected lookup method.
+        """
+        if lookup_name == "arp":
+            return await client.get_arp_table()
+        if lookup_name == "ndp":
+            return await client.get_ndp_table()
+        return await client.get_host_observations()
+
+    failed_probe = FakeResponse(status=503, reason="Unavailable", ok=False)
+    successful_probe = FakeResponse()
+    failed_request = FakeResponse(status=500, reason="Server Error", ok=False)
+    successful_request = FakeResponse(json_payload=payload)
+
+    if lookup_name == "host_observations":
+        client._post = AsyncMock(side_effect=client._do_post)
+        session.post.side_effect = [
+            failed_probe,
+            failed_probe,
+            successful_probe,
+            failed_request,
+            successful_probe,
+            failed_request,
+            successful_probe,
+            successful_request,
+            successful_probe,
+            failed_request,
+        ]
+    else:
+        client._get = AsyncMock(side_effect=client._do_get)
+        session.get.side_effect = [
+            failed_probe,
+            failed_probe,
+            successful_probe,
+            failed_request,
+            successful_probe,
+            failed_request,
+            successful_probe,
+            successful_request,
+            successful_probe,
+            failed_request,
+        ]
+
+    with caplog.at_level("DEBUG"):
+        assert await lookup() is None
+        assert await lookup() is None
+        assert await lookup() is None
+        assert await lookup() is None
+        assert await lookup() == expected
+        assert await lookup() is None
+
+    probe_failures = [
+        record
+        for record in caplog.records
+        if record.msg.startswith("Transient ") and "endpoint check failure" in record.msg
+    ]
+    request_failures = [
+        record
+        for record in caplog.records
+        if record.msg.startswith(("Error in do_get", "Error in do_post"))
+    ]
+    probe_recoveries = [
+        record for record in caplog.records if " probe recovered for " in record.getMessage()
+    ]
+    request_recoveries = [
+        record for record in caplog.records if " request recovered for " in record.getMessage()
+    ]
+
+    assert [record.levelname for record in probe_failures] == ["WARNING", "DEBUG"]
+    assert [record.levelname for record in request_failures] == ["ERROR", "DEBUG", "ERROR"]
+    assert len(probe_recoveries) == 1
+    assert len(request_recoveries) == 1
+
+
+@pytest.mark.asyncio
+async def test_neighbor_probe_failure_logging_is_per_client(
+    make_client: ClientType,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Keep one client's repeated probe failures from muting another client.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        caplog (pytest.LogCaptureFixture): Captured records used to inspect log levels.
+    """
+    first_client, first_session = make_mock_session_client(make_client)
+    second_client, second_session = make_mock_session_client(make_client)
+    for client, session in (
+        (first_client, first_session),
+        (second_client, second_session),
+    ):
+        client._get = AsyncMock(side_effect=client._do_get)
+        session.get.return_value = FakeResponse(status=503, reason="Unavailable", ok=False)
+
+    with caplog.at_level("DEBUG"):
+        assert await first_client.get_ndp_table() is None
+        assert await second_client.get_ndp_table() is None
+        assert await first_client.get_ndp_table() is None
+
+    failures = [
+        record
+        for record in caplog.records
+        if record.msg.startswith("Transient ") and "endpoint check failure" in record.msg
+    ]
+    assert [record.levelname for record in failures] == ["WARNING", "WARNING", "DEBUG"]
+
+
+@pytest.mark.asyncio
+async def test_throwing_neighbor_lookup_does_not_duplicate_request_failure_log(
+    make_client: ClientType,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Avoid logging the same transport failure again in the public wrapper.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        caplog (pytest.LogCaptureFixture): Captured records used to inspect log count.
+    """
+    client, session = make_mock_session_client(partial(make_client, throw_errors=True))
+    client._get = AsyncMock(side_effect=client._do_get)
+    session.get.side_effect = [
+        FakeResponse(),
+        FakeResponse(status=500, reason="Server Error", ok=False),
+    ]
+
+    with caplog.at_level("DEBUG"), pytest.raises(OPNsenseConnectionError):
+        await client.get_ndp_table()
+
+    failures = [
+        record
+        for record in caplog.records
+        if record.msg.startswith("Error in do_get")
+        or record.msg.startswith("Error in get_ndp_table")
+    ]
+    assert len(failures) == 1
+    assert failures[0].msg.startswith("Error in do_get")

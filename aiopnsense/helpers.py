@@ -8,7 +8,7 @@ import ipaddress
 import logging
 import re
 import traceback
-from typing import Any
+from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiohttp
@@ -22,6 +22,13 @@ from .exceptions import (
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+_REQUEST_ERROR_LOGGED_ATTRIBUTE = "_aiopnsense_request_error_logged"
+
+
+class _RequestLoggingClient(Protocol):
+    """Client state required by request outage logging helpers."""
+
+    _request_outages: set[tuple[str, str, str]]
 
 
 class _ExceptionLogDetails:
@@ -106,17 +113,19 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
         except asyncio.CancelledError:
             raise
         except (TimeoutError, aiohttp.ServerTimeoutError, OPNsenseTimeoutError) as e:
-            _LOGGER.warning("Timeout Error in %s. Will retry. %s", func.__name__.strip("_"), e)
+            if not _is_request_error_logged(e):
+                _LOGGER.warning("Timeout Error in %s. Will retry. %s", func.__name__.strip("_"), e)
             if self._throw_errors:
                 if isinstance(e, OPNsenseError):
                     raise
                 raise _map_opnsense_exception(e) from e
         except Exception as e:
-            _LOGGER.error(
-                "Error in %s. %s",
-                func.__name__.strip("_"),
-                _ExceptionLogDetails(e),
-            )
+            if not _is_request_error_logged(e):
+                _LOGGER.error(
+                    "Error in %s. %s",
+                    func.__name__.strip("_"),
+                    _ExceptionLogDetails(e),
+                )
             if self._throw_errors:
                 if isinstance(e, OPNsenseError):
                     raise
@@ -124,6 +133,79 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
         return None
 
     return inner
+
+
+def _log_request_failure(
+    client: _RequestLoggingClient,
+    method: str,
+    path: str,
+    phase: str,
+    level: int,
+    message: str,
+    *args: Any,
+    error: BaseException | None = None,
+) -> None:
+    """Log one request failure per client, method, path, and request phase.
+
+    Args:
+        client (_RequestLoggingClient): Client holding request outage state.
+        method (str): HTTP method used by the request.
+        path (str): Requested API path.
+        phase (str): ``probe`` for availability checks or ``request`` for data calls.
+        level (int): Log level for the first failure in the current outage.
+        message (str): Failure message format.
+        args (Any): Values for the failure message format.
+        error (BaseException | None): Public exception that will be raised, if any.
+    """
+    key = (method.upper(), path, phase)
+    if key in client._request_outages:
+        _LOGGER.debug(message, *args)
+    else:
+        client._request_outages.add(key)
+        _LOGGER.log(level, message, *args)
+    if error is not None:
+        _mark_request_error_logged(error)
+
+
+def _log_request_recovery(
+    client: _RequestLoggingClient,
+    method: str,
+    path: str,
+    phase: str,
+) -> None:
+    """Log recovery after a successful request in the matching outage phase.
+
+    Args:
+        client (_RequestLoggingClient): Client holding request outage state.
+        method (str): HTTP method used by the request.
+        path (str): Requested API path.
+        phase (str): ``probe`` for availability checks or ``request`` for data calls.
+    """
+    key = (method.upper(), path, phase)
+    if key in client._request_outages:
+        client._request_outages.remove(key)
+        _LOGGER.info("%s %s recovered for %s", method.upper(), phase, path)
+
+
+def _mark_request_error_logged(error: BaseException) -> None:
+    """Mark a public request exception as already reported by its transport layer.
+
+    Args:
+        error (BaseException): Exception passed through queue and public wrappers.
+    """
+    setattr(error, _REQUEST_ERROR_LOGGED_ATTRIBUTE, True)
+
+
+def _is_request_error_logged(error: BaseException) -> bool:
+    """Return whether a transport layer already reported this request exception.
+
+    Args:
+        error (BaseException): Exception caught by a higher request wrapper.
+
+    Returns:
+        bool: Whether the exception was already logged at the request boundary.
+    """
+    return bool(getattr(error, _REQUEST_ERROR_LOGGED_ATTRIBUTE, False))
 
 
 def human_friendly_duration(seconds: int) -> str:

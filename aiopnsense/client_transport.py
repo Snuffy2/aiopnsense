@@ -3,13 +3,14 @@
 import codecs
 from collections.abc import AsyncGenerator, MutableMapping
 import json
+import logging
 from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
 
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
-from .exceptions import _map_opnsense_exception, _opnsense_http_error
-from .helpers import _LOGGER
+from .exceptions import OPNsenseError, _map_opnsense_exception, _opnsense_http_error
+from .helpers import _LOGGER, _log_request_failure, _log_request_recovery
 
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
 
@@ -19,6 +20,7 @@ class ClientTransportMixin:
 
     if TYPE_CHECKING:
         _password: str
+        _request_outages: set[tuple[str, str, str]]
         _rest_api_query_count: int
         _session: aiohttp.ClientSession
         _throw_errors: bool
@@ -311,11 +313,8 @@ class ClientTransportMixin:
                 returned by the GET request.
 
         Raises:
-            _opnsense_http_error: Raised as the mapped public OPNsense error for a
-                non-successful HTTP response when ``self._throw_errors`` is ``True``.
-            _map_opnsense_exception: Raised as the mapped public OPNsense error for
-                an aiohttp client error or timeout when ``self._throw_errors`` is
-                ``True``.
+            error: OPNsenseError raised for an HTTP or transport failure when
+                ``self._throw_errors`` is ``True``.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -331,28 +330,55 @@ class ClientTransportMixin:
                 _LOGGER.debug("[get] Response %s: %s", response.status, response.reason)
                 if response.ok:
                     if response_format == "text":
-                        return await response.text()
-                    return await response.json(content_type=None)
+                        result = await response.text()
+                    else:
+                        result = await response.json(content_type=None)
+                    _log_request_recovery(self, "get", path, "request")
+                    return result
+                error: OPNsenseError = _opnsense_http_error(response.status, response.reason)
                 if response.status == 403:
-                    _LOGGER.error(
+                    _log_request_failure(
+                        self,
+                        "get",
+                        path,
+                        "request",
+                        logging.ERROR,
                         "Permission Error in do_get (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                         caller,
                         url,
+                        error=error if self._throw_errors else None,
                     )
                 else:
-                    _LOGGER.error(
+                    _log_request_failure(
+                        self,
+                        "get",
+                        path,
+                        "request",
+                        logging.ERROR,
                         "Error in do_get (called by %s). Path: %s. Response %s: %s",
                         caller,
                         url,
                         response.status,
                         response.reason,
+                        error=error if self._throw_errors else None,
                     )
                 if self._throw_errors:
-                    raise _opnsense_http_error(response.status, response.reason)
+                    raise error
         except (aiohttp.ClientError, TimeoutError) as e:
-            _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
+            error = _map_opnsense_exception(e)
+            _log_request_failure(
+                self,
+                "get",
+                path,
+                "request",
+                logging.ERROR,
+                "Client error. %s: %s",
+                type(e).__name__,
+                e,
+                error=error if self._throw_errors else None,
+            )
             if self._throw_errors:
-                raise _map_opnsense_exception(e) from e
+                raise error from e
 
         return None
 
@@ -432,11 +458,8 @@ class ClientTransportMixin:
             MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request.
 
         Raises:
-            _opnsense_http_error: Raised as the mapped public OPNsense error for a
-                non-successful HTTP response when ``self._throw_errors`` is ``True``.
-            _map_opnsense_exception: Raised as the mapped public OPNsense error for
-                an aiohttp client error or timeout when ``self._throw_errors`` is
-                ``True``.
+            error: OPNsenseError raised for an HTTP or transport failure when
+                ``self._throw_errors`` is ``True``.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -452,27 +475,52 @@ class ClientTransportMixin:
                 _LOGGER.debug("[post] Response %s: %s", response.status, response.reason)
                 if response.ok:
                     response_json: dict[str, Any] | list = await response.json(content_type=None)
+                    _log_request_recovery(self, "post", path, "request")
                     return response_json
+                error: OPNsenseError = _opnsense_http_error(response.status, response.reason)
                 if response.status == 403:
-                    _LOGGER.error(
+                    _log_request_failure(
+                        self,
+                        "post",
+                        path,
+                        "request",
+                        logging.ERROR,
                         "Permission Error in do_post (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                         caller,
                         url,
+                        error=error if self._throw_errors else None,
                     )
                 else:
-                    _LOGGER.error(
+                    _log_request_failure(
+                        self,
+                        "post",
+                        path,
+                        "request",
+                        logging.ERROR,
                         "Error in do_post (called by %s). Path: %s. Response %s: %s",
                         caller,
                         url,
                         response.status,
                         response.reason,
+                        error=error if self._throw_errors else None,
                     )
                 if self._throw_errors:
-                    raise _opnsense_http_error(response.status, response.reason)
+                    raise error
         except (aiohttp.ClientError, TimeoutError) as e:
-            _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
+            error = _map_opnsense_exception(e)
+            _log_request_failure(
+                self,
+                "post",
+                path,
+                "request",
+                logging.ERROR,
+                "Client error. %s: %s",
+                type(e).__name__,
+                e,
+                error=error if self._throw_errors else None,
+            )
             if self._throw_errors:
-                raise _map_opnsense_exception(e) from e
+                raise error from e
 
         return None
 

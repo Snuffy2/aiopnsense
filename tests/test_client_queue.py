@@ -9,7 +9,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import OPNsenseError, client_queue as aiopnsense_client_queue
-from tests.conftest import FakeStreamResponseFactory, MakeClientFactory, make_mock_session_client
+from aiopnsense.exceptions import OPNsenseConnectionError
+from tests.conftest import (
+    FakeResponse,
+    FakeStreamResponseFactory,
+    MakeClientFactory,
+    make_mock_session_client,
+)
 
 
 @pytest.mark.asyncio
@@ -206,6 +212,41 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=2)
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await asyncio.wait_for(client.async_close(), timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_process_queue_does_not_relog_transport_request_failure(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Avoid duplicating a transport failure log in the queue worker.
+
+    Args:
+        make_client (MakeClientFactory): Factory for clients using a mocked HTTP session.
+        caplog (pytest.LogCaptureFixture): Captured records used to inspect log count.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._throw_errors = True
+    session.get.return_value = FakeResponse(status=500, reason="Server Error", ok=False)
+    task: asyncio.Task | None = None
+    try:
+        client._request_queue = asyncio.Queue()
+        task = asyncio.get_running_loop().create_task(client._process_queue())
+
+        with caplog.at_level("ERROR"), pytest.raises(OPNsenseConnectionError):
+            await client._get("/api/test/request")
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert sum(message.startswith("Error in do_get") for message in messages) == 1
+        assert not any(
+            message.startswith("Exception in request queue processor") for message in messages
+        )
     finally:
         if task is not None and not task.done():
             task.cancel()

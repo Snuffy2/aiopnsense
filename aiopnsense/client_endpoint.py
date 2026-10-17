@@ -1,6 +1,7 @@
 """Endpoint selection and availability helpers for OPNsenseClient."""
 
 from datetime import datetime
+import logging
 from typing import TYPE_CHECKING, cast
 from warnings import deprecated
 
@@ -8,8 +9,13 @@ import aiohttp
 
 from ._typing import AiopnsenseClientProtocol
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS, LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
-from .exceptions import OPNsenseUnknownFirmware, _map_opnsense_exception, _opnsense_http_error
-from .helpers import _LOGGER, firmware_is_at_least
+from .exceptions import (
+    OPNsenseError,
+    OPNsenseUnknownFirmware,
+    _map_opnsense_exception,
+    _opnsense_http_error,
+)
+from .helpers import _LOGGER, _log_request_failure, _log_request_recovery, firmware_is_at_least
 
 
 class ClientEndpointMixin:
@@ -20,6 +26,7 @@ class ClientEndpointMixin:
         _endpoint_cache_ttl_seconds: int
         _endpoint_checked_at: dict[str, datetime]
         _endpoint_permission_denied: set[str]
+        _request_outages: set[tuple[str, str, str]]
         _unsafe_post_endpoint_probe_paths: frozenset[str] | set[str]
         _unsafe_post_endpoint_probe_prefixes: tuple[str, ...]
         _unsafe_post_endpoint_probe_segments: frozenset[str] | set[str]
@@ -212,11 +219,8 @@ class ClientEndpointMixin:
                 When no exception is raised, this method always returns a ``bool``.
 
         Raises:
-            _opnsense_http_error: Raised as the mapped public OPNsense error for a
-                non-successful HTTP response when ``self._throw_errors`` is ``True``.
-            _map_opnsense_exception: Raised as the mapped public OPNsense error for
-                an aiohttp client error or timeout when ``self._throw_errors`` is
-                ``True``.
+            error: OPNsenseError raised for an HTTP or transport failure when
+                ``self._throw_errors`` is ``True``.
 
         Side Effects:
             Increments the REST query counter for uncached probes and updates
@@ -257,6 +261,7 @@ class ClientEndpointMixin:
                 ssl=self._verify_ssl,
             ) as response:
                 if response.ok:
+                    _log_request_recovery(self, normalized_method, path, "probe")
                     self._endpoint_permission_denied.discard(cache_key)
                     self._endpoint_availability[cache_key] = True
                     self._endpoint_checked_at[cache_key] = now
@@ -268,41 +273,62 @@ class ClientEndpointMixin:
                     return False
 
                 if response.status == 403:
-                    _LOGGER.error(
+                    error: OPNsenseError = _opnsense_http_error(response.status, response.reason)
+                    _log_request_failure(
+                        self,
+                        normalized_method,
+                        path,
+                        "probe",
+                        logging.ERROR,
                         "Permission Error in is_%s_endpoint_available. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                         normalized_method,
                         url,
+                        error=error if self._throw_errors else None,
                     )
                     if self._throw_errors:
                         self._clear_endpoint_cache_entry(cache_key)
-                        raise _opnsense_http_error(response.status, response.reason)
+                        raise error
                     self._endpoint_permission_denied.add(cache_key)
                     self._endpoint_availability[cache_key] = False
                     self._endpoint_checked_at[cache_key] = now
                     return False
 
                 self._clear_endpoint_cache_entry(cache_key)
-                _LOGGER.warning(
+                error = _opnsense_http_error(response.status, response.reason)
+                _log_request_failure(
+                    self,
+                    normalized_method,
+                    path,
+                    "probe",
+                    logging.WARNING,
                     "Transient %s endpoint check failure for %s. Response %s: %s. Not caching result.",
                     normalized_method.upper(),
                     path,
                     response.status,
                     response.reason,
+                    error=error if self._throw_errors else None,
                 )
                 if self._throw_errors:
-                    raise _opnsense_http_error(response.status, response.reason)
+                    raise error
                 return False
         except (aiohttp.ClientError, TimeoutError) as e:
             self._clear_endpoint_cache_entry(cache_key)
-            _LOGGER.warning(
+            error = _map_opnsense_exception(e)
+            _log_request_failure(
+                self,
+                normalized_method,
+                path,
+                "probe",
+                logging.WARNING,
                 "%s endpoint availability check failed for %s. %s: %s. Not caching result.",
                 normalized_method.upper(),
                 path,
                 type(e).__name__,
                 e,
+                error=error if self._throw_errors else None,
             )
             if self._throw_errors:
-                raise _map_opnsense_exception(e) from e
+                raise error from e
             return False
 
     async def _is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
