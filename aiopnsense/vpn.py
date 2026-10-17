@@ -949,6 +949,10 @@ class VPNMixin(AiopnsenseClientProtocol):
                 counts and aggregated counters. ``None`` when the child
                 configuration or any phase 2 session list could not be read this
                 time, so a missing reply is never reported as a down child.
+
+        Raises:
+            json.JSONDecodeError: Raised when a phase 2 sessions reply is not
+                valid JSON and ``self._throw_errors`` is ``True``.
         """
         configured = await self._get_ipsec_configured_rows(
             IPSEC_CHILDREN_SNAKE_ENDPOINT, IPSEC_CHILDREN_CAMELCASE_ENDPOINT
