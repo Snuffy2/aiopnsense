@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.4.0](https://github.com/Snuffy2/aiopnsense/compare/v1.3.0...v1.4.0) (2026-10-17)
+
+
+### Features
+
+* add IPsec connection enabled state and toggling ([#151](https://github.com/Snuffy2/aiopnsense/issues/151)) ([bba8894](https://github.com/Snuffy2/aiopnsense/commit/bba8894b52a6ee22b2ea05696f7f25c5f05871a3))
+
+
+### Bug Fixes
+
+* suppress repeated request outage logs until recovery ([#152](https://github.com/Snuffy2/aiopnsense/issues/152)) ([a16d90f](https://github.com/Snuffy2/aiopnsense/commit/a16d90fa539dbac48e2c64acfa2c907c48237387))
+
+
+### Miscellaneous Chores
+
+* add Snuffy2 as code owner ([#156](https://github.com/Snuffy2/aiopnsense/issues/156)) ([e952c6e](https://github.com/Snuffy2/aiopnsense/commit/e952c6eca4af098a506e70612d4af4fc1a2fbf87))
+
+
+### Tests
+
+* avoid timezone overflow in voucher fixtures ([#154](https://github.com/Snuffy2/aiopnsense/issues/154)) ([dd602e8](https://github.com/Snuffy2/aiopnsense/commit/dd602e847b09a3192b016a303dea94290adac534))
+
 ## [1.3.0](https://github.com/Snuffy2/aiopnsense/compare/v1.2.1...v1.3.0) (2026-10-16)
 
 
