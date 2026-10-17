@@ -90,7 +90,13 @@ class VPNMixin(AiopnsenseClientProtocol):
                 connected-client data when available. Returns ``None`` when the sessions
                 endpoint is unavailable or its rows are missing or malformed.
                 Route-derived ``clients`` and ``connected_clients`` are omitted
-                when routes are unavailable, rather than reporting zero clients.
+                when routes cannot be fetched or have missing or malformed rows,
+                rather than reporting zero clients.
+
+        Raises:
+            OPNsenseError: Raised when the routes request fails, for example
+                when its response is not valid JSON, and ``self._throw_errors``
+                is ``True``.
         """
         # https://docs.opnsense.org/development/api/core/openvpn.html
         # https://github.com/opnsense/core/blob/master/src/opnsense/www/js/widgets/OpenVPNClients.js
@@ -116,7 +122,13 @@ class VPNMixin(AiopnsenseClientProtocol):
             camel_case_path=OPENVPN_ROUTES_CAMELCASE_ENDPOINT,
         )
         if await self._is_get_endpoint_available(routes_endpoint):
-            routes_info = await self._safe_dict_get(routes_endpoint)
+            try:
+                routes_info = await self._safe_dict_get(routes_endpoint)
+            except OPNsenseError as err:
+                if self._throw_errors:
+                    raise
+                _LOGGER.debug("[get_openvpn] routes unavailable. %s: %s", type(err).__name__, err)
+                routes_info = {}
         else:
             _LOGGER.debug("OpenVPN routes endpoint unavailable")
             routes_info = {}

@@ -764,6 +764,73 @@ async def test_get_ipsec_malformed_phase2_json_through_queue(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_openvpn_malformed_routes_json_through_queue(
+    make_client: MakeClientFactory, throw_errors: bool
+) -> None:
+    """Keep OpenVPN session status when a queued routes reply is not valid JSON.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Client ``throw_errors`` setting.
+
+    Returns:
+        None: This test asserts partial-result and strict-error behavior.
+    """
+    client, session = make_mock_session_client(make_client)
+    task: asyncio.Task | None = None
+    sessions_endpoint = aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT
+    routes_endpoint = aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT
+
+    def fake_get(url: str, **kwargs: Any) -> FakeResponse:
+        """Return a connected session and malformed routes at the HTTP boundary.
+
+        Args:
+            url (str): Requested URL.
+            kwargs (Any): Unused HTTP options.
+
+        Returns:
+            FakeResponse: Queued HTTP response for the requested endpoint.
+        """
+        del kwargs
+        if url.endswith(routes_endpoint):
+            return _MalformedJSONResponse()
+        if url.endswith(sessions_endpoint):
+            return FakeResponse(
+                json_payload={"rows": [{"id": "vpn-1_1", "type": "server", "status": "connected"}]}
+            )
+        return FakeResponse(json_payload={})
+
+    try:
+        client._use_snake_case = True
+        client._throw_errors = throw_errors
+        client._request_queue = asyncio.Queue()
+        client._is_get_endpoint_available = AsyncMock(
+            side_effect=lambda path: path in {sessions_endpoint, routes_endpoint}
+        )
+        session.get = fake_get
+        task = asyncio.get_running_loop().create_task(client._process_queue())
+
+        if throw_errors:
+            with pytest.raises(OPNsenseError):
+                await client.get_openvpn()
+        else:
+            openvpn = await client.get_openvpn()
+
+            assert openvpn is not None
+            assert openvpn["servers"]["vpn-1"]["status"] == "up"
+            assert "clients" not in openvpn["servers"]["vpn-1"]
+            assert "connected_clients" not in openvpn["servers"]["vpn-1"]
+            assert openvpn["clients"] == {}
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("vpn", ["openvpn", "wireguard", "ipsec"])
 @pytest.mark.parametrize(
     "reply", ["empty", "missing", "null", "wrong_type", "http", "timeout", "decode", "unavailable"]
