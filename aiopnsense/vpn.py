@@ -31,6 +31,7 @@ IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT = "/api/ipsec/connections/searchConnection"
 IPSEC_CONNECTION_TOGGLE_SNAKE_ENDPOINT_PREFIX = "/api/ipsec/connections/toggle_connection/"
 IPSEC_CONNECTION_TOGGLE_CAMELCASE_ENDPOINT_PREFIX = "/api/ipsec/connections/toggleConnection/"
 IPSEC_SERVICE_RECONFIGURE_ENDPOINT = "/api/ipsec/service/reconfigure"
+IPSEC_CONFIGURED_VERSIONS: dict[str, str] = {"1": "IKEv1", "2": "IKEv2"}
 OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX = "/api/openvpn/instances/toggle/"
 OPENVPN_SERVICE_RECONFIGURE_ENDPOINT = "/api/openvpn/service/reconfigure"
 WIREGUARD_CLIENT_TOGGLE_SNAKE_ENDPOINT_PREFIX = "/api/wireguard/client/toggle_client/"
@@ -758,6 +759,25 @@ class VPNMixin(AiopnsenseClientProtocol):
         }
 
     @staticmethod
+    def _ipsec_config_enabled(row: MutableMapping[str, Any]) -> bool | None:
+        """Read the ``enabled`` field of an IPsec configuration row.
+
+        Args:
+            row (MutableMapping[str, Any]): Raw row from an OPNsense IPsec
+                configuration search API.
+
+        Returns:
+            bool | None: The enabled state, or ``None`` when the field is
+                missing or not a recognizable ``0``/``1`` value.
+        """
+        value = row.get("enabled")
+        if isinstance(value, bool):
+            return value
+        if str(value).strip() in {"0", "1"}:
+            return str(value).strip() == "1"
+        return None
+
+    @staticmethod
     def _process_ipsec_configured_connection(
         row: MutableMapping[str, Any],
     ) -> MutableMapping[str, Any] | None:
@@ -770,19 +790,20 @@ class VPNMixin(AiopnsenseClientProtocol):
         Returns:
             MutableMapping[str, Any] | None: Disconnected connection mapping in
                 the same shape as a session row, or ``None`` when the row has no
-                usable UUID.
+                usable UUID. ``version`` uses the session spelling (``IKEv1`` or
+                ``IKEv2``) and is ``None`` when both versions are allowed;
+                ``enabled`` is omitted when the configured value is unrecognized.
         """
         uuid = row.get("uuid")
         if not isinstance(uuid, str) or not uuid:
             return None
         description = row.get("description")
-        return {
+        connection: dict[str, Any] = {
             "uuid": uuid,
             "name": description if isinstance(description, str) and description else uuid,
             "connected": False,
             "status": "disconnected",
-            "enabled": VPNMixin._ipsec_flag(row.get("enabled")),
-            "version": row.get("version"),
+            "version": IPSEC_CONFIGURED_VERSIONS.get(str(row.get("version"))),
             "local_addrs": row.get("local_addrs"),
             "remote_addrs": row.get("remote_addrs"),
             "local_id": None,
@@ -794,6 +815,10 @@ class VPNMixin(AiopnsenseClientProtocol):
             "total_packets_recv": 0,
             "total_packets_sent": 0,
         }
+        enabled = VPNMixin._ipsec_config_enabled(row)
+        if enabled is not None:
+            connection["enabled"] = enabled
+        return connection
 
     async def _get_ipsec_configured_connections(
         self,
@@ -842,7 +867,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 for sessions without a configured connection (legacy tunnels, or
                 an API user without access to the connections configuration) and
                 the key is omitted when the configuration could not be read this
-                time.
+                time or reports an unrecognized value.
                 Configured connections without a session, including disabled
                 ones, are reported as disconnected. Returns an empty
                 ``connections`` mapping when the sessions endpoint is unavailable
@@ -873,11 +898,12 @@ class VPNMixin(AiopnsenseClientProtocol):
                 continue
             if configured is not None:
                 configured_row = configured.get(connection["uuid"])
-                connection["enabled"] = (
-                    self._ipsec_flag(configured_row.get("enabled"))
-                    if configured_row is not None
-                    else None
-                )
+                if configured_row is None:
+                    connection["enabled"] = None
+                else:
+                    enabled = self._ipsec_config_enabled(configured_row)
+                    if enabled is not None:
+                        connection["enabled"] = enabled
             ipsec["connections"][connection["uuid"]] = connection
 
         for uuid, configured_row in (configured or {}).items():

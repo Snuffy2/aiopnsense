@@ -896,7 +896,7 @@ async def test_get_ipsec_reports_configured_connections_without_session(
             "connected": False,
             "status": "disconnected",
             "enabled": False,
-            "version": "2",
+            "version": "IKEv2",
             "local_addrs": "198.51.100.1",
             "remote_addrs": "203.0.113.9",
             "local_id": None,
@@ -908,6 +908,63 @@ async def test_get_ipsec_reports_configured_connections_without_session(
             "total_packets_recv": 0,
             "total_packets_sent": 0,
         }
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enabled", "version", "expected_enabled", "expected_version"),
+    [
+        ("1", "1", True, "IKEv1"),
+        (0, "2", False, "IKEv2"),
+        (True, "0", True, None),
+        (None, "2", "missing", "IKEv2"),
+        ("", "2", "missing", "IKEv2"),
+        ("yes", "9", "missing", None),
+    ],
+)
+async def test_get_ipsec_configured_enabled_and_version_normalization(
+    make_client: ClientType,
+    enabled: Any,
+    version: str,
+    expected_enabled: bool | str,
+    expected_version: str | None,
+) -> None:
+    """Normalize configured IKE versions and omit unrecognized enabled values.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        enabled (Any): Raw ``enabled`` value of the configuration rows.
+        version (str): Raw ``version`` value of the configuration rows.
+        expected_enabled (bool | str): Expected ``enabled`` value, or ``"missing"``
+            when the key must be omitted.
+        expected_version (str | None): Expected ``version`` of a configured-only row.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        sessions = {"rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]}
+        configured = {
+            "rows": [
+                {"uuid": "uuid-up", "enabled": enabled, "version": version},
+                {"uuid": "uuid-off", "enabled": enabled, "version": version},
+            ]
+        }
+        client._safe_dict_get = AsyncMock(
+            side_effect=lambda path: configured if "connection" in path else sessions
+        )
+
+        ipsec = await client.get_ipsec()
+
+        for uuid in ("uuid-up", "uuid-off"):
+            row = ipsec["connections"][uuid]
+            if expected_enabled == "missing":
+                assert "enabled" not in row
+            else:
+                assert row["enabled"] is expected_enabled
+        assert ipsec["connections"]["uuid-off"]["version"] == expected_version
     finally:
         await client.async_close()
 
