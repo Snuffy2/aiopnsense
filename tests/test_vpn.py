@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+import json
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -9,6 +10,7 @@ import pytest
 
 import aiopnsense as aiopnsense_module
 from aiopnsense import OPNsenseClient, vpn as aiopnsense_vpn
+from aiopnsense.exceptions import OPNsenseError
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -1272,6 +1274,45 @@ async def test_get_ipsec_children_fail_closed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_ipsec_children_malformed_phase2_json(
+    make_client: ClientType, throw_errors: bool
+) -> None:
+    """Handle a phase 2 sessions reply that is not valid JSON.
+
+    Without ``throw_errors`` the phase 1 connections are kept and ``children`` is
+    omitted; with ``throw_errors`` the error still propagates.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Client ``throw_errors`` setting.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._throw_errors = throw_errors
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": True}]}
+        client._safe_dict_get = AsyncMock(
+            side_effect=lambda path: _ipsec_get_response(path, sessions, {"rows": []})
+        )
+        client._safe_dict_post = AsyncMock(
+            side_effect=json.JSONDecodeError("Expecting value", "<html>", 0)
+        )
+
+        if throw_errors:
+            with pytest.raises(OPNsenseError):
+                await client.get_ipsec()
+        else:
+            ipsec = await client.get_ipsec()
+
+            assert set(ipsec["connections"]) == {"ike-1"}
+            assert "children" not in ipsec
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_ipsec_children_skip_phase2_without_connected_sessions(
     make_client: ClientType,
 ) -> None:
@@ -1342,13 +1383,12 @@ async def test_toggle_vpn_instance_ipsec_posts_toggle_then_reconfigure(
     [
         {"rows": {"not": "a list"}},
         {"rows": "nope"},
-        {},
     ],
 )
 async def test_get_ipsec_malformed_payload_returns_empty(
     make_client: ClientType, payload: dict[str, Any]
 ) -> None:
-    """Return an empty connections mapping when the sessions payload is malformed.
+    """Return empty mappings when the sessions rows are not a list.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1362,8 +1402,29 @@ async def test_get_ipsec_malformed_payload_returns_empty(
 
         ipsec = await client.get_ipsec()
 
-        assert ipsec["connections"] == {}
-        assert ipsec.get("children", {}) == {}
+        assert ipsec == {"connections": {}, "children": {}}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_ipsec_without_rows_omits_unreadable_children(make_client: ClientType) -> None:
+    """Treat a sessions payload without rows as no sessions.
+
+    The child configuration has no rows either, so ``children`` is omitted.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value={})
+
+        ipsec = await client.get_ipsec()
+
+        assert ipsec == {"connections": {}}
     finally:
         await client.async_close()
 

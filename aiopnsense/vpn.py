@@ -2,6 +2,7 @@
 
 from collections.abc import MutableMapping
 from datetime import datetime, timedelta
+import json
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
@@ -964,7 +965,17 @@ class VPNMixin(AiopnsenseClientProtocol):
             camel_case_path=IPSEC_PHASE2_SESSIONS_CAMELCASE_ENDPOINT,
         )
         for session_name in connected_session_names:
-            payload = await self._safe_dict_post(phase2_endpoint, {"id": session_name})
+            try:
+                payload = await self._safe_dict_post(phase2_endpoint, {"id": session_name})
+            except json.JSONDecodeError as err:
+                if self._throw_errors:
+                    raise
+                _LOGGER.debug(
+                    "[get_ipsec] phase 2 sessions unavailable for %s (malformed JSON: %s)",
+                    session_name,
+                    err,
+                )
+                return None
             sa_rows = payload.get("rows")
             if not isinstance(sa_rows, list):
                 _LOGGER.debug(
