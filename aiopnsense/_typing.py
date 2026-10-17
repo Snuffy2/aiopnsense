@@ -9,6 +9,7 @@ class AiopnsenseClientProtocol(Protocol):
     """Structural typing contract used by split aiopnsense mixins."""
 
     _throw_errors: bool
+    _endpoint_availability: dict[str, bool]
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None: ...
 
