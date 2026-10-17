@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from aiopnsense import OPNsenseError, client_queue as aiopnsense_client_queue
+from aiopnsense import OPNsenseError, client_queue as aiopnsense_client_queue, vpn as aiopnsense_vpn
 from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import (
     FakeResponse,
@@ -760,4 +760,190 @@ async def test_get_ipsec_malformed_phase2_json_through_queue(
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_openvpn_malformed_routes_json_through_queue(
+    make_client: MakeClientFactory, throw_errors: bool
+) -> None:
+    """Keep OpenVPN session status when a queued routes reply is not valid JSON.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Client ``throw_errors`` setting.
+
+    Returns:
+        None: This test asserts partial-result and strict-error behavior.
+    """
+    client, session = make_mock_session_client(make_client)
+    sessions_endpoint = aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT
+    routes_endpoint = aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT
+
+    def fake_get(url: str, **kwargs: Any) -> FakeResponse:
+        """Return a connected session and malformed routes at the HTTP boundary.
+
+        Args:
+            url (str): Requested URL.
+            kwargs (Any): Unused HTTP options.
+
+        Returns:
+            FakeResponse: Queued HTTP response for the requested endpoint.
+        """
+        del kwargs
+        if url.endswith(routes_endpoint):
+            return _MalformedJSONResponse()
+        if url.endswith(sessions_endpoint):
+            return FakeResponse(
+                json_payload={"rows": [{"id": "vpn-1_1", "type": "server", "status": "connected"}]}
+            )
+        return FakeResponse(json_payload={})
+
+    try:
+        client._use_snake_case = True
+        client._throw_errors = throw_errors
+        client._is_get_endpoint_available = AsyncMock(
+            side_effect=lambda path: path in {sessions_endpoint, routes_endpoint}
+        )
+        session.get = fake_get
+        if throw_errors:
+            with pytest.raises(OPNsenseError):
+                await client.get_openvpn()
+        else:
+            openvpn = await client.get_openvpn()
+
+            assert openvpn is not None
+            assert openvpn["servers"]["vpn-1"]["status"] == "up"
+            assert "clients" not in openvpn["servers"]["vpn-1"]
+            assert "connected_clients" not in openvpn["servers"]["vpn-1"]
+            assert openvpn["clients"] == {}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vpn", ["openvpn", "wireguard", "ipsec"])
+@pytest.mark.parametrize(
+    "reply", ["empty", "missing", "null", "wrong_type", "http", "timeout", "decode", "unavailable"]
+)
+async def test_vpn_status_unavailable_vs_empty(
+    make_client: MakeClientFactory, vpn: str, reply: str
+) -> None:
+    """Distinguish unavailable observations from empty sessions through the real queue.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        vpn (str): VPN getter to exercise.
+        reply (str): Primary status response or failure to simulate.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._use_snake_case = True
+    endpoints = {
+        "openvpn": aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT,
+        "wireguard": aiopnsense_vpn.WIREGUARD_SUMMARY_ENDPOINT,
+        "ipsec": aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT,
+    }
+    status_endpoint = endpoints[vpn]
+    client._is_get_endpoint_available = AsyncMock(return_value=reply != "unavailable")
+    config = {
+        "uuid": "configured",
+        "role": "server",
+        "enabled": "1",
+        "name": "configured",
+        "instance": "1",
+        "peers": {"peer": {"selected": "1", "value": "peer"}},
+    }
+
+    def fake_get(url: str, **kwargs: Any) -> FakeResponse:
+        """Return a status reply or configured inventory at the HTTP boundary.
+
+        Args:
+            url (str): Requested URL.
+            kwargs (Any): Unused HTTP options.
+
+        Returns:
+            FakeResponse: Response for the requested endpoint.
+
+        Raises:
+            TimeoutError: Simulated primary status timeout.
+        """
+        if url.endswith(status_endpoint):
+            if reply == "timeout":
+                raise TimeoutError("status unavailable")
+            payloads = {
+                "empty": {"rows": []},
+                "missing": {},
+                "null": {"rows": None},
+                "wrong_type": {"rows": {}},
+            }
+            response = FakeResponse(
+                status=503 if reply == "http" else 200,
+                ok=reply != "http",
+                json_payload=payloads.get(reply),
+            )
+            if reply == "decode":
+                response.json = AsyncMock(side_effect=json.JSONDecodeError("invalid", "", 0))
+            return response
+        if url.endswith(aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT):
+            return FakeResponse(json_payload={"rows": []})
+        return FakeResponse(
+            json_payload={
+                "rows": [config],
+                "client": {"clients": {"client": {"peer": {"name": "peer"}}}},
+                "server": {"servers": {"server": {"configured": config}}},
+            }
+        )
+
+    session.get = fake_get
+    try:
+        result = await getattr(client, f"get_{vpn}")()
+        if reply != "empty":
+            assert result is None
+        else:
+            assert result is not None
+            if vpn == "ipsec":
+                assert result["connections"]["configured"]["connected"] is False
+                assert result["children"]["configured"]["status"] == "disconnected"
+                assert result["children"]["configured"]["total_bytes_recv"] == 0
+            else:
+                server = result["servers"]["configured"]
+                assert server["connected_clients"] == 0
+                assert server["total_bytes_recv"] == 0
+                if vpn == "wireguard":
+                    assert server["clients"][0]["connected"] is False
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vpn", ["openvpn", "wireguard", "ipsec"])
+@pytest.mark.parametrize("failure", ["http", "decode", "cancel"])
+async def test_vpn_status_propagates_errors(
+    make_client: MakeClientFactory, vpn: str, failure: str
+) -> None:
+    """Preserve strict request errors and cancellation through the real queue.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        vpn (str): VPN getter to exercise.
+        failure (str): HTTP, JSON decoding, or cancellation failure.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._throw_errors = True
+    client._use_snake_case = True
+    client._is_get_endpoint_available = AsyncMock(return_value=True)
+    response = FakeResponse(status=503, ok=False)
+    if failure != "http":
+        response = FakeResponse()
+        error = (
+            asyncio.CancelledError() if failure == "cancel" else json.JSONDecodeError("bad", "", 0)
+        )
+        response.json = AsyncMock(side_effect=error)
+    session.get = lambda *args, **kwargs: response
+    try:
+        expected = asyncio.CancelledError if failure == "cancel" else OPNsenseError
+        with pytest.raises(expected):
+            await getattr(client, f"get_{vpn}")()
+    finally:
         await client.async_close()

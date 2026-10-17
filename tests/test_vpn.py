@@ -633,9 +633,9 @@ async def test_get_wireguard_success_and_invalid(make_client: ClientType) -> Non
     # client peer should reflect disconnected (old handshake)
     assert wg["clients"]["c1"].get("connected_servers") == 0
 
-    # invalid structure (summary not list) -> empty wireguard structure
+    # Invalid summary must not report configured peers as disconnected.
     client._safe_dict_get = AsyncMock(return_value={"rows": {}})
-    assert await client.get_wireguard() == {"servers": {}, "clients": {}}
+    assert await client.get_wireguard() is None
     await client.async_close()
 
 
@@ -656,7 +656,7 @@ async def test_version_switched_vpn_endpoints_fail_closed(make_client: ClientTyp
         client._safe_dict_get = AsyncMock()
 
         openvpn = await client.get_openvpn()
-        assert openvpn == {"servers": {}, "clients": {}}
+        assert openvpn is None
         client._is_get_endpoint_available.assert_awaited()
         client._safe_dict_get.assert_not_awaited()
     finally:
@@ -704,7 +704,7 @@ async def test_vpn_switched_endpoints_follow_selected_case(
     try:
         client._use_snake_case = use_snake_case
         client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={})
+        client._safe_dict_get = AsyncMock(return_value={"rows": []})
         client._safe_dict_post = AsyncMock(side_effect=[{"changed": True}, {"result": "ok"}])
 
         await client.get_openvpn()
@@ -1344,10 +1344,10 @@ async def test_toggle_vpn_instance_ipsec_posts_toggle_then_reconfigure(
         {"rows": "nope"},
     ],
 )
-async def test_get_ipsec_malformed_payload_returns_empty(
+async def test_get_ipsec_malformed_payload_returns_none(
     make_client: ClientType, payload: dict[str, Any]
 ) -> None:
-    """Return empty mappings when the sessions rows are not a list.
+    """Return None when the sessions rows are not a list.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1361,16 +1361,14 @@ async def test_get_ipsec_malformed_payload_returns_empty(
 
         ipsec = await client.get_ipsec()
 
-        assert ipsec == {"connections": {}, "children": {}}
+        assert ipsec is None
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_get_ipsec_without_rows_omits_unreadable_children(make_client: ClientType) -> None:
-    """Treat a sessions payload without rows as no sessions.
-
-    The child configuration has no rows either, so ``children`` is omitted.
+async def test_get_ipsec_without_rows_returns_none(make_client: ClientType) -> None:
+    """Treat a sessions payload without rows as unavailable.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1383,7 +1381,7 @@ async def test_get_ipsec_without_rows_omits_unreadable_children(make_client: Cli
 
         ipsec = await client.get_ipsec()
 
-        assert ipsec == {"connections": {}}
+        assert ipsec is None
     finally:
         await client.async_close()
 
@@ -1401,7 +1399,7 @@ async def test_get_ipsec_endpoint_unavailable_fails_closed(make_client: ClientTy
         client._is_get_endpoint_available = AsyncMock(return_value=False)
         client._safe_dict_get = AsyncMock()
 
-        assert await client.get_ipsec() == {"connections": {}, "children": {}}
+        assert await client.get_ipsec() is None
         client._is_get_endpoint_available.assert_awaited_once_with(
             aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT
         )
@@ -1433,3 +1431,43 @@ def test_ipsec_flag_variants(value: Any, expected: bool) -> None:
         expected (bool): Expected normalized boolean.
     """
     assert aiopnsense_vpn.VPNMixin._ipsec_flag(value) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("routes", [None, {}, {"rows": None}, {"rows": []}])
+async def test_openvpn_unavailable_routes_omit_client_counts(
+    make_client: ClientType, routes: dict[str, Any] | None
+) -> None:
+    """Keep session status while distinguishing unknown routes from no clients.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        routes (dict[str, Any] | None): Routes payload, or unavailable endpoint.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._use_snake_case = True
+    client._is_get_endpoint_available = AsyncMock(
+        side_effect=lambda path: (
+            routes is not None or path != aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT
+        )
+    )
+    client._safe_dict_get = AsyncMock(
+        side_effect=lambda path: (
+            routes
+            if path == aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT
+            else {"rows": [{"type": "server", "id": "server", "status": "connected"}]}
+        )
+    )
+    try:
+        result = await client.get_openvpn()
+        assert result is not None
+        server = result["servers"]["server"]
+        assert server["status"] == "up"
+        if routes == {"rows": []}:
+            assert server["clients"] == []
+            assert server["connected_clients"] == 0
+        else:
+            assert "clients" not in server
+            assert "connected_clients" not in server
+    finally:
+        await client.async_close()
