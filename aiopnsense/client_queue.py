@@ -6,7 +6,7 @@ import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .exceptions import OPNsenseError, _map_opnsense_exception
-from .helpers import _LOGGER
+from .helpers import _LOGGER, _is_request_error_logged, _mark_request_error_logged
 
 
 class ClientQueueMixin:
@@ -229,16 +229,19 @@ class ClientQueueMixin:
                     future.cancel()
                 raise
             except Exception as e:  # noqa: BLE001
-                _LOGGER.error(
-                    "Exception in request queue processor (called by %s). %s: %s",
-                    caller,
-                    type(e).__name__,
-                    e,
-                )
+                if not _is_request_error_logged(e):
+                    _LOGGER.error(
+                        "Exception in request queue processor (called by %s). %s: %s",
+                        caller,
+                        type(e).__name__,
+                        e,
+                    )
                 if future is not None and not future.done():
                     mapped_error = _map_opnsense_exception(e)
                     if mapped_error is not e:
                         mapped_error.__cause__ = e
+                    if _is_request_error_logged(e):
+                        _mark_request_error_logged(mapped_error)
                     future.set_exception(mapped_error)
             await asyncio.sleep(0.3)
 
