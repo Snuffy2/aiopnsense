@@ -28,7 +28,7 @@ ClientType = Callable[..., OPNsenseClient]
                     "password": "p",
                     "vouchergroup": "g",
                     "starttime": "t",
-                    "expirytime": 253402300799,
+                    "expirytime": 1700000000,
                     "validity": 65,
                 }
             ],
@@ -132,14 +132,15 @@ async def test_generate_vouchers_auto_selects_single_provider(make_client: Clien
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_list_get = AsyncMock(return_value=["srv one"])
         client._safe_list_post = AsyncMock(
-            return_value=[{"username": "u", "validity": 60, "expirytime": 253402300799}]
+            return_value=[{"username": "u", "validity": 60, "expirytime": 1700000000}]
         )
 
         vouchers = await client.generate_vouchers({})
 
         assert vouchers[0]["username"] == "u"
         assert vouchers[0]["validity_str"] == "1 minute"
-        assert vouchers[0]["expiry_timestamp"] == 253402300799
+        assert vouchers[0]["expiry_timestamp"] == 1700000000
+        assert vouchers[0]["expirytime"].timestamp() == 1700000000
         client._safe_list_get.assert_awaited_once_with("/api/captiveportal/voucher/list_providers")
         client._safe_list_post.assert_awaited_once_with(
             "/api/captiveportal/voucher/generate_vouchers/srv%20one/",
