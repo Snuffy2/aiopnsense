@@ -778,7 +778,6 @@ async def test_get_openvpn_malformed_routes_json_through_queue(
         None: This test asserts partial-result and strict-error behavior.
     """
     client, session = make_mock_session_client(make_client)
-    task: asyncio.Task | None = None
     sessions_endpoint = aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT
     routes_endpoint = aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT
 
@@ -804,13 +803,10 @@ async def test_get_openvpn_malformed_routes_json_through_queue(
     try:
         client._use_snake_case = True
         client._throw_errors = throw_errors
-        client._request_queue = asyncio.Queue()
         client._is_get_endpoint_available = AsyncMock(
             side_effect=lambda path: path in {sessions_endpoint, routes_endpoint}
         )
         session.get = fake_get
-        task = asyncio.get_running_loop().create_task(client._process_queue())
-
         if throw_errors:
             with pytest.raises(OPNsenseError):
                 await client.get_openvpn()
@@ -823,10 +819,6 @@ async def test_get_openvpn_malformed_routes_json_through_queue(
             assert "connected_clients" not in openvpn["servers"]["vpn-1"]
             assert openvpn["clients"] == {}
     finally:
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
         await client.async_close()
 
 
