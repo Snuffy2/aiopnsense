@@ -26,6 +26,12 @@ WIREGUARD_CLIENTS_ENDPOINT = "/api/wireguard/client/get"
 WIREGUARD_SERVERS_ENDPOINT = "/api/wireguard/server/get"
 IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT = "/api/ipsec/sessions/search_phase1"
 IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT = "/api/ipsec/sessions/searchPhase1"
+IPSEC_CONNECTIONS_SNAKE_ENDPOINT = "/api/ipsec/connections/search_connection"
+IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT = "/api/ipsec/connections/searchConnection"
+IPSEC_CONNECTION_TOGGLE_SNAKE_ENDPOINT_PREFIX = "/api/ipsec/connections/toggle_connection/"
+IPSEC_CONNECTION_TOGGLE_CAMELCASE_ENDPOINT_PREFIX = "/api/ipsec/connections/toggleConnection/"
+IPSEC_SERVICE_RECONFIGURE_ENDPOINT = "/api/ipsec/service/reconfigure"
+IPSEC_CONFIGURED_VERSIONS: dict[str, str] = {"1": "IKEv1", "2": "IKEv2"}
 OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX = "/api/openvpn/instances/toggle/"
 OPENVPN_SERVICE_RECONFIGURE_ENDPOINT = "/api/openvpn/service/reconfigure"
 WIREGUARD_CLIENT_TOGGLE_SNAKE_ENDPOINT_PREFIX = "/api/wireguard/client/toggle_client/"
@@ -617,7 +623,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             vpn_type (str): Vpn type used by this operation.
             clients_servers (str): WireGuard collection to toggle. Use
                 ``clients`` for a client entry or ``servers`` for a server
-                entry. Ignored for OpenVPN.
+                entry. IPsec only supports ``connections``. Ignored for OpenVPN.
             uuid (str): UUID of the VPN instance to toggle.
 
         Returns:
@@ -670,6 +676,29 @@ class VPNMixin(AiopnsenseClientProtocol):
                 return False
             reconfigure = await self._safe_dict_post(WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT)
             return reconfigure.get("result", "") == "ok"
+        if vpn_type == "ipsec":
+            if clients_servers != "connections":
+                return False
+            endpoint = await self._get_endpoint_path(
+                snake_case_path=f"{IPSEC_CONNECTION_TOGGLE_SNAKE_ENDPOINT_PREFIX}{uuid}",
+                camel_case_path=f"{IPSEC_CONNECTION_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}",
+            )
+            success = await self._safe_dict_post(endpoint)
+            _LOGGER.debug(
+                "[toggle_vpn_instance] IPsec connection toggle response for UUID %s: %s",
+                uuid,
+                success,
+            )
+            if not success.get("changed", False):
+                return False
+            reconfigure = await self._safe_dict_post(IPSEC_SERVICE_RECONFIGURE_ENDPOINT)
+            _LOGGER.debug(
+                "[toggle_vpn_instance] IPsec service reconfigure response after toggling UUID "
+                "%s: %s",
+                uuid,
+                reconfigure,
+            )
+            return reconfigure.get("status", "") == "ok"
         return False
 
     @staticmethod
@@ -729,6 +758,101 @@ class VPNMixin(AiopnsenseClientProtocol):
             "total_packets_sent": try_to_int(row.get("packets-out"), 0),
         }
 
+    @staticmethod
+    def _ipsec_config_enabled(row: MutableMapping[str, Any]) -> bool | None:
+        """Read the ``enabled`` field of an IPsec configuration row.
+
+        Args:
+            row (MutableMapping[str, Any]): Raw row from an OPNsense IPsec
+                configuration search API.
+
+        Returns:
+            bool | None: The enabled state, or ``None`` when the field is
+                missing or not a recognizable ``0``/``1`` value.
+        """
+        value = row.get("enabled")
+        if isinstance(value, bool):
+            return value
+        if str(value).strip() in {"0", "1"}:
+            return str(value).strip() == "1"
+        return None
+
+    @staticmethod
+    def _process_ipsec_configured_connection(
+        row: MutableMapping[str, Any],
+    ) -> MutableMapping[str, Any] | None:
+        """Normalize a configured IPsec connection that has no active session.
+
+        Args:
+            row (MutableMapping[str, Any]): Raw row from the OPNsense IPsec
+                ``search_connection`` configuration API.
+
+        Returns:
+            MutableMapping[str, Any] | None: Disconnected connection mapping in
+                the same shape as a session row, or ``None`` when the row has no
+                usable UUID. ``version`` uses the session spelling (``IKEv1`` or
+                ``IKEv2``) and is ``None`` when both versions are allowed;
+                ``enabled`` is omitted when the configured value is unrecognized.
+        """
+        uuid = row.get("uuid")
+        if not isinstance(uuid, str) or not uuid:
+            return None
+        description = row.get("description")
+        connection: dict[str, Any] = {
+            "uuid": uuid,
+            "name": description if isinstance(description, str) and description else uuid,
+            "connected": False,
+            "status": "disconnected",
+            "version": IPSEC_CONFIGURED_VERSIONS.get(str(row.get("version"))),
+            "local_addrs": row.get("local_addrs"),
+            "remote_addrs": row.get("remote_addrs"),
+            "local_id": None,
+            "remote_id": None,
+            "routed": False,
+            "install_time": None,
+            "total_bytes_recv": 0,
+            "total_bytes_sent": 0,
+            "total_packets_recv": 0,
+            "total_packets_sent": 0,
+        }
+        enabled = VPNMixin._ipsec_config_enabled(row)
+        if enabled is not None:
+            connection["enabled"] = enabled
+        return connection
+
+    async def _get_ipsec_configured_connections(
+        self,
+    ) -> dict[str, MutableMapping[str, Any]] | None:
+        """Return configured IPsec connections keyed by UUID.
+
+        Returns:
+            dict[str, MutableMapping[str, Any]] | None: Raw configuration rows
+                keyed by connection UUID. Empty when the endpoint is known to be
+                missing or not permitted for the API user, so no connection can
+                be toggled. ``None`` when the configuration could not be read
+                this time (transient failure or malformed payload).
+        """
+        endpoint = await self._get_endpoint_path(
+            snake_case_path=IPSEC_CONNECTIONS_SNAKE_ENDPOINT,
+            camel_case_path=IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT,
+        )
+        if not await self._is_get_endpoint_available(endpoint):
+            if self._endpoint_availability.get(endpoint) is False:
+                _LOGGER.debug("IPsec connections endpoint missing or not permitted")
+                return {}
+            _LOGGER.debug("IPsec connections endpoint temporarily unavailable")
+            return None
+        payload = await self._safe_dict_get(endpoint)
+        rows = payload.get("rows")
+        if not isinstance(rows, list):
+            _LOGGER.debug("[get_ipsec] configured connections unavailable (malformed rows)")
+            return None
+        configured: dict[str, MutableMapping[str, Any]] = {}
+        for row in rows:
+            if isinstance(row, MutableMapping) and isinstance(row.get("uuid"), str) and row["uuid"]:
+                configured[row["uuid"]] = row
+        return configured
+
     @_log_errors
     async def get_ipsec(self) -> MutableMapping[str, Any]:
         """Return IPsec phase 1 (IKE) connection status information.
@@ -738,9 +862,16 @@ class VPNMixin(AiopnsenseClientProtocol):
                 IKE connection UUID. Entries combine the connection description,
                 IKE version, local and remote addresses and identities, the
                 connected state, install age, routing state, and byte and packet
-                counters reported by the OPNsense IPsec sessions API. Returns an
-                empty ``connections`` mapping when the endpoint is unavailable or
-                the payload is malformed.
+                counters reported by the OPNsense IPsec sessions API. ``enabled``
+                comes from the IPsec connections configuration: it is ``None``
+                for sessions without a configured connection (legacy tunnels, or
+                an API user without access to the connections configuration) and
+                the key is omitted when the configuration could not be read this
+                time or reports an unrecognized value.
+                Configured connections without a session, including disabled
+                ones, are reported as disconnected. Returns an empty
+                ``connections`` mapping when the sessions endpoint is unavailable
+                or the payload is malformed.
         """
         # https://docs.opnsense.org/development/api/core/ipsec.html
         ipsec: dict[str, Any] = {"connections": {}}
@@ -758,13 +889,29 @@ class VPNMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("[get_ipsec] connections: 0 (malformed rows)")
             return ipsec
 
+        configured = await self._get_ipsec_configured_connections()
         for row in rows:
             if not isinstance(row, MutableMapping):
                 continue
             connection = self._process_ipsec_connection(row)
             if connection is None:
                 continue
+            if configured is not None:
+                configured_row = configured.get(connection["uuid"])
+                if configured_row is None:
+                    connection["enabled"] = None
+                else:
+                    enabled = self._ipsec_config_enabled(configured_row)
+                    if enabled is not None:
+                        connection["enabled"] = enabled
             ipsec["connections"][connection["uuid"]] = connection
+
+        for uuid, configured_row in (configured or {}).items():
+            if uuid in ipsec["connections"]:
+                continue
+            connection = self._process_ipsec_configured_connection(configured_row)
+            if connection is not None:
+                ipsec["connections"][uuid] = connection
 
         _LOGGER.debug("[get_ipsec] connections: %s", len(ipsec["connections"]))
         return ipsec
