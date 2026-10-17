@@ -32,14 +32,3 @@ Only disable TLS verification if you understand the risks in doing so.
            await client.validate()
 
    asyncio.run(main())
-
-Request failure logs
---------------------
-
-For each client, HTTP request failures are logged at their original warning or
-error level once per ongoing outage for that method and path. Repeated failures
-are logged at debug level, and a successful request logs an informational
-recovery. Endpoint availability probes and data requests track recovery
-separately, so a successful probe does not imply that a subsequent data request
-succeeded. This changes logging only; ``throw_errors`` still controls whether
-request failures are suppressed or raised.
