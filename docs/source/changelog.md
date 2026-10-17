@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.3.1](https://github.com/Snuffy2/aiopnsense/compare/v1.3.0...v1.3.1) (2026-10-17)
+
+
+### Features
+
+* add IPsec child (phase 2) status to get_ipsec ([#153](https://github.com/Snuffy2/aiopnsense/issues/153)) ([f1df285](https://github.com/Snuffy2/aiopnsense/commit/f1df285dcdbb14df0f3b89c517699f3afe7f87fd))
+* add IPsec connection enabled state and toggling ([#151](https://github.com/Snuffy2/aiopnsense/issues/151)) ([bba8894](https://github.com/Snuffy2/aiopnsense/commit/bba8894b52a6ee22b2ea05696f7f25c5f05871a3))
+
+
+### Bug Fixes
+
+* distinguish unavailable VPN status from empty sessions ([#159](https://github.com/Snuffy2/aiopnsense/issues/159)) ([87beec3](https://github.com/Snuffy2/aiopnsense/commit/87beec3ed03be6f0be428c0bb0050a37e49e745c))
+* suppress repeated request outage logs until recovery ([#152](https://github.com/Snuffy2/aiopnsense/issues/152)) ([a16d90f](https://github.com/Snuffy2/aiopnsense/commit/a16d90fa539dbac48e2c64acfa2c907c48237387))
+
+
+### Dependencies
+
+* bump astral-sh/setup-uv from 10.2.0 to 10.3.0 in the github-actions group ([#157](https://github.com/Snuffy2/aiopnsense/issues/157)) ([bd59948](https://github.com/Snuffy2/aiopnsense/commit/bd59948baed5d188bb570f1fed7a7cb0f3cd1ee5))
+* bump the python-dependencies group with 5 updates ([#158](https://github.com/Snuffy2/aiopnsense/issues/158)) ([bb2de9d](https://github.com/Snuffy2/aiopnsense/commit/bb2de9d32832c19783ab3b377380f62d4632760f))
+
+
+### Miscellaneous Chores
+
+* add Snuffy2 as code owner ([#156](https://github.com/Snuffy2/aiopnsense/issues/156)) ([e952c6e](https://github.com/Snuffy2/aiopnsense/commit/e952c6eca4af098a506e70612d4af4fc1a2fbf87))
+
+
+### Tests
+
+* avoid timezone overflow in voucher fixtures ([#154](https://github.com/Snuffy2/aiopnsense/issues/154)) ([dd602e8](https://github.com/Snuffy2/aiopnsense/commit/dd602e847b09a3192b016a303dea94290adac534))
+
 ## [1.3.0](https://github.com/Snuffy2/aiopnsense/compare/v1.2.1...v1.3.0) (2026-10-16)
 
 
