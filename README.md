@@ -41,20 +41,6 @@ The client currently includes helpers for:
 
 - Read the Docs: <https://aiopnsense.readthedocs.io>
 
-## VPN status availability
-
-`get_openvpn()`, `get_wireguard()`, and `get_ipsec()` return `None` when their
-primary sessions or summary endpoint is unavailable, or its response has missing
-or malformed `rows`. Treat this as an unknown observation, rather than clearing
-previous state or reporting disconnected tunnels and zero traffic. A successful
-`rows: []` response still returns a mapping and reports configured WireGuard peers
-and IPsec connections and children as disconnected with zero counters.
-
-OpenVPN omits server `clients` and `connected_clients` when routes cannot be read.
-IPsec omits `children` when child configuration or phase 2 sessions cannot be read,
-while retaining valid phase 1 data. Request errors still propagate when
-`throw_errors=True`; cancellation always propagates.
-
 ## Live test scripts
 
 The `scripts/` directory includes live diagnostic helpers for maintainers:
