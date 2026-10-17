@@ -2,7 +2,6 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-import json
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -10,7 +9,6 @@ import pytest
 
 import aiopnsense as aiopnsense_module
 from aiopnsense import OPNsenseClient, vpn as aiopnsense_vpn
-from aiopnsense.exceptions import OPNsenseError
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -1269,45 +1267,6 @@ async def test_get_ipsec_children_fail_closed(
         else:
             assert set(ipsec["children"]) == expected_children
             assert ipsec["children"]["child-x"]["enabled"] is None
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("throw_errors", [False, True])
-async def test_get_ipsec_children_malformed_phase2_json(
-    make_client: ClientType, throw_errors: bool
-) -> None:
-    """Handle a phase 2 sessions reply that is not valid JSON.
-
-    Without ``throw_errors`` the phase 1 connections are kept and ``children`` is
-    omitted; with ``throw_errors`` the error still propagates.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Client ``throw_errors`` setting.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._use_snake_case = True
-        client._throw_errors = throw_errors
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": True}]}
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: _ipsec_get_response(path, sessions, {"rows": []})
-        )
-        client._safe_dict_post = AsyncMock(
-            side_effect=json.JSONDecodeError("Expecting value", "<html>", 0)
-        )
-
-        if throw_errors:
-            with pytest.raises(OPNsenseError):
-                await client.get_ipsec()
-        else:
-            ipsec = await client.get_ipsec()
-
-            assert set(ipsec["connections"]) == {"ike-1"}
-            assert "children" not in ipsec
     finally:
         await client.async_close()
 

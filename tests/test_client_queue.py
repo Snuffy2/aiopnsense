@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import MutableMapping
 import contextlib
+import json
 from typing import Any, Never
 from unittest.mock import AsyncMock
 
@@ -695,4 +696,68 @@ async def test_stream_interface_traffic_does_not_enqueue_request(
         assert client._workers == []
         assert not hasattr(client, "_queue_monitor")
     finally:
+        await client.async_close()
+
+
+class _MalformedJSONResponse(FakeResponse):
+    """Successful response whose body is not valid JSON."""
+
+    async def json(self, content_type: Any = None) -> Never:
+        """Raise the error aiohttp raises for a body that is not valid JSON.
+
+        Args:
+            content_type (Any, optional): Requested content type (unused by the fake).
+
+        Returns:
+            Never: This method always raises.
+
+        Raises:
+            json.JSONDecodeError: Always.
+        """
+        del content_type
+        raise json.JSONDecodeError("Expecting value", "<html>", 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_ipsec_malformed_phase2_json_through_queue(
+    make_client: MakeClientFactory, throw_errors: bool
+) -> None:
+    """Keep IPsec phase 1 data when a queued phase 2 reply is not valid JSON.
+
+    The phase 2 POST runs through ``_post``, the request queue and ``_do_post``,
+    so the decode error reaches ``get_ipsec`` as the queue's mapped error.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Client ``throw_errors`` setting.
+    """
+    client, session = make_mock_session_client(make_client)
+    task: asyncio.Task | None = None
+    try:
+        client._use_snake_case = True
+        client._throw_errors = throw_errors
+        client._request_queue = asyncio.Queue()
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": True}]}
+        client._safe_dict_get = AsyncMock(
+            side_effect=lambda path: sessions if "search_phase1" in path else {"rows": []}
+        )
+        session.post = lambda *a, **k: _MalformedJSONResponse()
+        task = asyncio.get_running_loop().create_task(client._process_queue())
+
+        if throw_errors:
+            with pytest.raises(OPNsenseError):
+                await client.get_ipsec()
+        else:
+            ipsec = await client.get_ipsec()
+
+            assert ipsec is not None
+            assert set(ipsec["connections"]) == {"ike-1"}
+            assert "children" not in ipsec
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         await client.async_close()

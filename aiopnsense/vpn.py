@@ -2,10 +2,10 @@
 
 from collections.abc import MutableMapping
 from datetime import datetime, timedelta
-import json
 from typing import Any
 
 from ._typing import AiopnsenseClientProtocol
+from .exceptions import OPNsenseError
 from .helpers import (
     _LOGGER,
     _log_errors,
@@ -909,6 +909,9 @@ class VPNMixin(AiopnsenseClientProtocol):
     def _add_ipsec_child_sa(child: dict[str, Any], sa_row: MutableMapping[str, Any]) -> None:
         """Aggregate one phase 2 security association into its child entry.
 
+        Byte and packet counters are summed over the SAs, so they drop when an SA
+        is rekeyed. ``install_time`` is the age of the oldest installed SA.
+
         Args:
             child (dict[str, Any]): Child entry updated in place.
             sa_row (MutableMapping[str, Any]): Raw row from the OPNsense IPsec
@@ -951,8 +954,9 @@ class VPNMixin(AiopnsenseClientProtocol):
                 time, so a missing reply is never reported as a down child.
 
         Raises:
-            json.JSONDecodeError: Raised when a phase 2 sessions reply is not
-                valid JSON and ``self._throw_errors`` is ``True``.
+            OPNsenseError: Raised when a phase 2 sessions request fails, for
+                example with a reply that is not valid JSON, and
+                ``self._throw_errors`` is ``True``.
         """
         configured = await self._get_ipsec_configured_rows(
             IPSEC_CHILDREN_SNAKE_ENDPOINT, IPSEC_CHILDREN_CAMELCASE_ENDPOINT
@@ -971,12 +975,13 @@ class VPNMixin(AiopnsenseClientProtocol):
         for session_name in connected_session_names:
             try:
                 payload = await self._safe_dict_post(phase2_endpoint, {"id": session_name})
-            except json.JSONDecodeError as err:
+            except OPNsenseError as err:
                 if self._throw_errors:
                     raise
                 _LOGGER.debug(
-                    "[get_ipsec] phase 2 sessions unavailable for %s (malformed JSON: %s)",
+                    "[get_ipsec] phase 2 sessions unavailable for %s. %s: %s",
                     session_name,
+                    type(err).__name__,
                     err,
                 )
                 return None
@@ -1019,7 +1024,8 @@ class VPNMixin(AiopnsenseClientProtocol):
                 time or reports an unrecognized value.
                 Configured connections without a session, including disabled
                 ones, are reported as disconnected. ``children`` holds phase 2
-                status keyed by child UUID and is omitted when it could not be
+                status keyed by child UUID, with ``install_time`` as the age of
+                the oldest installed SA, and is omitted when it could not be
                 read completely. Returns empty ``connections`` and ``children``
                 mappings when the sessions endpoint is unavailable or the payload
                 is malformed.
