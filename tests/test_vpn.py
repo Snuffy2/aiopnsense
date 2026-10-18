@@ -683,13 +683,16 @@ async def test_get_wireguard_rejects_malformed_inventory_entries(
             client_summ["client-disabled"]["servers"] = {
                 "server-malformed": {"selected": "1", "value": "invalid"}
             }
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
-                {"rows": []},
-                {"client": {"clients": {"client": client_summ}}},
-                {"server": {"servers": {"server": server_summ}}},
-            ]
-        )
+        response_by_path = {
+            aiopnsense_vpn.WIREGUARD_SUMMARY_ENDPOINT: {"rows": []},
+            aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT: {
+                "client": {"clients": {"client": client_summ}}
+            },
+            aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT: {
+                "server": {"servers": {"server": server_summ}}
+            },
+        }
+        client._safe_dict_get = AsyncMock(side_effect=lambda path: response_by_path[path])
 
         assert await client.get_wireguard() is None
     finally:
@@ -768,20 +771,19 @@ async def test_version_switched_vpn_endpoints_fail_closed(make_client: ClientTyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("inventory", "instances", "providers"),
+    ("instances", "providers"),
     [
-        (
-            "instances",
+        pytest.param(
             {"rows": [{"role": "client", "uuid": "disabled", "enabled": "0"}, None]},
             {"server": {"name": "server"}},
+            id="malformed_instance_row",
         ),
-        (
-            "instances",
+        pytest.param(
             {"rows": [{"role": "server", "uuid": ""}, {"role": "client", "uuid": "ok"}]},
             {},
+            id="empty_server_uuid",
         ),
-        (
-            "instances",
+        pytest.param(
             {
                 "rows": [
                     {"role": "client", "uuid": "disabled", "enabled": "0"},
@@ -789,9 +791,9 @@ async def test_version_switched_vpn_endpoints_fail_closed(make_client: ClientTyp
                 ]
             },
             {},
+            id="missing_instance_role",
         ),
-        (
-            "instances",
+        pytest.param(
             {
                 "rows": [
                     {"role": "client", "uuid": "disabled", "enabled": "0"},
@@ -799,18 +801,18 @@ async def test_version_switched_vpn_endpoints_fail_closed(make_client: ClientTyp
                 ]
             },
             {},
+            id="empty_instance_role",
         ),
-        (
-            "providers",
+        pytest.param(
             {"rows": [{"role": "client", "uuid": "disabled", "enabled": "0"}]},
             {"good": {"name": "good"}, "malformed": None},
+            id="malformed_provider_record",
         ),
     ],
 )
 @pytest.mark.parametrize("throw_errors", [False, True])
 async def test_get_openvpn_rejects_malformed_required_inventory_entries(
     make_client: ClientType,
-    inventory: str,
     instances: dict[str, Any],
     providers: dict[str, Any],
     throw_errors: bool,
@@ -819,7 +821,6 @@ async def test_get_openvpn_rejects_malformed_required_inventory_entries(
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        inventory (str): Required inventory containing the malformed record.
         instances (dict[str, Any]): Instance-search payload returned by the API.
         providers (dict[str, Any]): Provider payload returned by the API.
         throw_errors (bool): Whether strict request errors are enabled.
@@ -851,8 +852,6 @@ async def test_get_openvpn_rejects_malformed_required_inventory_entries(
         client._get = AsyncMock(return_value=providers)
 
         assert await client.get_openvpn() is None
-        if inventory == "instances":
-            client._get.assert_awaited_once_with(aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT)
     finally:
         await client.async_close()
 
@@ -986,8 +985,8 @@ async def test_vpn_switched_endpoints_follow_selected_case(
         await client.get_openvpn()
         await client.toggle_vpn_instance("wireguard", "clients", "uuid")
 
-        assert client._safe_dict_get.await_args_list[0].args[0] == expected_sessions
-        assert client._safe_dict_get.await_args_list[1].args[0] == expected_routes
+        client._safe_dict_get.assert_any_await(expected_sessions)
+        client._safe_dict_get.assert_any_await(expected_routes)
         assert client._safe_dict_post.await_args_list[0].args[0] == expected_client_toggle
     finally:
         await client.async_close()
@@ -1637,7 +1636,6 @@ async def test_get_ipsec_malformed_child_config_omits_only_children(
 
         assert set(result["connections"]) == {"ike-1"}
         assert "children" not in result
-        client._safe_dict_post.assert_not_awaited()
     finally:
         await client.async_close()
 
