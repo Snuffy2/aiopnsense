@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.2](https://github.com/Snuffy2/aiopnsense/compare/v1.3.1...v1.3.2) (2026-10-18)
+
+
+### Bug Fixes
+
+* reject incomplete IPsec, OpenVPN, and WireGuard inventories ([#160](https://github.com/Snuffy2/aiopnsense/issues/160)) ([5b7bb1d](https://github.com/Snuffy2/aiopnsense/commit/5b7bb1d674d0b6300d65e9c8045ff81201a3767e))
+
 ## [1.3.1](https://github.com/Snuffy2/aiopnsense/compare/v1.3.0...v1.3.1) (2026-10-17)
 
 
