@@ -1129,18 +1129,21 @@ class VPNMixin(AiopnsenseClientProtocol):
                 Configured connections without a session, including disabled
                 ones, are reported as disconnected. ``children`` holds phase 2
                 status keyed by child UUID, with ``install_time`` as the age of
-                the oldest installed SA, and is omitted when it could not be
-                read completely. Returns ``None`` when the phase 1 sessions endpoint
-                is unavailable or its rows are missing or malformed. A valid
-                empty session list still reports configured connections and
-                children as disconnected with zero counters.
+                the oldest installed SA. A transient child-configuration or phase 2
+                read failure, or a decoded response without a valid ``rows`` list,
+                omits ``children``. Invalid JSON from the child-configuration
+                endpoint instead makes this method return ``None`` by default and
+                raise ``OPNsenseError`` when ``self._throw_errors`` is ``True``.
+                Returns ``None`` when the phase 1 sessions endpoint is unavailable
+                or its rows are missing or malformed. A valid empty session list
+                still reports configured connections and children as disconnected
+                with zero counters.
                 When ``self._throw_errors`` is ``True``, request or endpoint-probe
                 failures can raise ``OPNsenseError``, including a forbidden (403)
                 connections configuration endpoint. A known missing (404)
                 connections configuration endpoint still allows session-only
                 results. Structurally malformed phase 1 or connections
-                configuration payloads return ``None`` regardless of error mode;
-                incomplete child data omits ``children``.
+                configuration payloads return ``None`` regardless of error mode.
         """
         # https://docs.opnsense.org/development/api/core/ipsec.html
         ipsec: dict[str, Any] = {"connections": {}, "children": {}}
