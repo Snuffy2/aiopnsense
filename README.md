@@ -29,6 +29,12 @@ The client currently includes helpers for:
 - IPsec phase 1 (IKE) connection status plus connection toggling, and phase 2 (child SA) status
 - vnStat metrics, captive portal vouchers, and speed test data
 
+`get_ipsec()` returns `None` when phase 1 status or the connections configuration
+cannot be read reliably, including transient configuration failures with no active
+sessions. Consumers should treat this as unavailable data rather than an empty
+inventory. Known missing or forbidden configuration endpoints still allow
+session-only results with `enabled: None`.
+
 ## Requirements
 
 * ### Requires OPNsense Firmware >= 25.1

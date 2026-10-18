@@ -917,6 +917,80 @@ async def test_vpn_status_unavailable_vs_empty(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("has_session", [False, True])
+@pytest.mark.parametrize("reply", ["http", "timeout", "decode", "malformed", "empty"])
+async def test_ipsec_connection_inventory_failure_and_recovery(
+    make_client: MakeClientFactory, has_session: bool, reply: str
+) -> None:
+    """Keep failed configuration reads distinct from empty inventories through the queue.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        has_session (bool): Whether phase 1 reports an active session.
+        reply (str): Connections configuration response to simulate before recovery.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._use_snake_case = True
+    client._is_get_endpoint_available = AsyncMock(return_value=True)
+    recovered = False
+
+    def fake_get(url: str, **kwargs: Any) -> FakeResponse:
+        """Return successful status and a failing or recovered configuration response.
+
+        Args:
+            url (str): Requested URL.
+            kwargs (Any): Unused HTTP options.
+
+        Returns:
+            FakeResponse: Response for the requested endpoint.
+
+        Raises:
+            TimeoutError: Simulated connections configuration timeout.
+        """
+        if url.endswith(aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT):
+            return FakeResponse(
+                json_payload={
+                    "rows": [{"ikeid": "active", "name": "active", "connected": True}]
+                    if has_session
+                    else []
+                }
+            )
+        if url.endswith(aiopnsense_vpn.IPSEC_CONNECTIONS_SNAKE_ENDPOINT):
+            if recovered:
+                return FakeResponse(json_payload={"rows": [{"uuid": "disabled", "enabled": "0"}]})
+            if reply == "timeout":
+                raise TimeoutError("connections unavailable")
+            response = FakeResponse(
+                status=503 if reply == "http" else 200,
+                ok=reply != "http",
+                json_payload={"rows": [] if reply == "empty" else None},
+            )
+            if reply == "decode":
+                response.json = AsyncMock(side_effect=json.JSONDecodeError("invalid", "", 0))
+            return response
+        return FakeResponse(json_payload={"rows": []})
+
+    session.get = fake_get
+    try:
+        result = await client.get_ipsec()
+        if reply == "empty":
+            assert result is not None
+            assert set(result["connections"]) == ({"active"} if has_session else set())
+            if has_session:
+                assert result["connections"]["active"]["enabled"] is None
+        else:
+            assert result is None
+
+        recovered = True
+        result = await client.get_ipsec()
+        assert result is not None
+        assert result["connections"]["disabled"]["enabled"] is False
+        assert result["connections"]["disabled"]["status"] == "disconnected"
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("vpn", ["openvpn", "wireguard", "ipsec"])
 @pytest.mark.parametrize("failure", ["http", "decode", "cancel"])
 async def test_vpn_status_propagates_errors(

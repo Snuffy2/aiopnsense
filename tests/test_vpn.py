@@ -1006,17 +1006,20 @@ async def test_get_ipsec_configured_enabled_and_version_normalization(
         (True, {}),
     ],
 )
-async def test_get_ipsec_without_connection_inventory_keeps_sessions_only(
+@pytest.mark.parametrize("has_session", [False, True])
+async def test_get_ipsec_without_connection_inventory_returns_none(
     make_client: ClientType,
     connections_available: bool,
     configured: dict[str, Any],
+    has_session: bool,
 ) -> None:
-    """Omit the enabled state when the connections inventory cannot be read this time.
+    """Report an unavailable inventory when connection configuration cannot be read.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         connections_available (bool): Whether the connections endpoint is reported available.
         configured (dict[str, Any]): Connections payload returned by the API.
+        has_session (bool): Whether the successful phase 1 response has an active session.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -1024,15 +1027,18 @@ async def test_get_ipsec_without_connection_inventory_keeps_sessions_only(
         client._is_get_endpoint_available = AsyncMock(
             side_effect=lambda path: connections_available or "connection" not in path
         )
-        sessions = {"rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]}
+        sessions = {
+            "rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]
+            if has_session
+            else []
+        }
         client._safe_dict_get = AsyncMock(
             side_effect=lambda path: configured if "connection" in path else sessions
         )
 
         ipsec = await client.get_ipsec()
 
-        assert set(ipsec["connections"]) == {"uuid-up"}
-        assert "enabled" not in ipsec["connections"]["uuid-up"]
+        assert ipsec is None
     finally:
         await client.async_close()
 

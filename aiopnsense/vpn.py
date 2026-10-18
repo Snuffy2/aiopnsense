@@ -1048,8 +1048,11 @@ class VPNMixin(AiopnsenseClientProtocol):
                 comes from the IPsec connections configuration: it is ``None``
                 for sessions without a configured connection (legacy tunnels, or
                 an API user without access to the connections configuration) and
-                the key is omitted when the configuration could not be read this
-                time or reports an unrecognized value.
+                the key is omitted when the configuration reports an unrecognized
+                value. Returns ``None`` when the connections configuration cannot
+                be read this time, so a partial inventory cannot be mistaken for
+                a complete one. A known missing or forbidden configuration endpoint
+                still allows session-only results with ``enabled=None``.
                 Configured connections without a session, including disabled
                 ones, are reported as disconnected. ``children`` holds phase 2
                 status keyed by child UUID, with ``install_time`` as the age of
@@ -1078,6 +1081,9 @@ class VPNMixin(AiopnsenseClientProtocol):
         configured = await self._get_ipsec_configured_rows(
             IPSEC_CONNECTIONS_SNAKE_ENDPOINT, IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT
         )
+        if configured is None:
+            _LOGGER.debug("[get_ipsec] connections inventory unavailable")
+            return None
         connected_session_names: list[str] = []
         for row in rows:
             if not isinstance(row, MutableMapping):
@@ -1085,20 +1091,19 @@ class VPNMixin(AiopnsenseClientProtocol):
             connection = self._process_ipsec_connection(row)
             if connection is None:
                 continue
-            if configured is not None:
-                configured_row = configured.get(connection["uuid"])
-                if configured_row is None:
-                    connection["enabled"] = None
-                else:
-                    enabled = self._ipsec_config_enabled(configured_row)
-                    if enabled is not None:
-                        connection["enabled"] = enabled
+            configured_row = configured.get(connection["uuid"])
+            if configured_row is None:
+                connection["enabled"] = None
+            else:
+                enabled = self._ipsec_config_enabled(configured_row)
+                if enabled is not None:
+                    connection["enabled"] = enabled
             ipsec["connections"][connection["uuid"]] = connection
             session_name = row.get("name")
             if connection["connected"] and isinstance(session_name, str) and session_name:
                 connected_session_names.append(session_name)
 
-        for uuid, configured_row in (configured or {}).items():
+        for uuid, configured_row in configured.items():
             if uuid in ipsec["connections"]:
                 continue
             connection = self._process_ipsec_configured_connection(configured_row)
