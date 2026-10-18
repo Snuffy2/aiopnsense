@@ -20,6 +20,8 @@ OPNSENSE_INTERFACE_ASSIGNMENT_FIRMWARE = "26.7.6"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 # Shared cache time-to-live, in seconds, for endpoint availability state.
 DEFAULT_CACHE_TTL_SECONDS = 6 * 60 * 60
+# Pause, in seconds, between queued API requests to avoid overloading OPNsense.
+QUEUE_REQUEST_INTERVAL_SECONDS = 0.3
 
 # Mapping of ambiguous timezone abbreviations to explicit IANA timezones.
 AMBIGUOUS_TZINFOS: dict[str, Any] = {

@@ -5,6 +5,7 @@ from collections.abc import MutableMapping
 import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
 from .helpers import _LOGGER, _is_request_error_logged, _mark_request_error_logged
 
@@ -243,7 +244,7 @@ class ClientQueueMixin:
                     if _is_request_error_logged(e):
                         _mark_request_error_logged(mapped_error)
                     future.set_exception(mapped_error)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(QUEUE_REQUEST_INTERVAL_SECONDS)
 
     async def async_close(self) -> None:
         """Cancel all running background tasks and clear the request queue."""

@@ -19,6 +19,16 @@ from tests.conftest import (
 )
 
 
+@pytest.fixture(autouse=True)
+def no_queue_request_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove the production pause between queued requests to keep tests fast.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+    """
+    monkeypatch.setattr(aiopnsense_client_queue, "QUEUE_REQUEST_INTERVAL_SECONDS", 0)
+
+
 @pytest.mark.asyncio
 async def test_opnsenseclient_async_close(make_client: MakeClientFactory) -> None:
     """Verify ``async_close`` cancels worker tasks and clears queued requests.
