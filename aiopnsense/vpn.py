@@ -88,13 +88,15 @@ class VPNMixin(AiopnsenseClientProtocol):
                 keyed by UUID. Server entries combine instance, provider,
                 session, route, tunnel-address, DNS, status, byte-counter, and
                 connected-client data when available. Returns ``None`` when the sessions
-                endpoint is unavailable or its rows are missing or malformed.
+                endpoint is unavailable or its rows are missing or malformed, or when
+                the instance or provider inventory cannot be read reliably. Known
+                missing or forbidden inventory endpoints still allow partial results.
                 Route-derived ``clients`` and ``connected_clients`` are omitted
                 when routes cannot be fetched or have missing or malformed rows,
                 rather than reporting zero clients.
 
         Raises:
-            OPNsenseError: Raised when the routes request fails, for example
+            OPNsenseError: Raised when a routes or inventory request fails, for example
                 when its response is not valid JSON, and ``self._throw_errors``
                 is ``True``.
         """
@@ -135,16 +137,29 @@ class VPNMixin(AiopnsenseClientProtocol):
 
         providers_endpoint = OPENVPN_PROVIDERS_ENDPOINT
         if await self._is_get_endpoint_available(providers_endpoint):
-            providers_info = await self._safe_dict_get(providers_endpoint)
+            # Preserve the distinction between a valid empty mapping and a failed request.
+            providers_info = await self._get(providers_endpoint)
+            if providers_info == []:
+                providers_info = {}
+            if not isinstance(providers_info, MutableMapping):
+                _LOGGER.debug("[get_openvpn] providers inventory unavailable")
+                return None
         else:
             _LOGGER.debug("OpenVPN providers endpoint unavailable")
+            if self._endpoint_availability.get(providers_endpoint) is not False:
+                return None
             providers_info = {}
 
         instances_endpoint = OPENVPN_INSTANCES_SEARCH_ENDPOINT
         if await self._is_get_endpoint_available(instances_endpoint):
             instances_info = await self._safe_dict_get(instances_endpoint)
+            if not isinstance(instances_info.get("rows"), list):
+                _LOGGER.debug("[get_openvpn] instances inventory unavailable (malformed rows)")
+                return None
         else:
             _LOGGER.debug("OpenVPN instances endpoint unavailable")
+            if self._endpoint_availability.get(instances_endpoint) is not False:
+                return None
             instances_info = {}
 
         self._process_openvpn_instances(instances_info, openvpn)
@@ -346,7 +361,9 @@ class VPNMixin(AiopnsenseClientProtocol):
                 peer links, enabled state, interface names, handshake status,
                 byte counters, and connected peer counts where available. Returns
                 ``None`` when the summary endpoint is unavailable or its rows
-                are missing or malformed. A valid empty summary still reports
+                are missing or malformed, or either configuration inventory cannot
+                be read reliably. Known missing or forbidden configuration endpoints
+                are treated as empty. A valid empty summary still reports
                 configured peers as disconnected with zero counters.
         """
         data_sources = {
@@ -360,11 +377,19 @@ class VPNMixin(AiopnsenseClientProtocol):
                 data[key] = await self._safe_dict_get(path)
             else:
                 _LOGGER.debug("WireGuard endpoint unavailable: %s", path)
-                data[key] = {}
+                if self._endpoint_availability.get(path) is not False:
+                    return None
+                # Only known missing or forbidden configuration may be treated as empty.
+                if key == "clients_raw":
+                    data[key] = {"client": {"clients": {"client": {}}}}
+                elif key == "servers_raw":
+                    data[key] = {"server": {"servers": {"server": {}}}}
+                else:
+                    return None
 
         summary = data["summary_raw"].get("rows")
-        client_summ = dict_get(data["clients_raw"], "client.clients.client", {})
-        server_summ = dict_get(data["servers_raw"], "server.servers.server", {})
+        client_summ = dict_get(data["clients_raw"], "client.clients.client")
+        server_summ = dict_get(data["servers_raw"], "server.servers.server")
 
         if (
             not isinstance(summary, list)

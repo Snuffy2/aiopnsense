@@ -95,6 +95,7 @@ async def test_get_openvpn_and_fetch_details(
             """
             return []
 
+        client._get = AsyncMock(side_effect=fake_safe_dict_get)
         monkeypatch.setattr(
             client, "_safe_dict_get", AsyncMock(side_effect=fake_safe_dict_get), raising=False
         )
@@ -248,6 +249,7 @@ async def test_openvpn_more_detail_parsing(
             return {"instance": {}}  # missing details
         return {}
 
+    client._get = AsyncMock(side_effect=fake_safe_dict_get)
     monkeypatch.setattr(
         client, "_safe_dict_get", AsyncMock(side_effect=fake_safe_dict_get), raising=False
     )
@@ -327,6 +329,7 @@ async def test_openvpn_processing_and_fetch_details(make_client: ClientType) -> 
             return {}
 
         client._safe_dict_get = AsyncMock(side_effect=fake_safe_dict_get)
+        client._get = AsyncMock(side_effect=fake_safe_dict_get)
 
         openvpn = await client.get_openvpn()
         assert "servers" in openvpn and "clients" in openvpn
@@ -705,6 +708,7 @@ async def test_vpn_switched_endpoints_follow_selected_case(
         client._use_snake_case = use_snake_case
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        client._get = AsyncMock(return_value={})
         client._safe_dict_post = AsyncMock(side_effect=[{"changed": True}, {"result": "ok"}])
 
         await client.get_openvpn()
@@ -1457,6 +1461,7 @@ async def test_openvpn_unavailable_routes_omit_client_counts(
             routes is not None or path != aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT
         )
     )
+    client._get = AsyncMock(return_value={})
     client._safe_dict_get = AsyncMock(
         side_effect=lambda path: (
             routes

@@ -35,6 +35,13 @@ sessions. Consumers should treat this as unavailable data rather than an empty
 inventory. Known missing or forbidden configuration endpoints still allow
 session-only results with `enabled: None`.
 
+`get_openvpn()` and `get_wireguard()` likewise return `None` when their
+configuration inventories cannot be read reliably, instead of returning a
+reduced or empty inventory. This includes OpenVPN instances and providers,
+and WireGuard clients and servers. Known missing or forbidden configuration
+endpoints retain partial results; valid empty configuration responses remain
+valid inventories.
+
 ## Requirements
 
 * ### Requires OPNsense Firmware >= 25.1

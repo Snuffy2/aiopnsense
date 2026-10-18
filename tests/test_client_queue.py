@@ -806,6 +806,12 @@ async def test_get_openvpn_malformed_routes_json_through_queue(
         client._is_get_endpoint_available = AsyncMock(
             side_effect=lambda path: path in {sessions_endpoint, routes_endpoint}
         )
+        client._endpoint_availability.update(
+            {
+                aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT: False,
+                aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT: False,
+            }
+        )
         session.get = fake_get
         if throw_errors:
             with pytest.raises(OPNsenseError):
@@ -1019,5 +1025,130 @@ async def test_vpn_status_propagates_errors(
         expected = asyncio.CancelledError if failure == "cancel" else OPNsenseError
         with pytest.raises(expected):
             await getattr(client, f"get_{vpn}")()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("vpn", "endpoint", "collection"),
+    [
+        ("openvpn", aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT, "servers"),
+        ("openvpn", aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT, "servers"),
+        ("wireguard", aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT, "clients"),
+        ("wireguard", aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT, "servers"),
+    ],
+)
+@pytest.mark.parametrize("has_session", [False, True])
+@pytest.mark.parametrize(
+    "reply", ["http", "timeout", "decode", "missing", "malformed", "empty", "probe", "forbidden"]
+)
+async def test_vpn_configuration_inventory_failure_and_recovery(
+    make_client: MakeClientFactory,
+    vpn: str,
+    endpoint: str,
+    collection: str,
+    has_session: bool,
+    reply: str,
+) -> None:
+    """Reject incomplete inventories and recover disabled entries through the real queue.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        vpn (str): VPN getter to exercise.
+        endpoint (str): Configuration endpoint that fails before recovery.
+        collection (str): Inventory collection populated on recovery.
+        has_session (bool): Whether status reports an active session.
+        reply (str): Configuration response or probe failure to simulate.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._use_snake_case = True
+    recovered = False
+    if reply == "forbidden":
+        client._endpoint_availability[endpoint] = False
+    client._is_get_endpoint_available = AsyncMock(
+        side_effect=lambda path: (
+            recovered or path != endpoint or reply not in {"probe", "forbidden"}
+        )
+    )
+    config = {"uuid": "disabled", "role": "server", "enabled": "0", "name": "disabled"}
+    populated = {
+        aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT: {"rows": [config]},
+        aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT: {"disabled": {"name": "disabled"}},
+        aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT: {
+            "client": {"clients": {"client": {"disabled": config}}}
+        },
+        aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT: {
+            "server": {"servers": {"server": {"disabled": config}}}
+        },
+    }
+    empty: dict[str, Any] = {
+        aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT: {"rows": []},
+        aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT: [],
+        aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT: {"client": {"clients": {"client": {}}}},
+        aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT: {"server": {"servers": {"server": {}}}},
+    }
+
+    def fake_get(url: str, **kwargs: Any) -> FakeResponse:
+        """Return a configuration failure, valid empty inventory, or recovered inventory.
+
+        Args:
+            url (str): Requested URL.
+            kwargs (Any): Unused HTTP options.
+
+        Returns:
+            FakeResponse: Response for the requested endpoint.
+
+        Raises:
+            TimeoutError: Simulated configuration timeout.
+        """
+        if url.endswith(endpoint):
+            if recovered:
+                return FakeResponse(json_payload=populated[endpoint])
+            if reply == "timeout":
+                raise TimeoutError("configuration unavailable")
+            payload: Any = empty[endpoint] if reply == "empty" else None
+            if reply == "missing":
+                # An empty providers mapping is valid; other inventories require their container.
+                payload = None if endpoint == aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT else {}
+            if reply == "malformed":
+                payload = {"rows": None} if vpn == "openvpn" else {"client": None, "server": None}
+                if endpoint == aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT:
+                    payload = ["invalid"]
+            response = FakeResponse(
+                status=503 if reply == "http" else 200,
+                ok=reply != "http",
+                json_payload=payload,
+            )
+            if reply == "decode":
+                response.json = AsyncMock(side_effect=json.JSONDecodeError("invalid", "", 0))
+            return response
+        for path, payload in empty.items():
+            if url.endswith(path):
+                return FakeResponse(json_payload=payload)
+        return FakeResponse(
+            json_payload={
+                "rows": [{"id": "active_1", "type": "server", "status": "connected"}]
+                if has_session
+                else []
+            }
+        )
+
+    session.get = fake_get
+    try:
+        result = await getattr(client, f"get_{vpn}")()
+        if reply in {"empty", "forbidden"}:
+            assert result is not None
+            assert "disabled" not in result[collection]
+            if vpn == "openvpn" and has_session:
+                assert result["servers"]["active"]["status"] == "up"
+        else:
+            assert result is None
+        recovered = True
+        result = await getattr(client, f"get_{vpn}")()
+        assert result is not None
+        assert "disabled" in result[collection]
+        if endpoint != aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT:
+            assert result[collection]["disabled"]["enabled"] is False
     finally:
         await client.async_close()
