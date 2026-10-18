@@ -441,12 +441,10 @@ class VPNMixin(AiopnsenseClientProtocol):
         servers = {
             uid: self._process_wireguard_server(uid, srv, client_summ)
             for uid, srv in server_summ.items()
-            if isinstance(srv, MutableMapping)
         }
         clients = {
             uid: self._process_wireguard_client(uid, clnt, servers)
             for uid, clnt in client_summ.items()
-            if isinstance(clnt, MutableMapping)
         }
 
         self._update_wireguard_status(summary, servers, clients)
