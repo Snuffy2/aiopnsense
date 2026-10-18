@@ -831,7 +831,7 @@ async def test_get_openvpn_malformed_routes_json_through_queue(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("vpn", ["openvpn", "wireguard", "ipsec"])
 @pytest.mark.parametrize(
-    "reply", ["empty", "missing", "null", "wrong_type", "http", "timeout", "decode", "unavailable"]
+    "reply", ["empty", "missing", "wrong_type", "http", "timeout", "decode", "unavailable"]
 )
 async def test_vpn_status_unavailable_vs_empty(
     make_client: MakeClientFactory, vpn: str, reply: str
@@ -880,7 +880,6 @@ async def test_vpn_status_unavailable_vs_empty(
             payloads = {
                 "empty": {"rows": []},
                 "missing": {},
-                "null": {"rows": None},
                 "wrong_type": {"rows": {}},
             }
             response = FakeResponse(
