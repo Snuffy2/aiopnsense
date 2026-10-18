@@ -87,18 +87,23 @@ class VPNMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any] | None: Mapping with ``servers`` and ``clients``
                 keyed by UUID. Server entries combine instance, provider,
                 session, route, tunnel-address, DNS, status, byte-counter, and
-                connected-client data when available. Returns ``None`` when the sessions
-                endpoint is unavailable or its rows are missing or malformed, or when
-                the instance or provider inventory cannot be read reliably. Known
-                missing or forbidden inventory endpoints still allow partial results.
+                connected-client data when available. With the default
+                ``throw_errors=False``, returns ``None`` when the sessions endpoint
+                is unavailable or its rows are missing or malformed, or when the
+                instance or provider inventory cannot be read reliably. A known
+                missing (404) or forbidden (403) inventory endpoint allows partial
+                results in this mode.
                 Route-derived ``clients`` and ``connected_clients`` are omitted
                 when routes cannot be fetched or have missing or malformed rows,
                 rather than reporting zero clients.
 
         Raises:
-            OPNsenseError: Raised when a routes or inventory request fails, for example
-                when its response is not valid JSON, and ``self._throw_errors``
-                is ``True``.
+            OPNsenseError: Raised when ``self._throw_errors`` is ``True`` and a
+                request or endpoint probe fails, including a forbidden (403)
+                instance or provider configuration endpoint. A known missing
+                (404) instance or provider endpoint still allows partial results.
+                Structurally malformed required payloads return ``None`` rather
+                than raising.
         """
         # https://docs.opnsense.org/development/api/core/openvpn.html
         # https://github.com/opnsense/core/blob/master/src/opnsense/www/js/widgets/OpenVPNClients.js
@@ -359,12 +364,19 @@ class VPNMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any] | None: Mapping with ``servers`` and ``clients``
                 keyed by UUID. Entries combine configured tunnel addresses,
                 peer links, enabled state, interface names, handshake status,
-                byte counters, and connected peer counts where available. Returns
-                ``None`` when the summary endpoint is unavailable or its rows
-                are missing or malformed, or either configuration inventory cannot
-                be read reliably. Known missing or forbidden configuration endpoints
-                are treated as empty. A valid empty summary still reports
-                configured peers as disconnected with zero counters.
+                byte counters, and connected peer counts where available. With the
+                default ``throw_errors=False``, returns ``None`` when the
+                summary endpoint is unavailable or its rows are missing or
+                malformed, or either configuration inventory cannot be read
+                reliably. A known missing (404) or forbidden (403) configuration
+                endpoint is treated as empty in this mode. A valid empty summary
+                still reports configured peers as disconnected with zero counters.
+                When ``self._throw_errors`` is ``True``, request or endpoint-probe
+                failures can raise ``OPNsenseError``, including a forbidden (403)
+                configuration endpoint. A known missing (404) endpoint is treated
+                as empty for the clients and servers configuration inventories.
+                Structurally malformed required payloads return ``None`` regardless
+                of error mode.
         """
         data_sources = {
             "summary_raw": WIREGUARD_SUMMARY_ENDPOINT,
@@ -1074,10 +1086,11 @@ class VPNMixin(AiopnsenseClientProtocol):
                 for sessions without a configured connection (legacy tunnels, or
                 an API user without access to the connections configuration) and
                 the key is omitted when the configuration reports an unrecognized
-                value. Returns ``None`` when the connections configuration cannot
-                be read this time, so a partial inventory cannot be mistaken for
-                a complete one. A known missing or forbidden configuration endpoint
-                still allows session-only results with ``enabled=None``.
+                value. With the default ``throw_errors=False``, returns ``None``
+                when the connections configuration cannot be read this time, so
+                a partial inventory cannot be mistaken for a complete one. A known
+                missing (404) or forbidden (403) configuration endpoint allows
+                session-only results with ``enabled=None`` in this mode.
                 Configured connections without a session, including disabled
                 ones, are reported as disconnected. ``children`` holds phase 2
                 status keyed by child UUID, with ``install_time`` as the age of
@@ -1086,6 +1099,13 @@ class VPNMixin(AiopnsenseClientProtocol):
                 is unavailable or its rows are missing or malformed. A valid
                 empty session list still reports configured connections and
                 children as disconnected with zero counters.
+                When ``self._throw_errors`` is ``True``, request or endpoint-probe
+                failures can raise ``OPNsenseError``, including a forbidden (403)
+                connections configuration endpoint. A known missing (404)
+                connections configuration endpoint still allows session-only
+                results. Structurally malformed phase 1 or connections
+                configuration payloads return ``None`` regardless of error mode;
+                incomplete child data omits ``children``.
         """
         # https://docs.opnsense.org/development/api/core/ipsec.html
         ipsec: dict[str, Any] = {"connections": {}, "children": {}}

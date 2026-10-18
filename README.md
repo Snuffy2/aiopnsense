@@ -29,18 +29,28 @@ The client currently includes helpers for:
 - IPsec phase 1 (IKE) connection status plus connection toggling, and phase 2 (child SA) status
 - vnStat metrics, captive portal vouchers, and speed test data
 
-`get_ipsec()` returns `None` when phase 1 status or the connections configuration
-cannot be read reliably, including transient configuration failures with no active
-sessions. Consumers should treat this as unavailable data rather than an empty
-inventory. Known missing or forbidden configuration endpoints still allow
-session-only results with `enabled: None`.
+By default (`throw_errors=False`), `get_ipsec()` returns `None` when phase 1
+status or the connections configuration cannot be read reliably, including
+transient configuration failures with no active sessions. Consumers should
+treat this as unavailable data rather than an empty inventory. In this default
+mode, a known missing (404) or forbidden (403) connections configuration
+endpoint allows session-only results with `enabled: None`. With
+`throw_errors=True`, request or endpoint-probe failures can raise an
+`OPNsenseError`; a 403 connections-configuration probe raises instead of
+returning session-only results, while a known missing (404) connections
+configuration endpoint still allows them.
+Structurally malformed required payloads return `None` regardless of error mode.
 
-`get_openvpn()` and `get_wireguard()` likewise return `None` when their
-configuration inventories cannot be read reliably, instead of returning a
-reduced or empty inventory. This includes OpenVPN instances and providers,
-and WireGuard clients and servers. Known missing or forbidden configuration
-endpoints retain partial results; valid empty configuration responses remain
-valid inventories.
+By default, `get_openvpn()` and `get_wireguard()` return `None` when required
+status or configuration inventories cannot be read reliably, rather than
+returning an incomplete inventory. This includes OpenVPN instances and
+providers, and WireGuard clients and servers. In this default mode, known missing
+(404) or forbidden (403) configuration endpoints retain partial results; valid
+empty configuration responses remain valid inventories. With `throw_errors=True`,
+request or endpoint-probe failures can raise an `OPNsenseError`; a 403
+configuration probe raises, while a known missing (404) configuration inventory
+endpoint still allows partial results. Structurally malformed required payloads
+return `None` regardless of error mode.
 
 ## Requirements
 
