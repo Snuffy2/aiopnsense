@@ -891,6 +891,8 @@ async def test_vpn_status_unavailable_vs_empty(
             if reply == "decode":
                 response.json = AsyncMock(side_effect=json.JSONDecodeError("invalid", "", 0))
             return response
+        if url.endswith(aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT):
+            return FakeResponse(json_payload={"configured": {"name": "configured"}})
         if url.endswith(aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT):
             return FakeResponse(json_payload={"rows": []})
         return FakeResponse(

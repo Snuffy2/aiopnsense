@@ -154,13 +154,35 @@ class VPNMixin(AiopnsenseClientProtocol):
             if self._endpoint_availability.get(providers_endpoint) is not False:
                 return None
             providers_info = {}
+        if any(
+            not isinstance(uuid, str) or not uuid or not isinstance(vpn_info, MutableMapping)
+            for uuid, vpn_info in providers_info.items()
+        ):
+            _LOGGER.debug("[get_openvpn] providers inventory unavailable (malformed entry)")
+            return None
 
         instances_endpoint = OPENVPN_INSTANCES_SEARCH_ENDPOINT
         if await self._is_get_endpoint_available(instances_endpoint):
             instances_info = await self._safe_dict_get(instances_endpoint)
-            if not isinstance(instances_info.get("rows"), list):
+            instance_rows = instances_info.get("rows")
+            if not isinstance(instance_rows, list):
                 _LOGGER.debug("[get_openvpn] instances inventory unavailable (malformed rows)")
                 return None
+            for instance in instance_rows:
+                if not isinstance(instance, MutableMapping):
+                    _LOGGER.debug("[get_openvpn] instances inventory unavailable (malformed row)")
+                    return None
+                role = instance.get("role")
+                if not isinstance(role, str) or not role.strip():
+                    _LOGGER.debug("[get_openvpn] instances inventory unavailable (malformed role)")
+                    return None
+                if role.lower() in {"server", "client"}:
+                    uuid = instance.get("uuid")
+                    if not isinstance(uuid, str) or not uuid:
+                        _LOGGER.debug(
+                            "[get_openvpn] instances inventory unavailable (malformed identity)"
+                        )
+                        return None
         else:
             _LOGGER.debug("OpenVPN instances endpoint unavailable")
             if self._endpoint_availability.get(instances_endpoint) is not False:
@@ -409,6 +431,11 @@ class VPNMixin(AiopnsenseClientProtocol):
             or not isinstance(server_summ, MutableMapping)
         ):
             _LOGGER.debug("[get_wireguard] status unavailable (malformed payload)")
+            return None
+        if any(not isinstance(client, MutableMapping) for client in client_summ.values()) or any(
+            not isinstance(server, MutableMapping) for server in server_summ.values()
+        ):
+            _LOGGER.debug("[get_wireguard] configuration unavailable (malformed entry)")
             return None
 
         servers = {
@@ -924,8 +951,16 @@ class VPNMixin(AiopnsenseClientProtocol):
             return None
         configured: dict[str, MutableMapping[str, Any]] = {}
         for row in rows:
-            if isinstance(row, MutableMapping) and isinstance(row.get("uuid"), str) and row["uuid"]:
-                configured[row["uuid"]] = row
+            if not isinstance(row, MutableMapping):
+                _LOGGER.debug("[get_ipsec] configuration unavailable (malformed row): %s", endpoint)
+                return None
+            uuid = row.get("uuid")
+            if not isinstance(uuid, str) or not uuid:
+                _LOGGER.debug(
+                    "[get_ipsec] configuration unavailable (malformed identity): %s", endpoint
+                )
+                return None
+            configured[uuid] = row
         return configured
 
     @staticmethod
