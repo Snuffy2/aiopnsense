@@ -87,16 +87,23 @@ class VPNMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any] | None: Mapping with ``servers`` and ``clients``
                 keyed by UUID. Server entries combine instance, provider,
                 session, route, tunnel-address, DNS, status, byte-counter, and
-                connected-client data when available. Returns ``None`` when the sessions
-                endpoint is unavailable or its rows are missing or malformed.
+                connected-client data when available. With the default
+                ``throw_errors=False``, returns ``None`` when the sessions endpoint
+                is unavailable or its rows are missing or malformed, or when the
+                instance or provider inventory cannot be read reliably. A known
+                missing (404) or forbidden (403) inventory endpoint allows partial
+                results in this mode.
                 Route-derived ``clients`` and ``connected_clients`` are omitted
                 when routes cannot be fetched or have missing or malformed rows,
                 rather than reporting zero clients.
 
         Raises:
-            OPNsenseError: Raised when the routes request fails, for example
-                when its response is not valid JSON, and ``self._throw_errors``
-                is ``True``.
+            OPNsenseError: Raised when ``self._throw_errors`` is ``True`` and a
+                request or endpoint probe fails, including a forbidden (403)
+                instance or provider configuration endpoint. A known missing
+                (404) instance or provider endpoint still allows partial results.
+                Structurally malformed required payloads return ``None`` rather
+                than raising.
         """
         # https://docs.opnsense.org/development/api/core/openvpn.html
         # https://github.com/opnsense/core/blob/master/src/opnsense/www/js/widgets/OpenVPNClients.js
@@ -135,16 +142,51 @@ class VPNMixin(AiopnsenseClientProtocol):
 
         providers_endpoint = OPENVPN_PROVIDERS_ENDPOINT
         if await self._is_get_endpoint_available(providers_endpoint):
-            providers_info = await self._safe_dict_get(providers_endpoint)
+            # Preserve the distinction between a valid empty mapping and a failed request.
+            providers_info = await self._get(providers_endpoint)
+            if providers_info == []:
+                providers_info = {}
+            if not isinstance(providers_info, MutableMapping):
+                _LOGGER.debug("[get_openvpn] providers inventory unavailable")
+                return None
         else:
             _LOGGER.debug("OpenVPN providers endpoint unavailable")
+            if self._endpoint_availability.get(providers_endpoint) is not False:
+                return None
             providers_info = {}
+        if any(
+            not isinstance(uuid, str) or not uuid or not isinstance(vpn_info, MutableMapping)
+            for uuid, vpn_info in providers_info.items()
+        ):
+            _LOGGER.debug("[get_openvpn] providers inventory unavailable (malformed entry)")
+            return None
 
         instances_endpoint = OPENVPN_INSTANCES_SEARCH_ENDPOINT
         if await self._is_get_endpoint_available(instances_endpoint):
             instances_info = await self._safe_dict_get(instances_endpoint)
+            instance_rows = instances_info.get("rows")
+            if not isinstance(instance_rows, list):
+                _LOGGER.debug("[get_openvpn] instances inventory unavailable (malformed rows)")
+                return None
+            for instance in instance_rows:
+                if not isinstance(instance, MutableMapping):
+                    _LOGGER.debug("[get_openvpn] instances inventory unavailable (malformed row)")
+                    return None
+                role = instance.get("role")
+                if not isinstance(role, str) or not role.strip():
+                    _LOGGER.debug("[get_openvpn] instances inventory unavailable (malformed role)")
+                    return None
+                if role.lower() in {"server", "client"}:
+                    uuid = instance.get("uuid")
+                    if not isinstance(uuid, str) or not uuid:
+                        _LOGGER.debug(
+                            "[get_openvpn] instances inventory unavailable (malformed identity)"
+                        )
+                        return None
         else:
             _LOGGER.debug("OpenVPN instances endpoint unavailable")
+            if self._endpoint_availability.get(instances_endpoint) is not False:
+                return None
             instances_info = {}
 
         self._process_openvpn_instances(instances_info, openvpn)
@@ -344,10 +386,19 @@ class VPNMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any] | None: Mapping with ``servers`` and ``clients``
                 keyed by UUID. Entries combine configured tunnel addresses,
                 peer links, enabled state, interface names, handshake status,
-                byte counters, and connected peer counts where available. Returns
-                ``None`` when the summary endpoint is unavailable or its rows
-                are missing or malformed. A valid empty summary still reports
-                configured peers as disconnected with zero counters.
+                byte counters, and connected peer counts where available. With the
+                default ``throw_errors=False``, returns ``None`` when the
+                summary endpoint is unavailable or its rows are missing or
+                malformed, or either configuration inventory cannot be read
+                reliably. A known missing (404) or forbidden (403) configuration
+                endpoint is treated as empty in this mode. A valid empty summary
+                still reports configured peers as disconnected with zero counters.
+                When ``self._throw_errors`` is ``True``, request or endpoint-probe
+                failures can raise ``OPNsenseError``, including a forbidden (403)
+                configuration endpoint. A known missing (404) endpoint is treated
+                as empty for the clients and servers configuration inventories.
+                Structurally malformed required payloads return ``None`` regardless
+                of error mode.
         """
         data_sources = {
             "summary_raw": WIREGUARD_SUMMARY_ENDPOINT,
@@ -360,11 +411,19 @@ class VPNMixin(AiopnsenseClientProtocol):
                 data[key] = await self._safe_dict_get(path)
             else:
                 _LOGGER.debug("WireGuard endpoint unavailable: %s", path)
-                data[key] = {}
+                if self._endpoint_availability.get(path) is not False:
+                    return None
+                # Only known missing or forbidden configuration may be treated as empty.
+                if key == "clients_raw":
+                    data[key] = {"client": {"clients": {"client": {}}}}
+                elif key == "servers_raw":
+                    data[key] = {"server": {"servers": {"server": {}}}}
+                else:
+                    return None
 
         summary = data["summary_raw"].get("rows")
-        client_summ = dict_get(data["clients_raw"], "client.clients.client", {})
-        server_summ = dict_get(data["servers_raw"], "server.servers.server", {})
+        client_summ = dict_get(data["clients_raw"], "client.clients.client")
+        server_summ = dict_get(data["servers_raw"], "server.servers.server")
 
         if (
             not isinstance(summary, list)
@@ -373,16 +432,19 @@ class VPNMixin(AiopnsenseClientProtocol):
         ):
             _LOGGER.debug("[get_wireguard] status unavailable (malformed payload)")
             return None
+        if any(not isinstance(client, MutableMapping) for client in client_summ.values()) or any(
+            not isinstance(server, MutableMapping) for server in server_summ.values()
+        ):
+            _LOGGER.debug("[get_wireguard] configuration unavailable (malformed entry)")
+            return None
 
         servers = {
             uid: self._process_wireguard_server(uid, srv, client_summ)
             for uid, srv in server_summ.items()
-            if isinstance(srv, MutableMapping)
         }
         clients = {
             uid: self._process_wireguard_client(uid, clnt, servers)
             for uid, clnt in client_summ.items()
-            if isinstance(clnt, MutableMapping)
         }
 
         self._update_wireguard_status(summary, servers, clients)
@@ -887,8 +949,16 @@ class VPNMixin(AiopnsenseClientProtocol):
             return None
         configured: dict[str, MutableMapping[str, Any]] = {}
         for row in rows:
-            if isinstance(row, MutableMapping) and isinstance(row.get("uuid"), str) and row["uuid"]:
-                configured[row["uuid"]] = row
+            if not isinstance(row, MutableMapping):
+                _LOGGER.debug("[get_ipsec] configuration unavailable (malformed row): %s", endpoint)
+                return None
+            uuid = row.get("uuid")
+            if not isinstance(uuid, str) or not uuid:
+                _LOGGER.debug(
+                    "[get_ipsec] configuration unavailable (malformed identity): %s", endpoint
+                )
+                return None
+            configured[uuid] = row
         return configured
 
     @staticmethod
@@ -1048,16 +1118,30 @@ class VPNMixin(AiopnsenseClientProtocol):
                 comes from the IPsec connections configuration: it is ``None``
                 for sessions without a configured connection (legacy tunnels, or
                 an API user without access to the connections configuration) and
-                the key is omitted when the configuration could not be read this
-                time or reports an unrecognized value.
+                the key is omitted when the configuration reports an unrecognized
+                value. With the default ``throw_errors=False``, returns ``None``
+                when the connections configuration cannot be read this time, so
+                a partial inventory cannot be mistaken for a complete one. A known
+                missing (404) or forbidden (403) configuration endpoint allows
+                session-only results with ``enabled=None`` in this mode.
                 Configured connections without a session, including disabled
                 ones, are reported as disconnected. ``children`` holds phase 2
                 status keyed by child UUID, with ``install_time`` as the age of
-                the oldest installed SA, and is omitted when it could not be
-                read completely. Returns ``None`` when the phase 1 sessions endpoint
-                is unavailable or its rows are missing or malformed. A valid
-                empty session list still reports configured connections and
-                children as disconnected with zero counters.
+                the oldest installed SA. A transient child-configuration or phase 2
+                read failure, or a decoded response without a valid ``rows`` list,
+                omits ``children``. Invalid JSON from the child-configuration
+                endpoint instead makes this method return ``None`` by default and
+                raise ``OPNsenseError`` when ``self._throw_errors`` is ``True``.
+                Returns ``None`` when the phase 1 sessions endpoint is unavailable
+                or its rows are missing or malformed. A valid empty session list
+                still reports configured connections and children as disconnected
+                with zero counters.
+                When ``self._throw_errors`` is ``True``, request or endpoint-probe
+                failures can raise ``OPNsenseError``, including a forbidden (403)
+                connections configuration endpoint. A known missing (404)
+                connections configuration endpoint still allows session-only
+                results. Structurally malformed phase 1 or connections
+                configuration payloads return ``None`` regardless of error mode.
         """
         # https://docs.opnsense.org/development/api/core/ipsec.html
         ipsec: dict[str, Any] = {"connections": {}, "children": {}}
@@ -1078,6 +1162,9 @@ class VPNMixin(AiopnsenseClientProtocol):
         configured = await self._get_ipsec_configured_rows(
             IPSEC_CONNECTIONS_SNAKE_ENDPOINT, IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT
         )
+        if configured is None:
+            _LOGGER.debug("[get_ipsec] connections inventory unavailable")
+            return None
         connected_session_names: list[str] = []
         for row in rows:
             if not isinstance(row, MutableMapping):
@@ -1085,20 +1172,19 @@ class VPNMixin(AiopnsenseClientProtocol):
             connection = self._process_ipsec_connection(row)
             if connection is None:
                 continue
-            if configured is not None:
-                configured_row = configured.get(connection["uuid"])
-                if configured_row is None:
-                    connection["enabled"] = None
-                else:
-                    enabled = self._ipsec_config_enabled(configured_row)
-                    if enabled is not None:
-                        connection["enabled"] = enabled
+            configured_row = configured.get(connection["uuid"])
+            if configured_row is None:
+                connection["enabled"] = None
+            else:
+                enabled = self._ipsec_config_enabled(configured_row)
+                if enabled is not None:
+                    connection["enabled"] = enabled
             ipsec["connections"][connection["uuid"]] = connection
             session_name = row.get("name")
             if connection["connected"] and isinstance(session_name, str) and session_name:
                 connected_session_names.append(session_name)
 
-        for uuid, configured_row in (configured or {}).items():
+        for uuid, configured_row in configured.items():
             if uuid in ipsec["connections"]:
                 continue
             connection = self._process_ipsec_configured_connection(configured_row)
