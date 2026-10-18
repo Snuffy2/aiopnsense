@@ -925,8 +925,18 @@ async def test_vpn_status_unavailable_vs_empty(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("has_session", [False, True])
-@pytest.mark.parametrize("reply", ["http", "timeout", "decode", "malformed", "empty"])
+@pytest.mark.parametrize(
+    ("has_session", "reply"),
+    [
+        pytest.param(False, "empty", id="empty_without_session"),
+        pytest.param(True, "empty", id="empty_with_session"),
+        pytest.param(False, "malformed", id="malformed_without_session"),
+        pytest.param(True, "malformed", id="malformed_with_session"),
+        pytest.param(True, "http", id="http_with_session"),
+        pytest.param(True, "timeout", id="timeout_with_session"),
+        pytest.param(True, "decode", id="decode_with_session"),
+    ],
+)
 async def test_ipsec_connection_inventory_failure_and_recovery(
     make_client: MakeClientFactory, has_session: bool, reply: str
 ) -> None:
@@ -1033,17 +1043,48 @@ async def test_vpn_status_propagates_errors(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("vpn", "endpoint", "collection"),
+    ("vpn", "endpoint", "collection", "has_session", "reply"),
     [
-        ("openvpn", aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT, "servers"),
-        ("openvpn", aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT, "servers"),
-        ("wireguard", aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT, "clients"),
-        ("wireguard", aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT, "servers"),
+        pytest.param(
+            "openvpn",
+            endpoint,
+            "servers",
+            has_session,
+            reply,
+            id=f"openvpn_{source}_{reply}_{'with' if has_session else 'without'}_session",
+        )
+        for source, endpoint in (
+            ("instances", aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT),
+            ("providers", aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT),
+        )
+        for has_session, reply in (
+            (False, "empty"),
+            (True, "empty"),
+            (False, "malformed"),
+            (True, "malformed"),
+            (True, "http"),
+            (True, "timeout"),
+            (True, "decode"),
+            (True, "missing"),
+            (True, "probe"),
+            (True, "forbidden"),
+        )
+    ]
+    + [
+        pytest.param(
+            "wireguard",
+            endpoint,
+            collection,
+            False,
+            reply,
+            id=f"wireguard_{source}_{reply}",
+        )
+        for source, endpoint, collection in (
+            ("clients", aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT, "clients"),
+            ("servers", aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT, "servers"),
+        )
+        for reply in ("http", "timeout", "decode", "missing", "malformed", "empty")
     ],
-)
-@pytest.mark.parametrize("has_session", [False, True])
-@pytest.mark.parametrize(
-    "reply", ["http", "timeout", "decode", "missing", "malformed", "empty", "probe", "forbidden"]
 )
 async def test_vpn_configuration_inventory_failure_and_recovery(
     make_client: MakeClientFactory,

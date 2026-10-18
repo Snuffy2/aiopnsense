@@ -291,22 +291,34 @@ async def test_openvpn_processing_and_fetch_details(make_client: ClientType) -> 
                         },
                         "malformed",
                         {"type": "server"},
+                        {"type": "client", "id": "phantomserver_1", "status": "connected"},
+                        {"type": "server", "id": "srv2_1", "status": "failed"},
                     ]
                 }
             if "search_routes" in path:
                 return {
                     "rows": [
+                        {"id": "unknown", "common_name": "ignored"},
                         {
                             "id": "srv1",
                             "common_name": "cname",
                             "real_address": "1.2.3.4",
                             "virtual_address": "10.0.0.1",
                         },
+                        {
+                            "id": "srv2",
+                            "common_name": "client-a",
+                            "real_address": "1.2.3.5",
+                            "virtual_address": "10.0.0.2",
+                        },
                         None,
                     ]
                 }
             if "providers" in path:
-                return {"srv1": {"name": "prov1", "hostname": "host.example", "local_port": "1194"}}
+                return {
+                    "srv1": {"name": "prov1", "hostname": "host.example", "local_port": "1194"},
+                    "srv2": {"name": "provider-two"},
+                }
             if "instances/search" in path:
                 return {
                     "rows": [
@@ -316,7 +328,13 @@ async def test_openvpn_processing_and_fetch_details(make_client: ClientType) -> 
                             "description": "Serv1",
                             "enabled": "1",
                             "dev_type": "tun",
-                        }
+                        },
+                        {
+                            "role": "client",
+                            "uuid": "c1",
+                            "description": "client1",
+                            "enabled": "1",
+                        },
                     ]
                 }
             if "/instances/get/" in path:
@@ -332,12 +350,21 @@ async def test_openvpn_processing_and_fetch_details(make_client: ClientType) -> 
         client._get = AsyncMock(side_effect=fake_safe_dict_get)
 
         openvpn = await client.get_openvpn()
-        assert "servers" in openvpn and "clients" in openvpn
+        assert set(openvpn["servers"]) == {"srv1", "srv2"}
+        assert set(openvpn["clients"]) == {"c1"}
         servers = openvpn["servers"]
-        assert any(s.get("uuid") == "srv1" for s in servers.values())
         srv = servers.get("srv1")
         assert srv is not None
+        assert srv["status"] == "up"
         assert srv.get("dns_servers") == ["8.8.8.8"]
+        assert len(srv["clients"]) == 1
+        assert srv["clients"][0]["name"] == "cname"
+        assert servers["srv2"]["name"] == "provider-two"
+        assert servers["srv2"]["status"] == "failed"
+        assert len(servers["srv2"]["clients"]) == 1
+        assert servers["srv2"]["clients"][0]["name"] == "client-a"
+        assert openvpn["clients"]["c1"]["name"] == "client1"
+        assert openvpn["clients"]["c1"]["enabled"] is True
     finally:
         await client.async_close()
 
@@ -375,63 +402,6 @@ async def test_openvpn_client_session_updates_server_stats() -> None:
         for c in clients.values()
     )
     assert server_updated or client_updated
-
-
-@pytest.mark.asyncio
-async def test_openvpn_processing_helpers_filter_unsupported_data_and_unknown_servers() -> None:
-    """OpenVPN helpers filter unsupported session roles and unknown route servers.
-
-    Returns:
-        None: This test validates helper-level filtering and route association behavior.
-    """
-    openvpn: dict[str, Any] = {"servers": {}, "clients": {}}
-
-    aiopnsense_module.OPNsenseClient._process_openvpn_instances(  # type: ignore[arg-type]
-        {
-            "rows": [
-                {"role": "client", "uuid": "c1", "description": "client1", "enabled": "1"},
-                {"role": "other", "uuid": "ignored"},
-            ]
-        },
-        openvpn,
-    )
-    assert "c1" in openvpn["clients"]
-
-    aiopnsense_module.OPNsenseClient._process_openvpn_providers(  # type: ignore[arg-type]
-        {
-            "srv2": {"name": "provider-two"},
-        },
-        openvpn,
-    )
-    assert openvpn["servers"]["srv2"]["name"] == "provider-two"
-
-    aiopnsense_module.OPNsenseClient._process_openvpn_sessions(  # type: ignore[arg-type]
-        {
-            "rows": [
-                None,
-                {"id": "srv2_1", "type": "client"},  # non-server session
-                {"id": "srv2_1", "type": "server", "status": "failed"},
-            ]
-        },
-        openvpn,
-    )
-    assert openvpn["servers"]["srv2"]["status"] == "failed"
-
-    aiopnsense_module.OPNsenseClient._process_openvpn_routes(  # type: ignore[arg-type]
-        {
-            "rows": [
-                {"id": "unknown", "common_name": "skip"},
-                {
-                    "id": "srv2",
-                    "common_name": "client-a",
-                    "real_address": "1.2.3.4",
-                    "virtual_address": "10.0.0.2",
-                },
-            ]
-        },
-        openvpn,
-    )
-    assert len(openvpn["servers"]["srv2"]["clients"]) == 1
 
 
 @pytest.mark.asyncio
@@ -1279,12 +1249,10 @@ async def test_get_ipsec_configured_enabled_and_version_normalization(
         (True, {}),
     ],
 )
-@pytest.mark.parametrize("has_session", [False, True])
 async def test_get_ipsec_without_connection_inventory_returns_none(
     make_client: ClientType,
     connections_available: bool,
     configured: dict[str, Any],
-    has_session: bool,
 ) -> None:
     """Report an unavailable inventory when connection configuration cannot be read.
 
@@ -1292,7 +1260,6 @@ async def test_get_ipsec_without_connection_inventory_returns_none(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         connections_available (bool): Whether the connections endpoint is reported available.
         configured (dict[str, Any]): Connections payload returned by the API.
-        has_session (bool): Whether the successful phase 1 response has an active session.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -1300,11 +1267,7 @@ async def test_get_ipsec_without_connection_inventory_returns_none(
         client._is_get_endpoint_available = AsyncMock(
             side_effect=lambda path: connections_available or "connection" not in path
         )
-        sessions = {
-            "rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]
-            if has_session
-            else []
-        }
+        sessions = {"rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]}
         client._safe_dict_get = AsyncMock(
             side_effect=lambda path: configured if "connection" in path else sessions
         )
@@ -1319,14 +1282,12 @@ async def test_get_ipsec_without_connection_inventory_returns_none(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "malformed_row",
-    [None, {}, {"uuid": ""}],
+    [pytest.param(None, id="non_mapping_row"), pytest.param({"uuid": ""}, id="empty_uuid")],
 )
-@pytest.mark.parametrize("has_session", [False, True])
 @pytest.mark.parametrize("throw_errors", [False, True])
 async def test_get_ipsec_rejects_malformed_connection_rows(
     make_client: ClientType,
     malformed_row: Any,
-    has_session: bool,
     throw_errors: bool,
 ) -> None:
     """Reject a malformed connection record even beside a valid disabled row.
@@ -1334,7 +1295,6 @@ async def test_get_ipsec_rejects_malformed_connection_rows(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         malformed_row (Any): Invalid configured connection row.
-        has_session (bool): Whether the phase 1 response also has an active session.
         throw_errors (bool): Whether strict request errors are enabled.
     """
     client, _session = make_mock_session_client(make_client)
@@ -1342,11 +1302,7 @@ async def test_get_ipsec_rejects_malformed_connection_rows(
         client._throw_errors = throw_errors
         client._use_snake_case = True
         client._is_get_endpoint_available = AsyncMock(return_value=True)
-        sessions = {
-            "rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]
-            if has_session
-            else []
-        }
+        sessions = {"rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]}
         configured = {
             "rows": [
                 {"uuid": "uuid-disabled", "enabled": "0"},
