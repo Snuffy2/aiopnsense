@@ -59,6 +59,7 @@ dev = [
 [tool.uv]
 required-version = ">=0.11.0"
 constraint-dependencies = [
+    "certifi>=2026.10.19",
     "multidict>=6.9.1",
     "urllib3>=2.8.0",
 ]
