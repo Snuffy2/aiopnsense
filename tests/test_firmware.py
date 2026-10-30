@@ -247,7 +247,7 @@ async def test_get_firmware_update_info_triggers_check_when_versions_cannot_comp
 async def test_upgrade_firmware_calls_expected_endpoint(
     make_client: Callable[..., Any], upgrade_type: str, expected_path: str
 ) -> None:
-    """Supported upgrade types should call the matching firmware endpoint.
+    """Deprecated upgrade calls warn and still dispatch to the matching endpoint.
 
     Args:
         make_client (Callable[..., Any]): Factory used to create the upgrade client.
@@ -259,7 +259,9 @@ async def test_upgrade_firmware_calls_expected_endpoint(
         client._firmware_version = "26.1.1"
         client._do_post = AsyncMock(return_value={"status": "ok"})
 
-        result = await client.upgrade_firmware(upgrade_type)
+        assert "install_firmware(target_version=...)" in client.upgrade_firmware.__deprecated__
+        with pytest.warns(DeprecationWarning, match=r"Use install_firmware\(target_version="):
+            result = await client.upgrade_firmware(upgrade_type)
 
         assert result == {"status": "ok"}
         assert client._firmware_version is None
@@ -433,7 +435,7 @@ async def test_cancelled_legacy_upgrade_does_not_leave_deferred_post(
 
     session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
     session.post.return_value.json = blocked_json
-    task = asyncio.create_task(client.upgrade_firmware())
+    task = asyncio.create_task(client.upgrade_firmware())  # type: ignore[deprecated]
     try:
         await response_started.wait()
         assert session.post.call_count == 1

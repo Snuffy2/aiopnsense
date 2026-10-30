@@ -5,6 +5,7 @@ from collections.abc import MutableMapping
 from datetime import datetime, timedelta
 import math
 from typing import Any
+from warnings import deprecated
 
 import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
@@ -405,9 +406,12 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             )
             await asyncio.sleep(delay)
 
+    @deprecated(
+        "Use install_firmware(target_version=...) to install firmware and verify completion."
+    )
     @_log_errors
     async def upgrade_firmware(self, type: str = "update") -> MutableMapping[str, Any] | None:
-        """Trigger a firmware upgrade.
+        """Trigger a firmware upgrade without waiting for installation to complete.
 
         Args:
             type (str): Firmware action to trigger. ``update`` applies minor
