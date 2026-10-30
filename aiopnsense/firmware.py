@@ -339,11 +339,12 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                         raise OPNsenseError("Malformed firmware progress log")
                     lines = log.splitlines()
                     if not started and log != baseline_log and lines[:2] != baseline_header:
-                        if lines and lines[0] == marker and len(lines) >= 2:
-                            started = True
-                            active_header = lines[:2]
-                            start_guard.reschedule(None)
-                        elif "***GOT REQUEST TO " in log:
+                        if lines and lines[0] == marker:
+                            if len(lines) >= 2:
+                                started = True
+                                active_header = lines[:2]
+                                start_guard.reschedule(None)
+                        elif lines and lines[0].startswith("***GOT REQUEST TO "):
                             raise OPNsenseError("Firmware progress belongs to a different action")
                     if started and not (reboot and disconnected):
                         if any(

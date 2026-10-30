@@ -707,15 +707,50 @@ async def test_install_firmware_waits_for_terminal_idle(
 
 
 @pytest.mark.asyncio
+async def test_install_firmware_waits_for_complete_action_header(
+    install_client: Callable[..., Any],
+) -> None:
+    """A marker-only first poll remains pending until its header is complete.
+
+    Args:
+        install_client (Callable[..., Any]): Lifecycle transport factory.
+    """
+    partial = {"status": "running", "log": "***GOT REQUEST TO UPDATE***"}
+    complete = _install_progress("done", "***DONE***")
+    target_version = "26.7.8"
+    client, session = install_client(
+        [
+            (partial, "busy", "26.7.7"),
+            (complete, "ready", target_version),
+        ]
+    )
+
+    await client.install_firmware(target_version=target_version, poll_interval=0.001)
+
+    assert await client.get_host_firmware_version() == target_version
+    session.post.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "outage",
+    [
+        pytest.param(aiohttp.ClientConnectionError("server rebooted"), id="connection-error"),
+        pytest.param(TimeoutError("server rebooted"), id="timeout-error"),
+    ],
+)
 @pytest.mark.parametrize("throw_errors", [False, True])
+@pytest.mark.asyncio
 async def test_install_firmware_reboot_recovers_empty_log(
-    install_client: Callable[..., Any], throw_errors: bool
+    install_client: Callable[..., Any],
+    throw_errors: bool,
+    outage: aiohttp.ClientConnectionError | TimeoutError,
 ) -> None:
     """Server reboot requires outage and recovery despite postboot empty ERROR.
 
     Args:
         install_client (Callable[..., Any]): Lifecycle transport factory.
         throw_errors (bool): Shared client error propagation mode.
+        outage (aiohttp.ClientConnectionError | TimeoutError): Simulated reboot outage.
     """
 
     reboot = _install_progress("reboot", "***REBOOT***")
@@ -724,7 +759,7 @@ async def test_install_firmware_reboot_recovers_empty_log(
         [
             (reboot, "busy", target_version),
             (reboot, "ready", target_version),  # pre-reboot five-second window
-            aiohttp.ClientConnectionError("server rebooted"),
+            outage,
             ({"status": "error", "log": ""}, "busy", target_version),
             ({"status": "error", "log": ""}, "ready", target_version),
         ],
@@ -970,18 +1005,29 @@ async def test_firmware_automatic_check_is_suppressed(
         await client.async_close()
 
 
+@pytest.mark.parametrize(
+    "progress",
+    [
+        pytest.param({"status": "done", "log": "old check"}, id="unchanged-baseline"),
+        pytest.param(
+            {"status": "running", "log": "***GOT REQUEST TO UPDATE***"},
+            id="incomplete-matching-header",
+        ),
+    ],
+)
 @pytest.mark.asyncio
 async def test_install_firmware_start_deadline(
-    install_client: Callable[..., Any], monkeypatch: pytest.MonkeyPatch
+    install_client: Callable[..., Any], monkeypatch: pytest.MonkeyPatch, progress: dict[str, str]
 ) -> None:
     """Unconfirmed dispatch gets a short bounded wait independent of overall timeout.
 
     Args:
         install_client (Callable[..., Any]): Lifecycle transport factory.
         monkeypatch (pytest.MonkeyPatch): Start-deadline override fixture.
+        progress (dict[str, str]): Progress response that cannot confirm startup.
     """
     monkeypatch.setattr(firmware_module, "FIRMWARE_START_TIMEOUT_SECONDS", 0.005)
-    client, session = install_client([({"status": "done", "log": "old check"}, "ready", "26.7.8")])
+    client, session = install_client([(progress, "ready", "26.7.8")])
     with pytest.raises(OPNsenseError, match="did not start"):
         await client.install_firmware(target_version="26.7.8", poll_interval=100, timeout=1)
     session.post.assert_called_once()
