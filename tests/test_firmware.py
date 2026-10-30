@@ -48,61 +48,117 @@ async def test_get_host_firmware_version_and_fallback(
 
 
 @pytest.mark.asyncio
-async def test_get_firmware_update_info_triggers_check_when_status_is_incomplete(
+@pytest.mark.parametrize(
+    ("product_version", "product_latest", "product_check", "last_check_age", "status_msg"),
+    [
+        pytest.param("1.0", "2.0", {}, None, None, id="incomplete-check-details"),
+        pytest.param(
+            "1.0.0",
+            "1.0.0",
+            {"status": "ok"},
+            timedelta(days=2),
+            None,
+            id="stale-check",
+        ),
+        pytest.param(
+            "26.1.2",
+            "26.1.3_1",
+            {"status": "ok"},
+            timedelta(0),
+            "There are no updates available on the selected mirror.",
+            id="suffixed-latest-version",
+        ),
+        pytest.param(
+            "25.7_9",
+            "25.7.1",
+            {"status": "ok"},
+            timedelta(0),
+            "There are no updates available on the selected mirror.",
+            id="underscore-revision-version",
+        ),
+        pytest.param(
+            "26.1.11_1",
+            "26.1.11_2",
+            {"status": "ok"},
+            timedelta(0),
+            "There are no updates available on the selected mirror.",
+            id="hotfix-only-latest-revision",
+        ),
+        pytest.param(
+            "26.7.6",
+            "26.7.6_3",
+            {"status": "ok"},
+            timedelta(0),
+            "There are no updates available on the selected mirror.",
+            id="first-hotfix-available",
+        ),
+        pytest.param(
+            "26.7.6.0",
+            "26.7.6_3",
+            {"status": "ok"},
+            timedelta(0),
+            "There are no updates available on the selected mirror.",
+            id="hotfix-available-with-zero-component-base",
+        ),
+        pytest.param(
+            "26.7.6_9",
+            "26.7.6_10",
+            {"status": "ok"},
+            timedelta(0),
+            "There are no updates available on the selected mirror.",
+            id="numeric-hotfix-ordering",
+        ),
+        pytest.param(
+            "26.1.11_1",
+            "26.1.11_bad",
+            {"status": "ok"},
+            timedelta(0),
+            "There are no updates available on the selected mirror.",
+            id="incomparable-version",
+        ),
+    ],
+)
+async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
     make_client: Callable[..., Any],
+    product_version: str,
+    product_latest: str,
+    product_check: dict[str, str],
+    last_check_age: timedelta | None,
+    status_msg: str | None,
 ) -> None:
-    """Missing firmware status details should trigger a background firmware check.
+    """Incomplete, stale, newer, and incomparable status should trigger refresh.
 
     Args:
-        make_client (Callable[..., Any]): Factory used to configure an incomplete firmware-status response.
+        make_client (Callable[..., Any]): Factory used to create the firmware client.
+        product_version (str): Installed firmware version in the status response.
+        product_latest (str): Advertised latest firmware version in the status response.
+        product_check (dict[str, str]): Firmware check details in the response.
+        last_check_age (timedelta | None): Age of the last check, or ``None`` if missing.
+        status_msg (str | None): Optional status message from the firmware response.
     """
     client = make_client()
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
-        status = {
-            "product": {"product_version": "1.0", "product_latest": "2.0", "product_check": {}}
-        }
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: {"status": "ready"} if path.endswith("/running") else status
-        )
-        client._do_post = AsyncMock(return_value={})
-
-        result = await client.get_firmware_update_info()
-
-        assert result == status
-        client._do_post.assert_awaited_once_with("/api/core/firmware/check")
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_firmware_update_info_triggers_check_when_last_check_is_stale(
-    make_client: Callable[..., Any],
-) -> None:
-    """A stale `last_check` should trigger a firmware refresh.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure a stale firmware-status response.
-    """
-    client, _ = make_mock_session_client(make_client)
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        status = {
+        status: dict[str, object] = {
             "product": {
-                "product_version": "1.0.0",
-                "product_latest": "1.0.0",
-                "product_check": {"status": "ok"},
-            },
-            "last_check": (datetime.now(UTC) - timedelta(days=2)).isoformat(),
+                "product_version": product_version,
+                "product_latest": product_latest,
+                "product_check": product_check,
+            }
         }
+        if status_msg is not None:
+            status["status_msg"] = status_msg
+        if last_check_age is not None:
+            status["last_check"] = (datetime.now(UTC) - last_check_age).isoformat()
         client._safe_dict_get = AsyncMock(
             side_effect=lambda path: {"status": "ready"} if path.endswith("/running") else status
         )
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
         client._do_post = AsyncMock(return_value={})
 
-        await client.get_firmware_update_info()
+        result = await client.get_firmware_update_info()
 
+        assert result == status
         client._do_post.assert_awaited_once_with("/api/core/firmware/check")
     finally:
         await client.async_close()
@@ -152,89 +208,6 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
             result = await client.get_firmware_update_info()
             assert result == status
         client._do_post.assert_not_awaited()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("product_version", "product_latest"),
-    [
-        pytest.param("26.1.2", "26.1.3_1", id="suffixed-latest-version"),
-        pytest.param("25.7_9", "25.7.1", id="underscore-revision-version"),
-        pytest.param("26.1.11_1", "26.1.11_2", id="hotfix-only-latest-revision"),
-        pytest.param("26.7.6", "26.7.6_3", id="first-hotfix-available"),
-        pytest.param("26.7.6.0", "26.7.6_3", id="hotfix-available-with-zero-component-base"),
-        pytest.param("26.7.6_9", "26.7.6_10", id="numeric-hotfix-ordering"),
-    ],
-)
-async def test_get_firmware_update_info_triggers_check_for_newer_latest_versions(
-    make_client: Callable[..., Any], product_version: str, product_latest: str
-) -> None:
-    """Newer latest firmware revisions should trigger a details refresh.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure the version comparison response.
-        product_version (str): Installed firmware version in the status response.
-        product_latest (str): Newer advertised firmware version in the status response.
-    """
-    client = make_client()
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        status = {
-            "product": {
-                "product_version": product_version,
-                "product_latest": product_latest,
-                "product_check": {"status": "ok"},
-            },
-            "status_msg": "There are no updates available on the selected mirror.",
-            "last_check": datetime.now(UTC).isoformat(),
-        }
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: {"status": "ready"} if path.endswith("/running") else status
-        )
-        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-        client._do_post = AsyncMock(return_value={})
-
-        result = await client.get_firmware_update_info()
-
-        assert result == status
-        client._do_post.assert_awaited_once_with("/api/core/firmware/check")
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_firmware_update_info_triggers_check_when_versions_cannot_compare(
-    make_client: Callable[..., Any],
-) -> None:
-    """Uncomparable firmware versions should trigger a status refresh.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure an uncomparable version response.
-    """
-    client = make_client()
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        status = {
-            "product": {
-                "product_version": "26.1.11_1",
-                "product_latest": "26.1.11_bad",
-                "product_check": {"status": "ok"},
-            },
-            "status_msg": "There are no updates available on the selected mirror.",
-            "last_check": datetime.now(UTC).isoformat(),
-        }
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: {"status": "ready"} if path.endswith("/running") else status
-        )
-        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-        client._do_post = AsyncMock(return_value={})
-
-        result = await client.get_firmware_update_info()
-
-        assert result == status
-        client._do_post.assert_awaited_once_with("/api/core/firmware/check")
     finally:
         await client.async_close()
 
