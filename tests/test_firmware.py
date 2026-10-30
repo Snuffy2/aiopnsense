@@ -10,7 +10,13 @@ import aiohttp
 import pytest
 
 import aiopnsense
-from aiopnsense.exceptions import OPNsenseError, OPNsenseInvalidArgument
+from aiopnsense.exceptions import (
+    OPNsenseConnectionError,
+    OPNsenseError,
+    OPNsenseInvalidArgument,
+    OPNsenseInvalidAuth,
+    OPNsensePrivilegeMissing,
+)
 import aiopnsense.firmware as firmware_module
 from tests.conftest import FakeResponse, make_mock_session_client
 
@@ -1033,12 +1039,19 @@ async def test_install_firmware_rejects_replaced_same_action_log(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("http_status", [401, 403])
+@pytest.mark.parametrize(
+    ("http_status", "error_type"),
+    [
+        pytest.param(401, OPNsenseInvalidAuth, id="unauthorized"),
+        pytest.param(403, OPNsensePrivilegeMissing, id="forbidden"),
+    ],
+)
 @pytest.mark.parametrize("phase", ["dispatch", "observation"])
 async def test_install_firmware_auth_failure_is_fatal(
     install_client: Callable[..., Any],
     fake_response_factory: Callable[..., Any],
     http_status: int,
+    error_type: type[OPNsenseConnectionError],
     phase: str,
 ) -> None:
     """Permission failures must not be treated as a reboot outage or retried.
@@ -1047,6 +1060,7 @@ async def test_install_firmware_auth_failure_is_fatal(
         install_client (Callable[..., Any]): Lifecycle transport factory.
         fake_response_factory (Callable[..., Any]): HTTP response factory.
         http_status (int): Fatal HTTP permission status.
+        error_type (type[OPNsenseConnectionError]): Public error corresponding to the HTTP status.
         phase (str): Where permission failure occurs.
     """
     client, session = install_client([])
@@ -1059,8 +1073,9 @@ async def test_install_firmware_auth_failure_is_fatal(
             fake_response_factory(json_payload={"status": "done", "log": "old check"}),
             failure,
         ]
-    with pytest.raises(OPNsenseError, match=str(http_status)):
+    with pytest.raises(error_type) as error:
         await client.install_firmware(target_version="26.7.8", poll_interval=0.001)
+    assert error.value.status == http_status
     session.post.assert_called_once()
 
 
