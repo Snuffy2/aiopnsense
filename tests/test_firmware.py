@@ -263,7 +263,8 @@ async def test_upgrade_firmware_calls_expected_endpoint(
 
         assert result == {"status": "ok"}
         assert client._firmware_version is None
-        client._do_post.assert_awaited_once_with(expected_path, caller="upgrade_firmware")
+        client._do_post.assert_awaited_once()
+        assert client._do_post.await_args.args[0] == expected_path
     finally:
         await client.async_close()
 
@@ -606,13 +607,48 @@ async def test_install_firmware_waits_for_terminal_idle(
         throw_errors=throw_errors,
         preflight=["busy", "ready"],
     )
-    await client.install_firmware(action, target_version="26.7.8", poll_interval=0.001)
-    assert client._firmware_version == "26.7.8"
-    assert session.get.call_count == 12
-    session.post.assert_called_once()
-    assert session.post.call_args.args[0].endswith(f"/{action}")
-    assert client._throw_errors is throw_errors
-    assert not client._firmware_install_active
+    final_evidence_observed = asyncio.Event()
+    release_final_evidence = asyncio.Event()
+
+    async def held_final_evidence(content_type: Any = None) -> dict[str, dict[str, str]]:
+        """Hold the installed-version response until the test releases it.
+
+        Args:
+            content_type (Any): Unused fake response option.
+
+        Returns:
+            dict[str, dict[str, str]]: Installed firmware version response.
+        """
+        final_evidence_observed.set()
+        await release_final_evidence.wait()
+        return {"product": {"product_version": "26.7.8"}}
+
+    responses = list(session.get.side_effect)
+    responses[-1].json = held_final_evidence
+    session.get.side_effect = responses
+    install_task = asyncio.create_task(
+        client.install_firmware(action, target_version="26.7.8", poll_interval=0.001)
+    )
+    evidence_wait = asyncio.create_task(final_evidence_observed.wait())
+    try:
+        completed, _ = await asyncio.wait(
+            {install_task, evidence_wait}, timeout=1, return_when=asyncio.FIRST_COMPLETED
+        )
+        assert evidence_wait in completed
+        assert not install_task.done()
+
+        release_final_evidence.set()
+        await install_task
+        assert await client.get_host_firmware_version() == "26.7.8"
+        assert not client._firmware_install_active
+        session.post.assert_called_once()
+        assert session.post.call_args.args[0] == f"http://localhost/api/core/firmware/{action}"
+    finally:
+        release_final_evidence.set()
+        for task in (install_task, evidence_wait):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(install_task, evidence_wait, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -638,9 +674,47 @@ async def test_install_firmware_reboot_recovers_empty_log(
         ],
         throw_errors=throw_errors,
     )
-    await client.install_firmware(target_version="26.7.8", poll_interval=0.001)
-    assert session.get.call_count == 15
-    session.post.assert_called_once()
+    final_evidence_observed = asyncio.Event()
+    release_final_evidence = asyncio.Event()
+
+    async def held_final_evidence(content_type: Any = None) -> dict[str, dict[str, str]]:
+        """Hold the post-reboot installed-version response until released.
+
+        Args:
+            content_type (Any): Unused fake response option.
+
+        Returns:
+            dict[str, dict[str, str]]: Installed firmware version response.
+        """
+        final_evidence_observed.set()
+        await release_final_evidence.wait()
+        return {"product": {"product_version": "26.7.8"}}
+
+    responses = list(session.get.side_effect)
+    responses[-1].json = held_final_evidence
+    session.get.side_effect = responses
+    install_task = asyncio.create_task(
+        client.install_firmware(target_version="26.7.8", poll_interval=0.001)
+    )
+    evidence_wait = asyncio.create_task(final_evidence_observed.wait())
+    try:
+        completed, _ = await asyncio.wait(
+            {install_task, evidence_wait}, timeout=1, return_when=asyncio.FIRST_COMPLETED
+        )
+        assert evidence_wait in completed
+        assert not install_task.done()
+
+        release_final_evidence.set()
+        await install_task
+        assert not client._firmware_install_active
+        session.post.assert_called_once()
+        assert session.post.call_args.args[0] == "http://localhost/api/core/firmware/update"
+    finally:
+        release_final_evidence.set()
+        for task in (install_task, evidence_wait):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(install_task, evidence_wait, return_exceptions=True)
 
 
 @pytest.mark.asyncio
