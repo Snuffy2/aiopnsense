@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
+import aiopnsense
 from aiopnsense.exceptions import OPNsenseError, OPNsenseInvalidArgument
 import aiopnsense.firmware as firmware_module
 from tests.conftest import FakeResponse, make_mock_session_client
@@ -120,6 +121,7 @@ async def test_get_host_firmware_version_and_fallback(
 )
 async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
     make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
     product_version: str,
     product_latest: str,
     product_check: dict[str, str],
@@ -130,13 +132,14 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
 
     Args:
         make_client (Callable[..., Any]): Factory used to create the firmware client.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
         product_version (str): Installed firmware version in the status response.
         product_latest (str): Advertised latest firmware version in the status response.
         product_check (dict[str, str]): Firmware check details in the response.
         last_check_age (timedelta | None): Age of the last check, or ``None`` if missing.
         status_msg (str | None): Optional status message from the firmware response.
     """
-    client = make_client()
+    client, session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         status: dict[str, object] = {
@@ -154,12 +157,13 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
             side_effect=lambda path: {"status": "ready"} if path.endswith("/running") else status
         )
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-        client._do_post = AsyncMock(return_value={})
+        session.post.return_value = fake_response_factory(json_payload={})
 
         result = await client.get_firmware_update_info()
 
         assert result == status
-        client._do_post.assert_awaited_once_with("/api/core/firmware/check")
+        assert session.post.call_count == 1
+        assert session.post.call_args.args[0] == "http://localhost/api/core/firmware/check"
     finally:
         await client.async_close()
 
@@ -177,16 +181,20 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
     ],
 )
 async def test_get_firmware_update_info_does_not_trigger_check_for_recent_healthy_status(
-    make_client: Callable[..., Any], product_version: str, product_latest: str
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    product_version: str,
+    product_latest: str,
 ) -> None:
     """Healthy firmware status should not trigger checks across repeated polls.
 
     Args:
         make_client (Callable[..., Any]): Factory used to configure a healthy recent firmware status.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
         product_version (str): Installed firmware version in the status response.
         product_latest (str): Equal or older advertised firmware version.
     """
-    client = make_client()
+    client, session = make_mock_session_client(make_client)
     try:
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         status = {
@@ -202,12 +210,12 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
             side_effect=lambda path: {"status": "ready"} if path.endswith("/running") else status
         )
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-        client._do_post = AsyncMock(return_value={})
+        session.post.return_value = fake_response_factory(json_payload={})
 
         for _ in range(3):
             result = await client.get_firmware_update_info()
             assert result == status
-        client._do_post.assert_not_awaited()
+        assert session.post.call_count == 0
     finally:
         await client.async_close()
 
@@ -218,47 +226,57 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
     [("update", "/api/core/firmware/update"), ("upgrade", "/api/core/firmware/upgrade")],
 )
 async def test_upgrade_firmware_calls_expected_endpoint(
-    make_client: Callable[..., Any], upgrade_type: str, expected_path: str
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    upgrade_type: str,
+    expected_path: str,
 ) -> None:
     """Deprecated upgrade calls warn and still dispatch to the matching endpoint.
 
     Args:
         make_client (Callable[..., Any]): Factory used to create the upgrade client.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
         upgrade_type (str): Supported upgrade action supplied to the client.
         expected_path (str): Firmware API path expected for the action.
     """
-    client = make_client()
+    client, session = make_mock_session_client(make_client)
     try:
         client._firmware_version = "26.1.1"
-        client._do_post = AsyncMock(return_value={"status": "ok"})
+        session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
 
-        assert "install_firmware(target_version=...)" in client.upgrade_firmware.__deprecated__
+        legacy_upgrade = client.upgrade_firmware  # type: ignore[deprecated]
+        assert "install_firmware(target_version=...)" in legacy_upgrade.__deprecated__  # type: ignore[attr-defined]
         with pytest.warns(DeprecationWarning, match=r"Use install_firmware\(target_version="):
-            result = await client.upgrade_firmware(upgrade_type)
+            result = await legacy_upgrade(upgrade_type)
 
         assert result == {"status": "ok"}
-        assert client._firmware_version is None
-        client._do_post.assert_awaited_once()
-        assert client._do_post.await_args.args[0] == expected_path
+        assert session.post.call_count == 1
+        assert session.post.call_args.args[0] == f"http://localhost{expected_path}"
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(return_value={"product": {"product_version": "26.1.2"}})
+        assert await client.get_host_firmware_version() == "26.1.2"
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_upgrade_firmware_rejects_unknown_type(make_client: Callable[..., Any]) -> None:
+async def test_upgrade_firmware_rejects_unknown_type(
+    make_client: Callable[..., Any], fake_response_factory: Callable[..., Any]
+) -> None:
     """Unknown firmware upgrade types should return `None` without calling the API.
 
     Args:
         make_client (Callable[..., Any]): Factory used to create the client rejecting the action.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
     """
-    client = make_client()
+    client, session = make_mock_session_client(make_client)
     try:
-        client._do_post = AsyncMock()
+        session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
 
-        result = await client.upgrade_firmware("invalid")
+        result = await client.upgrade_firmware("invalid")  # type: ignore[deprecated]
 
         assert result is None
-        client._do_post.assert_not_awaited()
+        assert session.post.call_count == 0
     finally:
         await client.async_close()
 
@@ -304,9 +322,8 @@ async def test_install_firmware_waits_for_legacy_upgrade_response(
         install_task = asyncio.create_task(
             client.install_firmware(target_version="26.7.8", poll_interval=0.001)
         )
-        while not client._firmware_install_active:
-            await asyncio.sleep(0)
-
+        await asyncio.sleep(0)
+        assert not install_task.done()
         assert session.get.call_count == 0
 
         release_legacy.set()
@@ -325,12 +342,12 @@ async def test_install_firmware_waits_for_legacy_upgrade_response(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("throw_errors", [False, True])
-async def test_legacy_upgrade_is_rejected_during_install(
+async def test_firmware_actions_are_rejected_during_install(
     install_client: Callable[..., Any],
     fake_response_factory: Callable[..., Any],
     throw_errors: bool,
 ) -> None:
-    """Legacy actions do not dispatch while an install remains active.
+    """Legacy actions and automatic checks do not dispatch during an install.
 
     Args:
         install_client (Callable[..., Any]): Firmware lifecycle client factory.
@@ -366,6 +383,14 @@ async def test_legacy_upgrade_is_rejected_during_install(
     install_task = asyncio.create_task(client.install_firmware(target_version="26.7.8"))
     try:
         await observing.wait()
+
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            side_effect=lambda path: (
+                {"status": "ready"} if path.endswith("/running") else {"status": "error"}
+            )
+        )
+        await client.get_firmware_update_info()
 
         if throw_errors:
             with pytest.raises(OPNsenseError, match="already active"):
@@ -516,7 +541,7 @@ def install_client(
             tuple[Any, Any]: Client and mocked session.
         """
         client, session = make_mock_session_client(make_client)
-        client._throw_errors = throw_errors
+        client.toggle_throwing_errors(throw_errors)
         payloads: list[Any] = [{"status": state} for state in (preflight or ["ready"])]
         payloads.append({"status": "done", "log": baseline})
         for observation in observations:
@@ -612,6 +637,35 @@ async def _run_install_until_final_evidence(
         await asyncio.gather(install_task, evidence_wait, return_exceptions=True)
 
 
+async def _assert_install_can_start_after_cleanup(
+    client: aiopnsense.OPNsenseClient,
+    session: MagicMock,
+    fake_response_factory: Callable[..., FakeResponse],
+    previous_dispatches: int,
+) -> None:
+    """Prove a completed or cancelled install releases public action ownership.
+
+    Args:
+        client (aiopnsense.OPNsenseClient): Client whose previous install ended or was cancelled.
+        session (MagicMock): Mock session receiving lifecycle requests.
+        fake_response_factory (Callable[..., FakeResponse]): HTTP response factory.
+        previous_dispatches (int): Dispatch count before this recovery probe.
+    """
+    session.get.side_effect = [
+        fake_response_factory(json_payload={"status": "ready"}),
+        fake_response_factory(json_payload={"status": "done", "log": "old check"}),
+        fake_response_factory(json_payload=_install_progress("done", "***DONE***")),
+        fake_response_factory(json_payload={"status": "ready"}),
+        fake_response_factory(json_payload={"product": {"product_version": "26.7.8"}}),
+    ]
+    session.post.side_effect = None
+    session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
+
+    await client.install_firmware(target_version="26.7.8", poll_interval=0.001)
+
+    assert session.post.call_count == previous_dispatches + 1
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("throw_errors", [False, True])
 @pytest.mark.parametrize("action", ["update", "upgrade"])
@@ -642,7 +696,6 @@ async def test_install_firmware_waits_for_terminal_idle(
         client.install_firmware(action, target_version=target_version, poll_interval=0.001),
     )
     assert await client.get_host_firmware_version() == target_version
-    assert not client._firmware_install_active
     session.post.assert_called_once()
     assert session.post.call_args.args[0] == f"http://localhost/api/core/firmware/{action}"
 
@@ -676,7 +729,6 @@ async def test_install_firmware_reboot_recovers_empty_log(
         target_version,
         client.install_firmware(target_version=target_version, poll_interval=0.001),
     )
-    assert not client._firmware_install_active
     session.post.assert_called_once()
     assert session.post.call_args.args[0] == "http://localhost/api/core/firmware/update"
 
@@ -728,12 +780,17 @@ async def test_install_firmware_dispatch_rejected_or_lost(
     ],
 )
 async def test_install_firmware_terminal_contract(
-    install_client: Callable[..., Any], progress: dict[str, str], version: str, error: str | None
+    install_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    progress: dict[str, str],
+    version: str,
+    error: str | None,
 ) -> None:
     """Terminal logs and actual installed versions jointly establish success.
 
     Args:
         install_client (Callable[..., Any]): Lifecycle transport factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
         progress (dict[str, str]): Terminal log response.
         version (str): Installed firmware version.
         error (str | None): Expected failure text, if any.
@@ -746,18 +803,21 @@ async def test_install_firmware_terminal_contract(
     else:
         await client.install_firmware(target_version="26.7.8", poll_interval=0.001)
     session.post.assert_called_once()
-    assert not client._firmware_install_active
+    await _assert_install_can_start_after_cleanup(client, session, fake_response_factory, 1)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("baseline", ["old check", _install_progress("done", "***DONE***")["log"]])
 async def test_install_firmware_stale_log_times_out_and_cleans_up(
-    install_client: Callable[..., Any], baseline: str
+    install_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    baseline: str,
 ) -> None:
     """Stale progress cannot confirm a new installation even at target version.
 
     Args:
         install_client (Callable[..., Any]): Lifecycle transport factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
         baseline (str): Previous daemon log.
     """
 
@@ -766,8 +826,8 @@ async def test_install_firmware_stale_log_times_out_and_cleans_up(
     )
     with pytest.raises(OPNsenseError, match="deadline"):
         await client.install_firmware(target_version="26.7.8", timeout=0.01, poll_interval=0.1)
-    assert not client._firmware_install_active
     session.post.assert_called_once()
+    await _assert_install_can_start_after_cleanup(client, session, fake_response_factory, 1)
 
 
 @pytest.mark.asyncio
@@ -805,13 +865,15 @@ async def test_install_firmware_rejects_invalid_arguments(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["preflight", "observation"])
 async def test_install_firmware_concurrency_and_cancellation(
-    install_client: Callable[..., Any], monkeypatch: pytest.MonkeyPatch, phase: str
+    install_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    phase: str,
 ) -> None:
     """Cancellation releases local ownership; concurrent installs never queue.
 
     Args:
         install_client (Callable[..., Any]): Lifecycle transport factory.
-        monkeypatch (pytest.MonkeyPatch): Async wait patch fixture.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
         phase (str): Cancellation before or after firmware dispatch.
     """
 
@@ -819,58 +881,87 @@ async def test_install_firmware_concurrency_and_cancellation(
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    async def blocked_wait(*args: Any) -> None:
-        """Hold the preflight idle wait until the owning task is cancelled.
+    async def held_json(content_type: object | None = None) -> dict[str, str]:
+        """Hold a public firmware response until the owning task is cancelled.
 
         Args:
-            args (Any): Unused lifecycle observation arguments.
+            content_type (object | None): Unused response decoding option.
+
+        Returns:
+            dict[str, str]: Preflight-ready or in-progress firmware response.
         """
         entered.set()
         await release.wait()
+        if phase == "preflight":
+            return {"status": "ready"}
+        return _install_progress("running")
 
-    method = "_wait_firmware_idle" if phase == "preflight" else "_observe_firmware_install"
-    monkeypatch.setattr(client, method, blocked_wait)
+    held_response = fake_response_factory(json_payload={})
+    held_response.json = held_json
+    if phase == "preflight":
+        session.get.side_effect = [held_response]
+    else:
+        session.get.side_effect = [
+            fake_response_factory(json_payload={"status": "ready"}),
+            fake_response_factory(json_payload={"status": "done", "log": "old check"}),
+            held_response,
+        ]
     task = asyncio.create_task(client.install_firmware(target_version="26.7.8"))
-    await entered.wait()
-    with pytest.raises(OPNsenseError, match="already active"):
-        await client.install_firmware(target_version="26.7.8")
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert not client._firmware_install_active
-    assert session.post.call_count == (0 if phase == "preflight" else 1)
+    expected_dispatches = 0 if phase == "preflight" else 1
+    try:
+        await entered.wait()
+        assert session.post.call_count == expected_dispatches
+        with pytest.raises(OPNsenseError, match="already active"):
+            await client.install_firmware(target_version="26.7.8")
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert session.post.call_count == expected_dispatches
+        await _assert_install_can_start_after_cleanup(
+            client, session, fake_response_factory, expected_dispatches
+        )
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await client.async_close()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "active,check,server",
+    "check,server",
     [
-        (True, True, "ready"),
-        (False, False, "ready"),
-        (False, True, "busy"),
-        (False, True, "unknown"),
+        pytest.param(False, "ready", id="read-only"),
+        pytest.param(True, "busy", id="server-busy"),
+        pytest.param(True, "unknown", id="server-unknown"),
     ],
 )
 async def test_firmware_automatic_check_is_suppressed(
-    make_client: Callable[..., Any], active: bool, check: bool, server: str
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    check: bool,
+    server: str,
 ) -> None:
-    """Read-only and active/unknown server states never dispatch automatic checks.
+    """Read-only checks and non-ready server states never dispatch automatic checks.
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
-        active (bool): Local install state.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
         check (bool): Whether automatic checking is permitted.
         server (str): Server lock state.
     """
-    client = make_client()
-    client._firmware_install_active = active
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
-    client._safe_dict_get = AsyncMock(
-        side_effect=lambda path: {"status": server} if path.endswith("/running") else {}
-    )
-    client._do_post = AsyncMock()
-    await client.get_firmware_update_info(check_for_updates=check)
-    client._do_post.assert_not_awaited()
+    client, session = make_mock_session_client(make_client)
+    try:
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_dict_get = AsyncMock(
+            side_effect=lambda path: {"status": server} if path.endswith("/running") else {}
+        )
+        session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
+        await client.get_firmware_update_info(check_for_updates=check)
+        assert session.post.call_count == 0
+    finally:
+        await client.async_close()
 
 
 @pytest.mark.asyncio
@@ -888,7 +979,6 @@ async def test_install_firmware_start_deadline(
     with pytest.raises(OPNsenseError, match="did not start"):
         await client.install_firmware(target_version="26.7.8", poll_interval=100, timeout=1)
     session.post.assert_called_once()
-    assert not client._firmware_install_active
 
 
 @pytest.mark.asyncio
@@ -972,7 +1062,6 @@ async def test_install_firmware_auth_failure_is_fatal(
     with pytest.raises(OPNsenseError, match=str(http_status)):
         await client.install_firmware(target_version="26.7.8", poll_interval=0.001)
     session.post.assert_called_once()
-    assert not client._firmware_install_active
 
 
 @pytest.mark.asyncio
@@ -1045,7 +1134,10 @@ async def test_cancelled_firmware_check_does_not_dispatch_later(
         await unrelated
         await client._get("/after-cancel/read")
         assert session.post.call_count == requests_before_cancel
-        assert not client._firmware_action_lock.locked()
+        session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
+        dispatches_before_retry = session.post.call_count
+        await client.get_firmware_update_info()
+        assert session.post.call_count == dispatches_before_retry + 1
     finally:
         release_worker.set()
         finish_check.set()
