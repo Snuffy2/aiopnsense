@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.3.3](https://github.com/Snuffy2/aiopnsense/compare/v1.3.2...v1.3.3) (2026-10-30)
+
+
+### Bug Fixes
+
+* **deps:** update certifi to remove compromised CA trust ([#165](https://github.com/Snuffy2/aiopnsense/issues/165)) ([6b37b1d](https://github.com/Snuffy2/aiopnsense/commit/6b37b1db107b2d96cb1f54c492ecab99c91c49e8))
+* migrate pydoclint configuration for updated hooks ([#167](https://github.com/Snuffy2/aiopnsense/issues/167)) ([8c909a9](https://github.com/Snuffy2/aiopnsense/commit/8c909a9a65c28ee84a73a66fc15b0267fb433e1b))
+* verify firmware installation lifecycle ([#169](https://github.com/Snuffy2/aiopnsense/issues/169)) ([cd9884d](https://github.com/Snuffy2/aiopnsense/commit/cd9884d85b5901916337d1e1575229e22856722d))
+
+
+### Dependencies
+
+* bump the python-dependencies group with 3 updates ([#164](https://github.com/Snuffy2/aiopnsense/issues/164)) ([16c1c0c](https://github.com/Snuffy2/aiopnsense/commit/16c1c0c4491f146aa95ad580c4db483b7a4f0e4e))
+* bump uv from 0.13.0 to 0.13.4 ([#163](https://github.com/Snuffy2/aiopnsense/issues/163)) ([b2ae207](https://github.com/Snuffy2/aiopnsense/commit/b2ae2078f10d821201904d491bac060ed7d8eab7))
+* update prek hooks ([#162](https://github.com/Snuffy2/aiopnsense/issues/162)) ([84de3d2](https://github.com/Snuffy2/aiopnsense/commit/84de3d25ee2cf57118efd2667005c7d24cd660f4))
+* update prek hooks ([#168](https://github.com/Snuffy2/aiopnsense/issues/168)) ([3029184](https://github.com/Snuffy2/aiopnsense/commit/30291840effecdbb6f48c289bf5a0741896f8346))
+
 ## [1.3.2](https://github.com/Snuffy2/aiopnsense/compare/v1.3.1...v1.3.2) (2026-10-18)
 
 
