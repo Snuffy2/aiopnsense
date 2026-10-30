@@ -1,13 +1,24 @@
 """Typing protocol contracts for aiopnsense mixins."""
 
+import asyncio
 from collections.abc import AsyncGenerator, MutableMapping
 from datetime import tzinfo
 from typing import Any, Protocol
+
+import aiohttp
 
 
 class AiopnsenseClientProtocol(Protocol):
     """Structural typing contract used by split aiopnsense mixins."""
 
+    _firmware_install_active: bool
+    _firmware_action_lock: asyncio.Lock
+    _session: aiohttp.ClientSession
+    _url: str
+    _username: str
+    _password: str
+    _verify_ssl: bool
+    _rest_api_query_count: int
     _throw_errors: bool
     _endpoint_availability: dict[str, bool]
 
@@ -17,6 +28,10 @@ class AiopnsenseClientProtocol(Protocol):
 
     async def _post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> MutableMapping[str, Any] | list | None: ...
+
+    async def _do_post(
+        self, path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
     ) -> MutableMapping[str, Any] | list | None: ...
 
     async def _get_from_stream(self, path: str) -> dict[str, Any]: ...
