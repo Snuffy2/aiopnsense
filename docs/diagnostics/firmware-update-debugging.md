@@ -5,7 +5,7 @@ attempts used hass-opnsense v1.3.0 with aiopnsense 1.3.2. A subsequent single
 authorized CLI update succeeded. This document records the API contract and
 observations needed to reproduce the failure safely in automated tests.
 
-The [deidentified capture](../diagnostics/firmware-update-26.7.8.json) contains
+The [deidentified capture](firmware-update-26.7.8.json) contains
 the request/state transitions and complete terminal update log. Credentials,
 cookies, connection identifiers, absolute event times, and request UUIDs are
 excluded. Package and repository names are retained for technical context.
