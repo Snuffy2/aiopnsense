@@ -413,6 +413,9 @@ class FirmwareMixin(AiopnsenseClientProtocol):
     async def upgrade_firmware(self, type: str = "update") -> MutableMapping[str, Any] | None:
         """Trigger a firmware upgrade without waiting for installation to complete.
 
+        Deprecated: use ``install_firmware(target_version=...)`` to install
+        firmware and verify completion.
+
         Args:
             type (str): Firmware action to trigger. ``update`` applies minor
                 updates on the current series, while ``upgrade`` starts a major
