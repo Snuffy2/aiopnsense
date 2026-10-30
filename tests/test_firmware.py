@@ -257,13 +257,13 @@ async def test_upgrade_firmware_calls_expected_endpoint(
     client = make_client()
     try:
         client._firmware_version = "26.1.1"
-        client._safe_dict_post = AsyncMock(return_value={"status": "ok"})
+        client._do_post = AsyncMock(return_value={"status": "ok"})
 
         result = await client.upgrade_firmware(upgrade_type)
 
         assert result == {"status": "ok"}
         assert client._firmware_version is None
-        client._safe_dict_post.assert_awaited_once_with(expected_path)
+        client._do_post.assert_awaited_once_with(expected_path, caller="upgrade_firmware")
     finally:
         await client.async_close()
 
@@ -277,13 +277,176 @@ async def test_upgrade_firmware_rejects_unknown_type(make_client: Callable[..., 
     """
     client = make_client()
     try:
-        client._safe_dict_post = AsyncMock()
+        client._do_post = AsyncMock()
 
         result = await client.upgrade_firmware("invalid")
 
         assert result is None
-        client._safe_dict_post.assert_not_awaited()
+        client._do_post.assert_not_awaited()
     finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_install_firmware_waits_for_legacy_upgrade_response(
+    install_client: Callable[..., Any], fake_response_factory: Callable[..., Any]
+) -> None:
+    """Install preflight waits until a legacy action response has completed.
+
+    Args:
+        install_client (Callable[..., Any]): Firmware lifecycle client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+    """
+    client, session = install_client([(_install_progress("done", "***DONE***"), "ready", "26.7.8")])
+    legacy_started = asyncio.Event()
+    release_legacy = asyncio.Event()
+
+    async def legacy_json(content_type: Any = None) -> dict[str, str]:
+        """Hold the legacy HTTP response until the install is waiting.
+
+        Args:
+            content_type (Any): Unused fake response option.
+
+        Returns:
+            dict[str, str]: Successful legacy action response.
+        """
+        legacy_started.set()
+        await release_legacy.wait()
+        return {"status": "ok"}
+
+    legacy_response = fake_response_factory(json_payload={"status": "ok"})
+    legacy_response.json = legacy_json
+    session.post.side_effect = [
+        legacy_response,
+        fake_response_factory(json_payload={"status": "ok"}),
+    ]
+    legacy_task: asyncio.Task[Any] | None = None
+    install_task: asyncio.Task[Any] | None = None
+    try:
+        legacy_task = asyncio.create_task(client.upgrade_firmware())
+        await legacy_started.wait()
+        install_task = asyncio.create_task(
+            client.install_firmware(target_version="26.7.8", poll_interval=0.001)
+        )
+        while not client._firmware_install_active:
+            await asyncio.sleep(0)
+
+        assert session.get.call_count == 0
+
+        release_legacy.set()
+        assert await legacy_task == {"status": "ok"}
+        await install_task
+        assert session.post.call_count == 2
+    finally:
+        release_legacy.set()
+        tasks = [task for task in (legacy_task, install_task) if task is not None]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_legacy_upgrade_is_rejected_during_install(
+    install_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    throw_errors: bool,
+) -> None:
+    """Legacy actions do not dispatch while an install remains active.
+
+    Args:
+        install_client (Callable[..., Any]): Firmware lifecycle client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        throw_errors (bool): Whether public methods propagate OPNsense errors.
+    """
+    client, session = install_client([], throw_errors=throw_errors)
+    observing = asyncio.Event()
+    release_progress = asyncio.Event()
+
+    async def held_progress_json(content_type: Any = None) -> dict[str, str]:
+        """Hold a real firmware progress response while the install is active.
+
+        Args:
+            content_type (Any): Unused fake response option.
+
+        Returns:
+            dict[str, str]: Completed firmware progress response.
+        """
+        observing.set()
+        await release_progress.wait()
+        return _install_progress("done", "***DONE***")
+
+    progress_response = fake_response_factory(json_payload={})
+    progress_response.json = held_progress_json
+    session.get.side_effect = [
+        fake_response_factory(json_payload={"status": "ready"}),
+        fake_response_factory(json_payload={"status": "done", "log": "old check"}),
+        progress_response,
+        fake_response_factory(json_payload={"status": "ready"}),
+        fake_response_factory(json_payload={"product": {"product_version": "26.7.8"}}),
+    ]
+    install_task = asyncio.create_task(client.install_firmware(target_version="26.7.8"))
+    try:
+        await observing.wait()
+
+        if throw_errors:
+            with pytest.raises(OPNsenseError, match="already active"):
+                await client.upgrade_firmware("upgrade")
+        else:
+            assert await client.upgrade_firmware("upgrade") is None
+        assert session.post.call_count == 1
+    finally:
+        release_progress.set()
+        await install_task
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_legacy_upgrade_does_not_leave_deferred_post(
+    make_client: Callable[..., Any], fake_response_factory: Callable[..., Any]
+) -> None:
+    """Cancelling the public action after dispatch does not queue another POST.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+    """
+    client, session = make_mock_session_client(make_client)
+    response_started = asyncio.Event()
+    hold_response = asyncio.Event()
+
+    async def blocked_json(content_type: Any = None) -> dict[str, str]:
+        """Hold the immediate POST response until its caller is cancelled.
+
+        Args:
+            content_type (Any): Unused fake response option.
+
+        Returns:
+            dict[str, str]: Successful action response if not cancelled.
+        """
+        response_started.set()
+        await hold_response.wait()
+        return {"status": "ok"}
+
+    session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
+    session.post.return_value.json = blocked_json
+    task = asyncio.create_task(client.upgrade_firmware())
+    try:
+        await response_started.wait()
+        assert session.post.call_count == 1
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        hold_response.set()
+        await asyncio.sleep(0)
+        assert session.post.call_count == 1
+    finally:
+        hold_response.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         await client.async_close()
 
 

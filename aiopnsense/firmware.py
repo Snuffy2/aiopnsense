@@ -418,12 +418,22 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any] | None: Firmware action response for
                 supported action types, or ``None`` when ``type`` is not
                 ``update`` or ``upgrade``.
+
+        Raises:
+            OPNsenseError: A firmware installation is already active when
+                ``_throw_errors`` is enabled.
         """
         # update = minor updates of the same opnsense version
         # upgrade = major updates to a new opnsense version
         if type in ("update", "upgrade"):
-            self._firmware_version = None
-            return await self._safe_dict_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}")
+            async with self._firmware_action_lock:
+                if self._firmware_install_active:
+                    raise OPNsenseError("A firmware installation is already active on this client")
+                self._firmware_version = None
+                response = await self._do_post(
+                    f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}", caller="upgrade_firmware"
+                )
+                return dict(response) if isinstance(response, MutableMapping) else {}
         return None
 
     @_log_errors
