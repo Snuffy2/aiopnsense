@@ -78,6 +78,8 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
             if throw_errors is _UNSET:
                 self._throw_errors = initial
         self._firmware_version: str | None = None
+        self._firmware_install_active: bool = False
+        self._firmware_action_lock = asyncio.Lock()
         self._use_snake_case: bool | None = None
         self._endpoint_availability: dict[str, bool] = {}
         self._endpoint_checked_at: dict[str, datetime] = {}
