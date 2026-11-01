@@ -29,22 +29,6 @@ The client currently includes helpers for:
 - IPsec phase 1 (IKE) connection status plus connection toggling, and phase 2 (child SA) status
 - vnStat metrics, captive portal vouchers, and speed test data
 
-## Neighbor normalization
-
-Raw ARP and NDP table responses remain available from the client. To normalize an
-individual row, use the optional additive helper:
-
-```python
-from aiopnsense.neighbors import normalize_neighbor_entry
-
-entry = normalize_neighbor_entry(row)
-```
-
-The returned frozen `NeighborEntry` provides normalized MAC and IP addresses,
-metadata copied from the row, and a `usable` flag indicating whether the input
-was a mutable mapping. `valid_mac` requires a complete MAC address; `mac` also
-preserves permissively normalized values.
-
 ## Requirements
 
 * ### Requires OPNsense Firmware >= 25.1
