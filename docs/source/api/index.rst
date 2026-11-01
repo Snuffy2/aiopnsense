@@ -13,7 +13,6 @@ is grouped by functional area and also includes standalone normalization helpers
    telemetry
    traffic
    dhcp
-   arp_ndp
    firewall
    services
    smart
