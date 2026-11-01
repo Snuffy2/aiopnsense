@@ -60,6 +60,50 @@ Read diagnostics traffic
 
    asyncio.run(main())
 
+Normalize ARP and NDP rows
+--------------------------
+
+``normalize_arp_ndp_entry()`` is synchronous and works with rows from either
+table. Normalized NDP inventory alone does not prove current reachability.
+
+.. code-block:: python
+
+   import asyncio
+   from collections.abc import Mapping
+
+   import aiohttp
+   from aiopnsense import OPNsenseClient
+
+   async def main() -> None:
+       async with aiohttp.ClientSession() as session:
+           async with OPNsenseClient(
+               url="https://opnsense.example.com",
+               username="YOUR_API_KEY",
+               password="YOUR_API_SECRET",
+               session=session,
+           ) as client:
+               tables = (
+                   ("ARP", await client.get_arp_table()),
+                   ("NDP", await client.get_ndp_table()),
+               )
+               for family, rows in tables:
+                   if rows is None:
+                       print(f"{family} table unavailable")
+                       continue
+                   for row in rows:
+                       if not isinstance(row, Mapping):
+                           continue
+                       entry = client.normalize_arp_ndp_entry(row)
+                       address = entry.ipv4_address or entry.ipv6_address
+                       if not entry.usable or entry.valid_mac is None or address is None:
+                           continue
+                       print(
+                           f"{family}: MAC={entry.valid_mac}, IP={address}, "
+                           f"hostname={entry.hostname}, interface={entry.interface}"
+                       )
+
+   asyncio.run(main())
+
 Check firmware or control a service
 -----------------------------------
 

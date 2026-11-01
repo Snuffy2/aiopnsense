@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import OPNsenseClient
-from aiopnsense.dhcp import normalize_arp_ndp_entry
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsensePrivilegeMissing,
@@ -2135,7 +2134,7 @@ def test_normalization(
         ipv4 (str | None): Expected IPv4 address.
         ipv6 (str | None): Expected IPv6 address.
     """
-    entry = normalize_arp_ndp_entry(row)
+    entry = OPNsenseClient.normalize_arp_ndp_entry(row)
     assert (entry.mac, entry.valid_mac, entry.ipv4_address, entry.ipv6_address) == (
         mac,
         valid,
@@ -2158,7 +2157,7 @@ def test_metadata_is_copied_and_entry_is_frozen() -> None:
         "expires": expires,
         "type": {"kind": "dynamic"},
     }
-    entry = normalize_arp_ndp_entry(row)
+    entry = OPNsenseClient.normalize_arp_ndp_entry(row)
     interface["name"].append("changed")
     expires.append(2)
     assert entry.hostname == "router"
@@ -2173,7 +2172,7 @@ def test_metadata_is_copied_and_entry_is_frozen() -> None:
 
 def test_mapping_usability_and_missing_metadata() -> None:
     """Immutable mappings are normalized but not classified as usable."""
-    entry = normalize_arp_ndp_entry(
+    entry = OPNsenseClient.normalize_arp_ndp_entry(
         MappingProxyType({"hostname": "???", "manufacturer": 3, "intf": "wan"})
     )
     assert not entry.usable
@@ -2210,4 +2209,4 @@ def test_interface_aliases(row: dict[str, object], expected: object) -> None:
         row (dict[str, object]): Raw neighbor row with interface aliases.
         expected (object): Expected normalized interface metadata.
     """
-    assert normalize_arp_ndp_entry(row).interface == expected
+    assert OPNsenseClient.normalize_arp_ndp_entry(row).interface == expected

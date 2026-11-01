@@ -1,8 +1,8 @@
 API Reference
 =============
 
-The client API is exposed through ``aiopnsense.OPNsenseClient``. The reference
-is grouped by functional area and also includes standalone normalization helpers.
+The public API is exposed through ``aiopnsense.OPNsenseClient``. To make the
+reference easier to navigate, the methods are grouped below by functional area.
 
 .. toctree::
    :maxdepth: 1

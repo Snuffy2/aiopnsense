@@ -13,6 +13,3 @@ API reference
 -------------
 
 .. opnsense-client-api:: aiopnsense.dhcp.DHCPMixin
-
-.. automodule:: aiopnsense.dhcp
-   :members: ArpNdpEntry, normalize_arp_ndp_entry
