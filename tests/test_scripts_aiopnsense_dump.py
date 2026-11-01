@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections.abc import Callable
+from datetime import UTC, datetime
 import importlib.util
 import json
 from pathlib import Path
@@ -14,6 +15,8 @@ from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from aiopnsense import OPNsenseClient
 
 
 def load_dump_module() -> ModuleType:
@@ -109,8 +112,8 @@ def test_endpoint_registry_contains_expected_read_only_entries() -> None:
     entries = module.list_endpoints()
     endpoint_map = {entry["endpoint"]: (entry["method"], entry["warning"]) for entry in entries}
     expected_entries = {
-        "arp_table": ("get_arp_table", None),
-        "ndp_table": ("get_ndp_table", None),
+        "arp_table": ("get_arp_entries", None),
+        "ndp_table": ("get_ndp_entries", None),
         "carp": ("get_carp", None),
         "certificates": ("get_certificates", None),
         "device_unique_id": ("get_device_unique_id", None),
@@ -122,7 +125,7 @@ def test_endpoint_registry_contains_expected_read_only_entries() -> None:
         ),
         "gateways": ("get_gateways", None),
         "host_firmware_version": ("get_host_firmware_version", None),
-        "host_observations": ("get_host_observations", None),
+        "host_observations": ("get_host_observation_entries", None),
         "interfaces": ("get_interfaces", None),
         "interface_traffic": ("get_interface_traffic", None),
         "interface_traffic_stream": ("stream_interface_traffic", None),
@@ -283,6 +286,209 @@ async def test_run_endpoint_calls_public_method() -> None:
     assert result["method"] == "get_system_info"
     assert result["warning"] is None
     assert result["data"] == {"system": "running"}
+
+
+@pytest.mark.parametrize(
+    ("endpoint_name", "method_name", "deprecated_method_name"),
+    [
+        ("arp_table", "get_arp_entries", "get_arp_table"),
+        ("ndp_table", "get_ndp_entries", "get_ndp_table"),
+    ],
+)
+@pytest.mark.parametrize(
+    "raw_rows",
+    [
+        pytest.param((), id="empty-table"),
+        pytest.param(
+            ({"ip": "192.0.2.10", "mac": "00:11:22:33:44:55", "vendor_extra": [1, 2]},),
+            id="complete-wire-rows",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_endpoint_dumps_typed_neighbor_wire_rows(
+    endpoint_name: str,
+    method_name: str,
+    deprecated_method_name: str,
+    raw_rows: tuple[object, ...],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The JSON boundary retains complete raw rows and calls only the typed API.
+
+    Args:
+        endpoint_name (str): Stable dump endpoint name.
+        method_name (str): Replacement public client method.
+        deprecated_method_name (str): Deprecated method that must not be called.
+        raw_rows (tuple[object, ...]): Source rows copied into the typed result.
+        capsys (pytest.CaptureFixture[str]): Captures real script JSON output.
+    """
+    module = load_dump_module()
+    table = OPNsenseClient.ArpNdpTable(
+        entries=(),
+        unparsed_row_count=0,
+        raw_rows=raw_rows,
+    )
+    client = MagicMock()
+    typed_method = AsyncMock(return_value=table)
+    deprecated_method = MagicMock(side_effect=AssertionError("deprecated API called"))
+    setattr(client, method_name, typed_method)
+    setattr(client, deprecated_method_name, deprecated_method)
+
+    result = await module.run_endpoint(client, endpoint_name, stream_seconds=30.0)
+
+    typed_method.assert_awaited_once_with()
+    deprecated_method.assert_not_called()
+    module.write_output(result)
+    captured = capsys.readouterr()
+    rendered = json.loads(captured.out)
+    assert captured.err == ""
+    assert rendered["endpoint"] == endpoint_name
+    assert rendered["method"] == method_name
+    assert rendered["data"] == list(raw_rows)
+
+
+@pytest.mark.parametrize(
+    ("endpoint_name", "method_name", "deprecated_method_name"),
+    [
+        ("arp_table", "get_arp_entries", "get_arp_table"),
+        ("ndp_table", "get_ndp_entries", "get_ndp_table"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_main_reports_unavailable_neighbor_with_separate_stderr(
+    endpoint_name: str,
+    method_name: str,
+    deprecated_method_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Unavailable neighbor output stays JSON null with guidance only on stderr.
+
+    Args:
+        endpoint_name (str): Stable dump endpoint name.
+        method_name (str): Replacement public client method.
+        deprecated_method_name (str): Deprecated method that must not be called.
+        monkeypatch (pytest.MonkeyPatch): Fixture replacing live API dependencies.
+        tmp_path (Path): Temporary location for the optional JSON output file.
+        capsys (pytest.CaptureFixture[str]): Captures script JSON and diagnostics separately.
+    """
+    module = load_dump_module()
+    client = MagicMock()
+    client.validate = AsyncMock()
+    client.async_close = AsyncMock()
+    typed_method = AsyncMock(return_value=None)
+    deprecated_method = MagicMock(side_effect=AssertionError("deprecated API called"))
+    setattr(client, method_name, typed_method)
+    setattr(client, deprecated_method_name, deprecated_method)
+    session = FakeClientSession()
+    monkeypatch.setattr(module, "load_live_config", MagicMock(return_value=object()))
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda: session)
+    monkeypatch.setattr(module, "create_client", lambda _config, _session: client)
+    output_path = tmp_path / f"{endpoint_name}.json"
+
+    exit_code = await module.async_main(["--endpoint", endpoint_name, "--output", str(output_path)])
+
+    captured = capsys.readouterr()
+    stdout_payload = json.loads(captured.out)
+    file_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert stdout_payload == file_payload
+    assert stdout_payload["endpoint"] == endpoint_name
+    assert stdout_payload["method"] == method_name
+    assert stdout_payload["data"] is None
+    assert captured.err.count("Warning:") == 1
+    assert f"{endpoint_name} has no normalized data" in captured.err
+    assert "may be unavailable or its response may not pass validation" in captured.err
+    assert "scripts/opnsense_api_call.py" in captured.err
+    typed_method.assert_awaited_once_with()
+    deprecated_method.assert_not_called()
+    client.validate.assert_awaited_once_with()
+    client.async_close.assert_awaited_once_with()
+    session.enter.assert_awaited_once()
+    session.exit.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("observations", "expected_data"),
+    [
+        pytest.param(
+            OPNsenseClient.HostObservations(
+                source="discovery",
+                entries=(
+                    OPNsenseClient.HostObservation(
+                        mac="00:11:22:33:44:55",
+                        ip="2001:db8::1",
+                        last_seen=datetime(2026, 11, 1, 15, 30, tzinfo=UTC),
+                    ),
+                ),
+            ),
+            {
+                "source": "discovery",
+                "rows": [
+                    {
+                        "mac": "00:11:22:33:44:55",
+                        "ip": "2001:db8::1",
+                        "last_seen": "2026-11-01 15:30:00+00:00",
+                    },
+                ],
+            },
+            id="timestamped-discovery",
+        ),
+        pytest.param(
+            OPNsenseClient.HostObservations(source="arp-ndp", entries=()),
+            {"source": "arp-ndp", "rows": []},
+            id="discovery-disabled",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_endpoint_dumps_typed_host_observations(
+    observations: OPNsenseClient.HostObservations,
+    expected_data: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Typed observations serialize to the historical mapping with JSON timestamps.
+
+    Args:
+        observations (OPNsenseClient.HostObservations): Typed result from the public API.
+        expected_data (dict[str, Any]): Historical output shape expected after JSON decoding.
+        capsys (pytest.CaptureFixture[str]): Captures real script JSON output.
+    """
+    module = load_dump_module()
+    client = MagicMock()
+    typed_method = AsyncMock(return_value=observations)
+    deprecated_method = MagicMock(side_effect=AssertionError("deprecated API called"))
+    client.get_host_observation_entries = typed_method
+    client.get_host_observations = deprecated_method
+
+    result = await module.run_endpoint(client, "host_observations", stream_seconds=30.0)
+
+    typed_method.assert_awaited_once_with()
+    deprecated_method.assert_not_called()
+    module.write_output(result)
+    captured = capsys.readouterr()
+    rendered = json.loads(captured.out)
+    assert captured.err == ""
+    assert rendered["method"] == "get_host_observation_entries"
+    assert rendered["data"] == expected_data
+
+
+@pytest.mark.asyncio
+async def test_run_endpoint_preserves_unavailable_host_observations() -> None:
+    """Unavailable host observations remain null without calling the deprecated API."""
+    module = load_dump_module()
+    client = MagicMock()
+    typed_method = AsyncMock(return_value=None)
+    deprecated_method = MagicMock(side_effect=AssertionError("deprecated API called"))
+    client.get_host_observation_entries = typed_method
+    client.get_host_observations = deprecated_method
+
+    result = await module.run_endpoint(client, "host_observations", stream_seconds=30.0)
+
+    typed_method.assert_awaited_once_with()
+    deprecated_method.assert_not_called()
+    assert result["data"] is None
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import importlib
 import logging
 from pathlib import Path
+import sys
 import time
 from typing import Any
 
@@ -27,6 +28,7 @@ if __name__ == "__main__":
 
 import aiohttp
 
+from aiopnsense import OPNsenseClient
 from aiopnsense.exceptions import OPNsenseError
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,7 +43,7 @@ class EndpointSpec:
 
 
 ENDPOINTS: dict[str, EndpointSpec] = {
-    "arp_table": EndpointSpec("get_arp_table"),
+    "arp_table": EndpointSpec("get_arp_entries"),
     "carp": EndpointSpec("get_carp"),
     "certificates": EndpointSpec("get_certificates"),
     "device_unique_id": EndpointSpec("get_device_unique_id"),
@@ -54,11 +56,11 @@ ENDPOINTS: dict[str, EndpointSpec] = {
     "gateways": EndpointSpec("get_gateways"),
     "host_firmware_version": EndpointSpec("get_host_firmware_version"),
     "interfaces": EndpointSpec("get_interfaces"),
-    "host_observations": EndpointSpec("get_host_observations"),
+    "host_observations": EndpointSpec("get_host_observation_entries"),
     "interface_traffic": EndpointSpec("get_interface_traffic"),
     "interface_traffic_stream": EndpointSpec("stream_interface_traffic"),
     "ipsec": EndpointSpec("get_ipsec"),
-    "ndp_table": EndpointSpec("get_ndp_table"),
+    "ndp_table": EndpointSpec("get_ndp_entries"),
     "notices": EndpointSpec("get_notices"),
     "nut_ups_status": EndpointSpec("get_nut_ups_status"),
     "openvpn": EndpointSpec("get_openvpn"),
@@ -160,6 +162,46 @@ def list_endpoints() -> list[dict[str, Any]]:
     ]
 
 
+def _neighbor_rows_for_dump(
+    table: OPNsenseClient.ArpNdpTable | None,
+) -> list[object] | None:
+    """Return copied wire rows in the historical JSON dump shape.
+
+    Args:
+        table (OPNsenseClient.ArpNdpTable | None): Typed neighbor-table result.
+
+    Returns:
+        list[object] | None: All copied source rows as a JSON-friendly list, or None when
+            the endpoint was unavailable.
+    """
+    return None if table is None else list(table.raw_rows)
+
+
+def _host_observations_for_dump(
+    observations: OPNsenseClient.HostObservations | None,
+) -> dict[str, Any] | None:
+    """Adapt typed host observations to their historical JSON dump shape.
+
+    Args:
+        observations (OPNsenseClient.HostObservations | None): Typed observation result.
+
+    Returns:
+        dict[str, Any] | None: Historical source and row mapping, or None when the endpoint
+            was unavailable.
+    """
+    if observations is None:
+        return None
+    if observations.source == "arp-ndp":
+        return {"source": "arp-ndp", "rows": []}
+    return {
+        "source": "discovery",
+        "rows": [
+            {"mac": entry.mac, "ip": entry.ip, "last_seen": entry.last_seen}
+            for entry in observations.entries
+        ],
+    }
+
+
 def choose_endpoint_from_menu(endpoint_names: list[str]) -> str:
     """Prompt for a 1-based endpoint selection and return the chosen name.
 
@@ -214,13 +256,13 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
     method_name = spec.method_name
     method = getattr(client, method_name)
     if method_name == "stream_interface_traffic":
-        data: list[Any] = []
+        stream_data: list[Any] = []
         if stream_seconds <= 0:
             return {
                 "endpoint": endpoint_name,
                 "method": method_name,
                 "warning": spec.warning,
-                "data": data,
+                "data": stream_data,
             }
 
         deadline = time.monotonic() + stream_seconds
@@ -246,7 +288,7 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
                     sample = next_item.result()
                 except StopAsyncIteration:
                     break
-                data.append(sample)
+                stream_data.append(sample)
         except (OPNsenseError, aiohttp.ClientError, TimeoutError, RuntimeError, OSError) as err:
             stream_error = err
             raise
@@ -264,10 +306,21 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
             "endpoint": endpoint_name,
             "method": method_name,
             "warning": spec.warning,
-            "data": data,
+            "data": stream_data,
         }
     else:
         data = await method()
+        if endpoint_name in {"arp_table", "ndp_table"}:
+            data = _neighbor_rows_for_dump(data)
+            if data is None:
+                print(
+                    f"Warning: {endpoint_name} has no normalized data (the endpoint may be "
+                    "unavailable or its response may not pass validation). Use "
+                    "scripts/opnsense_api_call.py to inspect the raw response.",
+                    file=sys.stderr,
+                )
+        elif endpoint_name == "host_observations":
+            data = _host_observations_for_dump(data)
 
     return {
         "endpoint": endpoint_name,

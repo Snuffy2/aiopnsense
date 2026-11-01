@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import is_dataclass
 from importlib import import_module
 import inspect
 from typing import Any, ClassVar
@@ -54,7 +55,7 @@ def _iter_public_method_names(mixin_class: type[Any]) -> list[str]:
 
 
 class OPNsenseClientAPIDirective(Directive):
-    """Render public mixin methods as ``OPNsenseClient`` API entries."""
+    """Render public client methods and nested dataclass models."""
 
     has_content = False
     required_arguments = 1
@@ -65,7 +66,7 @@ class OPNsenseClientAPIDirective(Directive):
     }
 
     def run(self) -> list[nodes.Node]:
-        """Generate ``automethod`` entries for one mixin.
+        """Generate method and nested model documentation through the public client API.
 
         Returns:
             list[nodes.Node]: Parsed docutils nodes for the generated method docs.
@@ -75,6 +76,7 @@ class OPNsenseClientAPIDirective(Directive):
         """
         mixin_path = self.arguments[0]
         client_path = self.options.get("client", "aiopnsense.OPNsenseClient")
+        client_module, _, client_name = client_path.rpartition(".")
 
         try:
             mixin_class = _import_object(mixin_path)
@@ -102,6 +104,18 @@ class OPNsenseClientAPIDirective(Directive):
                 source=mixin_path,
             )
             generated_lines.append("", source=mixin_path)
+
+        for name, model_type in mixin_class.__dict__.items():
+            if (
+                not name.startswith("_")
+                and isinstance(model_type, type)
+                and is_dataclass(model_type)
+            ):
+                generated_lines.append(
+                    f".. autoclass:: {client_module}::{client_name}.{name}",
+                    source=mixin_path,
+                )
+                generated_lines.append("", source=mixin_path)
 
         container = nodes.container()
         container.document = self.state.document

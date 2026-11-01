@@ -60,6 +60,44 @@ Read diagnostics traffic
 
    asyncio.run(main())
 
+Fetch normalized ARP and NDP tables
+-----------------------------------
+
+Fetch IPv4 and IPv6 neighbors as ``OPNsenseClient.ArpNdpEntry`` objects.
+
+.. code-block:: python
+
+   import asyncio
+
+   import aiohttp
+   from aiopnsense import OPNsenseClient
+
+   async def main() -> None:
+       async with aiohttp.ClientSession() as session:
+           async with OPNsenseClient(
+               url="https://opnsense.example.com",
+               username="YOUR_API_KEY",
+               password="YOUR_API_SECRET",
+               session=session,
+           ) as client:
+               tables = (
+                   ("ARP", await client.get_arp_entries()),
+                   ("NDP", await client.get_ndp_entries()),
+               )
+               for family, table in tables:
+                   if table is None:
+                       print(f"{family} table unavailable")
+                       continue
+                   for entry in table.entries:
+                       entry: OPNsenseClient.ArpNdpEntry
+                       address = entry.ipv4_address or entry.ipv6_address
+                       print(
+                           f"{family}: MAC={entry.valid_mac}, IP={address}, "
+                           f"hostname={entry.hostname}, interface={entry.interface_name}"
+                       )
+
+   asyncio.run(main())
+
 Check firmware or control a service
 -----------------------------------
 
