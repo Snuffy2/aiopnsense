@@ -60,17 +60,21 @@ Read diagnostics traffic
 
    asyncio.run(main())
 
-Normalize ARP and NDP rows
---------------------------
+Fetch normalized ARP and NDP tables
+-----------------------------------
 
-``normalize_arp_ndp_entry()`` is synchronous and returns a frozen
-``OPNsenseClient.ArpNdpEntry`` containing normalized identity and copied metadata
-from either table. Normalized NDP inventory alone does not prove current reachability.
+``get_arp_entries()`` and ``get_ndp_entries()`` fetch a table once and return an
+``OPNsenseClient.ArpNdpTable``, or ``None`` when the lookup is unavailable. Its ``entries`` are
+frozen ``OPNsenseClient.ArpNdpEntry`` rows with normalized identity and copied metadata; rows
+with invalid identities stay in the table; strict MAC/IP fields become ``None`` while
+permissive MAC text is retained. ``unparsed_row_count``
+reports source rows that were not mappings, so a nonzero count means ``entries`` may be partial.
+Expiration flags use the shared boolean coercion rules. Table parse quality is separate
+from presence: normalized NDP inventory alone does not prove current reachability.
 
 .. code-block:: python
 
    import asyncio
-   from collections.abc import Mapping
 
    import aiohttp
    from aiopnsense import OPNsenseClient
@@ -84,19 +88,19 @@ from either table. Normalized NDP inventory alone does not prove current reachab
                session=session,
            ) as client:
                tables = (
-                   ("ARP", await client.get_arp_table()),
-                   ("NDP", await client.get_ndp_table()),
+                   ("ARP", await client.get_arp_entries()),
+                   ("NDP", await client.get_ndp_entries()),
                )
-               for family, rows in tables:
-                   if rows is None:
+               for family, table in tables:
+                   if table is None:
                        print(f"{family} table unavailable")
                        continue
-                   for row in rows:
-                       if not isinstance(row, Mapping):
-                           continue
-                       entry: OPNsenseClient.ArpNdpEntry = client.normalize_arp_ndp_entry(row)
+                   if table.unparsed_row_count:
+                       print(f"{family} table is partial: {table.unparsed_row_count} unparsed rows")
+                   for entry in table.entries:
+                       entry: OPNsenseClient.ArpNdpEntry
                        address = entry.ipv4_address or entry.ipv6_address
-                       if not entry.usable or entry.valid_mac is None or address is None:
+                       if entry.valid_mac is None or address is None:
                            continue
                        print(
                            f"{family}: MAC={entry.valid_mac}, IP={address}, "

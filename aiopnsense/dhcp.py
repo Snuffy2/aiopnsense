@@ -13,6 +13,7 @@ from .helpers import (
     _LOGGER,
     _log_errors,
     api_value_matches,
+    coerce_bool,
     dict_get,
     get_ip_key,
     timestamp_to_datetime,
@@ -52,12 +53,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
             ipv6_address (str | None): Canonical IPv6 address with any interface scope retained.
             hostname (str | None): Hostname with surrounding question marks removed.
             manufacturer (str | None): Nonempty manufacturer string, or None if absent or invalid.
-            expired (bool): Expiration flag using the source value's Python truthiness.
+            expired (bool): Expiration flag normalized by ``coerce_bool``. Nonzero numbers
+                and trimmed case-insensitive ``1``, ``true``, ``yes``, or ``on`` strings are
+                True; absent flags and other values are False.
             interface (object): Copied metadata from the first present interface alias:
                 ``intf_description``, ``intf``, or ``interface``.
             expires (object): Copied raw expiration metadata.
             arp_type (object): Copied raw neighbor entry type.
-            usable (bool): Whether the source is a mutable mapping, independently of identity validity.
         """
 
         mac: str | None
@@ -70,7 +72,26 @@ class DHCPMixin(AiopnsenseClientProtocol):
         interface: object
         expires: object
         arp_type: object
-        usable: bool
+
+    @dataclass(frozen=True, slots=True)
+    class ArpNdpTable:
+        """Normalized ARP or NDP table returned by one lookup.
+
+        Attributes:
+            entries (tuple[ArpNdpEntry, ...]): One entry for every mapping row, in source order.
+                Rows with missing or invalid identities are retained. Strict MAC/IP fields
+                are None when invalid; the permissively normalized ``mac`` text is preserved.
+            unparsed_row_count (int): Number of source rows that are not mappings and therefore
+                have no entry. A nonzero count means the entries may not describe the whole
+                table.
+            raw_rows (tuple[object, ...]): Deep copies of every source row in source order, with
+                mapping rows copied as plain dicts, isolated from both the response and the
+                entries, for diagnostics only.
+        """
+
+        entries: tuple[DHCPMixin.ArpNdpEntry, ...]
+        unparsed_row_count: int
+        raw_rows: tuple[object, ...]
 
     @staticmethod
     def _normalized_ip(value: object, *, version: int) -> str | None:
@@ -92,15 +113,15 @@ class DHCPMixin(AiopnsenseClientProtocol):
         return address.compressed if address.version == version else None
 
     @staticmethod
-    def normalize_arp_ndp_entry(row: Mapping[str, object]) -> ArpNdpEntry:
+    def _parse_neighbor_row(row: Mapping[str, object]) -> ArpNdpEntry:
         """Copy and normalize one raw ARP or NDP neighbor row.
 
         Args:
             row (Mapping[str, object]): Mapping returned by the neighbor table API.
 
         Returns:
-            ArpNdpEntry: A normalized entry. Only mutable mappings are classified as usable;
-            metadata objects are deep-copied from the source row.
+            ArpNdpEntry: A normalized entry whose metadata objects are deep-copied from the
+                source row.
         """
         copied = copy.deepcopy(dict(row))
         raw_mac = copied.get("mac")
@@ -126,11 +147,32 @@ class DHCPMixin(AiopnsenseClientProtocol):
             ipv6_address=DHCPMixin._normalized_ip(raw_ip, version=6),
             hostname=hostname,
             manufacturer=manufacturer,
-            expired=bool(copied.get("expired", False)),
+            expired=coerce_bool(copied.get("expired")),
             interface=copied.get("intf_description", copied.get("intf", copied.get("interface"))),
             expires=copied.get("expires"),
             arp_type=copied.get("type"),
-            usable=isinstance(row, MutableMapping),
+        )
+
+    @staticmethod
+    def _parse_neighbor_table(rows: list | None) -> ArpNdpTable | None:
+        """Normalize raw neighbor rows into a table.
+
+        Args:
+            rows (list | None): Raw rows from a neighbor table getter.
+
+        Returns:
+            ArpNdpTable | None: Normalized table, or None when the lookup was unavailable.
+        """
+        if rows is None:
+            return None
+        return DHCPMixin.ArpNdpTable(
+            entries=tuple(
+                DHCPMixin._parse_neighbor_row(row) for row in rows if isinstance(row, Mapping)
+            ),
+            unparsed_row_count=sum(1 for row in rows if not isinstance(row, Mapping)),
+            raw_rows=tuple(
+                copy.deepcopy(dict(row) if isinstance(row, Mapping) else row) for row in rows
+            ),
         )
 
     def _normalize_lease_key_value(self, value: Any) -> Any:
@@ -277,6 +319,37 @@ class DHCPMixin(AiopnsenseClientProtocol):
         ndp_table_info = await self._safe_dict_get(NDP_TABLE_ENDPOINT)
         ndp_table = ndp_table_info.get("rows")
         return ndp_table if isinstance(ndp_table, list) else None
+
+    async def get_arp_entries(self, resolve_hostnames: bool = False) -> ArpNdpTable | None:
+        """Return the active ARP table with normalized entries.
+
+        Uses :meth:`get_arp_table` and normalizes the returned rows locally.
+
+        Args:
+            resolve_hostnames (bool): Whether reverse DNS lookups should be requested.
+
+        Returns:
+            ArpNdpTable | None: Normalized rows plus the count of rows that could not be
+                interpreted and isolated raw copies for diagnostics. None means the lookup
+                was unavailable or malformed, as for :meth:`get_arp_table`; a successful
+                empty table has no entries.
+        """
+        return self._parse_neighbor_table(
+            await self.get_arp_table(resolve_hostnames=resolve_hostnames)
+        )
+
+    async def get_ndp_entries(self) -> ArpNdpTable | None:
+        """Return the IPv6 neighbor table with normalized entries.
+
+        Uses :meth:`get_ndp_table` and normalizes the returned rows locally.
+
+        Returns:
+            ArpNdpTable | None: Normalized rows plus the count of rows that could not be
+                interpreted and isolated raw copies for diagnostics. None means the lookup
+                was unavailable or malformed, as for :meth:`get_ndp_table`; a successful
+                empty table has no entries.
+        """
+        return self._parse_neighbor_table(await self.get_ndp_table())
 
     @_log_errors
     async def get_host_observations(self) -> dict[str, Any] | None:

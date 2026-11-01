@@ -2101,11 +2101,151 @@ async def test_throwing_neighbor_lookup_does_not_duplicate_request_failure_log(
     assert failures[0].msg.startswith("Error in do_get")
 
 
+async def _fetch_entries(
+    make_client: ClientType,
+    family: Literal["arp", "ndp"],
+    payload: object,
+    **client_options: Any,
+) -> tuple[OPNsenseClient.ArpNdpTable | None, Any]:
+    """Fetch a normalized table through the HTTP-like client seam.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        family (Literal["arp", "ndp"]): Neighbor table family to fetch.
+        payload (object): JSON response body for the table request.
+        **client_options (Any): Options passed to the client factory.
+
+    Returns:
+        tuple[OPNsenseClient.ArpNdpTable | None, Any]: Normalized table and the mocked session.
+    """
+    client, session = make_mock_session_client(partial(make_client, **client_options))
+    client._get = AsyncMock(side_effect=client._do_get)
+    session.get.side_effect = [FakeResponse(), FakeResponse(json_payload=payload)]
+    if family == "arp":
+        return await client.get_arp_entries(resolve_hostnames=True), session
+    return await client.get_ndp_entries(), session
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("family", ["arp", "ndp"])
+@pytest.mark.parametrize("payload", [{}, {"rows": None}, {"rows": {}}, []])
+async def test_neighbor_entries_unavailable_or_malformed_outer_payload(
+    make_client: ClientType, family: Literal["arp", "ndp"], payload: object
+) -> None:
+    """An absent or malformed rows field is unavailable rather than an empty table.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        family (Literal["arp", "ndp"]): Neighbor table family.
+        payload (object): Malformed table response.
+    """
+    table, _session = await _fetch_entries(make_client, family, payload)
+    assert table is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("family", ["arp", "ndp"])
+async def test_neighbor_entries_unavailable_endpoint_and_empty_table(
+    make_client: ClientType, family: Literal["arp", "ndp"]
+) -> None:
+    """Distinguish an unavailable endpoint from a successful empty table.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        family (Literal["arp", "ndp"]): Neighbor table family.
+    """
+    table, _session = await _fetch_entries(make_client, family, {"rows": []})
+    assert table == OPNsenseClient.ArpNdpTable(entries=(), unparsed_row_count=0, raw_rows=())
+
+    client, session = make_mock_session_client(make_client)
+    session.get.side_effect = [FakeResponse(status=404, ok=False)]
+    fetch = client.get_arp_entries if family == "arp" else client.get_ndp_entries
+    assert await fetch() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resolve_hostnames", [True, False])
+async def test_get_arp_entries_requests_table_once_with_resolve_flag(
+    make_client: ClientType, resolve_hostnames: bool
+) -> None:
+    """Fetching normalized ARP rows makes one table request and forwards the resolve flag.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        resolve_hostnames (bool): Requested reverse-DNS behavior.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._get = AsyncMock(side_effect=client._do_get)
+    session.get.side_effect = [
+        FakeResponse(),
+        FakeResponse(json_payload={"rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}),
+    ]
+
+    table = await client.get_arp_entries(resolve_hostnames=resolve_hostnames)
+
+    assert table is not None
+    assert len(table.entries) == 1
+    requested = [call.args[0] for call in session.get.call_args_list]
+    assert requested[-1] == (
+        "http://localhost/api/diagnostics/interface/search_arp"
+        f"?resolve={'yes' if resolve_hostnames else 'no'}"
+    )
+    assert sum("search_arp?" in url for url in requested) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("family", ["arp", "ndp"])
+@pytest.mark.parametrize(
+    ("status", "timeout", "expected_error"),
+    [
+        (403, False, OPNsensePrivilegeMissing),
+        (500, False, OPNsenseConnectionError),
+        (200, True, OPNsenseTimeoutError),
+    ],
+    ids=["permission", "server", "timeout"],
+)
+async def test_neighbor_entries_propagate_public_errors_when_throwing(
+    make_client: ClientType,
+    family: Literal["arp", "ndp"],
+    status: int,
+    timeout: bool,
+    expected_error: type[OPNsenseConnectionError],
+) -> None:
+    """Throwing clients raise the public error and non-throwing clients return None.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        family (Literal["arp", "ndp"]): Neighbor table family.
+        status (int): Response status for simulated HTTP failures.
+        timeout (bool): Whether to simulate a transport timeout instead of a response.
+        expected_error (type[OPNsenseConnectionError]): Expected public exception type.
+    """
+    for throw_errors in (True, False):
+        client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
+        client._get = AsyncMock(side_effect=client._do_get)
+        failure = TimeoutError("timed out") if timeout else FakeResponse(status=status, ok=False)
+        session.get.side_effect = [FakeResponse(), failure]
+        fetch = client.get_arp_entries if family == "arp" else client.get_ndp_entries
+        if throw_errors:
+            with pytest.raises(expected_error):
+                await fetch()
+        else:
+            assert await fetch() is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("row", "mac", "valid", "ipv4", "ipv6"),
     [
         (
             {"mac": " AA-BB-CC-DD-EE-FF ", "ip": " 192.0.2.1 "},
+            "aa:bb:cc:dd:ee:ff",
+            "aa:bb:cc:dd:ee:ff",
+            "192.0.2.1",
+            None,
+        ),
+        (
+            {"mac-address": "aa:bb:cc:dd:ee:ff", "ip-address": "192.0.2.1"},
             "aa:bb:cc:dd:ee:ff",
             "aa:bb:cc:dd:ee:ff",
             "192.0.2.1",
@@ -2120,21 +2260,34 @@ async def test_throwing_neighbor_lookup_does_not_duplicate_request_failure_log(
         ),
         ({"mac": 5, "mac-address": [], "ip": [], "ip-address": 42}, None, None, None, None),
         ({"mac": "zz:zz:zz:zz:zz:zz", "ip": "bad"}, "zz:zz:zz:zz:zz:zz", None, None, None),
+        ({}, None, None, None, None),
     ],
+    ids=["primary", "arp-aliases", "partial-mac-scoped-ipv6", "wrong-types", "invalid", "empty"],
 )
-def test_normalization(
-    row: dict[str, object], mac: str | None, valid: str | None, ipv4: str | None, ipv6: str | None
+async def test_neighbor_entries_normalize_identity_and_retain_invalid_mappings(
+    make_client: ClientType,
+    row: dict[str, object],
+    mac: str | None,
+    valid: str | None,
+    ipv4: str | None,
+    ipv6: str | None,
 ) -> None:
-    """Normalize aliases, malformed values, and both address families.
+    """Normalize aliases and families, retaining mappings with invalid identity fields.
 
     Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
         row (dict[str, object]): Raw neighbor values.
         mac (str | None): Expected permissive MAC.
         valid (str | None): Expected strict MAC.
         ipv4 (str | None): Expected IPv4 address.
         ipv6 (str | None): Expected IPv6 address.
     """
-    entry = OPNsenseClient.normalize_arp_ndp_entry(row)
+    table, _session = await _fetch_entries(make_client, "ndp", {"rows": [row]})
+
+    assert table is not None
+    assert table.unparsed_row_count == 0
+    assert len(table.entries) == 1
+    entry = table.entries[0]
     assert isinstance(entry, OPNsenseClient.ArpNdpEntry)
     assert (entry.mac, entry.valid_mac, entry.ipv4_address, entry.ipv6_address) == (
         mac,
@@ -2142,11 +2295,47 @@ def test_normalization(
         ipv4,
         ipv6,
     )
-    assert entry.usable
 
 
-def test_metadata_is_copied_and_entry_is_frozen() -> None:
-    """Preserve metadata, isolate nested source values, and freeze fields."""
+@pytest.mark.asyncio
+async def test_neighbor_entries_partial_table_preserves_order_and_counts_nonmappings(
+    make_client: ClientType,
+) -> None:
+    """Keep mapping rows in source order and count rows that are not mappings.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+    """
+    rows = [
+        {"mac": "aa:bb:cc:dd:ee:01", "ip": "192.0.2.1"},
+        "not a row",
+        {"mac": "bad", "ip": "also bad"},
+        None,
+        {"mac": "aa:bb:cc:dd:ee:02", "ip": "192.0.2.2"},
+    ]
+
+    table, _session = await _fetch_entries(make_client, "arp", {"rows": rows})
+
+    assert table is not None
+    assert [entry.mac for entry in table.entries] == [
+        "aa:bb:cc:dd:ee:01",
+        "bad",
+        "aa:bb:cc:dd:ee:02",
+    ]
+    assert table.entries[1].valid_mac is None
+    assert table.unparsed_row_count == 2
+    assert table.raw_rows == tuple(rows)
+
+
+@pytest.mark.asyncio
+async def test_neighbor_entries_copy_metadata_and_raw_rows_and_are_frozen(
+    make_client: ClientType,
+) -> None:
+    """Isolate entries and diagnostic rows from the response and from each other.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+    """
     interface = {"name": ["lan"]}
     expires = [1]
     row = {
@@ -2158,31 +2347,75 @@ def test_metadata_is_copied_and_entry_is_frozen() -> None:
         "expires": expires,
         "type": {"kind": "dynamic"},
     }
-    entry = OPNsenseClient.normalize_arp_ndp_entry(row)
+    client, session = make_mock_session_client(make_client)
+    client._get = AsyncMock(side_effect=client._do_get)
+    response = FakeResponse(json_payload={"rows": [row]})
+    session.get.side_effect = [FakeResponse(), response]
+
+    table = await client.get_arp_entries()
     interface["name"].append("changed")
     expires.append(2)
+
+    assert table is not None
+    entry = table.entries[0]
     assert entry.hostname == "router"
     assert entry.manufacturer == "Vendor"
-    assert entry.expired is True
+    assert entry.expired is False
     assert entry.interface == {"name": ["lan"]}
     assert entry.expires == [1]
     assert entry.arp_type == {"kind": "dynamic"}
+    assert table.raw_rows == ({**row, "intf_description": {"name": ["lan"]}, "expires": [1]},)
+    raw_row = table.raw_rows[0]
+    assert isinstance(raw_row, dict)
+    raw_row["type"]["kind"] = "changed"
+    assert entry.arp_type == {"kind": "dynamic"}
     with pytest.raises(FrozenInstanceError):
         entry.hostname = "other"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        table.unparsed_row_count = 1  # type: ignore[misc]
 
 
-def test_mapping_usability_and_missing_metadata() -> None:
-    """Immutable mappings are normalized but not classified as usable."""
-    entry = OPNsenseClient.normalize_arp_ndp_entry(
-        MappingProxyType({"hostname": "???", "manufacturer": 3, "intf": "wan"})
-    )
-    assert not entry.usable
-    assert entry.hostname is None
-    assert entry.manufacturer is None
-    assert entry.interface == "wan"
-    assert not entry.expired
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        ({}, False),
+        ({"expired": False}, False),
+        ({"expired": True}, True),
+        ({"expired": 0}, False),
+        ({"expired": 1}, True),
+        ({"expired": ""}, False),
+        ({"expired": " Yes "}, True),
+        ({"expired": "NO"}, False),
+        ({"expired": " true"}, True),
+        ({"expired": "False "}, False),
+        ({"expired": "1"}, True),
+        ({"expired": "0"}, False),
+        ({"expired": None}, False),
+        ({"expired": 2}, True),
+        ({"expired": -1}, True),
+        ({"expired": 1.0}, True),
+        ({"expired": "maybe"}, False),
+        ({"expired": []}, False),
+    ],
+)
+async def test_neighbor_entries_expired_conversion(
+    make_client: ClientType, row: dict[str, object], expected: bool
+) -> None:
+    """Normalize expiration values with the shared boolean coercion contract.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        row (dict[str, object]): Raw neighbor row.
+        expected (bool): Expected expiration state.
+    """
+    table, _session = await _fetch_entries(make_client, "arp", {"rows": [row]})
+
+    assert table is not None
+    assert table.entries[0].expired is expected
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("row", "expected"),
     [
@@ -2203,11 +2436,22 @@ def test_mapping_usability_and_missing_metadata() -> None:
     ],
     ids=["raw-arp", "ndp-interface", "description", "null-description", "null-interface"],
 )
-def test_interface_aliases(row: dict[str, object], expected: object) -> None:
-    """Preserve raw ARP interfaces and existing NDP field precedence.
+async def test_neighbor_interface_aliases_and_mapping_proxy_rows(
+    make_client: ClientType, row: dict[str, object], expected: object
+) -> None:
+    """Preserve raw ARP interfaces, NDP field precedence, and accept any Mapping row.
 
     Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
         row (dict[str, object]): Raw neighbor row with interface aliases.
         expected (object): Expected normalized interface metadata.
     """
-    assert OPNsenseClient.normalize_arp_ndp_entry(row).interface == expected
+    client, _session = make_mock_session_client(make_client)
+    client.get_arp_table = AsyncMock(return_value=[MappingProxyType(row)])
+
+    table = await client.get_arp_entries()
+
+    assert table is not None
+    assert table.unparsed_row_count == 0
+    assert table.entries[0].interface == expected
+    assert table.raw_rows == (row,)
