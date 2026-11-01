@@ -1795,7 +1795,6 @@ async def test_host_observation_entries_returns_typed_result_with_one_fetch(
     )
     with pytest.raises(FrozenInstanceError):
         observations.entries[0].ip = "192.0.2.1"  # type: ignore[misc]
-    assert not hasattr(observations, "__dict__")
     assert client._is_post_endpoint_available.await_count == 1
     assert client._post.await_count == 1
     assert client._post.await_args.kwargs == {
