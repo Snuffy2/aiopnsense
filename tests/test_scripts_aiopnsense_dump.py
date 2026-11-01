@@ -339,7 +339,9 @@ async def test_run_endpoint_dumps_typed_neighbor_wire_rows(
     typed_method.assert_awaited_once_with()
     deprecated_method.assert_not_called()
     module.write_output(result)
-    rendered = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    rendered = json.loads(captured.out)
+    assert captured.err == ""
     assert rendered["endpoint"] == endpoint_name
     assert rendered["method"] == method_name
     assert rendered["data"] == list(raw_rows)
@@ -353,30 +355,58 @@ async def test_run_endpoint_dumps_typed_neighbor_wire_rows(
     ],
 )
 @pytest.mark.asyncio
-async def test_run_endpoint_preserves_unavailable_neighbor_result(
+async def test_async_main_reports_unavailable_neighbor_with_separate_stderr(
     endpoint_name: str,
     method_name: str,
     deprecated_method_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Unavailable typed neighbor lookups remain null and use one public request.
+    """Unavailable neighbor output stays JSON null with guidance only on stderr.
 
     Args:
         endpoint_name (str): Stable dump endpoint name.
         method_name (str): Replacement public client method.
         deprecated_method_name (str): Deprecated method that must not be called.
+        monkeypatch (pytest.MonkeyPatch): Fixture replacing live API dependencies.
+        tmp_path (Path): Temporary location for the optional JSON output file.
+        capsys (pytest.CaptureFixture[str]): Captures script JSON and diagnostics separately.
     """
     module = load_dump_module()
     client = MagicMock()
+    client.validate = AsyncMock()
+    client.async_close = AsyncMock()
     typed_method = AsyncMock(return_value=None)
     deprecated_method = MagicMock(side_effect=AssertionError("deprecated API called"))
     setattr(client, method_name, typed_method)
     setattr(client, deprecated_method_name, deprecated_method)
+    session = FakeClientSession()
+    monkeypatch.setattr(module, "load_live_config", MagicMock(return_value=object()))
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda: session)
+    monkeypatch.setattr(module, "create_client", lambda _config, _session: client)
+    output_path = tmp_path / f"{endpoint_name}.json"
 
-    result = await module.run_endpoint(client, endpoint_name, stream_seconds=30.0)
+    exit_code = await module.async_main(["--endpoint", endpoint_name, "--output", str(output_path)])
 
+    captured = capsys.readouterr()
+    stdout_payload = json.loads(captured.out)
+    file_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert stdout_payload == file_payload
+    assert stdout_payload["endpoint"] == endpoint_name
+    assert stdout_payload["method"] == method_name
+    assert stdout_payload["data"] is None
+    assert captured.err.count("Warning:") == 1
+    assert f"{endpoint_name} has no normalized data" in captured.err
+    assert "may be unavailable or its response may not pass validation" in captured.err
+    assert "scripts/opnsense_api_call.py" in captured.err
     typed_method.assert_awaited_once_with()
     deprecated_method.assert_not_called()
-    assert result["data"] is None
+    client.validate.assert_awaited_once_with()
+    client.async_close.assert_awaited_once_with()
+    session.enter.assert_awaited_once()
+    session.exit.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -437,7 +467,9 @@ async def test_run_endpoint_dumps_typed_host_observations(
     typed_method.assert_awaited_once_with()
     deprecated_method.assert_not_called()
     module.write_output(result)
-    rendered = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    rendered = json.loads(captured.out)
+    assert captured.err == ""
     assert rendered["method"] == "get_host_observation_entries"
     assert rendered["data"] == expected_data
 

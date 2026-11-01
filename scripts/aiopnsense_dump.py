@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import importlib
 import logging
 from pathlib import Path
+import sys
 import time
 from typing import Any
 
@@ -311,6 +312,13 @@ async def run_endpoint(client: Any, endpoint_name: str, stream_seconds: float) -
         data = await method()
         if endpoint_name in {"arp_table", "ndp_table"}:
             data = _neighbor_rows_for_dump(data)
+            if data is None:
+                print(
+                    f"Warning: {endpoint_name} has no normalized data (the endpoint may be "
+                    "unavailable or its response may not pass validation). Use "
+                    "scripts/opnsense_api_call.py to inspect the raw response.",
+                    file=sys.stderr,
+                )
         elif endpoint_name == "host_observations":
             data = _host_observations_for_dump(data)
 
