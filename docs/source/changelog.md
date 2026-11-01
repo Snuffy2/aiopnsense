@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.0](https://github.com/Snuffy2/aiopnsense/compare/v1.3.3...v1.4.0) (2026-11-01)
+
+
+### Features
+
+* return normalized ARP and NDP table entries ([#172](https://github.com/Snuffy2/aiopnsense/issues/172)) ([3538339](https://github.com/Snuffy2/aiopnsense/commit/3538339f0e4a9e960005af0b31a66eb5a30b424e))
+
+
+### Dependencies
+
+* bump astral-sh/setup-uv from 10.3.0 to 10.3.2 in the github-actions group ([#170](https://github.com/Snuffy2/aiopnsense/issues/170)) ([8484c75](https://github.com/Snuffy2/aiopnsense/commit/8484c75abb009819e45fb6ea152a864c9020addc))
+* bump the python-dependencies group with 6 updates ([#171](https://github.com/Snuffy2/aiopnsense/issues/171)) ([3dc27f8](https://github.com/Snuffy2/aiopnsense/commit/3dc27f8d2c5c595239dfe68c8ad812c0ec2ae48c))
+
 ## [1.3.3](https://github.com/Snuffy2/aiopnsense/compare/v1.3.2...v1.3.3) (2026-10-30)
 
 
