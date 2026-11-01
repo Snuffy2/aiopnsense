@@ -1,5 +1,6 @@
 """Tests for `aiopnsense.dhcp`."""
 
+import asyncio
 from collections.abc import Callable, MutableMapping
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
@@ -2231,15 +2232,16 @@ async def _fetch_entries(
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
         family (Literal["arp", "ndp"]): Neighbor table family to fetch.
-        payload (object): JSON response body for the table request.
+        payload (object): JSON response envelope for the table request.
         **client_options (Any): Options passed to the client factory.
 
     Returns:
         tuple[OPNsenseClient.ArpNdpTable | None, Any]: Normalized table and the mocked session.
     """
     client, session = make_mock_session_client(partial(make_client, **client_options))
-    client._get = AsyncMock(side_effect=client._do_get)
-    session.get.side_effect = [FakeResponse(), FakeResponse(json_payload=payload)]
+    client._post = AsyncMock(side_effect=client._do_post)
+    session.get.return_value = FakeResponse()
+    session.post.return_value = FakeResponse(json_payload=payload)
     if family == "arp":
         return await client.get_arp_entries(resolve_hostnames=True), session
     return await client.get_ndp_entries(), session
@@ -2247,11 +2249,24 @@ async def _fetch_entries(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("family", ["arp", "ndp"])
-@pytest.mark.parametrize("payload", [{}, {"rows": None}, {"rows": {}}, []])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"rows": None},
+        {"rows": {}},
+        {"rows": []},
+        {"total": True, "rows": []},
+        {"total": -1, "rows": []},
+        {"total": "0", "rows": []},
+        {"total": 2, "rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]},
+        [],
+    ],
+)
 async def test_neighbor_entries_unavailable_or_malformed_outer_payload(
     make_client: ClientType, family: Literal["arp", "ndp"], payload: object
 ) -> None:
-    """An absent or malformed rows field is unavailable rather than an empty table.
+    """Reject malformed or truncated envelopes instead of returning partial inventories.
 
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
@@ -2274,7 +2289,7 @@ async def test_neighbor_entries_unavailable_endpoint_and_empty_table(
         family (Literal["arp", "ndp"]): Neighbor table family.
     """
     before_fetch = datetime.now(UTC)
-    table, _session = await _fetch_entries(make_client, family, {"rows": []})
+    table, _session = await _fetch_entries(make_client, family, {"total": 0, "rows": []})
     after_fetch = datetime.now(UTC)
     assert table is not None
     assert table.entries == ()
@@ -2292,6 +2307,55 @@ async def test_neighbor_entries_unavailable_endpoint_and_empty_table(
 
 
 @pytest.mark.asyncio
+async def test_neighbor_entries_fetch_all_rows_with_one_post(
+    make_client: ClientType,
+) -> None:
+    """Request the full ARP result set in one POST instead of accepting a page.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+    """
+    rows = [{"mac": "aa:bb:cc:dd:ee:ff", "ip": "192.0.2.1"}] * 10_000
+    client, session = make_mock_session_client(make_client)
+    client._post = AsyncMock(side_effect=client._do_post)
+    session.get.return_value = FakeResponse()
+    session.post.return_value = FakeResponse(
+        json_payload={"total": len(rows), "rowCount": -1, "current": 1, "rows": rows}
+    )
+
+    table = await client.get_arp_entries(resolve_hostnames=True)
+
+    assert table is not None
+    assert len(table.entries) == 10_000
+    assert session.get.call_count == 1
+    assert session.get.call_args.args[0] == "http://localhost/api/diagnostics/interface/search_arp"
+    assert session.post.call_count == 1
+    assert (
+        session.post.call_args.args[0]
+        == "http://localhost/api/diagnostics/interface/search_arp?resolve=yes"
+    )
+    assert session.post.call_args.kwargs["json"] == {"rowCount": -1}
+    assert client._post.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_neighbor_entries_propagate_cancellation(
+    make_client: ClientType,
+) -> None:
+    """Propagate cancellation during a normalized table request.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._is_get_endpoint_available = AsyncMock(return_value=True)
+    client._post = AsyncMock(side_effect=asyncio.CancelledError)
+
+    with pytest.raises(asyncio.CancelledError):
+        await client.get_arp_entries()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("resolve_hostnames", [True, False])
 async def test_get_arp_entries_requests_table_once_with_resolve_flag(
     make_client: ClientType, resolve_hostnames: bool
@@ -2303,22 +2367,25 @@ async def test_get_arp_entries_requests_table_once_with_resolve_flag(
         resolve_hostnames (bool): Requested reverse-DNS behavior.
     """
     client, session = make_mock_session_client(make_client)
-    client._get = AsyncMock(side_effect=client._do_get)
-    session.get.side_effect = [
-        FakeResponse(),
-        FakeResponse(json_payload={"rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}),
-    ]
+    client._post = AsyncMock(side_effect=client._do_post)
+    session.get.return_value = FakeResponse()
+    session.post.return_value = FakeResponse(
+        json_payload={"total": 1, "rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}
+    )
 
     table = await client.get_arp_entries(resolve_hostnames=resolve_hostnames)
 
     assert table is not None
     assert len(table.entries) == 1
-    requested = [call.args[0] for call in session.get.call_args_list]
-    assert requested[-1] == (
+    assert session.get.call_count == 1
+    assert session.get.call_args.args[0] == "http://localhost/api/diagnostics/interface/search_arp"
+    assert session.post.call_count == 1
+    assert session.post.call_args.args[0] == (
         "http://localhost/api/diagnostics/interface/search_arp"
         f"?resolve={'yes' if resolve_hostnames else 'no'}"
     )
-    assert sum("search_arp?" in url for url in requested) == 1
+    assert session.post.call_args.kwargs["json"] == {"rowCount": -1}
+    assert client._post.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -2350,9 +2417,10 @@ async def test_neighbor_entries_propagate_public_errors_when_throwing(
     """
     for throw_errors in (True, False):
         client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-        client._get = AsyncMock(side_effect=client._do_get)
+        client._post = AsyncMock(side_effect=client._do_post)
+        session.get.return_value = FakeResponse()
         failure = TimeoutError("timed out") if timeout else FakeResponse(status=status, ok=False)
-        session.get.side_effect = [FakeResponse(), failure]
+        session.post.side_effect = [failure]
         fetch = client.get_arp_entries if family == "arp" else client.get_ndp_entries
         if throw_errors:
             with pytest.raises(expected_error):
@@ -2410,7 +2478,7 @@ async def test_neighbor_entries_normalize_identity_and_retain_invalid_mappings(
         ipv4 (str | None): Expected IPv4 address.
         ipv6 (str | None): Expected IPv6 address.
     """
-    table, _session = await _fetch_entries(make_client, "ndp", {"rows": [row]})
+    table, _session = await _fetch_entries(make_client, "ndp", {"total": 1, "rows": [row]})
 
     assert table is not None
     assert table.unparsed_row_count == 0
@@ -2442,7 +2510,7 @@ async def test_neighbor_entries_partial_table_preserves_order_and_counts_nonmapp
         {"mac": "aa:bb:cc:dd:ee:02", "ip": "192.0.2.2"},
     ]
 
-    table, _session = await _fetch_entries(make_client, "arp", {"rows": rows})
+    table, _session = await _fetch_entries(make_client, "arp", {"total": len(rows), "rows": rows})
 
     assert table is not None
     assert [entry.mac for entry in table.entries] == [
@@ -2476,9 +2544,9 @@ async def test_neighbor_entries_copy_metadata_and_raw_rows_and_are_frozen(
         "type": {"kind": "dynamic"},
     }
     client, session = make_mock_session_client(make_client)
-    client._get = AsyncMock(side_effect=client._do_get)
-    response = FakeResponse(json_payload={"rows": [row]})
-    session.get.side_effect = [FakeResponse(), response]
+    client._post = AsyncMock(side_effect=client._do_post)
+    session.get.return_value = FakeResponse()
+    session.post.return_value = FakeResponse(json_payload={"total": 1, "rows": [row]})
 
     table = await client.get_arp_entries()
     interface["name"].append("changed")
@@ -2538,7 +2606,9 @@ async def test_neighbor_entries_boolean_flag_conversion(
         expected (bool): Expected expiration and permanent-entry flags.
     """
     table, _session = await _fetch_entries(
-        make_client, "arp", {"rows": [{**row, "permanent": row.get("expired")}]}
+        make_client,
+        "arp",
+        {"total": 1, "rows": [{**row, "permanent": row.get("expired")}]},
     )
 
     assert table is not None
@@ -2586,7 +2656,7 @@ async def test_neighbor_interface_aliases_and_mapping_proxy_rows(
         expected (object): Expected normalized interface metadata.
     """
     client, _session = make_mock_session_client(make_client)
-    client._get_arp_table = AsyncMock(return_value=[MappingProxyType(row)])
+    client._get_complete_neighbor_rows = AsyncMock(return_value=[MappingProxyType(row)])
 
     table = await client.get_arp_entries()
 
@@ -2626,7 +2696,7 @@ async def test_normalized_neighbors_preserve_all_endpoint_fields(
         warnings.filterwarnings(
             "error", message="Use get_(arp|ndp)_entries", category=DeprecationWarning
         )
-        table, _session = await _fetch_entries(make_client, family, {"rows": [row]})
+        table, _session = await _fetch_entries(make_client, family, {"total": 1, "rows": [row]})
     assert table is not None
     entry = table.entries[0]
     assert entry.interface == "LAN"
@@ -2661,7 +2731,7 @@ async def test_neighbor_entries_trim_host_metadata_and_preserve_raw_values(
         },
         {"hostname": "??", "manufacturer": None},
     ]
-    table, _session = await _fetch_entries(make_client, "arp", {"rows": rows})
+    table, _session = await _fetch_entries(make_client, "arp", {"total": len(rows), "rows": rows})
 
     assert table is not None
     first, second, third = table.entries

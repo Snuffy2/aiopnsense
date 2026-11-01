@@ -370,6 +370,36 @@ class DHCPMixin(AiopnsenseClientProtocol):
         ndp_table = ndp_table_info.get("rows")
         return ndp_table if isinstance(ndp_table, list) else None
 
+    @_log_errors
+    async def _get_complete_neighbor_rows(self, endpoint: str, request_path: str) -> list | None:
+        """Fetch every row for a normalized neighbor table and verify completeness.
+
+        Args:
+            endpoint (str): Endpoint path used for the existing availability probe.
+            request_path (str): Data-request path, including any query parameters.
+
+        Returns:
+            list | None: Complete rows, including a successful empty list, or None when the
+                endpoint is unavailable or the response is missing, malformed, or truncated.
+        """
+        if not await self._is_get_endpoint_available(endpoint):
+            _LOGGER.debug("Neighbor endpoint unavailable: %s", endpoint)
+            return None
+
+        payload = await self._safe_dict_post(request_path, {"rowCount": -1})
+        rows = payload.get("rows")
+        total = payload.get("total")
+        if (
+            not isinstance(rows, list)
+            or isinstance(total, bool)
+            or not isinstance(total, int)
+            or total < 0
+            or total != len(rows)
+        ):
+            _LOGGER.debug("Neighbor endpoint returned an incomplete table: %s", endpoint)
+            return None
+        return rows
+
     @deprecated("Use get_arp_entries() instead; raw rows remain available as table.raw_rows.")
     async def get_arp_table(self, resolve_hostnames: bool = False) -> list | None:
         """Return raw ARP rows through the deprecated compatibility API.
@@ -398,7 +428,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
     async def get_arp_entries(self, resolve_hostnames: bool = False) -> ArpNdpTable | None:
         """Return the active ARP table with normalized entries.
 
-        Fetches raw rows internally and normalizes them locally.
+        Fetches all rows in one POST request and normalizes them locally. A response whose
+        ``total`` does not match the returned row count is treated as unavailable.
 
         Args:
             resolve_hostnames (bool): Whether reverse DNS lookups should be requested.
@@ -409,14 +440,19 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 was unavailable or malformed, as for :meth:`get_arp_table`; a successful
                 empty table has no entries.
         """
+        resolve_flag = "yes" if resolve_hostnames else "no"
         return self._parse_neighbor_table(
-            await self._get_arp_table(resolve_hostnames=resolve_hostnames)
+            await self._get_complete_neighbor_rows(
+                ARP_TABLE_ENDPOINT,
+                f"{ARP_TABLE_ENDPOINT}?resolve={resolve_flag}",
+            )
         )
 
     async def get_ndp_entries(self) -> ArpNdpTable | None:
         """Return the IPv6 neighbor table with normalized entries.
 
-        Fetches raw rows internally and normalizes them locally.
+        Fetches all rows in one POST request and normalizes them locally. A response whose
+        ``total`` does not match the returned row count is treated as unavailable.
 
         Returns:
             ArpNdpTable | None: Normalized rows plus the count of rows that could not be
@@ -424,7 +460,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 was unavailable or malformed, as for :meth:`get_ndp_table`; a successful
                 empty table has no entries.
         """
-        return self._parse_neighbor_table(await self._get_ndp_table())
+        return self._parse_neighbor_table(
+            await self._get_complete_neighbor_rows(NDP_TABLE_ENDPOINT, NDP_TABLE_ENDPOINT)
+        )
 
     async def _fetch_host_observations(self) -> HostObservations | None:
         """Fetch and validate timestamped host observations from OPNsense.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections.abc import Callable
+from datetime import UTC, datetime
 import importlib.util
 import json
 from pathlib import Path
@@ -14,6 +15,8 @@ from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from aiopnsense import OPNsenseClient
 
 
 def load_dump_module() -> ModuleType:
@@ -109,8 +112,8 @@ def test_endpoint_registry_contains_expected_read_only_entries() -> None:
     entries = module.list_endpoints()
     endpoint_map = {entry["endpoint"]: (entry["method"], entry["warning"]) for entry in entries}
     expected_entries = {
-        "arp_table": ("get_arp_table", None),
-        "ndp_table": ("get_ndp_table", None),
+        "arp_table": ("get_arp_entries", None),
+        "ndp_table": ("get_ndp_entries", None),
         "carp": ("get_carp", None),
         "certificates": ("get_certificates", None),
         "device_unique_id": ("get_device_unique_id", None),
@@ -122,7 +125,7 @@ def test_endpoint_registry_contains_expected_read_only_entries() -> None:
         ),
         "gateways": ("get_gateways", None),
         "host_firmware_version": ("get_host_firmware_version", None),
-        "host_observations": ("get_host_observations", None),
+        "host_observations": ("get_host_observation_entries", None),
         "interfaces": ("get_interfaces", None),
         "interface_traffic": ("get_interface_traffic", None),
         "interface_traffic_stream": ("stream_interface_traffic", None),
@@ -283,6 +286,177 @@ async def test_run_endpoint_calls_public_method() -> None:
     assert result["method"] == "get_system_info"
     assert result["warning"] is None
     assert result["data"] == {"system": "running"}
+
+
+@pytest.mark.parametrize(
+    ("endpoint_name", "method_name", "deprecated_method_name"),
+    [
+        ("arp_table", "get_arp_entries", "get_arp_table"),
+        ("ndp_table", "get_ndp_entries", "get_ndp_table"),
+    ],
+)
+@pytest.mark.parametrize(
+    "raw_rows",
+    [
+        pytest.param((), id="empty-table"),
+        pytest.param(
+            ({"ip": "192.0.2.10", "mac": "00:11:22:33:44:55", "vendor_extra": [1, 2]},),
+            id="complete-wire-rows",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_endpoint_dumps_typed_neighbor_wire_rows(
+    endpoint_name: str,
+    method_name: str,
+    deprecated_method_name: str,
+    raw_rows: tuple[object, ...],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The JSON boundary retains complete raw rows and calls only the typed API.
+
+    Args:
+        endpoint_name (str): Stable dump endpoint name.
+        method_name (str): Replacement public client method.
+        deprecated_method_name (str): Deprecated method that must not be called.
+        raw_rows (tuple[object, ...]): Source rows copied into the typed result.
+        capsys (pytest.CaptureFixture[str]): Captures real script JSON output.
+    """
+    module = load_dump_module()
+    table = OPNsenseClient.ArpNdpTable(
+        entries=(),
+        unparsed_row_count=0,
+        raw_rows=raw_rows,
+    )
+    client = MagicMock()
+    typed_method = AsyncMock(return_value=table)
+    deprecated_method = MagicMock(side_effect=AssertionError("deprecated API called"))
+    setattr(client, method_name, typed_method)
+    setattr(client, deprecated_method_name, deprecated_method)
+
+    result = await module.run_endpoint(client, endpoint_name, stream_seconds=30.0)
+
+    typed_method.assert_awaited_once_with()
+    deprecated_method.assert_not_called()
+    module.write_output(result)
+    rendered = json.loads(capsys.readouterr().out)
+    assert rendered["endpoint"] == endpoint_name
+    assert rendered["method"] == method_name
+    assert rendered["data"] == list(raw_rows)
+
+
+@pytest.mark.parametrize(
+    ("endpoint_name", "method_name", "deprecated_method_name"),
+    [
+        ("arp_table", "get_arp_entries", "get_arp_table"),
+        ("ndp_table", "get_ndp_entries", "get_ndp_table"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_endpoint_preserves_unavailable_neighbor_result(
+    endpoint_name: str,
+    method_name: str,
+    deprecated_method_name: str,
+) -> None:
+    """Unavailable typed neighbor lookups remain null and use one public request.
+
+    Args:
+        endpoint_name (str): Stable dump endpoint name.
+        method_name (str): Replacement public client method.
+        deprecated_method_name (str): Deprecated method that must not be called.
+    """
+    module = load_dump_module()
+    client = MagicMock()
+    typed_method = AsyncMock(return_value=None)
+    deprecated_method = MagicMock(side_effect=AssertionError("deprecated API called"))
+    setattr(client, method_name, typed_method)
+    setattr(client, deprecated_method_name, deprecated_method)
+
+    result = await module.run_endpoint(client, endpoint_name, stream_seconds=30.0)
+
+    typed_method.assert_awaited_once_with()
+    deprecated_method.assert_not_called()
+    assert result["data"] is None
+
+
+@pytest.mark.parametrize(
+    ("observations", "expected_data"),
+    [
+        pytest.param(
+            OPNsenseClient.HostObservations(
+                source="discovery",
+                entries=(
+                    OPNsenseClient.HostObservation(
+                        mac="00:11:22:33:44:55",
+                        ip="2001:db8::1",
+                        last_seen=datetime(2026, 11, 1, 15, 30, tzinfo=UTC),
+                    ),
+                ),
+            ),
+            {
+                "source": "discovery",
+                "rows": [
+                    {
+                        "mac": "00:11:22:33:44:55",
+                        "ip": "2001:db8::1",
+                        "last_seen": "2026-11-01 15:30:00+00:00",
+                    },
+                ],
+            },
+            id="timestamped-discovery",
+        ),
+        pytest.param(
+            OPNsenseClient.HostObservations(source="arp-ndp", entries=()),
+            {"source": "arp-ndp", "rows": []},
+            id="discovery-disabled",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_endpoint_dumps_typed_host_observations(
+    observations: OPNsenseClient.HostObservations,
+    expected_data: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Typed observations serialize to the historical mapping with JSON timestamps.
+
+    Args:
+        observations (OPNsenseClient.HostObservations): Typed result from the public API.
+        expected_data (dict[str, Any]): Historical output shape expected after JSON decoding.
+        capsys (pytest.CaptureFixture[str]): Captures real script JSON output.
+    """
+    module = load_dump_module()
+    client = MagicMock()
+    typed_method = AsyncMock(return_value=observations)
+    deprecated_method = MagicMock(side_effect=AssertionError("deprecated API called"))
+    client.get_host_observation_entries = typed_method
+    client.get_host_observations = deprecated_method
+
+    result = await module.run_endpoint(client, "host_observations", stream_seconds=30.0)
+
+    typed_method.assert_awaited_once_with()
+    deprecated_method.assert_not_called()
+    module.write_output(result)
+    rendered = json.loads(capsys.readouterr().out)
+    assert rendered["method"] == "get_host_observation_entries"
+    assert rendered["data"] == expected_data
+
+
+@pytest.mark.asyncio
+async def test_run_endpoint_preserves_unavailable_host_observations() -> None:
+    """Unavailable host observations remain null without calling the deprecated API."""
+    module = load_dump_module()
+    client = MagicMock()
+    typed_method = AsyncMock(return_value=None)
+    deprecated_method = MagicMock(side_effect=AssertionError("deprecated API called"))
+    client.get_host_observation_entries = typed_method
+    client.get_host_observations = deprecated_method
+
+    result = await module.run_endpoint(client, "host_observations", stream_seconds=30.0)
+
+    typed_method.assert_awaited_once_with()
+    deprecated_method.assert_not_called()
+    assert result["data"] is None
 
 
 @pytest.mark.asyncio
