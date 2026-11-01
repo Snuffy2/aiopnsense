@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import is_dataclass
 from importlib import import_module
 import inspect
-from typing import Any, ClassVar
+from typing import Any, ClassVar, get_type_hints
 
 from docutils import nodes
 from docutils.parsers.rst import Directive, directives
@@ -54,7 +55,7 @@ def _iter_public_method_names(mixin_class: type[Any]) -> list[str]:
 
 
 class OPNsenseClientAPIDirective(Directive):
-    """Render public mixin methods as ``OPNsenseClient`` API entries."""
+    """Render client methods and their module-owned dataclass return models."""
 
     has_content = False
     required_arguments = 1
@@ -65,7 +66,7 @@ class OPNsenseClientAPIDirective(Directive):
     }
 
     def run(self) -> list[nodes.Node]:
-        """Generate ``automethod`` entries for one mixin.
+        """Generate method entries and returned dataclass documentation for one mixin.
 
         Returns:
             list[nodes.Node]: Parsed docutils nodes for the generated method docs.
@@ -102,6 +103,21 @@ class OPNsenseClientAPIDirective(Directive):
                 source=mixin_path,
             )
             generated_lines.append("", source=mixin_path)
+
+        documented_models: set[type[Any]] = set()
+        for method_name in method_names:
+            method = getattr(mixin_class, method_name)
+            return_type = get_type_hints(method).get("return")
+            if (
+                isinstance(return_type, type)
+                and is_dataclass(return_type)
+                and return_type.__module__ == mixin_class.__module__
+                and return_type not in documented_models
+            ):
+                model_path = f"{return_type.__module__}.{return_type.__qualname__}"
+                generated_lines.append(f".. autoclass:: {model_path}", source=mixin_path)
+                generated_lines.append("", source=mixin_path)
+                documented_models.add(return_type)
 
         container = nodes.container()
         container.document = self.state.document
