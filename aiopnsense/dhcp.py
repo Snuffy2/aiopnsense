@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 import ipaddress
 import re
 from typing import Any
+from warnings import deprecated
 
 from ._typing import AiopnsenseClientProtocol
 from .helpers import (
@@ -60,6 +61,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 ``intf_description``, ``intf``, or ``interface``.
             expires (object): Copied raw expiration metadata.
             arp_type (object): Copied raw neighbor entry type.
+            interface_name (object): Copied interface identifier from ``intf`` or ``interface``.
+            interface_description (object): Copied interface description from ``intf_description``.
+            permanent (bool): Permanent-entry flag normalized by ``coerce_bool``.
         """
 
         mac: str | None
@@ -72,6 +76,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
         interface: object
         expires: object
         arp_type: object
+        interface_name: object = None
+        interface_description: object = None
+        permanent: bool = False
 
     @dataclass(frozen=True, slots=True)
     class ArpNdpTable:
@@ -86,7 +93,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 table.
             raw_rows (tuple[object, ...]): Deep copies of every source row in source order, with
                 mapping rows copied as plain dicts, isolated from both the response and the
-                entries, for diagnostics only.
+                entries, for diagnostics and access to original or unknown fields.
         """
 
         entries: tuple[DHCPMixin.ArpNdpEntry, ...]
@@ -151,6 +158,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
             interface=copied.get("intf_description", copied.get("intf", copied.get("interface"))),
             expires=copied.get("expires"),
             arp_type=copied.get("type"),
+            interface_name=copied.get("intf", copied.get("interface")),
+            interface_description=copied.get("intf_description"),
+            permanent=coerce_bool(copied.get("permanent")),
         )
 
     @staticmethod
@@ -275,7 +285,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             lease["reserved_by"] = list(raw_reserved)
 
     @_log_errors
-    async def get_arp_table(self, resolve_hostnames: bool = False) -> list | None:
+    async def _get_arp_table(self, resolve_hostnames: bool = False) -> list | None:
         """Return active ARP table entries.
 
         Args:
@@ -300,7 +310,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         return arp_table if isinstance(arp_table, list) else None
 
     @_log_errors
-    async def get_ndp_table(self) -> list | None:
+    async def _get_ndp_table(self) -> list | None:
         """Return IPv6 neighbors from the OPNsense NDP table.
 
         Returns:
@@ -320,10 +330,35 @@ class DHCPMixin(AiopnsenseClientProtocol):
         ndp_table = ndp_table_info.get("rows")
         return ndp_table if isinstance(ndp_table, list) else None
 
+    @deprecated("Use get_arp_entries() instead; raw rows remain available as table.raw_rows.")
+    async def get_arp_table(self, resolve_hostnames: bool = False) -> list | None:
+        """Return raw ARP rows through the deprecated compatibility API.
+
+        Deprecated: use :meth:`get_arp_entries` for normalized entries and complete raw rows.
+
+        Args:
+            resolve_hostnames (bool): Whether reverse DNS lookups should be requested.
+
+        Returns:
+            list | None: Unmodified rows, or None when unavailable or malformed.
+        """
+        return await self._get_arp_table(resolve_hostnames=resolve_hostnames)
+
+    @deprecated("Use get_ndp_entries() instead; raw rows remain available as table.raw_rows.")
+    async def get_ndp_table(self) -> list | None:
+        """Return raw NDP rows through the deprecated compatibility API.
+
+        Deprecated: use :meth:`get_ndp_entries` for normalized entries and complete raw rows.
+
+        Returns:
+            list | None: Unmodified rows, or None when unavailable or malformed.
+        """
+        return await self._get_ndp_table()
+
     async def get_arp_entries(self, resolve_hostnames: bool = False) -> ArpNdpTable | None:
         """Return the active ARP table with normalized entries.
 
-        Uses :meth:`get_arp_table` and normalizes the returned rows locally.
+        Fetches raw rows internally and normalizes them locally.
 
         Args:
             resolve_hostnames (bool): Whether reverse DNS lookups should be requested.
@@ -335,13 +370,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 empty table has no entries.
         """
         return self._parse_neighbor_table(
-            await self.get_arp_table(resolve_hostnames=resolve_hostnames)
+            await self._get_arp_table(resolve_hostnames=resolve_hostnames)
         )
 
     async def get_ndp_entries(self) -> ArpNdpTable | None:
         """Return the IPv6 neighbor table with normalized entries.
 
-        Uses :meth:`get_ndp_table` and normalizes the returned rows locally.
+        Fetches raw rows internally and normalizes them locally.
 
         Returns:
             ArpNdpTable | None: Normalized rows plus the count of rows that could not be
@@ -349,7 +384,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 was unavailable or malformed, as for :meth:`get_ndp_table`; a successful
                 empty table has no entries.
         """
-        return self._parse_neighbor_table(await self.get_ndp_table())
+        return self._parse_neighbor_table(await self._get_ndp_table())
 
     @_log_errors
     async def get_host_observations(self) -> dict[str, Any] | None:
