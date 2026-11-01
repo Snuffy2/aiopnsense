@@ -482,9 +482,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
             observations.append(DHCPMixin.HostObservation(mac=mac, ip=ip, last_seen=observed))
         return DHCPMixin.HostObservations(source="discovery", entries=tuple(observations))
 
+    @deprecated("Use get_host_observation_entries() instead.")
     @_log_errors
     async def get_host_observations(self) -> dict[str, Any] | None:
         """Return timestamped MAC observations as dictionaries for compatibility.
+
+        Deprecated: use :meth:`get_host_observation_entries` for immutable typed results.
 
         Returns:
             dict[str, Any] | None: The historical ``{"source": ..., "rows": ...}`` shape.

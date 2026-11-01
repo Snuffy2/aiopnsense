@@ -1737,7 +1737,8 @@ async def test_host_observations_normalizes_packet_sightings(
             ],
         }
     )
-    result = await client.get_host_observations()
+    with pytest.warns(DeprecationWarning, match="Use get_host_observation_entries"):
+        result = await client.get_host_observations()  # type: ignore[deprecated]
     assert result is not None
     assert result["source"] == "discovery"
     assert result["rows"][0]["mac"] == "aa:bb:cc:dd:ee:01"
@@ -1775,8 +1776,13 @@ async def test_host_observation_entries_returns_typed_result_with_one_fetch(
         }
     )
 
-    observations = await client.get_host_observation_entries()
+    with warnings.catch_warnings(record=True) as emitted_warnings:
+        warnings.simplefilter("always", DeprecationWarning)
+        observations = await client.get_host_observation_entries()
 
+    assert not any(
+        "Use get_host_observation_entries" in str(warning.message) for warning in emitted_warnings
+    )
     assert isinstance(observations, OPNsenseClient.HostObservations)
     assert observations.source == "discovery"
     assert observations.entries == (
@@ -1889,7 +1895,7 @@ async def test_host_observations_rejects_invalid_totals(
         }
     )
 
-    assert await client.get_host_observations() is None
+    assert await client.get_host_observations() is None  # type: ignore[deprecated]
 
 
 @pytest.mark.asyncio
@@ -1934,7 +1940,7 @@ async def test_host_observations_requests_all_rows_through_post_json(
     session.post.side_effect = search_response
     session.get.side_effect = search_response
 
-    result = await client.get_host_observations()
+    result = await client.get_host_observations()  # type: ignore[deprecated]
 
     assert result is not None
     assert len(result["rows"]) == 10_000
@@ -2005,7 +2011,7 @@ async def test_host_observations_rejects_non_authoritative_payloads(
     client, session = make_mock_session_client(make_client)
     client._post = AsyncMock(side_effect=client._do_post)
     session.post.return_value = FakeResponse(json_payload=payload)
-    assert await client.get_host_observations() is None
+    assert await client.get_host_observations() is None  # type: ignore[deprecated]
 
 
 @pytest.mark.asyncio
@@ -2023,7 +2029,7 @@ async def test_host_observations_distinguishes_disabled_service(make_client: Cli
             "rows": [{"source": "arp-ndp", "last_seen": ""}],
         }
     )
-    assert await client.get_host_observations() == {"source": "arp-ndp", "rows": []}
+    assert await client.get_host_observations() == {"source": "arp-ndp", "rows": []}  # type: ignore[deprecated]
 
 
 @pytest.mark.asyncio
@@ -2039,7 +2045,7 @@ async def test_host_observations_http_failure_is_unavailable(
     """
     client, session = make_mock_session_client(make_client)
     session.post.return_value = FakeResponse(status=status, ok=False)
-    assert await client.get_host_observations() is None
+    assert await client.get_host_observations() is None  # type: ignore[deprecated]
 
 
 @pytest.mark.asyncio
@@ -2084,7 +2090,7 @@ async def test_neighbor_lookup_logs_failure_once_until_recovery_then_again(
             return await client.get_arp_table()  # type: ignore[deprecated]
         if lookup_name == "ndp":
             return await client.get_ndp_table()  # type: ignore[deprecated]
-        return await client.get_host_observations()
+        return await client.get_host_observations()  # type: ignore[deprecated]
 
     failed_probe = FakeResponse(status=503, reason="Unavailable", ok=False)
     successful_probe = FakeResponse()
