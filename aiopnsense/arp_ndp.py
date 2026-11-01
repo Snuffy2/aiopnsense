@@ -1,4 +1,4 @@
-"""Normalize raw OPNsense neighbor rows for consumers."""
+"""Normalize raw OPNsense ARP and NDP table rows for consumers."""
 
 from collections.abc import Mapping, MutableMapping
 import copy

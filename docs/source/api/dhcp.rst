@@ -9,6 +9,8 @@ and grant the API user ``Interfaces: Neighbors: Automatic discovery``.
 Group observations from either address family by MAC and apply your own presence
 window. Raw NDP entries alone do not prove current reachability.
 
+For normalized ARP and NDP row values, see :doc:`arp_ndp`.
+
 API reference
 -------------
 

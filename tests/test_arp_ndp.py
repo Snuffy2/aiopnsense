@@ -5,7 +5,7 @@ from types import MappingProxyType
 
 import pytest
 
-from aiopnsense.neighbors import normalize_neighbor_entry
+from aiopnsense.arp_ndp import normalize_neighbor_entry
 
 
 @pytest.mark.parametrize(
