@@ -63,8 +63,9 @@ Read diagnostics traffic
 Normalize ARP and NDP rows
 --------------------------
 
-``normalize_arp_ndp_entry()`` is synchronous and works with rows from either
-table. Normalized NDP inventory alone does not prove current reachability.
+``normalize_arp_ndp_entry()`` is synchronous and returns a frozen
+``OPNsenseClient.ArpNdpEntry`` containing normalized identity and copied metadata
+from either table. Normalized NDP inventory alone does not prove current reachability.
 
 .. code-block:: python
 
@@ -93,7 +94,7 @@ table. Normalized NDP inventory alone does not prove current reachability.
                    for row in rows:
                        if not isinstance(row, Mapping):
                            continue
-                       entry = client.normalize_arp_ndp_entry(row)
+                       entry: OPNsenseClient.ArpNdpEntry = client.normalize_arp_ndp_entry(row)
                        address = entry.ipv4_address or entry.ipv6_address
                        if not entry.usable or entry.valid_mac is None or address is None:
                            continue
