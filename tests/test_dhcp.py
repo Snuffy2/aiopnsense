@@ -2214,11 +2214,10 @@ async def test_throwing_neighbor_lookup_does_not_duplicate_request_failure_log(
     failures = [
         record
         for record in caplog.records
-        if record.msg.startswith("Error in do_get")
-        or record.msg.startswith("Error in _get_ndp_table")
+        if record.getMessage().startswith(("Error in do_get", "Error in get_ndp_table"))
     ]
     assert len(failures) == 1
-    assert failures[0].msg.startswith("Error in do_get")
+    assert failures[0].getMessage().startswith("Error in do_get")
 
 
 async def _fetch_entries(
