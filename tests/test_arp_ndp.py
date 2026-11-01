@@ -5,7 +5,7 @@ from types import MappingProxyType
 
 import pytest
 
-from aiopnsense.arp_ndp import normalize_neighbor_entry
+from aiopnsense.arp_ndp import normalize_arp_ndp_entry
 
 
 @pytest.mark.parametrize(
@@ -41,7 +41,7 @@ def test_normalization(
         ipv4 (str | None): Expected IPv4 address.
         ipv6 (str | None): Expected IPv6 address.
     """
-    entry = normalize_neighbor_entry(row)
+    entry = normalize_arp_ndp_entry(row)
     assert (entry.mac, entry.valid_mac, entry.ipv4_address, entry.ipv6_address) == (
         mac,
         valid,
@@ -64,7 +64,7 @@ def test_metadata_is_copied_and_entry_is_frozen() -> None:
         "expires": expires,
         "type": {"kind": "dynamic"},
     }
-    entry = normalize_neighbor_entry(row)
+    entry = normalize_arp_ndp_entry(row)
     interface["name"].append("changed")
     expires.append(2)
     assert entry.hostname == "router"
@@ -79,7 +79,7 @@ def test_metadata_is_copied_and_entry_is_frozen() -> None:
 
 def test_mapping_usability_and_missing_metadata() -> None:
     """Immutable mappings are normalized but not classified as usable."""
-    entry = normalize_neighbor_entry(
+    entry = normalize_arp_ndp_entry(
         MappingProxyType({"hostname": "???", "manufacturer": 3, "intf": "wan"})
     )
     assert not entry.usable

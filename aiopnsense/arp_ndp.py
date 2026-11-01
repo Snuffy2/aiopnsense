@@ -10,7 +10,7 @@ _MAC_PATTERN = re.compile(r"^([0-9a-f]{2}:){5}([0-9a-f]{2})$")
 
 
 @dataclass(frozen=True, slots=True)
-class NeighborEntry:
+class ArpNdpEntry:
     """Normalized neighbor row, with copied metadata isolated from its source."""
 
     mac: str | None
@@ -45,14 +45,14 @@ def _normalized_ip(value: object, *, version: int) -> str | None:
     return address.compressed if address.version == version else None
 
 
-def normalize_neighbor_entry(row: Mapping[str, object]) -> NeighborEntry:
+def normalize_arp_ndp_entry(row: Mapping[str, object]) -> ArpNdpEntry:
     """Copy and normalize one raw ARP or NDP neighbor row.
 
     Args:
         row (Mapping[str, object]): Mapping returned by the neighbor table API.
 
     Returns:
-        NeighborEntry: A normalized entry. Only mutable mappings are classified as usable;
+        ArpNdpEntry: A normalized entry. Only mutable mappings are classified as usable;
         metadata objects are deep-copied from the source row.
     """
     copied = copy.deepcopy(dict(row))
@@ -72,7 +72,7 @@ def normalize_neighbor_entry(row: Mapping[str, object]) -> NeighborEntry:
     manufacturer = copied.get("manufacturer")
     if not isinstance(manufacturer, str) or not manufacturer:
         manufacturer = None
-    return NeighborEntry(
+    return ArpNdpEntry(
         mac=mac or None,
         valid_mac=valid_mac,
         ipv4_address=_normalized_ip(raw_ip, version=4),
