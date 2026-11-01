@@ -80,7 +80,7 @@ def normalize_arp_ndp_entry(row: Mapping[str, object]) -> ArpNdpEntry:
         hostname=hostname,
         manufacturer=manufacturer,
         expired=bool(copied.get("expired", False)),
-        interface=copied.get("intf_description", copied.get("intf")),
+        interface=copied.get("intf_description", copied.get("intf", copied.get("interface"))),
         expires=copied.get("expires"),
         arp_type=copied.get("type"),
         usable=isinstance(row, MutableMapping),

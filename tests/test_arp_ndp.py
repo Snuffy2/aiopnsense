@@ -87,3 +87,33 @@ def test_mapping_usability_and_missing_metadata() -> None:
     assert entry.manufacturer is None
     assert entry.interface == "wan"
     assert not entry.expired
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        (
+            {
+                "ip-address": "192.0.2.1",
+                "mac-address": "aa:bb:cc:dd:ee:ff",
+                "interface": "em0",
+                "expires": 1199,
+                "type": "ethernet",
+            },
+            "em0",
+        ),
+        ({"intf": "em1", "interface": "em0"}, "em1"),
+        ({"intf_description": "LAN", "intf": "em1", "interface": "em0"}, "LAN"),
+        ({"intf_description": None, "intf": "em1", "interface": "em0"}, None),
+        ({"intf": None, "interface": "em0"}, None),
+    ],
+    ids=["raw-arp", "ndp-interface", "description", "null-description", "null-interface"],
+)
+def test_interface_aliases(row: dict[str, object], expected: object) -> None:
+    """Preserve raw ARP interfaces and existing NDP field precedence.
+
+    Args:
+        row (dict[str, object]): Raw neighbor row with interface aliases.
+        expected (object): Expected normalized interface metadata.
+    """
+    assert normalize_arp_ndp_entry(row).interface == expected
