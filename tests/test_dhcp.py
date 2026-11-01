@@ -1989,6 +1989,7 @@ async def test_host_observations_requests_all_rows_through_post_json(
                 {"source": []},
                 {"source": "unknown"},
                 {"ether_address": "incomplete"},
+                {"ether_address": "aa:bb:cc:dd:ee:gg"},
                 {"ether_address": None},
                 {"ip_address": "invalid"},
                 {"ip_address": 192},

@@ -505,7 +505,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             ):
                 return None
             mac = mac.strip().lower().replace("-", ":")
-            if re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac) is None:
+            if _MAC_PATTERN.fullmatch(mac) is None:
                 return None
             try:
                 ip = ipaddress.ip_address(address.strip()).compressed
