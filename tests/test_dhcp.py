@@ -2135,6 +2135,7 @@ def test_normalization(
         ipv6 (str | None): Expected IPv6 address.
     """
     entry = OPNsenseClient.normalize_arp_ndp_entry(row)
+    assert isinstance(entry, OPNsenseClient.ArpNdpEntry)
     assert (entry.mac, entry.valid_mac, entry.ipv4_address, entry.ipv6_address) == (
         mac,
         valid,

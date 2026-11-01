@@ -38,40 +38,39 @@ ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT = "/api/dhcpv6/leases/searchLease"
 _MAC_PATTERN = re.compile(r"^([0-9a-f]{2}:){5}([0-9a-f]{2})$")
 
 
-@dataclass(frozen=True, slots=True)
-class ArpNdpEntry:
-    """Normalized neighbor row, with copied metadata isolated from its source.
-
-    Attributes:
-        mac (str | None): Permissively normalized MAC address, including malformed values.
-        valid_mac (str | None): Canonical six-octet MAC address, or None if invalid.
-        ipv4_address (str | None): Canonical IPv4 address, or None for other input.
-        ipv6_address (str | None): Canonical IPv6 address with any interface scope retained.
-        hostname (str | None): Hostname with surrounding question marks removed.
-        manufacturer (str | None): Nonempty manufacturer string, or None if absent or invalid.
-        expired (bool): Expiration flag using the source value's Python truthiness.
-        interface (object): Copied metadata from the first present interface alias:
-            ``intf_description``, ``intf``, or ``interface``.
-        expires (object): Copied raw expiration metadata.
-        arp_type (object): Copied raw neighbor entry type.
-        usable (bool): Whether the source is a mutable mapping, independently of identity validity.
-    """
-
-    mac: str | None
-    valid_mac: str | None
-    ipv4_address: str | None
-    ipv6_address: str | None
-    hostname: str | None
-    manufacturer: str | None
-    expired: bool
-    interface: object
-    expires: object
-    arp_type: object
-    usable: bool
-
-
 class DHCPMixin(AiopnsenseClientProtocol):
     """DHCP and neighbor-table methods for OPNsenseClient."""
+
+    @dataclass(frozen=True, slots=True)
+    class ArpNdpEntry:
+        """Normalized neighbor row, with copied metadata isolated from its source.
+
+        Attributes:
+            mac (str | None): Permissively normalized MAC address, including malformed values.
+            valid_mac (str | None): Canonical six-octet MAC address, or None if invalid.
+            ipv4_address (str | None): Canonical IPv4 address, or None for other input.
+            ipv6_address (str | None): Canonical IPv6 address with any interface scope retained.
+            hostname (str | None): Hostname with surrounding question marks removed.
+            manufacturer (str | None): Nonempty manufacturer string, or None if absent or invalid.
+            expired (bool): Expiration flag using the source value's Python truthiness.
+            interface (object): Copied metadata from the first present interface alias:
+                ``intf_description``, ``intf``, or ``interface``.
+            expires (object): Copied raw expiration metadata.
+            arp_type (object): Copied raw neighbor entry type.
+            usable (bool): Whether the source is a mutable mapping, independently of identity validity.
+        """
+
+        mac: str | None
+        valid_mac: str | None
+        ipv4_address: str | None
+        ipv6_address: str | None
+        hostname: str | None
+        manufacturer: str | None
+        expired: bool
+        interface: object
+        expires: object
+        arp_type: object
+        usable: bool
 
     @staticmethod
     def _normalized_ip(value: object, *, version: int) -> str | None:
@@ -120,7 +119,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         manufacturer = copied.get("manufacturer")
         if not isinstance(manufacturer, str) or not manufacturer:
             manufacturer = None
-        return ArpNdpEntry(
+        return DHCPMixin.ArpNdpEntry(
             mac=mac or None,
             valid_mac=valid_mac,
             ipv4_address=DHCPMixin._normalized_ip(raw_ip, version=4),

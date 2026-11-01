@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import is_dataclass
 from importlib import import_module
 import inspect
-from typing import Any, ClassVar, get_type_hints
+from typing import Any, ClassVar
 
 from docutils import nodes
 from docutils.parsers.rst import Directive, directives
@@ -55,7 +55,7 @@ def _iter_public_method_names(mixin_class: type[Any]) -> list[str]:
 
 
 class OPNsenseClientAPIDirective(Directive):
-    """Render client methods and their module-owned dataclass return models."""
+    """Render public client methods and nested dataclass models."""
 
     has_content = False
     required_arguments = 1
@@ -66,7 +66,7 @@ class OPNsenseClientAPIDirective(Directive):
     }
 
     def run(self) -> list[nodes.Node]:
-        """Generate method entries and returned dataclass documentation for one mixin.
+        """Generate method and nested model documentation through the public client API.
 
         Returns:
             list[nodes.Node]: Parsed docutils nodes for the generated method docs.
@@ -104,20 +104,17 @@ class OPNsenseClientAPIDirective(Directive):
             )
             generated_lines.append("", source=mixin_path)
 
-        documented_models: set[type[Any]] = set()
-        for method_name in method_names:
-            method = getattr(mixin_class, method_name)
-            return_type = get_type_hints(method).get("return")
+        for name, model_type in mixin_class.__dict__.items():
             if (
-                isinstance(return_type, type)
-                and is_dataclass(return_type)
-                and return_type.__module__ == mixin_class.__module__
-                and return_type not in documented_models
+                not name.startswith("_")
+                and isinstance(model_type, type)
+                and is_dataclass(model_type)
             ):
-                model_path = f"{return_type.__module__}.{return_type.__qualname__}"
-                generated_lines.append(f".. autoclass:: {model_path}", source=mixin_path)
+                generated_lines.append(
+                    f".. autoclass:: {client_path}.{name}",
+                    source=mixin_path,
+                )
                 generated_lines.append("", source=mixin_path)
-                documented_models.add(return_type)
 
         container = nodes.container()
         container.document = self.state.document
