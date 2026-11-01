@@ -1750,6 +1750,119 @@ async def test_host_observations_normalizes_packet_sightings(
 
 
 @pytest.mark.asyncio
+async def test_host_observation_entries_returns_typed_result_with_one_fetch(
+    make_client: ClientType,
+) -> None:
+    """Return frozen typed observations from one request to the discovery endpoint.
+
+    Args:
+        make_client (ClientType): Factory for a client with a mocked HTTP session.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._is_post_endpoint_available = AsyncMock(return_value=True)
+    client._post = AsyncMock(side_effect=client._do_post)
+    session.post.return_value = FakeResponse(
+        json_payload={
+            "total": 1,
+            "rows": [
+                {
+                    "source": "discovery",
+                    "ether_address": "AA-BB-CC-DD-EE-01",
+                    "ip_address": "2001:0db8::1",
+                    "last_seen": "2026-01-01T02:00:00+02:00",
+                }
+            ],
+        }
+    )
+
+    observations = await client.get_host_observation_entries()
+
+    assert isinstance(observations, OPNsenseClient.HostObservations)
+    assert observations.source == "discovery"
+    assert observations.entries == (
+        OPNsenseClient.HostObservation(
+            mac="aa:bb:cc:dd:ee:01",
+            ip="2001:db8::1",
+            last_seen=datetime(2026, 1, 1, tzinfo=UTC),
+        ),
+    )
+    with pytest.raises(FrozenInstanceError):
+        observations.entries[0].ip = "192.0.2.1"  # type: ignore[misc]
+    assert not hasattr(observations, "__dict__")
+    assert client._is_post_endpoint_available.await_count == 1
+    assert client._post.await_count == 1
+    assert client._post.await_args.kwargs == {
+        "path": "/api/hostdiscovery/service/search",
+        "payload": {"rowCount": -1},
+    }
+
+
+@pytest.mark.asyncio
+async def test_host_observation_entries_preserves_disabled_source(
+    make_client: ClientType,
+) -> None:
+    """Represent disabled host discovery as an available empty typed result.
+
+    Args:
+        make_client (ClientType): Factory for a client with a mocked HTTP session.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._is_post_endpoint_available = AsyncMock(return_value=True)
+    client._post = AsyncMock(side_effect=client._do_post)
+    session.post.return_value = FakeResponse(
+        json_payload={"total": 1, "rows": [{"source": "arp-ndp", "last_seen": ""}]}
+    )
+
+    observations = await client.get_host_observation_entries()
+
+    assert observations == OPNsenseClient.HostObservations(source="arp-ndp", entries=())
+    assert client._post.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("throw_errors", "payload", "status", "expected_error"),
+    [
+        (False, {"total": 1, "rows": [{}]}, 200, None),
+        (False, None, 404, None),
+        (False, None, 403, None),
+        (True, None, 403, OPNsensePrivilegeMissing),
+    ],
+)
+async def test_host_observation_entries_preserves_failure_semantics(
+    make_client: ClientType,
+    throw_errors: bool,
+    payload: object,
+    status: int,
+    expected_error: type[OPNsensePrivilegeMissing] | None,
+) -> None:
+    """Keep unavailable and malformed results distinct from throwing-client errors.
+
+    Args:
+        make_client (ClientType): Factory for a client with a mocked HTTP session.
+        throw_errors (bool): Whether the client should raise public API failures.
+        payload (object): JSON response for a successful request.
+        status (int): Response status of the endpoint probe.
+        expected_error (type[OPNsensePrivilegeMissing] | None): Expected mapped error.
+    """
+    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
+    if status == 200:
+        client._is_post_endpoint_available = AsyncMock(return_value=True)
+        client._post = AsyncMock(side_effect=client._do_post)
+        session.post.return_value = FakeResponse(status=status, ok=True, json_payload=payload)
+    elif status == 404:
+        client._is_post_endpoint_available = AsyncMock(return_value=False)
+    else:
+        client._is_post_endpoint_available = AsyncMock(side_effect=OPNsensePrivilegeMissing)
+
+    if expected_error is not None:
+        with pytest.raises(expected_error):
+            await client.get_host_observation_entries()
+    else:
+        assert await client.get_host_observation_entries() is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("total", [1.9, 1.0, True, False, "1", "1.9", None, -1, 2])
 async def test_host_observations_rejects_invalid_totals(
     make_client: ClientType, total: object
@@ -2155,8 +2268,17 @@ async def test_neighbor_entries_unavailable_endpoint_and_empty_table(
         make_client (ClientType): Factory for clients using a mocked HTTP session.
         family (Literal["arp", "ndp"]): Neighbor table family.
     """
+    before_fetch = datetime.now(UTC)
     table, _session = await _fetch_entries(make_client, family, {"rows": []})
-    assert table == OPNsenseClient.ArpNdpTable(entries=(), unparsed_row_count=0, raw_rows=())
+    after_fetch = datetime.now(UTC)
+    assert table is not None
+    assert table.entries == ()
+    assert table.unparsed_row_count == 0
+    assert table.raw_rows == ()
+    assert table.fetched_at.tzinfo is UTC
+    assert before_fetch <= table.fetched_at <= after_fetch
+    fetched_at = table.fetched_at
+    assert table.fetched_at is fetched_at
 
     client, session = make_mock_session_client(make_client)
     session.get.side_effect = [FakeResponse(status=404, ok=False)]
@@ -2435,10 +2557,18 @@ async def test_neighbor_entries_boolean_flag_conversion(
         ),
         ({"intf": "em1", "interface": "em0"}, "em1"),
         ({"intf_description": "LAN", "intf": "em1", "interface": "em0"}, "LAN"),
-        ({"intf_description": None, "intf": "em1", "interface": "em0"}, None),
+        ({"intf_description": None, "intf": "em1", "interface": "em0"}, "em1"),
+        ({"intf_description": " \t ", "intf": "em1"}, "em1"),
         ({"intf": None, "interface": "em0"}, None),
     ],
-    ids=["raw-arp", "ndp-interface", "description", "null-description", "null-interface"],
+    ids=[
+        "raw-arp",
+        "ndp-interface",
+        "description",
+        "null-description",
+        "blank-description",
+        "null-interface",
+    ],
 )
 async def test_neighbor_interface_aliases_and_mapping_proxy_rows(
     make_client: ClientType, row: dict[str, object], expected: object
@@ -2501,6 +2631,45 @@ async def test_normalized_neighbors_preserve_all_endpoint_fields(
     assert entry.expires == 1199
     assert entry.arp_type == "ethernet"
     assert table.raw_rows == (row,)
+
+
+@pytest.mark.asyncio
+async def test_neighbor_entries_trim_host_metadata_and_preserve_raw_values(
+    make_client: ClientType,
+) -> None:
+    """Trim normalized metadata while preserving interface source fields and raw rows.
+
+    Args:
+        make_client (ClientType): Factory for a client with a mocked HTTP session.
+    """
+    rows = [
+        {
+            "hostname": "  ?? router ??  ",
+            "manufacturer": "  Vendor Inc  ",
+            "intf_description": " \t ",
+            "intf": "em0",
+        },
+        {
+            "hostname": " \t ",
+            "manufacturer": "   ",
+            "intf": "em1",
+        },
+        {"hostname": "??", "manufacturer": None},
+    ]
+    table, _session = await _fetch_entries(make_client, "arp", {"rows": rows})
+
+    assert table is not None
+    first, second, third = table.entries
+    assert (first.hostname, first.manufacturer) == ("router", "Vendor Inc")
+    assert first.interface == "em0"
+    assert first.interface_name == "em0"
+    assert first.interface_description == " \t "
+    assert (second.hostname, second.manufacturer) == (None, None)
+    assert second.interface == "em1"
+    assert second.interface_name == "em1"
+    assert second.interface_description is None
+    assert (third.hostname, third.manufacturer) == (None, None)
+    assert table.raw_rows == tuple(rows)
 
 
 @pytest.mark.asyncio

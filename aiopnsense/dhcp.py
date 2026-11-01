@@ -2,11 +2,11 @@
 
 from collections.abc import Mapping, MutableMapping
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
 import ipaddress
 import re
-from typing import Any
+from typing import Any, Literal
 from warnings import deprecated
 
 from ._typing import AiopnsenseClientProtocol
@@ -52,13 +52,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
             valid_mac (str | None): Canonical six-octet MAC address, or None if invalid.
             ipv4_address (str | None): Canonical IPv4 address, or None for other input.
             ipv6_address (str | None): Canonical IPv6 address with any interface scope retained.
-            hostname (str | None): Hostname with surrounding question marks removed.
-            manufacturer (str | None): Nonempty manufacturer string, or None if absent or invalid.
+            hostname (str | None): Trimmed hostname with surrounding question marks removed.
+            manufacturer (str | None): Trimmed manufacturer, or None if absent or blank.
             expired (bool): Expiration flag normalized by ``coerce_bool``. Nonzero numbers
                 and trimmed case-insensitive ``1``, ``true``, ``yes``, or ``on`` strings are
                 True; absent flags and other values are False.
-            interface (object): Copied metadata from the first present interface alias:
-                ``intf_description``, ``intf``, or ``interface``.
+            interface (object): Copied interface description, falling back to the interface
+                identifier when the description is missing or blank.
             expires (object): Copied raw expiration metadata.
             arp_type (object): Copied raw neighbor entry type.
             interface_name (object): Copied interface identifier from ``intf`` or ``interface``.
@@ -94,11 +94,42 @@ class DHCPMixin(AiopnsenseClientProtocol):
             raw_rows (tuple[object, ...]): Deep copies of every source row in source order, with
                 mapping rows copied as plain dicts, isolated from both the response and the
                 entries, for diagnostics and access to original or unknown fields.
+            fetched_at (datetime): UTC-aware time when this table was normalized. The value
+                stays fixed for the lifetime of this table.
         """
 
         entries: tuple[DHCPMixin.ArpNdpEntry, ...]
         unparsed_row_count: int
         raw_rows: tuple[object, ...]
+        fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    @dataclass(frozen=True, slots=True)
+    class HostObservation:
+        """One validated MAC and IP sighting from OPNsense host discovery.
+
+        Attributes:
+            mac (str): Canonical lowercase six-octet MAC address.
+            ip (str): Compressed IPv4 or IPv6 address.
+            last_seen (datetime): UTC-aware timestamp when the host was observed.
+        """
+
+        mac: str
+        ip: str
+        last_seen: datetime
+
+    @dataclass(frozen=True, slots=True)
+    class HostObservations:
+        """Validated host-discovery observations and their data source.
+
+        Attributes:
+            source (Literal['discovery', 'arp-ndp']): Source of the observation result.
+                ``arp-ndp`` means host discovery is disabled and has no timestamps.
+            entries (tuple[DHCPMixin.HostObservation, ...]): Timestamped discovery entries;
+                empty for the timestamp-free ``arp-ndp`` fallback.
+        """
+
+        source: Literal["discovery", "arp-ndp"]
+        entries: tuple[DHCPMixin.HostObservation, ...]
 
     @staticmethod
     def _normalized_ip(value: object, *, version: int) -> str | None:
@@ -141,12 +172,21 @@ class DHCPMixin(AiopnsenseClientProtocol):
             raw_ip = copied.get("ip-address")
         hostname = copied.get("hostname")
         if isinstance(hostname, str):
-            hostname = hostname.strip("?") or None
+            hostname = hostname.strip().strip("?").strip() or None
         else:
             hostname = None
         manufacturer = copied.get("manufacturer")
-        if not isinstance(manufacturer, str) or not manufacturer:
+        if isinstance(manufacturer, str):
+            manufacturer = manufacturer.strip() or None
+        else:
             manufacturer = None
+        interface_name = copied.get("intf", copied.get("interface"))
+        interface_description = copied.get("intf_description")
+        interface = interface_description
+        if interface_description is None or (
+            isinstance(interface_description, str) and not interface_description.strip()
+        ):
+            interface = interface_name
         return DHCPMixin.ArpNdpEntry(
             mac=mac or None,
             valid_mac=valid_mac,
@@ -155,11 +195,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             hostname=hostname,
             manufacturer=manufacturer,
             expired=coerce_bool(copied.get("expired")),
-            interface=copied.get("intf_description", copied.get("intf", copied.get("interface"))),
+            interface=interface,
             expires=copied.get("expires"),
             arp_type=copied.get("type"),
-            interface_name=copied.get("intf", copied.get("interface")),
-            interface_description=copied.get("intf_description"),
+            interface_name=interface_name,
+            interface_description=interface_description,
             permanent=coerce_bool(copied.get("permanent")),
         )
 
@@ -386,16 +426,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
         """
         return self._parse_neighbor_table(await self._get_ndp_table())
 
-    @_log_errors
-    async def get_host_observations(self) -> dict[str, Any] | None:
-        """Return timestamped MAC observations without changing neighbor inventories.
+    async def _fetch_host_observations(self) -> HostObservations | None:
+        """Fetch and validate timestamped host observations from OPNsense.
 
         Returns:
-            dict[str, Any] | None: Source and normalized rows containing ``mac``, ``ip``,
-                and UTC ``last_seen`` datetimes. ``discovery`` identifies packet observations;
-                ``arp-ndp`` identifies the timestamp-free fallback when hostwatch is disabled.
-                An unavailable endpoint, incomplete response, empty source, or malformed
-                discovery row returns ``None`` rather than an authoritative empty inventory.
+            HostObservations | None: Validated discovery entries, an empty timestamp-free
+                result when discovery is disabled, or None when the endpoint is unavailable
+                or the response is incomplete or malformed.
         """
         if not await self._is_post_endpoint_available(HOST_OBSERVATIONS_ENDPOINT):
             return None
@@ -413,11 +450,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             return None
         sources = {row.get("source") for row in rows}
         if sources == {"arp-ndp"}:
-            return {"source": "arp-ndp", "rows": []}
+            return DHCPMixin.HostObservations(source="arp-ndp", entries=())
         if sources != {"discovery"}:
             return None
 
-        observations: list[dict[str, Any]] = []
+        observations: list[DHCPMixin.HostObservation] = []
         latest_allowed = datetime.now(UTC) + timedelta(minutes=5)
         for row in rows:
             mac = row.get("ether_address")
@@ -442,8 +479,43 @@ class DHCPMixin(AiopnsenseClientProtocol):
             observed = observed.astimezone(UTC)
             if observed > latest_allowed:
                 return None
-            observations.append({"mac": mac, "ip": ip, "last_seen": observed})
-        return {"source": "discovery", "rows": observations}
+            observations.append(DHCPMixin.HostObservation(mac=mac, ip=ip, last_seen=observed))
+        return DHCPMixin.HostObservations(source="discovery", entries=tuple(observations))
+
+    @_log_errors
+    async def get_host_observations(self) -> dict[str, Any] | None:
+        """Return timestamped MAC observations as dictionaries for compatibility.
+
+        Returns:
+            dict[str, Any] | None: The historical ``{"source": ..., "rows": ...}`` shape.
+                Discovery rows contain normalized ``mac``, ``ip``, and UTC ``last_seen``
+                values. A disabled discovery service returns ``{"source": "arp-ndp",
+                "rows": []}``. An unavailable endpoint or malformed response returns None.
+        """
+        observations = await self._fetch_host_observations()
+        if observations is None:
+            return None
+        if observations.source == "arp-ndp":
+            return {"source": "arp-ndp", "rows": []}
+        return {
+            "source": "discovery",
+            "rows": [
+                {"mac": entry.mac, "ip": entry.ip, "last_seen": entry.last_seen}
+                for entry in observations.entries
+            ],
+        }
+
+    @_log_errors
+    async def get_host_observation_entries(self) -> HostObservations | None:
+        """Return validated host observations as immutable typed entries.
+
+        Returns:
+            HostObservations | None: Frozen normalized observations, including an empty
+                ``arp-ndp`` result when host discovery is disabled. None means unavailable
+                or malformed data. Each call performs one endpoint availability check and,
+                when available, one observation request.
+        """
+        return await self._fetch_host_observations()
 
     @_log_errors
     async def get_dhcp_leases(self, opnsense_tz: tzinfo | None = None) -> dict[str, Any]:
