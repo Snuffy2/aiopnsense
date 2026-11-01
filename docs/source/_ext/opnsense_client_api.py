@@ -76,6 +76,7 @@ class OPNsenseClientAPIDirective(Directive):
         """
         mixin_path = self.arguments[0]
         client_path = self.options.get("client", "aiopnsense.OPNsenseClient")
+        client_module, _, client_name = client_path.rpartition(".")
 
         try:
             mixin_class = _import_object(mixin_path)
@@ -111,7 +112,7 @@ class OPNsenseClientAPIDirective(Directive):
                 and is_dataclass(model_type)
             ):
                 generated_lines.append(
-                    f".. autoclass:: {client_path}.{name}",
+                    f".. autoclass:: {client_module}::{client_name}.{name}",
                     source=mixin_path,
                 )
                 generated_lines.append("", source=mixin_path)
