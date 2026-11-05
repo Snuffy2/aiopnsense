@@ -221,7 +221,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
         result = response.get("result")
         if (set_state and result == "Enabled") or (not set_state and result == "Disabled"):
             try:
-                dnsbl_resp = await self._get(UNBOUND_SERVICE_DNSBL_ENDPOINT)
+                dnsbl_resp = await self._post(UNBOUND_SERVICE_DNSBL_ENDPOINT)
                 _LOGGER.debug(
                     "[_toggle_unbound_blocklist] uuid: %s, set_state: %s, response: %s, dnsbl_resp: %s",
                     uuid,
