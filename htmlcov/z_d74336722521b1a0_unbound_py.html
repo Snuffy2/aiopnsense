@@ -67,7 +67,7 @@
             <a id="nextFileLink" class="nav" href="z_d74336722521b1a0_vnstat_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.0">coverage.py v7.17.0</a>,
-            created at 2026-11-02 11:57 +0000
+            created at 2026-11-06 02:24 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -305,7 +305,7 @@
     <p class="run"><span class="n"><a id="t221" href="#t221">221</a></span><span class="t">        <span class="nam">result</span> <span class="op">=</span> <span class="nam">response</span><span class="op">.</span><span class="nam">get</span><span class="op">(</span><span class="str">&quot;result&quot;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t222" href="#t222">222</a></span><span class="t">        <span class="key">if</span> <span class="op">(</span><span class="nam">set_state</span> <span class="key">and</span> <span class="nam">result</span> <span class="op">==</span> <span class="str">&quot;Enabled&quot;</span><span class="op">)</span> <span class="key">or</span> <span class="op">(</span><span class="key">not</span> <span class="nam">set_state</span> <span class="key">and</span> <span class="nam">result</span> <span class="op">==</span> <span class="str">&quot;Disabled&quot;</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t223" href="#t223">223</a></span><span class="t">            <span class="key">try</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t224" href="#t224">224</a></span><span class="t">                <span class="nam">dnsbl_resp</span> <span class="op">=</span> <span class="key">await</span> <span class="nam">self</span><span class="op">.</span><span class="nam">_get</span><span class="op">(</span><span class="nam">UNBOUND_SERVICE_DNSBL_ENDPOINT</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t224" href="#t224">224</a></span><span class="t">                <span class="nam">dnsbl_resp</span> <span class="op">=</span> <span class="key">await</span> <span class="nam">self</span><span class="op">.</span><span class="nam">_post</span><span class="op">(</span><span class="nam">UNBOUND_SERVICE_DNSBL_ENDPOINT</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t225" href="#t225">225</a></span><span class="t">                <span class="nam">_LOGGER</span><span class="op">.</span><span class="nam">debug</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t226" href="#t226">226</a></span><span class="t">                    <span class="str">&quot;[_toggle_unbound_blocklist] uuid: %s, set_state: %s, response: %s, dnsbl_resp: %s&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t227" href="#t227">227</a></span><span class="t">                    <span class="nam">uuid</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
@@ -402,7 +402,7 @@
             <a class="nav" href="z_d74336722521b1a0_vnstat_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.0">coverage.py v7.17.0</a>,
-            created at 2026-11-02 11:57 +0000
+            created at 2026-11-06 02:24 +0000
         </p>
     </div>
 </footer>
