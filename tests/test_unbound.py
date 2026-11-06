@@ -381,7 +381,7 @@ async def test_enable_disable_unbound_blocklist(
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
         client._safe_dict_post = AsyncMock(return_value=toggle_result)
-        client._get = AsyncMock(return_value=dnsbl_result)
+        client._post = AsyncMock(return_value=dnsbl_result)
 
         result = await getattr(client, method_name)(uuid)
 
@@ -393,7 +393,7 @@ async def test_enable_disable_unbound_blocklist(
             )
         else:
             client._safe_dict_post.assert_not_awaited()
-            client._get.assert_not_awaited()
+            client._post.assert_not_awaited()
     finally:
         await client.async_close()
 
@@ -761,7 +761,7 @@ async def test_enable_unbound_blocklist_uses_extended_fallback_when_firmware_is_
     try:
         client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
         client._safe_dict_post = AsyncMock(return_value={"result": "Enabled"})
-        client._get = AsyncMock(return_value={"status": "OK"})
+        client._post = AsyncMock(return_value={"status": "OK"})
         client._safe_dict_get = AsyncMock()
 
         result = await client.enable_unbound_blocklist("uuid1")
@@ -770,6 +770,7 @@ async def test_enable_unbound_blocklist_uses_extended_fallback_when_firmware_is_
         client._safe_dict_post.assert_awaited_once_with(
             "/api/unbound/settings/toggle_dnsbl/uuid1/1"
         )
+        client._post.assert_awaited_once_with("/api/unbound/service/dnsbl")
         client._safe_dict_get.assert_not_awaited()
     finally:
         await client.async_close()
@@ -815,7 +816,11 @@ async def test_disable_unbound_blocklist_uses_expected_invalid_firmware_fallback
         client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
         client._safe_dict_post = AsyncMock(return_value={"result": "Disabled"})
         client._get = AsyncMock(return_value={"status": "OK"})
-        client._post = AsyncMock(side_effect=[{"result": "saved"}, {"response": "OK"}])
+        client._post = AsyncMock(
+            side_effect=[{"result": "saved"}, {"response": "OK"}]
+            if uuid is None
+            else [{"status": "OK"}]
+        )
         payload = deepcopy(legacy_dnsbl_payload)
         payload["unbound"]["dnsbl"]["enabled"] = "1"
         client._safe_dict_get = AsyncMock(return_value=payload)
@@ -855,6 +860,7 @@ async def test_disable_unbound_blocklist_uses_expected_invalid_firmware_fallback
                 client._safe_dict_post.assert_awaited_once_with(
                     f"/api/unbound/settings/toggle_dnsbl/{uuid}/0"
                 )
+                client._post.assert_awaited_once_with("/api/unbound/service/dnsbl")
     finally:
         await client.async_close()
 
@@ -884,7 +890,7 @@ async def test_toggle_unbound_blocklist_handles_apply_exception(
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
         client._safe_dict_post = AsyncMock(return_value={"result": "Enabled"})
-        client._get = AsyncMock(side_effect=apply_error)
+        client._post = AsyncMock(side_effect=apply_error)
 
         result = await client.enable_unbound_blocklist("uuid1")
 
@@ -909,7 +915,8 @@ async def test_toggle_unbound_blocklist_uses_expected_endpoints(
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
         client._safe_dict_post = AsyncMock(return_value={"result": "Disabled"})
-        client._get = AsyncMock(return_value={"status": "OK"})
+        client._post = AsyncMock(return_value={"status": "OK"})
+        client._get = AsyncMock()
 
         result = await client.disable_unbound_blocklist("uuid1")
 
@@ -917,6 +924,7 @@ async def test_toggle_unbound_blocklist_uses_expected_endpoints(
         client._safe_dict_post.assert_awaited_once_with(
             "/api/unbound/settings/toggle_dnsbl/uuid1/0"
         )
-        client._get.assert_awaited_once_with("/api/unbound/service/dnsbl")
+        client._post.assert_awaited_once_with("/api/unbound/service/dnsbl")
+        client._get.assert_not_awaited()
     finally:
         await client.async_close()
