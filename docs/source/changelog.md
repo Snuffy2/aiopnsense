@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.1](https://github.com/Snuffy2/aiopnsense/compare/v1.4.0...v1.4.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* POST to unbound/service/dnsbl so blocklist toggles apply on OPNsense &gt;= 26.1.6 ([#176](https://github.com/Snuffy2/aiopnsense/issues/176)) ([b6d98ef](https://github.com/Snuffy2/aiopnsense/commit/b6d98ef5eaec866af17f4266018f2b62995e3f76))
+* POST to unbound/service/dnsbl so extended blocklist toggles apply ([b6d98ef](https://github.com/Snuffy2/aiopnsense/commit/b6d98ef5eaec866af17f4266018f2b62995e3f76))
+
+
+### Dependencies
+
+* update prek hooks ([#174](https://github.com/Snuffy2/aiopnsense/issues/174)) ([a28688b](https://github.com/Snuffy2/aiopnsense/commit/a28688b5d92627cb9966f31063e7a80aabcc7039))
+
 ## [1.4.0](https://github.com/Snuffy2/aiopnsense/compare/v1.3.3...v1.4.0) (2026-11-01)
 
 
