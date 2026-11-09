@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.2](https://github.com/Snuffy2/aiopnsense/compare/v1.4.1...v1.4.2) (2026-11-09)
+
+
+### Dependencies
+
+* bump astral-sh/setup-uv from 10.3.2 to 10.3.3 in the github-actions group ([#177](https://github.com/Snuffy2/aiopnsense/issues/177)) ([2f33a4e](https://github.com/Snuffy2/aiopnsense/commit/2f33a4eba5364a2c47bb9a223cab7bcbce36eb3e))
+* bump the python-dependencies group with 10 updates ([#178](https://github.com/Snuffy2/aiopnsense/issues/178)) ([048cab5](https://github.com/Snuffy2/aiopnsense/commit/048cab577bd9dc5cc2b26a51b840e9ef1df8fe01))
+* update prek hooks ([#179](https://github.com/Snuffy2/aiopnsense/issues/179)) ([f091275](https://github.com/Snuffy2/aiopnsense/commit/f09127559e0caa61fafa0ee566fa814c0ad87b63))
+
 ## [1.4.1](https://github.com/Snuffy2/aiopnsense/compare/v1.4.0...v1.4.1) (2026-11-06)
 
 
