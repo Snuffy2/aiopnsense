@@ -49,10 +49,6 @@ WIREGUARD_CLIENT_GET_CAMELCASE_ENDPOINT_PREFIX = "/api/wireguard/client/getClien
 WIREGUARD_SERVER_GET_SNAKE_ENDPOINT_PREFIX = "/api/wireguard/server/get_server/"
 WIREGUARD_SERVER_GET_CAMELCASE_ENDPOINT_PREFIX = "/api/wireguard/server/getServer/"
 WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT = "/api/wireguard/service/reconfigure"
-VPN_TOGGLE_TARGETS: dict[str, tuple[str, str]] = {
-    "on": ("1", "Enabled"),
-    "off": ("0", "Disabled"),
-}
 
 
 class VPNMixin(AiopnsenseClientProtocol):
@@ -721,23 +717,6 @@ class VPNMixin(AiopnsenseClientProtocol):
                 server_or_client["latest_handshake"] = handshake_time
 
     @staticmethod
-    def _vpn_toggle_url(endpoint: str, toggle_on_off: str | None) -> str:
-        """Append the explicit target state to a VPN toggle endpoint.
-
-        Args:
-            endpoint (str): Toggle endpoint including the item UUID.
-            toggle_on_off (str | None): Validated target state, or ``None`` to
-                let OPNsense flip the current state.
-
-        Returns:
-            str: Endpoint ending in ``/1`` or ``/0`` for an explicit target, or
-                the unchanged endpoint when no target was requested.
-        """
-        if toggle_on_off is None:
-            return endpoint
-        return f"{endpoint}/{VPN_TOGGLE_TARGETS[toggle_on_off][0]}"
-
-    @staticmethod
     def _vpn_toggle_early_result(
         response: MutableMapping[str, Any], toggle_on_off: str | None
     ) -> bool | None:
@@ -760,7 +739,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         changed = response.get("changed")
         if toggle_on_off is None:
             return None if changed else False
-        if response.get("result") != VPN_TOGGLE_TARGETS[toggle_on_off][1]:
+        if response.get("result") != ("Enabled" if toggle_on_off == "on" else "Disabled"):
             return False
         if changed is False:
             return True
@@ -794,11 +773,9 @@ class VPNMixin(AiopnsenseClientProtocol):
         if enabled not in {"0", "1"}:
             _LOGGER.debug("[toggle_vpn_instance] WireGuard state unavailable: %s", endpoint)
             return None
-        return enabled == VPN_TOGGLE_TARGETS[toggle_on_off][0]
+        return enabled == ("1" if toggle_on_off == "on" else "0")
 
-    async def _post_wireguard_toggle(
-        self, endpoint: str, toggle_on_off: str | None
-    ) -> dict[str, Any]:
+    async def _post_wireguard_toggle(self, url: str, toggle_on_off: str | None) -> dict[str, Any]:
         """Post a WireGuard toggle and undo a flip in the wrong direction.
 
         Released firmware through 26.7.9 ignores the target path segment and
@@ -807,25 +784,24 @@ class VPNMixin(AiopnsenseClientProtocol):
         before the service is reconfigured.
 
         Args:
-            endpoint (str): Toggle endpoint including the item UUID.
+            url (str): Toggle URL including the item UUID and any target state.
             toggle_on_off (str | None): Validated target state, or ``None`` for
                 a flip request.
 
         Returns:
             dict[str, Any]: Response from the last toggle request.
         """
-        url = self._vpn_toggle_url(endpoint, toggle_on_off)
         response = await self._safe_dict_post(url)
         if (
             toggle_on_off is not None
             and response.get("changed")
             and response.get("result") in {"Enabled", "Disabled"}
-            and response.get("result") != VPN_TOGGLE_TARGETS[toggle_on_off][1]
+            and response.get("result") != ("Enabled" if toggle_on_off == "on" else "Disabled")
         ):
             _LOGGER.debug(
                 "[toggle_vpn_instance] WireGuard toggle moved away from target %s, correcting: %s",
                 toggle_on_off,
-                endpoint,
+                url,
             )
             response = await self._safe_dict_post(url)
         return response
@@ -855,15 +831,16 @@ class VPNMixin(AiopnsenseClientProtocol):
                 explicit target state, in which case the service is not
                 reconfigured; otherwise, False.
         """
-        if toggle_on_off is not None and toggle_on_off not in VPN_TOGGLE_TARGETS:
+        if toggle_on_off not in {"on", "off", None}:
             _LOGGER.debug("[toggle_vpn_instance] invalid target state: %s", toggle_on_off)
             return False
         if vpn_type == "openvpn":
-            success = await self._safe_dict_post(
-                self._vpn_toggle_url(
-                    f"{OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX}{uuid}", toggle_on_off
-                )
-            )
+            url = f"{OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX}{uuid}"
+            if toggle_on_off == "on":
+                url = f"{url}/1"
+            elif toggle_on_off == "off":
+                url = f"{url}/0"
+            success = await self._safe_dict_post(url)
             _LOGGER.debug(
                 "[toggle_vpn_instance] OpenVPN instance toggle response for UUID %s: %s",
                 uuid,
@@ -897,7 +874,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 item_key = "client"
                 get_snake = f"{WIREGUARD_CLIENT_GET_SNAKE_ENDPOINT_PREFIX}{uuid}"
                 get_camel = f"{WIREGUARD_CLIENT_GET_CAMELCASE_ENDPOINT_PREFIX}{uuid}"
-                endpoint = await self._get_endpoint_path(
+                url = await self._get_endpoint_path(
                     snake_case_path=f"{WIREGUARD_CLIENT_TOGGLE_SNAKE_ENDPOINT_PREFIX}{uuid}",
                     camel_case_path=f"{WIREGUARD_CLIENT_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}",
                 )
@@ -905,7 +882,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 item_key = "server"
                 get_snake = f"{WIREGUARD_SERVER_GET_SNAKE_ENDPOINT_PREFIX}{uuid}"
                 get_camel = f"{WIREGUARD_SERVER_GET_CAMELCASE_ENDPOINT_PREFIX}{uuid}"
-                endpoint = await self._get_endpoint_path(
+                url = await self._get_endpoint_path(
                     snake_case_path=f"{WIREGUARD_SERVER_TOGGLE_SNAKE_ENDPOINT_PREFIX}{uuid}",
                     camel_case_path=f"{WIREGUARD_SERVER_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}",
                 )
@@ -919,7 +896,11 @@ class VPNMixin(AiopnsenseClientProtocol):
                     return False
                 if in_target_state:
                     return True
-            success = await self._post_wireguard_toggle(endpoint, toggle_on_off)
+            if toggle_on_off == "on":
+                url = f"{url}/1"
+            elif toggle_on_off == "off":
+                url = f"{url}/0"
+            success = await self._post_wireguard_toggle(url, toggle_on_off)
             early_result = self._vpn_toggle_early_result(success, toggle_on_off)
             if early_result is not None:
                 return early_result
@@ -928,11 +909,15 @@ class VPNMixin(AiopnsenseClientProtocol):
         if vpn_type == "ipsec":
             if clients_servers != "connections":
                 return False
-            endpoint = await self._get_endpoint_path(
+            url = await self._get_endpoint_path(
                 snake_case_path=f"{IPSEC_CONNECTION_TOGGLE_SNAKE_ENDPOINT_PREFIX}{uuid}",
                 camel_case_path=f"{IPSEC_CONNECTION_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}",
             )
-            success = await self._safe_dict_post(self._vpn_toggle_url(endpoint, toggle_on_off))
+            if toggle_on_off == "on":
+                url = f"{url}/1"
+            elif toggle_on_off == "off":
+                url = f"{url}/0"
+            success = await self._safe_dict_post(url)
             _LOGGER.debug(
                 "[toggle_vpn_instance] IPsec connection toggle response for UUID %s: %s",
                 uuid,
