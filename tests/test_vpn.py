@@ -1799,3 +1799,244 @@ async def test_openvpn_unavailable_routes_omit_client_counts(
             assert "connected_clients" not in server
     finally:
         await client.async_close()
+
+
+class FakeVpnToggleApi:
+    """Simulate the OPNsense VPN toggle, read, and reconfigure endpoints."""
+
+    def __init__(
+        self,
+        enabled: str | None,
+        honors_target: bool,
+        stale_enabled: str | None = None,
+        fail_toggle_number: int | None = None,
+    ) -> None:
+        """Initialize the simulated VPN item.
+
+        Args:
+            enabled (str | None): Stored state, or ``None`` for a missing item.
+            honors_target (bool): Whether toggle requests honor ``/0`` and ``/1``.
+            stale_enabled (str | None): State returned by reads when it differs
+                from the stored state, simulating another writer.
+            fail_toggle_number (int | None): One-based toggle request that fails.
+        """
+        self.enabled = enabled
+        self.honors_target = honors_target
+        self.stale_enabled = stale_enabled
+        self.fail_toggle_number = fail_toggle_number
+        self.toggle_count = 0
+        self.toggle_paths: list[str] = []
+        self.reconfigure_count = 0
+
+    async def get(self, path: str) -> dict[str, Any]:
+        """Return the simulated WireGuard item.
+
+        Args:
+            path (str): Requested item endpoint.
+
+        Returns:
+            dict[str, Any]: Item payload, or an empty mapping for a missing item.
+        """
+        if self.enabled is None:
+            return {}
+        key = "client" if "/client/" in path else "server"
+        return {key: {"enabled": self.stale_enabled or self.enabled}}
+
+    async def post(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Apply a simulated toggle or service reconfigure.
+
+        Args:
+            path (str): Requested endpoint.
+            payload (dict[str, Any] | None): Unused request payload.
+
+        Returns:
+            dict[str, Any]: Response shaped like the OPNsense endpoint.
+        """
+        if path.endswith("/service/reconfigure"):
+            self.reconfigure_count += 1
+            return {"result": "ok", "status": "ok"}
+        self.toggle_count += 1
+        self.toggle_paths.append(path)
+        if self.enabled is None or self.toggle_count == self.fail_toggle_number:
+            return {"result": "failed"}
+        last_segment = path.rsplit("/", 1)[-1]
+        target = last_segment if self.honors_target and last_segment in {"0", "1"} else None
+        new_state = target or ("0" if self.enabled == "1" else "1")
+        changed = new_state != self.enabled
+        self.enabled = new_state
+        return {"result": "Enabled" if new_state == "1" else "Disabled", "changed": changed}
+
+
+VPN_TOGGLE_ITEMS = [
+    pytest.param("openvpn", "servers", True, id="openvpn"),
+    pytest.param("wireguard", "clients", False, id="wireguard-client-released"),
+    pytest.param("wireguard", "clients", True, id="wireguard-client-patched"),
+    pytest.param("wireguard", "servers", False, id="wireguard-server-released"),
+    pytest.param("wireguard", "servers", True, id="wireguard-server-patched"),
+    pytest.param("ipsec", "connections", True, id="ipsec"),
+]
+
+
+def use_fake_vpn_api(client: OPNsenseClient, api: FakeVpnToggleApi) -> None:
+    """Route a client's VPN requests to a simulated API.
+
+    Args:
+        client (OPNsenseClient): Client under test.
+        api (FakeVpnToggleApi): Simulated OPNsense API.
+    """
+    client._use_snake_case = True
+    client._safe_dict_get = AsyncMock(side_effect=api.get)
+    client._safe_dict_post = AsyncMock(side_effect=api.post)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("vpn_type", "collection", "honors_target"), VPN_TOGGLE_ITEMS)
+@pytest.mark.parametrize(
+    ("initial", "target", "expected", "final", "reconfigures"),
+    [
+        pytest.param("0", "on", True, "1", 1, id="on"),
+        pytest.param("1", "off", True, "0", 1, id="off"),
+        pytest.param("1", None, True, "0", 1, id="flip"),
+        pytest.param("1", "on", True, "1", 0, id="already-on"),
+        pytest.param("0", "off", True, "0", 0, id="already-off"),
+        pytest.param(None, "on", False, None, 0, id="missing-on"),
+        pytest.param(None, "off", False, None, 0, id="missing-off"),
+        pytest.param(None, None, False, None, 0, id="missing-flip"),
+    ],
+)
+async def test_toggle_vpn_instance_reaches_requested_state(
+    make_client: ClientType,
+    vpn_type: str,
+    collection: str,
+    honors_target: bool,
+    initial: str | None,
+    target: str | None,
+    expected: bool,
+    final: str | None,
+    reconfigures: int,
+) -> None:
+    """Reach the requested state and reconfigure only after a real change.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        vpn_type (str): VPN implementation under test.
+        collection (str): VPN collection under test.
+        honors_target (bool): Whether simulated firmware honors the target.
+        initial (str | None): Initial stored state.
+        target (str | None): Requested target state.
+        expected (bool): Expected method result.
+        final (str | None): Expected final stored state.
+        reconfigures (int): Expected service reconfigure count.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        api = FakeVpnToggleApi(initial, honors_target)
+        use_fake_vpn_api(client, api)
+
+        result = await client.toggle_vpn_instance(vpn_type, collection, "uuid", target)
+
+        assert result is expected
+        assert api.enabled == final
+        assert api.reconfigure_count == reconfigures
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("collection", ["clients", "servers"])
+@pytest.mark.parametrize(
+    ("fail_toggle_number", "expected", "final", "reconfigures"),
+    [
+        pytest.param(None, True, "1", 1, id="corrected"),
+        pytest.param(2, False, "0", 0, id="correction-fails"),
+    ],
+)
+async def test_toggle_vpn_instance_wireguard_handles_change_after_read(
+    make_client: ClientType,
+    collection: str,
+    fail_toggle_number: int | None,
+    expected: bool,
+    final: str,
+    reconfigures: int,
+) -> None:
+    """Correct a released-firmware flip caused by a change after the state read.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        collection (str): WireGuard collection under test.
+        fail_toggle_number (int | None): Toggle request that fails.
+        expected (bool): Expected method result.
+        final (str): Expected final stored state.
+        reconfigures (int): Expected service reconfigure count.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        api = FakeVpnToggleApi(
+            "1",
+            honors_target=False,
+            stale_enabled="0",
+            fail_toggle_number=fail_toggle_number,
+        )
+        use_fake_vpn_api(client, api)
+
+        result = await client.toggle_vpn_instance("wireguard", collection, "uuid", "on")
+
+        assert result is expected
+        assert api.enabled == final
+        assert api.reconfigure_count == reconfigures
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_snake_case", "expected_path"),
+    [
+        (True, "/api/wireguard/client/toggle_client/uuid/1"),
+        (False, "/api/wireguard/client/toggleClient/uuid/1"),
+    ],
+)
+async def test_toggle_vpn_instance_wireguard_sends_target_for_firmware_style(
+    make_client: ClientType, use_snake_case: bool, expected_path: str
+) -> None:
+    """Send the explicit target on the firmware-appropriate WireGuard path.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        use_snake_case (bool): Whether the firmware uses snake_case endpoints.
+        expected_path (str): Expected toggle request path.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        api = FakeVpnToggleApi("0", honors_target=True)
+        use_fake_vpn_api(client, api)
+        client._use_snake_case = use_snake_case
+
+        assert await client.toggle_vpn_instance("wireguard", "clients", "uuid", "on") is True
+        assert api.toggle_paths == [expected_path]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("vpn_type", "collection", "honors_target"), VPN_TOGGLE_ITEMS)
+async def test_toggle_vpn_instance_rejects_invalid_target(
+    make_client: ClientType, vpn_type: str, collection: str, honors_target: bool
+) -> None:
+    """Reject an unknown target instead of flipping the item.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        vpn_type (str): VPN implementation under test.
+        collection (str): VPN collection under test.
+        honors_target (bool): Whether simulated firmware honors the target.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        api = FakeVpnToggleApi("1", honors_target)
+        use_fake_vpn_api(client, api)
+
+        assert await client.toggle_vpn_instance(vpn_type, collection, "uuid", "maybe") is False
+        assert (api.enabled, api.toggle_count, api.reconfigure_count) == ("1", 0, 0)
+    finally:
+        await client.async_close()
