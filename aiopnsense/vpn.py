@@ -718,7 +718,7 @@ class VPNMixin(AiopnsenseClientProtocol):
 
     @staticmethod
     def _vpn_toggle_early_result(
-        response: MutableMapping[str, Any], toggle_on_off: str | None
+        response: MutableMapping[str, Any], toggle_on_off: str | None = None
     ) -> bool | None:
         """Classify a toggle response before the service reconfigure.
 
@@ -728,8 +728,8 @@ class VPNMixin(AiopnsenseClientProtocol):
 
         Args:
             response (MutableMapping[str, Any]): Toggle endpoint response.
-            toggle_on_off (str | None): Validated target state, or ``None`` for
-                a flip request.
+            toggle_on_off (str | None, optional): Validated target state, or
+                ``None`` for a flip request.
 
         Returns:
             bool | None: ``None`` when the change needs a service reconfigure,
@@ -750,7 +750,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         snake_case_path: str,
         camel_case_path: str,
         item_key: str,
-        toggle_on_off: str,
+        toggle_on_off: str | None = None,
     ) -> bool | None:
         """Compare a WireGuard item's current state with the target state.
 
@@ -758,12 +758,16 @@ class VPNMixin(AiopnsenseClientProtocol):
             snake_case_path (str): Snake case item read endpoint.
             camel_case_path (str): Camel case item read endpoint.
             item_key (str): Response key holding the item, ``client`` or ``server``.
-            toggle_on_off (str): Validated target state.
+            toggle_on_off (str | None, optional): Validated target state, or
+                ``None`` for a flip request, which has no target to compare.
 
         Returns:
             bool | None: Whether the item is in the target state, or ``None``
-                when the item is missing or its state cannot be read.
+                when the item is missing or its state cannot be read. A flip
+                request returns ``False`` without reading the item.
         """
+        if toggle_on_off is None:
+            return False
         endpoint = await self._get_endpoint_path(
             snake_case_path=snake_case_path,
             camel_case_path=camel_case_path,
@@ -775,7 +779,9 @@ class VPNMixin(AiopnsenseClientProtocol):
             return None
         return enabled == ("1" if toggle_on_off == "on" else "0")
 
-    async def _post_wireguard_toggle(self, url: str, toggle_on_off: str | None) -> dict[str, Any]:
+    async def _post_wireguard_toggle(
+        self, url: str, toggle_on_off: str | None = None
+    ) -> dict[str, Any]:
         """Post a WireGuard toggle and undo a flip in the wrong direction.
 
         Released firmware through 26.7.9 ignores the target path segment and
@@ -785,8 +791,8 @@ class VPNMixin(AiopnsenseClientProtocol):
 
         Args:
             url (str): Toggle URL including the item UUID and any target state.
-            toggle_on_off (str | None): Validated target state, or ``None`` for
-                a flip request.
+            toggle_on_off (str | None, optional): Validated target state, or
+                ``None`` for a flip request.
 
         Returns:
             dict[str, Any]: Response from the last toggle request.
@@ -888,14 +894,13 @@ class VPNMixin(AiopnsenseClientProtocol):
                 )
             else:
                 return False
-            if toggle_on_off is not None:
-                in_target_state = await self._wireguard_is_in_target_state(
-                    get_snake, get_camel, item_key, toggle_on_off
-                )
-                if in_target_state is None:
-                    return False
-                if in_target_state:
-                    return True
+            in_target_state = await self._wireguard_is_in_target_state(
+                get_snake, get_camel, item_key, toggle_on_off
+            )
+            if in_target_state is None:
+                return False
+            if in_target_state:
+                return True
             if toggle_on_off == "on":
                 url = f"{url}/1"
             elif toggle_on_off == "off":
