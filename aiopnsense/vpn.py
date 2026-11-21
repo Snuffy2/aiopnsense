@@ -837,9 +837,8 @@ class VPNMixin(AiopnsenseClientProtocol):
                 explicit target state, in which case the service is not
                 reconfigured; otherwise, False.
         """
-        if toggle_on_off not in {"on", "off", None}:
-            _LOGGER.debug("[toggle_vpn_instance] invalid target state: %s", toggle_on_off)
-            return False
+        if toggle_on_off not in {"on", "off"}:
+            toggle_on_off = None
         if vpn_type == "openvpn":
             url = f"{OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX}{uuid}"
             if toggle_on_off == "on":

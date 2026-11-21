@@ -2020,10 +2020,10 @@ async def test_toggle_vpn_instance_wireguard_sends_target_for_firmware_style(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("vpn_type", "collection", "honors_target"), VPN_TOGGLE_ITEMS)
-async def test_toggle_vpn_instance_rejects_invalid_target(
+async def test_toggle_vpn_instance_unrecognized_target_flips(
     make_client: ClientType, vpn_type: str, collection: str, honors_target: bool
 ) -> None:
-    """Reject an unknown target instead of flipping the item.
+    """Flip the item for an unrecognized target, matching the other toggle methods.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -2036,7 +2036,7 @@ async def test_toggle_vpn_instance_rejects_invalid_target(
         api = FakeVpnToggleApi("1", honors_target)
         use_fake_vpn_api(client, api)
 
-        assert await client.toggle_vpn_instance(vpn_type, collection, "uuid", "maybe") is False
-        assert (api.enabled, api.toggle_count, api.reconfigure_count) == ("1", 0, 0)
+        assert await client.toggle_vpn_instance(vpn_type, collection, "uuid", "maybe") is True
+        assert (api.enabled, api.toggle_count, api.reconfigure_count) == ("0", 1, 1)
     finally:
         await client.async_close()
