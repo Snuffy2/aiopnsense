@@ -1673,12 +1673,11 @@ async def test_dhcp_switched_endpoints_follow_selected_case(
         await client._get_isc_dhcpv4_leases()
         await client._get_isc_dhcpv6_leases()
 
-        assert [url.removeprefix("http://localhost") for _, url, _ in router.requests] == [
-            KEA_LEASES4_PATH,
-            expected_kea,
-            expected_v4,
-            expected_v6,
-        ]
+        assert router.count("GET", KEA_LEASES4_PATH) == 1
+        assert router.count("GET", expected_kea) == 1
+        assert router.count("GET", expected_v4) == 1
+        assert router.count("GET", expected_v6) == 1
+        assert router.count() == 4
     finally:
         await client.async_close()
 

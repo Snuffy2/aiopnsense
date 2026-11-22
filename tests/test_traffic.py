@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
@@ -738,13 +738,11 @@ async def test_stream_interface_traffic_ends_quietly_when_endpoint_unavailable(
     client = make_client(session=session)
     router = install_fake_router(client, session, routes={("GET", STREAM_PATH): status})
     try:
-        client._stream_json_events = AsyncMock()
-
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
         assert samples == []
         assert router.count("GET", STREAM_PATH) == 1
-        client._stream_json_events.assert_not_called()
+        assert router.count() == 1
     finally:
         await client.async_close()
 
@@ -760,13 +758,11 @@ async def test_stream_interface_traffic_raises_permission_error_when_throw_error
     """
     session = MagicMock()
     client = make_client(session=session, throw_errors=True)
-    install_fake_router(client, session, routes={("GET", STREAM_PATH): 403})
+    router = install_fake_router(client, session, routes={("GET", STREAM_PATH): 403})
     try:
-        client._stream_json_events = AsyncMock()
-
         with pytest.raises(OPNsensePrivilegeMissing):
             [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
-        client._stream_json_events.assert_not_called()
+        assert router.count("GET", STREAM_PATH) == router.count() == 1
     finally:
         await client.async_close()
 
@@ -782,14 +778,12 @@ async def test_stream_interface_traffic_ends_quietly_on_absent_endpoint_in_throw
     """
     session = MagicMock()
     client = make_client(session=session, throw_errors=True)
-    install_fake_router(client, session, routes={("GET", STREAM_PATH): 404})
+    router = install_fake_router(client, session, routes={("GET", STREAM_PATH): 404})
     try:
-        client._stream_json_events = AsyncMock()
-
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
         assert samples == []
-        client._stream_json_events.assert_not_called()
+        assert router.count("GET", STREAM_PATH) == router.count() == 1
     finally:
         await client.async_close()
 
@@ -814,14 +808,12 @@ async def test_stream_interface_traffic_returns_empty_iteration_on_check_error(
     """
     session = MagicMock()
     client = make_client(session=session)
-    install_fake_router(client, session, routes={("GET", STREAM_PATH): probe_error})
+    router = install_fake_router(client, session, routes={("GET", STREAM_PATH): probe_error})
     try:
-        client._stream_json_events = AsyncMock()
-
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
         assert samples == []
-        client._stream_json_events.assert_not_called()
+        assert router.count("GET", STREAM_PATH) == router.count() == 1
     finally:
         await client.async_close()
 

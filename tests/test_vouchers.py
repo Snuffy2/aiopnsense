@@ -68,12 +68,11 @@ async def test_generate_vouchers_server_selection_errors(
     Returns:
         None: This test validates provider-selection error paths via assertions.
     """
-    client, _router = _make_voucher_client(make_client, providers)
+    client, router = _make_voucher_client(make_client, providers)
     try:
-        client._safe_list_post = AsyncMock()
         with pytest.raises(expect_exc):
             await client.generate_vouchers(data)
-        client._safe_list_post.assert_not_awaited()
+        assert router.count("POST") == 0
     finally:
         await client.async_close()
 
@@ -92,24 +91,25 @@ async def test_generate_vouchers_with_explicit_server_normalizes_vouchers(
     """
     client, router = _make_voucher_client(make_client, ["unused"])
     try:
-        client._safe_list_post = AsyncMock(
-            return_value=[
-                {
-                    "username": "u",
-                    "password": "p",
-                    "vouchergroup": "g",
-                    "starttime": "t",
-                    "expirytime": 1700000000,
-                    "validity": 65,
-                }
-            ]
-        )
+        generate_path = "/api/captiveportal/voucher/generate_vouchers/srv/"
+        router.routes[("POST", generate_path)] = [
+            {
+                "username": "u",
+                "password": "p",
+                "vouchergroup": "g",
+                "starttime": "t",
+                "expirytime": 1700000000,
+                "validity": 65,
+            }
+        ]
         got = await client.generate_vouchers({"voucher_server": "srv"})
 
         assert got[0]["username"] == "u"
         assert "expiry_timestamp" in got[0]
         assert "validity_str" in got[0]
         assert router.count("GET", PROVIDERS_PATH) == 0
+        assert router.count("POST", generate_path) == 1
+        assert [payload for method, _, payload in router.requests if method == "POST"] == [{}]
     finally:
         await client.async_close()
 
@@ -138,11 +138,9 @@ async def test_generate_vouchers_returns_empty_when_provider_lookup_unavailable(
     """
     client, router = _make_voucher_client(make_client, route_value)
     try:
-        client._safe_list_post = AsyncMock()
-
         assert await client.generate_vouchers({}) == []
         assert router.count("GET", PROVIDERS_PATH) == 1
-        client._safe_list_post.assert_not_awaited()
+        assert router.count("POST") == 0
     finally:
         await client.async_close()
 
@@ -169,13 +167,12 @@ async def test_generate_vouchers_provider_lookup_raises_in_throw_mode(
     Returns:
         None: This test validates throw-mode errors from the provider lookup.
     """
-    client, _router = _make_voucher_client(make_client, route_value)
+    client, router = _make_voucher_client(make_client, route_value)
     client._throw_errors = True
     try:
-        client._safe_list_post = AsyncMock()
         with pytest.raises(expected_error):
             await client.generate_vouchers({})
-        client._safe_list_post.assert_not_awaited()
+        assert router.count("POST") == 0
     finally:
         await client.async_close()
 
@@ -212,9 +209,10 @@ async def test_generate_vouchers_auto_selects_single_provider(make_client: Clien
     """
     client, router = _make_voucher_client(make_client, ["srv one"])
     try:
-        client._safe_list_post = AsyncMock(
-            return_value=[{"username": "u", "validity": 60, "expirytime": 1700000000}]
-        )
+        generate_path = "/api/captiveportal/voucher/generate_vouchers/srv%20one/"
+        router.routes[("POST", generate_path)] = [
+            {"username": "u", "validity": 60, "expirytime": 1700000000}
+        ]
 
         vouchers = await client.generate_vouchers({})
 
@@ -223,10 +221,8 @@ async def test_generate_vouchers_auto_selects_single_provider(make_client: Clien
         assert vouchers[0]["expiry_timestamp"] == 1700000000
         assert vouchers[0]["expirytime"].timestamp() == 1700000000
         assert router.count("GET", PROVIDERS_PATH) == 1
-        client._safe_list_post.assert_awaited_once_with(
-            "/api/captiveportal/voucher/generate_vouchers/srv%20one/",
-            payload={},
-        )
+        assert router.count("POST", generate_path) == 1
+        assert [payload for method, _, payload in router.requests if method == "POST"] == [{}]
     finally:
         await client.async_close()
 
@@ -245,14 +241,13 @@ async def test_generate_vouchers_posts_provider_qualified_url_without_provider_l
     """
     client, router = _make_voucher_client(make_client, ["other"])
     try:
-        client._safe_list_post = AsyncMock(return_value=[])
+        generate_path = "/api/captiveportal/voucher/generate_vouchers/srv%20one/"
+        router.routes[("POST", generate_path)] = []
 
         assert await client.generate_vouchers({"voucher_server": "srv one"}) == []
         assert router.count("GET") == 0
-        client._safe_list_post.assert_awaited_once_with(
-            "/api/captiveportal/voucher/generate_vouchers/srv%20one/",
-            payload={},
-        )
+        assert router.count("POST", generate_path) == 1
+        assert [payload for method, _, payload in router.requests if method == "POST"] == [{}]
     finally:
         await client.async_close()
 

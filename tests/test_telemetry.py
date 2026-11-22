@@ -283,11 +283,10 @@ async def test_telemetry_cpu_omits_usage_when_stream_unavailable(
         },
     )
     try:
-        client._get_from_stream = AsyncMock()
-
         assert await client._get_telemetry_cpu() == {"count": 2}
         assert router.count("GET", CPU_STREAM_PATH) == 1
-        client._get_from_stream.assert_not_awaited()
+        assert router.count("GET", CPU_TYPE_PATH) == 1
+        assert router.count() == 2
     finally:
         await client.async_close()
 

@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import OPNsenseError, client_queue as aiopnsense_client_queue, vpn as aiopnsense_vpn
-from aiopnsense._endpoint_outcome import EndpointOutcome
 from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import (
     FakeResponse,
@@ -168,14 +167,14 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
     Returns:
         None: This test asserts request queue dispatch and result propagation.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, session = make_mock_session_client(make_client)
     task: asyncio.Task | None = None
     try:
         # patch the do_* methods
         client._do_get = AsyncMock(return_value={"g": 1})
-        client._do_get_outcome = AsyncMock(return_value=EndpointOutcome.data("text"))
         client._do_post = AsyncMock(return_value={"p": 2})
         client._do_get_from_stream = AsyncMock(return_value={"s": 3})
+        session.get.return_value = FakeResponse(text_payload="text", json_payload={"json": True})
 
         # replace request queue with a real one
         q: asyncio.Queue = asyncio.Queue()
@@ -204,9 +203,7 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
         assert res_text.payload == "text"
         assert res2 == {"p": 2}
         assert res3 == {"s": 3}
-        assert client._do_get.await_count == 1
-        client._do_get.assert_any_await("/g", "t")
-        client._do_get_outcome.assert_awaited_once_with("/gt", "t", response_format="text")
+        session.get.assert_called_once()
 
         # cancel the processor task
         task.cancel()

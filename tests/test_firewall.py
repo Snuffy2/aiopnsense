@@ -543,7 +543,7 @@ async def _toggle_alias(
     throw_errors: bool = False,
     toggle: str | None = "on",
     alias: str = "alias1",
-) -> tuple[bool, FakeRouter, AsyncMock]:
+) -> tuple[bool, FakeRouter]:
     """Run ``toggle_alias`` against a Router answering the alias search with ``search_body``.
 
     Args:
@@ -556,17 +556,21 @@ async def _toggle_alias(
         alias (str): Alias name passed to ``toggle_alias``.
 
     Returns:
-        tuple[bool, FakeRouter, AsyncMock]: Result, fake Router and the POST mock.
+        tuple[bool, FakeRouter]: Result and the fake Router.
     """
     client, session = make_mock_session_client(make_client)
     client._use_snake_case = use_snake_case
     search_path = ALIAS_SEARCH_PATH if use_snake_case else "/api/firewall/alias/searchItem"
-    router = install_fake_router(client, session, routes={("GET", search_path): search_body})
-    client._safe_dict_post = AsyncMock(side_effect=post_payloads or [])
+    router = install_fake_router(
+        client,
+        session,
+        post_payloads=post_payloads,
+        routes={("GET", search_path): search_body},
+    )
     if throw_errors:
         client.toggle_throwing_errors(True)
     try:
-        return await client.toggle_alias(alias, toggle), router, client._safe_dict_post
+        return await client.toggle_alias(alias, toggle), router
     finally:
         await client.async_close()
 
@@ -582,11 +586,11 @@ async def test_toggle_alias_returns_false_when_alias_lookup_unavailable(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         route_value (Any): Response the Router gives for the alias search endpoint.
     """
-    result, router, post = await _toggle_alias(make_client, route_value)
+    result, router = await _toggle_alias(make_client, route_value)
 
     assert result is False
     assert router.count("GET", ALIAS_SEARCH_PATH) == 1
-    post.assert_not_awaited()
+    assert router.count("POST") == 0
 
 
 @pytest.mark.asyncio
@@ -614,10 +618,10 @@ async def test_toggle_alias_missing_lookup_does_not_raise_in_throw_mode(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    result, _router, post = await _toggle_alias(make_client, 404, throw_errors=True)
+    result, router = await _toggle_alias(make_client, 404, throw_errors=True)
 
     assert result is False
-    post.assert_not_awaited()
+    assert router.count("POST") == 0
 
 
 @pytest.mark.asyncio
@@ -672,13 +676,23 @@ async def test_toggle_alias_flows(
         expected (bool): Expected final result.
         post_count (int): Number of POST calls expected.
     """
-    result, router, post = await _toggle_alias(
+    result, router = await _toggle_alias(
         make_client, search_body, post_payloads=post_payloads, toggle="off"
     )
 
     assert result is expected
     assert router.count("GET", ALIAS_SEARCH_PATH) == 1
-    assert post.await_count == post_count
+    post_paths = [
+        path.removeprefix("http://localhost")
+        for method, path, _payload in router.requests
+        if method == "POST"
+    ]
+    expected_prefix = [
+        "/api/firewall/alias/toggle_item/aid/0",
+        "/api/firewall/alias/set",
+        "/api/firewall/alias/reconfigure",
+    ][:post_count]
+    assert post_paths == expected_prefix
 
 
 @pytest.mark.asyncio
@@ -711,7 +725,7 @@ async def test_firewall_switched_endpoints_follow_selected_case(
         expected_search (str): Expected alias-search endpoint path.
         expected_toggle (str): Expected alias-toggle endpoint path.
     """
-    result, router, post = await _toggle_alias(
+    result, router = await _toggle_alias(
         make_client,
         {"rows": [{"name": "alias1", "uuid": "aid"}]},
         post_payloads=[{"result": "ok"}, {"result": "saved"}, {"status": "ok"}],
@@ -720,4 +734,8 @@ async def test_firewall_switched_endpoints_follow_selected_case(
 
     assert result is True
     assert router.count("GET", expected_search) == 1
-    assert post.await_args_list[0].args[0] == expected_toggle
+    assert [
+        path.removeprefix("http://localhost")
+        for method, path, _payload in router.requests
+        if method == "POST"
+    ] == [expected_toggle, "/api/firewall/alias/set", "/api/firewall/alias/reconfigure"]

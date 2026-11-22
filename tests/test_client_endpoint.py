@@ -48,13 +48,15 @@ async def test_validate_maps_firmware_request_ssl_to_opnsense_ssl_error(
         None: This test asserts validate SSL mapping through the firmware status request.
     """
     client, session = make_mock_session_client(make_client)
-    client._throw_errors = False
-    router = install_fake_router(client, session, get_payloads=[_TestClientSSLError()])
+    router = install_fake_router(
+        client, session, routes={("GET", "/api/core/firmware/status"): _TestClientSSLError()}
+    )
     try:
         with pytest.raises(OPNsenseSSLError):
             await client.validate()
         assert router.count("GET") == 1
-        assert client._throw_errors is False
+        assert await client.get_host_firmware_version() is None
+        assert router.count("GET") == 2
     finally:
         await client.async_close()
 
@@ -72,21 +74,19 @@ async def test_validate_requests_again_for_cached_403_in_throw_mode(
         None: This test asserts validation requests cached permission failures again.
     """
     client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, get_payloads=[403, 403])
+    path = "/api/core/firmware/status"
+    router = install_fake_router(client, session, routes={("GET", path): 403})
     try:
-        path = "/api/core/firmware/status"
         assert await client.get_host_firmware_version() is None
-        assert client._endpoint_availability[path] is False
-        assert path in client._endpoint_permission_denied
+        assert await client.get_host_firmware_version() is None
+        assert router.count("GET", path) == 1
 
         with pytest.raises(OPNsensePrivilegeMissing):
             await client.validate(require_device_id=False)
 
         assert router.count("GET", path) == 2
-        assert client._throw_errors is False
-        assert path not in client._endpoint_availability
-        assert path not in client._endpoint_checked_at
-        assert path not in client._endpoint_permission_denied
+        assert await client.get_host_firmware_version() is None
+        assert router.count("GET", path) == 3
     finally:
         await client.async_close()
 
@@ -107,8 +107,8 @@ async def test_is_endpoint_available_is_deprecated_get_alias(
     router = install_fake_router(client, session)
     try:
         legacy_alias = client.is_endpoint_available  # type: ignore[deprecated]
-        assert "Endpoint availability probing is internal" in legacy_alias.__deprecated__  # type: ignore[attr-defined]
-        with pytest.warns(DeprecationWarning, match="Endpoint availability probing is internal"):
+        assert isinstance(getattr(legacy_alias, "__deprecated__", None), str)
+        with pytest.warns(DeprecationWarning):
             assert await legacy_alias(
                 "/api/test/endpoint",
                 force_refresh=True,
@@ -148,7 +148,7 @@ async def test_endpoint_status_reports_true_only_for_present_endpoint(
         with pytest.warns(DeprecationWarning):
             assert await client.is_endpoint_available(STATUS_PATH) is expected  # type: ignore[deprecated]
         assert router.count("GET", STATUS_PATH) == 1
-        assert {method for method, _url, _body in router.requests} == {"GET"}
+        assert router.count() == 1
     finally:
         await client.async_close()
 
@@ -359,16 +359,14 @@ async def test_validate_maps_firmware_request_http_errors_to_public_exceptions(
         None: This test asserts validation-time firmware request error mapping.
     """
     client, session = make_mock_session_client(make_client)
-    client._throw_errors = False
-    router = install_fake_router(client, session, get_payloads=[status])
+    path = "/api/core/firmware/status"
+    router = install_fake_router(client, session, routes={("GET", path): status})
     try:
-        path = "/api/core/firmware/status"
         with pytest.raises(expected_exception):
             await client.validate()
         assert router.count("GET", path) == 1
-        assert client._throw_errors is False
-        assert path not in client._endpoint_checked_at
-        assert path not in client._endpoint_availability
+        assert await client.get_host_firmware_version() is None
+        assert router.count("GET", path) == 2
     finally:
         await client.async_close()
 
