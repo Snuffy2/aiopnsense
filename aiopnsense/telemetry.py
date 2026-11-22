@@ -319,7 +319,8 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         cores_match = re.search(r"\((\d+) cores", cputype_info[0])
         cpu["count"] = try_to_int(cores_match.group(1)) if cores_match else 0
 
-        if not await self._is_get_endpoint_available(CPU_STREAM_ENDPOINT):
+        stream_status = await self._check_endpoint_status(CPU_STREAM_ENDPOINT)
+        if not stream_status.is_data:
             _LOGGER.debug("Telemetry CPU stream endpoint unavailable")
             return cpu
         cpustream_info = await self._get_from_stream(CPU_STREAM_ENDPOINT)

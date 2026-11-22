@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tests.conftest import make_mock_session_client
+from aiopnsense import OPNsensePrivilegeMissing
+from tests.conftest import install_fake_router, make_mock_session_client
 
 
 @pytest.mark.asyncio
@@ -67,9 +68,12 @@ async def test_telemetry_system_parsing_and_filesystems(
         await client.async_close()
 
 
+CPU_STREAM_PATH = "/api/diagnostics/cpu_usage/stream"
+
+
 @pytest.mark.asyncio
 async def test_telemetry_cpu_variants(make_client: Callable[..., Any]) -> None:
-    """Validate CPU telemetry behavior for empty, unavailable, and valid stream branches.
+    """Validate CPU telemetry behavior for empty and valid stream branches.
 
     Args:
         make_client (Callable[..., Any]): Fixture factory used to create client instances.
@@ -77,7 +81,8 @@ async def test_telemetry_cpu_variants(make_client: Callable[..., Any]) -> None:
     Returns:
         None: This test validates CPU count and usage normalization across branches.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, session = make_mock_session_client(make_client)
+    install_fake_router(client, session, routes={("GET", CPU_STREAM_PATH): 200})
     try:
         client._use_snake_case = True
         client._is_get_endpoint_available = AsyncMock(return_value=True)
@@ -86,16 +91,7 @@ async def test_telemetry_cpu_variants(make_client: Callable[..., Any]) -> None:
         cpu_empty = await client._get_telemetry_cpu()
         assert cpu_empty == {}
 
-        # available cpu type but unavailable stream endpoint -> fail closed
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
-        client._get_from_stream = AsyncMock()
-        cpu_stream_unavailable = await client._get_telemetry_cpu()
-        assert cpu_stream_unavailable == {"count": 2}
-        client._get_from_stream.assert_not_awaited()
-
         # valid cpu type and stream
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, True])
         client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
         client._get_from_stream = AsyncMock(
             return_value={
@@ -110,6 +106,62 @@ async def test_telemetry_cpu_variants(make_client: Callable[..., Any]) -> None:
         cpu = await client._get_telemetry_cpu()
         assert isinstance(cpu.get("count"), int)
         assert cpu.get("usage_total") == 29
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    "stream_answer",
+    [
+        pytest.param(404, id="absent-404"),
+        pytest.param(403, id="forbidden-403"),
+        pytest.param(500, id="transient-500"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_telemetry_cpu_omits_usage_when_stream_unavailable(
+    make_client: Callable[..., Any], stream_answer: int
+) -> None:
+    """A CPU stream the Router does not serve leaves only the core count, without reading the stream.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+        stream_answer (int): HTTP status the Router returns for the CPU stream endpoint.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", CPU_STREAM_PATH): stream_answer})
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
+        client._get_from_stream = AsyncMock()
+
+        assert await client._get_telemetry_cpu() == {"count": 2}
+        assert router.count("GET", CPU_STREAM_PATH) == 1
+        client._get_from_stream.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_cpu_raises_permission_error_for_forbidden_stream_in_throw_mode(
+    make_client: Callable[..., Any],
+) -> None:
+    """A 403 on the CPU stream raises in throw mode instead of omitting the usage fields.
+
+    Args:
+        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    install_fake_router(client, session, routes={("GET", CPU_STREAM_PATH): 403})
+    client.toggle_throwing_errors(True)
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
+
+        with pytest.raises(OPNsensePrivilegeMissing):
+            await client._get_telemetry_cpu()
     finally:
         await client.async_close()
 
@@ -586,12 +638,13 @@ async def test_telemetry_switched_endpoints_follow_selected_case(
     Returns:
         None: This test validates telemetry endpoint selection behavior.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, session = make_mock_session_client(make_client)
+    install_fake_router(client, session)
     try:
         client._use_snake_case = use_snake_case
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
         client._is_get_endpoint_available = AsyncMock(
-            side_effect=[True, False, True, True, True, True, True]
+            side_effect=[True, False, True, True, True, True]
         )
         client._get_from_stream = AsyncMock(return_value={})
 

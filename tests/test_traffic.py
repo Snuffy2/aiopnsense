@@ -10,13 +10,13 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseError, OPNsenseTimeoutError
+from aiopnsense import OPNsenseError, OPNsensePrivilegeMissing, OPNsenseTimeoutError
 from aiopnsense.traffic import (
     DIAGNOSTICS_TRAFFIC_ENDPOINT,
     DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX,
     normalize_traffic_payload,
 )
-from tests.conftest import FakeStreamResponseFactory, MakeClientFactory
+from tests.conftest import FakeStreamResponseFactory, MakeClientFactory, install_fake_router
 
 
 def test_diagnostics_traffic_stream_endpoint_prefix() -> None:
@@ -372,9 +372,10 @@ async def test_stream_interface_traffic_yields_normalized_samples(
             "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 2000}},
         }
 
-    client = make_client()
+    session = MagicMock()
+    client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        router = install_fake_router(client, session)
         client._stream_json_events = cast(Any, fake_stream)
 
         samples: list[dict[str, Any]] = []
@@ -383,9 +384,7 @@ async def test_stream_interface_traffic_yields_normalized_samples(
             if len(samples) == 1:
                 break
 
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
-        )
+        assert router.count("GET", f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1") == 1
         assert samples == [
             {
                 "time": 1710000006.0,
@@ -420,21 +419,17 @@ async def test_stream_interface_traffic_real_stream_path_keeps_non_ascii_name(
         fake_stream_response_factory (FakeStreamResponseFactory): Factory serving the non-ASCII stream response.
     """
     session = MagicMock()
+    client = make_client(session=session)
+    install_fake_router(client, session)
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
             b'data: {"time": 1, "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}}}\n\n',
             b'data: {"time": 2, "interfaces": {"wlan-\xc3\x9f": {"name": null, "description": "Tr\xc3\xa1ffic", "bytes received": 1200, "bytes transmitted": 2400}}}\n\n',
         ]
     )
-    client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
-        )
         assert list(samples[0]["interfaces"].keys()) == ["wlan-ß"]
         assert samples[0]["interfaces"]["wlan-ß"]["name"] == "Tráffic"
         assert samples[0]["interfaces"]["wlan-ß"]["interface"] == "wlan-ß"
@@ -468,9 +463,10 @@ async def test_stream_interface_traffic_closes_inner_iterator(
             nonlocal events_closed
             events_closed = True
 
-    client = make_client()
+    session = MagicMock()
+    client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        install_fake_router(client, session)
         client._stream_json_events = cast(Any, fake_stream)
 
         samples = client.stream_interface_traffic(poll_interval=1)
@@ -504,16 +500,15 @@ async def test_stream_interface_traffic_clamps_poll_interval(
             "interfaces": {"wan": {"bytes received": 2000, "bytes transmitted": 3000}},
         }
 
-    client = make_client()
+    session = MagicMock()
+    client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        router = install_fake_router(client, session)
         client._stream_json_events = cast(Any, fake_stream)
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=0)]
 
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
-        )
+        assert router.count("GET", f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1") == 1
         assert samples[0]["interfaces"]["wan"]["interval"] == 1.0
     finally:
         await client.async_close()
@@ -555,9 +550,10 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
             "interfaces": {"wan": {"bytes received": 12000, "bytes transmitted": 14000}},
         }
 
-    client = make_client()
+    session = MagicMock()
+    client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        install_fake_router(client, session)
         client._stream_json_events = cast(Any, fake_stream)
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
@@ -602,11 +598,10 @@ async def test_stream_interface_traffic_passes_read_timeout_from_clamped_poll_in
         )
 
     session = MagicMock()
-    session.get = fake_get
     client = make_client(session=session)
+    install_fake_router(client, session)
+    session.get = fake_get
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=120)]
 
         assert len(samples) == 1
@@ -629,6 +624,8 @@ async def test_stream_interface_traffic_reseeds_interval_after_malformed_json_ev
         fake_stream_response_factory (FakeStreamResponseFactory): Factory serving a malformed JSON stream event.
     """
     session = MagicMock()
+    client = make_client(session=session)
+    install_fake_router(client, session)
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
             b'data: {"time": 1710000010, "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 2000}}}\n\n',
@@ -636,10 +633,7 @@ async def test_stream_interface_traffic_reseeds_interval_after_malformed_json_ev
             b'data: {"time": 1710000013, "interfaces": {"wan": {"bytes received": 2000, "bytes transmitted": 3000}}}\n\n',
         ]
     )
-    client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=10)]
 
         assert len(samples) == 1
@@ -661,6 +655,8 @@ async def test_stream_interface_traffic_reseeds_interval_after_non_mapping_json_
     """
 
     session = MagicMock()
+    client = make_client(session=session)
+    install_fake_router(client, session)
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
             b'data: {"time": 1710000010, "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 2000}}}\n\n',
@@ -668,10 +664,7 @@ async def test_stream_interface_traffic_reseeds_interval_after_non_mapping_json_
             b'data: {"time": 1710000013, "interfaces": {"wan": {"bytes received": 2000, "bytes transmitted": 3000}}}\n\n',
         ]
     )
-    client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=10)]
 
         assert len(samples) == 1
@@ -694,6 +687,8 @@ async def test_stream_interface_traffic_resets_interval_after_stream_json_reset(
     """
 
     session = MagicMock()
+    client = make_client(session=session)
+    install_fake_router(client, session)
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
             b'data: {"time": 1710000005, "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}}}\n\n',
@@ -702,10 +697,7 @@ async def test_stream_interface_traffic_resets_interval_after_stream_json_reset(
             b'data: {"time": 1710000008, "interfaces": {"wan": {"bytes received": 3000, "bytes transmitted": 5000}}}\n\n',
         ]
     )
-    client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
         assert len(samples) == 2
@@ -717,18 +709,77 @@ async def test_stream_interface_traffic_resets_interval_after_stream_json_reset(
         await client.async_close()
 
 
+STREAM_PATH = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        pytest.param(404, id="absent-404"),
+        pytest.param(403, id="forbidden-403"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_stream_interface_traffic_returns_when_endpoint_unavailable(
+async def test_stream_interface_traffic_ends_quietly_when_endpoint_unavailable(
     make_client: Callable[..., Any],
+    status: int,
 ) -> None:
-    """Stream method should end without yielding when the endpoint is unavailable.
+    """Stream method should end without yielding when the Router reports the endpoint unavailable.
 
     Args:
-        make_client (Callable[..., Any]): Client factory reporting the streaming endpoint unavailable.
+        make_client (Callable[..., Any]): Client factory backed by a fake Router.
+        status (int): HTTP status the Router returns for the stream endpoint.
     """
-    client = make_client()
+    session = MagicMock()
+    client = make_client(session=session)
+    router = install_fake_router(client, session, routes={("GET", STREAM_PATH): status})
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
+        client._stream_json_events = AsyncMock()
+
+        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
+
+        assert samples == []
+        assert router.count("GET", STREAM_PATH) == 1
+        client._stream_json_events.assert_not_called()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_raises_permission_error_when_throw_errors_enabled(
+    make_client: Callable[..., Any],
+) -> None:
+    """A 403 on the stream endpoint should raise in throw mode while a 404 still ends quietly.
+
+    Args:
+        make_client (Callable[..., Any]): Client factory configured to raise public errors.
+    """
+    session = MagicMock()
+    client = make_client(session=session, throw_errors=True)
+    install_fake_router(client, session, routes={("GET", STREAM_PATH): 403})
+    try:
+        client._stream_json_events = AsyncMock()
+
+        with pytest.raises(OPNsensePrivilegeMissing):
+            [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
+        client._stream_json_events.assert_not_called()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_interface_traffic_ends_quietly_on_absent_endpoint_in_throw_mode(
+    make_client: Callable[..., Any],
+) -> None:
+    """A 404 on the stream endpoint is a normal empty result even when throw_errors is enabled.
+
+    Args:
+        make_client (Callable[..., Any]): Client factory configured to raise public errors.
+    """
+    session = MagicMock()
+    client = make_client(session=session, throw_errors=True)
+    install_fake_router(client, session, routes={("GET", STREAM_PATH): 404})
+    try:
         client._stream_json_events = AsyncMock()
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
@@ -747,19 +798,20 @@ async def test_stream_interface_traffic_returns_when_endpoint_unavailable(
     ],
 )
 @pytest.mark.asyncio
-async def test_stream_interface_traffic_returns_empty_iteration_on_probe_error(
+async def test_stream_interface_traffic_returns_empty_iteration_on_check_error(
     make_client: MakeClientFactory,
     probe_error: Exception,
 ) -> None:
-    """Probe errors should return an empty stream when throw_errors is disabled.
+    """Failed stream checks should return an empty stream when throw_errors is disabled.
 
     Args:
-        make_client (MakeClientFactory): Client factory whose stream probe fails.
-        probe_error (Exception): Error raised by the endpoint probe.
+        make_client (MakeClientFactory): Client factory whose stream check fails.
+        probe_error (Exception): Error raised by the Router for the stream endpoint.
     """
-    client = make_client()
+    session = MagicMock()
+    client = make_client(session=session)
+    install_fake_router(client, session, routes={("GET", STREAM_PATH): probe_error})
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=probe_error)
         client._stream_json_events = AsyncMock()
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
@@ -774,16 +826,16 @@ async def test_stream_interface_traffic_returns_empty_iteration_on_probe_error(
 async def test_stream_interface_traffic_raises_same_opnsense_error_when_throw_errors_enabled(
     make_client: MakeClientFactory,
 ) -> None:
-    """Mapped OPNsense errors from endpoint probing should be re-raised when throw_errors is enabled.
+    """Mapped OPNsense errors from the stream check should be re-raised when throw_errors is enabled.
 
     Args:
         make_client (MakeClientFactory): Client factory configured to re-raise ``OPNsenseError``.
     """
-    client = make_client(throw_errors=True)
+    session = MagicMock()
+    client = make_client(session=session, throw_errors=True)
+    probe_error = OPNsenseError("probe failed")
+    install_fake_router(client, session, routes={("GET", STREAM_PATH): probe_error})
     try:
-        probe_error = OPNsenseError("probe failed")
-        client._is_get_endpoint_available = AsyncMock(side_effect=probe_error)
-
         with pytest.raises(OPNsenseError) as exc:
             [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
         assert exc.value is probe_error
@@ -795,15 +847,17 @@ async def test_stream_interface_traffic_raises_same_opnsense_error_when_throw_er
 async def test_stream_interface_traffic_raises_when_probe_timeout_and_throw_errors_enabled(
     make_client: Callable[..., Any],
 ) -> None:
-    """Probe timeout should propagate when throw_errors is enabled.
+    """A stream check timeout should propagate when throw_errors is enabled.
 
     Args:
-        make_client (Callable[..., Any]): Client factory configured to re-raise the stream probe timeout.
+        make_client (Callable[..., Any]): Client factory configured to re-raise the stream timeout.
     """
-    client = make_client(throw_errors=True)
+    session = MagicMock()
+    client = make_client(session=session, throw_errors=True)
+    install_fake_router(
+        client, session, routes={("GET", STREAM_PATH): TimeoutError("probe timeout")}
+    )
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
-
         with pytest.raises(OPNsenseTimeoutError):
             [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
     finally:

@@ -42,6 +42,25 @@ class ClientEndpointMixin:
         _username: str
         _verify_ssl: bool
 
+        async def _do_get_outcome(
+            self,
+            path: str,
+            caller: str = "Unknown",
+            *,
+            read_body: bool = True,
+        ) -> EndpointOutcome:
+            """Execute an immediate GET request and classify the response.
+
+            Args:
+                path (str): API endpoint path to request.
+                caller (str): Calling method name used for diagnostics.
+                read_body (bool): Whether to decode a successful response body.
+
+            Returns:
+                EndpointOutcome: Classified transport response.
+            """
+            ...
+
         async def _queue_request(
             self,
             method: str,
@@ -253,11 +272,43 @@ class ClientEndpointMixin:
         """
         return await self._fetch_gated_outcome("post", path, payload)
 
+    async def _check_endpoint_status(
+        self,
+        path: str,
+        *,
+        force_refresh: bool = False,
+    ) -> EndpointOutcome:
+        """Report whether a GET endpoint is present, absent or failed, without reading its payload.
+
+        Used for reads that are not a plain bounded fetch, such as streams and
+        state-changing actions, where the caller needs the availability answer
+        but must not consume the response. The request is always a GET with no
+        payload. Outcomes and cache rules are the same as ``_fetch_endpoint_outcome``.
+
+        Args:
+            path (str): API endpoint path to check. A query string is sent but
+                excluded from the availability cache key.
+            force_refresh (bool): Whether to bypass a cached availability answer.
+                The request is sent and its result is cached.
+
+        Returns:
+            EndpointOutcome: ``DATA`` (with no payload) when the endpoint answers
+                successfully, ``ABSENT`` for a 404 or a 403, or ``TRANSIENT`` for any
+                other failure. A 403 or a transient failure raises the mapped
+                ``OPNsenseError`` instead when ``self._throw_errors`` is ``True``.
+        """
+        return await self._fetch_gated_outcome(
+            "get", path, status_only=True, force_refresh=force_refresh
+        )
+
     async def _fetch_gated_outcome(
         self,
         method: Literal["get", "post"],
         path: str,
         payload: MutableMapping[str, Any] | None = None,
+        *,
+        status_only: bool = False,
+        force_refresh: bool = False,
     ) -> EndpointOutcome:
         """Send one availability-gated request and report whether it returned data, is absent or failed.
 
@@ -271,6 +322,10 @@ class ClientEndpointMixin:
             path (str): API endpoint path to request. A query string is sent but
                 excluded from the availability cache key.
             payload (MutableMapping[str, Any] | None): Request body, sent with POST requests.
+            status_only (bool): Whether to check availability without reading the
+                payload (GET only). Status checks bypass the request queue, as the
+                availability probe always has; data fetches go through the queue.
+            force_refresh (bool): Whether to ignore a cached absent answer for this call.
 
         Returns:
             EndpointOutcome: ``DATA`` with the decoded payload, ``ABSENT`` when the
@@ -299,13 +354,21 @@ class ClientEndpointMixin:
             < self._endpoint_cache_ttl_seconds
         )
         if (
-            cache_is_fresh
+            not force_refresh
+            and cache_is_fresh
             and self._endpoint_availability.get(cache_key) is False
             and not (self._throw_errors and cache_key in self._endpoint_permission_denied)
         ):
             return EndpointOutcome.absent()
 
-        outcome: EndpointOutcome = await self._queue_request(f"{method}_outcome", path, payload)
+        if status_only:
+            outcome: EndpointOutcome = await self._do_get_outcome(
+                path,
+                "_check_endpoint_status",
+                read_body=False,
+            )
+        else:
+            outcome = await self._queue_request(f"{method}_outcome", path, payload)
 
         if outcome.is_data:
             _log_request_recovery(self, method, path, "request")
@@ -525,13 +588,18 @@ class ClientEndpointMixin:
 
     @deprecated("Endpoint availability probing is internal. Direct calls are no longer needed.")
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
-        """Backward-compatible alias for GET endpoint availability probing.
+        """Backward-compatible alias that reports whether a GET endpoint is present.
 
         Args:
-            path (str): API endpoint path to request.
+            path (str): API endpoint path to check.
             force_refresh (bool): Whether to bypass cached endpoint availability.
 
         Returns:
-            bool: ``True`` when the GET probe succeeds; otherwise, ``False``.
+            bool: ``True`` only when the Router answers the endpoint successfully;
+                ``False`` when it is absent or the check fails. In throw mode a 403
+                or a transient failure raises instead of returning ``False``.
         """
-        return await self._is_get_endpoint_available(path, force_refresh=force_refresh)
+        if not isinstance(path, str) or not path:
+            return False
+        outcome = await self._check_endpoint_status(path, force_refresh=force_refresh)
+        return outcome.is_data
