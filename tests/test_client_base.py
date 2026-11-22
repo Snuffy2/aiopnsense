@@ -460,8 +460,9 @@ async def test_validate_can_skip_device_unique_id_requirement(
     client._firmware_version = "0.0"
     try:
 
-        async def _refresh_firmware_version() -> None:
+        async def _refresh_firmware_version() -> str:
             client._firmware_version = OPNSENSE_RECOMMENDED_FIRMWARE
+            return OPNSENSE_RECOMMENDED_FIRMWARE
 
         _store_host_firmware_version = AsyncMock(side_effect=_refresh_firmware_version)
         get_device_unique_id = AsyncMock(side_effect=OPNsenseMissingDeviceUniqueID)

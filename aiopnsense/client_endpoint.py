@@ -23,6 +23,7 @@ class ClientEndpointMixin:
 
     if TYPE_CHECKING:
         _endpoint_availability: dict[str, bool]
+        _endpoint_cache_generation: int
         _endpoint_cache_ttl_seconds: int
         _endpoint_checked_at: dict[str, datetime]
         _endpoint_permission_denied: set[str]
@@ -192,6 +193,7 @@ class ClientEndpointMixin:
         from the old version. The availability, check-time and permission-denied
         caches are cleared together so they cannot drift apart.
         """
+        self._endpoint_cache_generation += 1
         self._use_snake_case = None
         self._endpoint_availability.clear()
         self._endpoint_checked_at.clear()
@@ -255,6 +257,7 @@ class ClientEndpointMixin:
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[is_%s_endpoint_available] path: %s", normalized_method, path)
+        cache_generation = self._endpoint_cache_generation
 
         try:
             request = getattr(self._session, normalized_method)
@@ -266,14 +269,16 @@ class ClientEndpointMixin:
             ) as response:
                 if response.ok:
                     _log_request_recovery(self, normalized_method, path, _PROBE_PHASE)
-                    self._endpoint_permission_denied.discard(cache_key)
-                    self._endpoint_availability[cache_key] = True
-                    self._endpoint_checked_at[cache_key] = now
+                    if self._endpoint_cache_generation == cache_generation:
+                        self._endpoint_permission_denied.discard(cache_key)
+                        self._endpoint_availability[cache_key] = True
+                        self._endpoint_checked_at[cache_key] = now
                     return True
                 if response.status == 404:
-                    self._endpoint_permission_denied.discard(cache_key)
-                    self._endpoint_availability[cache_key] = False
-                    self._endpoint_checked_at[cache_key] = now
+                    if self._endpoint_cache_generation == cache_generation:
+                        self._endpoint_permission_denied.discard(cache_key)
+                        self._endpoint_availability[cache_key] = False
+                        self._endpoint_checked_at[cache_key] = now
                     return False
 
                 http_error = _report_http_failure(
@@ -287,15 +292,18 @@ class ClientEndpointMixin:
                     reason=response.reason,
                 )
                 if response.status == 403 and not _throws_errors(self):
-                    self._endpoint_permission_denied.add(cache_key)
-                    self._endpoint_availability[cache_key] = False
-                    self._endpoint_checked_at[cache_key] = now
+                    if self._endpoint_cache_generation == cache_generation:
+                        self._endpoint_permission_denied.add(cache_key)
+                        self._endpoint_availability[cache_key] = False
+                        self._endpoint_checked_at[cache_key] = now
                     return False
-                self._clear_endpoint_cache_entry(cache_key)
+                if self._endpoint_cache_generation == cache_generation:
+                    self._clear_endpoint_cache_entry(cache_key)
                 _raise_if_throwing(self, http_error)
                 return False
         except (aiohttp.ClientError, TimeoutError) as e:
-            self._clear_endpoint_cache_entry(cache_key)
+            if self._endpoint_cache_generation == cache_generation:
+                self._clear_endpoint_cache_entry(cache_key)
             transport_error = _report_transport_failure(
                 self,
                 method=normalized_method,

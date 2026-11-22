@@ -1,8 +1,9 @@
 """Tests for client endpoint availability and endpoint-style selection."""
 
+import asyncio
 from datetime import datetime, timedelta
 import logging
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock
 
 import aiohttp
@@ -19,6 +20,7 @@ from tests.conftest import FakeResponse, MakeClientFactory, ScriptedRouter, make
 
 DISMISS_SNAKE_PATH = "/api/core/system/dismiss_status"
 DISMISS_CAMEL_PATH = "/api/core/system/dismissStatus"
+SYSTEM_INFORMATION_SNAKE_PATH = "/api/diagnostics/system/system_information"
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):
@@ -1299,3 +1301,68 @@ async def test_not_comparable_firmware_version_resets_nothing(
     router.firmware = "25.1"
     assert await client.get_host_firmware_version() == "25.1"
     assert await client.is_endpoint_available(LATE_PATH) is False
+
+
+@pytest.mark.asyncio
+async def test_old_endpoint_probe_cannot_restore_cache_after_firmware_change(
+    make_client: MakeClientFactory,
+) -> None:
+    """Keep a delayed old-firmware probe from overwriting refreshed endpoint state.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = ScriptedRouter(client, session)
+    router.firmware = "26.1.1"
+    original_probe = router._probe
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+    delayed_probe_pending = True
+
+    class DelayedNotFoundResponse(FakeResponse):
+        """404 response held until the test releases an old firmware probe."""
+
+        async def __aenter__(self) -> Self:
+            """Wait for release after the stale probe reaches its response.
+
+            Returns:
+                Self: This response after the test releases the probe.
+            """
+            probe_started.set()
+            await release_probe.wait()
+            return self
+
+    def _probe(url: str, **kwargs: Any) -> FakeResponse:
+        """Delay the first system-information probe and delegate all others.
+
+        Args:
+            url (str): Full URL requested by the availability check.
+            kwargs (Any): Request options passed to the scripted Router.
+
+        Returns:
+            FakeResponse: Delayed 404 or the scripted Router response.
+        """
+        nonlocal delayed_probe_pending
+        if url.endswith(SYSTEM_INFORMATION_SNAKE_PATH) and delayed_probe_pending:
+            delayed_probe_pending = False
+            return DelayedNotFoundResponse(status=404, ok=False)
+        return original_probe(url, **kwargs)
+
+    session.get.side_effect = _probe
+    old_probe_task = asyncio.create_task(client.get_system_info())
+    try:
+        await asyncio.wait_for(probe_started.wait(), timeout=1)
+        router.firmware = "26.1.11"
+        await client.validate(require_device_id=False)
+
+        router.endpoints[SYSTEM_INFORMATION_SNAKE_PATH] = {"name": "router"}
+        assert await client.get_system_info() == {"name": "router"}
+
+        release_probe.set()
+        assert await old_probe_task == {}
+        assert await client.get_system_info() == {"name": "router"}
+    finally:
+        release_probe.set()
+        if not old_probe_task.done():
+            await asyncio.gather(old_probe_task, return_exceptions=True)

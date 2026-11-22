@@ -20,7 +20,11 @@ from aiopnsense.exceptions import (
 )
 import aiopnsense.firmware as firmware_module
 from aiopnsense.helpers import firmware_is_at_least
-from tests.conftest import FakeResponse, make_mock_session_client
+from aiopnsense.system import (
+    CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
+    CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
+)
+from tests.conftest import FakeResponse, ScriptedRouter, make_mock_session_client
 
 
 @pytest.mark.asyncio
@@ -54,6 +58,55 @@ async def test_get_host_firmware_version_and_fallback(
         )
     finally:
         await fallback_client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_uncomparable_firmware_is_retried_on_next_capability_use(
+    scripted_router: tuple[aiopnsense.OPNsenseClient, ScriptedRouter],
+) -> None:
+    """A temporary incomparable version must not pin the endpoint fallback.
+
+    Args:
+        scripted_router (tuple[aiopnsense.OPNsenseClient, ScriptedRouter]): Client and scripted Router.
+    """
+    client, router = scripted_router
+    router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}
+    router.endpoints[CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT] = {"status": "ok"}
+    router.firmware = "not-a-version"
+
+    assert await client.close_notice("before-recovery") is True
+
+    router.firmware = "25.1"
+    assert await client.close_notice("after-recovery") is True
+
+    assert router.post_paths == [
+        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
+        CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
+    ]
+    assert router.get_paths.count(firmware_module.FIRMWARE_STATUS_ENDPOINT) == 2
+
+
+@pytest.mark.asyncio
+async def test_malformed_firmware_series_uses_unknown_capability_fallback(
+    make_client: Callable[..., Any],
+) -> None:
+    """A malformed series value must not break endpoint selection.
+
+    Args:
+        make_client (Callable[..., Any]): Factory used to create an OPNsense client.
+    """
+    client = make_client()
+    client._is_get_endpoint_available = AsyncMock(return_value=True)
+    client._safe_dict_get = AsyncMock(return_value={"product": {"product_series": []}})
+    client._safe_dict_post = AsyncMock(return_value={"status": "ok"})
+    try:
+        assert await client.close_notice("malformed-series") is True
+        client._safe_dict_post.assert_awaited_once_with(
+            CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
+            payload={"subject": "malformed-series"},
+        )
+    finally:
+        await client.async_close()
 
 
 @pytest.mark.asyncio

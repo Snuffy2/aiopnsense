@@ -104,7 +104,9 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 )
                 self._reset_endpoint_state()
             self._last_known_firmware_version = version
-        self._firmware_version = version
+            self._firmware_version = version
+            return
+        self._firmware_version = None
 
     async def _firmware_capability(self, capability: FirmwareCapability) -> bool | None:
         """Return whether the Router firmware supports a Firmware Capability.
@@ -152,19 +154,29 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         supported = await self._firmware_capability(capability)
         return capability.unknown_answer if supported is None else supported
 
-    async def _store_host_firmware_version(self) -> None:
-        """Cache the installed OPNsense firmware version or product series."""
+    async def _store_host_firmware_version(self) -> str | None:
+        """Read and cache the installed OPNsense firmware version or product series.
+
+        An incomparable string is returned for the current lookup so callers can
+        report Unknown Firmware accurately, but it is not cached. A later lookup
+        therefore checks the Router again.
+
+        Returns:
+            str | None: Firmware version or product series from this response.
+        """
         if not await self._is_get_endpoint_available(FIRMWARE_STATUS_ENDPOINT):
             _LOGGER.debug("Firmware status endpoint unavailable")
             self._record_firmware_version(None)
-            return
+            return None
 
         firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
-        firmware: str | None = dict_get(firmware_info, "product.product_version")
+        raw_firmware = dict_get(firmware_info, "product.product_version")
+        firmware: str | None = raw_firmware if isinstance(raw_firmware, str) else None
         comparable_firmware = trim_firmware_suffix(firmware)
         if not comparable_firmware or firmware_is_at_least(comparable_firmware, "0") is None:
             old = firmware
-            firmware = dict_get(firmware_info, "product.product_series", old)
+            product_series = dict_get(firmware_info, "product.product_series")
+            firmware = product_series if isinstance(product_series, str) else old
             if firmware != old:
                 _LOGGER.debug(
                     "[get_host_firmware_version] firmware: %s not valid SemVer, using %s",
@@ -174,6 +186,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         else:
             _LOGGER.debug("[get_host_firmware_version] firmware: %s", firmware)
         self._record_firmware_version(firmware)
+        return firmware
 
     @_log_errors
     async def get_host_firmware_version(self) -> None | str:
@@ -185,7 +198,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 firmware status endpoint is unavailable.
         """
         if self._firmware_version is None:
-            await self._store_host_firmware_version()
+            return await self._store_host_firmware_version()
         return self._firmware_version
 
     @_log_errors
