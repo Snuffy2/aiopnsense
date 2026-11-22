@@ -1681,12 +1681,27 @@ async def test_cancelled_close_releases_queued_vpn_call(make_client: MakeClientF
         return {"changed": True, "result": "Enabled"} if "/toggle/" in path else {"result": "ok"}
 
     client._do_post = AsyncMock(side_effect=do_post)
+    client._is_get_endpoint_available = AsyncMock(return_value=True)
     tasks: list[asyncio.Task[Any]] = []
     try:
         tasks.append(asyncio.create_task(client._post("/occupy")))
         await asyncio.wait_for(started.wait(), timeout=3)
+        worker = client._workers[0]
         queued = asyncio.create_task(client.toggle_vpn_instance("openvpn", "servers", "old", "on"))
         tasks.append(queued)
+
+        async def read_notices_after_worker_stops() -> dict[str, Any]:
+            """Submit a public read as soon as the original queue worker stops.
+
+            Returns:
+                dict[str, Any]: Dashboard notices if the read is accepted.
+            """
+            with contextlib.suppress(asyncio.CancelledError):
+                await worker
+            return await client.get_notices()
+
+        read = asyncio.create_task(read_notices_after_worker_stops())
+        tasks.append(read)
         await asyncio.sleep(0)
         close = asyncio.create_task(client.async_close())
         tasks.append(close)
@@ -1694,8 +1709,9 @@ async def test_cancelled_close_releases_queued_vpn_call(make_client: MakeClientF
         close.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(close, timeout=3)
-        done, _pending = await asyncio.wait((queued,), timeout=1)
+        done, _pending = await asyncio.wait((queued, read), timeout=1)
         assert queued in done and queued.cancelled()
+        assert read in done and read.cancelled()
         assert (
             await asyncio.wait_for(
                 client.toggle_vpn_instance("openvpn", "servers", "fresh", "on"), timeout=3

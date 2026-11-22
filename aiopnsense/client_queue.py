@@ -28,7 +28,7 @@ class ClientQueueMixin:
         _request_queue: asyncio.Queue[Any]
         _workers: list[asyncio.Task[Any]]
         _vpn_shutdown_generation: int
-        _vpn_close_count: int
+        _active_close_count: int
 
         async def _do_get(
             self,
@@ -88,7 +88,13 @@ class ClientQueueMixin:
             ...
 
     async def _ensure_workers_started(self) -> None:
-        """Ensure queue workers are running on the active event loop."""
+        """Ensure queue workers are running on the active event loop.
+
+        Raises:
+            asyncio.CancelledError: If the client is closing.
+        """
+        if self._active_close_count > 0:
+            raise asyncio.CancelledError("OPNsenseClient is closing")
         self._loop = asyncio.get_running_loop()
 
         self._workers = [worker for worker in self._workers if not worker.done()]
@@ -323,12 +329,12 @@ class ClientQueueMixin:
     async def async_close(self) -> None:
         """Cancel background work, invalidate VPN waiters, and clear the queue.
 
-        Closing increments the VPN generation, so in-progress VPN callers
-        cannot dispatch follow-up writes after this close operation begins.
+        Queue calls are cancelled while the client is closing. Closing also
+        invalidates in-progress VPN calls so they cannot send follow-up writes.
         """
         _LOGGER.debug("Closing OPNsenseClient and cancelling background tasks")
         self._vpn_shutdown_generation += 1
-        self._vpn_close_count += 1
+        self._active_close_count += 1
         try:
             tasks_to_cancel = []
 
@@ -363,4 +369,4 @@ class ClientQueueMixin:
                 self._loop = None
                 _LOGGER.debug("Request queue cleared")
             finally:
-                self._vpn_close_count -= 1
+                self._active_close_count -= 1

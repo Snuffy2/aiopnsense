@@ -965,7 +965,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         lock = self._vpn_service_locks.get(vpn_type)
         if lock is None:
             return False
-        if self._vpn_close_count > 0:
+        if self._active_close_count > 0:
             raise asyncio.CancelledError("OPNsenseClient is closing")
         shutdown_generation = self._vpn_shutdown_generation
         async with lock:
@@ -983,7 +983,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         Raises:
             asyncio.CancelledError: If client shutdown began after this call started.
         """
-        if self._vpn_close_count > 0 or shutdown_generation != self._vpn_shutdown_generation:
+        if self._active_close_count > 0 or shutdown_generation != self._vpn_shutdown_generation:
             raise asyncio.CancelledError("OPNsenseClient closed during VPN operation")
 
     async def _toggle_vpn_instance_locked(
