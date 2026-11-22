@@ -11,7 +11,12 @@ from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _attempt
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
-from .helpers import _LOGGER, _is_request_error_logged, _mark_request_error_logged
+from .helpers import (
+    _LOGGER,
+    _is_request_error_logged,
+    _mark_request_error_logged,
+    _redacted_exception_message,
+)
 
 
 @dataclass(slots=True)
@@ -426,7 +431,7 @@ class ClientQueueMixin:
                         "Exception in request queue processor (called by %s). %s: %s",
                         caller,
                         type(e).__name__,
-                        e,
+                        _redacted_exception_message(e),
                     )
                 if future is not None and not future.done():
                     mapped_error = _map_opnsense_exception(e)

@@ -369,6 +369,32 @@ async def test_endpoint_http_failure_logs_redact_url_credentials(
             await client.async_close()
 
 
+async def test_unexpected_endpoint_error_log_redacts_url_credentials(
+    make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Redact errors that escape the endpoint transport and reach the queue.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning OPNsense clients.
+        caplog (pytest.LogCaptureFixture): Captured request logs.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.toggle_throwing_errors(True)
+    failure = ValueError("Invalid response from https://test-user:test-password@router.invalid")
+    session.get.side_effect = failure
+
+    try:
+        with pytest.raises(OPNsenseError) as error:
+            await client.get_nut_ups_status()
+        assert error.value.__cause__ is failure
+        assert "Exception in request queue processor" in caplog.text
+        assert "router.invalid" in caplog.text
+        assert "test-user" not in caplog.text
+        assert "test-password" not in caplog.text
+    finally:
+        await client.async_close()
+
+
 @pytest.mark.parametrize(
     "validator_error",
     [
