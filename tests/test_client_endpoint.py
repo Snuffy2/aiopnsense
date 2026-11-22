@@ -965,25 +965,22 @@ async def test_set_use_snake_case_selects_expected_endpoint_style(
 
 
 @pytest.mark.parametrize(
-    ("firmware_version", "expected_use_snake_case"),
+    "firmware_version",
     [
-        pytest.param("invalid-version", None, id="invalid-version"),
-        pytest.param(None, None, id="missing-version"),
+        pytest.param("invalid-version", id="invalid-version"),
+        pytest.param(None, id="missing-version"),
     ],
 )
 @pytest.mark.asyncio
 async def test_set_use_snake_case_initial_raises_unknown_firmware(
     make_client: MakeClientFactory,
     firmware_version: str | None,
-    expected_use_snake_case: bool | None,
 ) -> None:
     """Verify legacy initial setup raises when firmware cannot be identified.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
         firmware_version (str | None): Invalid or missing firmware version returned by the client.
-        expected_use_snake_case (bool | None): Expected state to assert, when covered by the
-            original case.
 
     Returns:
         None: This test asserts the preserved compatibility path.
@@ -996,8 +993,7 @@ async def test_set_use_snake_case_initial_raises_unknown_firmware(
             await client._set_use_snake_case(initial=True)
 
         client.get_host_firmware_version.assert_awaited_once_with()
-        if expected_use_snake_case is not None:
-            assert client._use_snake_case is expected_use_snake_case
+        assert client._use_snake_case is None
     finally:
         await client.async_close()
 
