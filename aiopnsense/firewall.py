@@ -7,6 +7,7 @@ from typing import Any
 
 from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
+from .client_toggle import TOGGLE_ITEM_RESULTS, ToggleSpec, ToggleStep
 from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE, UNIFIED_NAT_TEMPLATE_FIRMWARE
 from .helpers import _LOGGER, api_value_matches, coerce_bool, firmware_is_at_least
 
@@ -343,40 +344,36 @@ class FirewallMixin(AiopnsenseClientProtocol):
             debug_label="get_nat_npt_rules",
         )
 
-    async def toggle_firewall_rule(self, uuid: str, toggle_on_off: str | None = None) -> bool:
-        """Toggle Firewall Rule on and off.
+    @_log_errors
+    async def toggle_firewall_rule(
+        self, uuid: str, toggle_on_off: str | None = None
+    ) -> bool | None:
+        """Toggle a Firewall Rule on or off and apply the filter.
 
         Args:
             uuid (str): UUID of the firewall filter rule to toggle.
             toggle_on_off (str | None, optional): Target state. Use ``on`` to
-                enable, ``off`` to disable, or ``None`` to let OPNsense toggle
+                enable, ``off`` to disable, or ``None`` or ``toggle`` to flip
                 the current state.
 
         Returns:
-            bool: True when the toggle operation completes successfully; otherwise, False.
+            bool | None: True when the Router acknowledged the save and confirmed
+                the apply; False when the save was not acknowledged (no apply is
+                sent) or the apply was not confirmed. An invalid ``toggle_on_off``
+                returns None, or raises ``OPNsenseInvalidArgument`` when
+                ``throw_errors`` is enabled, as do transport errors.
         """
-        payload: dict[str, Any] = {}
-        url = f"{FIREWALL_FILTER_TOGGLE_RULE_ENDPOINT_PREFIX}{uuid}"
-        if toggle_on_off == "on":
-            url = f"{url}/1"
-        elif toggle_on_off == "off":
-            url = f"{url}/0"
-        response = await self._safe_dict_post(
-            url,
-            payload=payload,
+        target = self._parse_toggle_target(toggle_on_off)
+        url = f"{FIREWALL_FILTER_TOGGLE_RULE_ENDPOINT_PREFIX}{uuid}{target.endpoint_suffix()}"
+        _LOGGER.debug("[toggle_firewall_rule] uuid: %s, target: %s, url: %s", uuid, target, url)
+        return await self._run_toggle(
+            ToggleSpec(
+                label="toggle_firewall_rule",
+                target=target,
+                save=(ToggleStep.save(url, TOGGLE_ITEM_RESULTS, payload={}),),
+                apply=(ToggleStep.apply(FIREWALL_FILTER_APPLY_ENDPOINT),),
+            )
         )
-        _LOGGER.debug(
-            "[toggle_firewall_rule] uuid: %s, action: %s, url: %s, response: %s",
-            uuid,
-            toggle_on_off,
-            url,
-            response,
-        )
-        if response.get("result") == "failed":
-            return False
-
-        apply_resp = await self._safe_dict_post(FIREWALL_FILTER_APPLY_ENDPOINT)
-        return apply_resp.get("status", "").strip() == "OK"
 
     async def toggle_nat_rule(
         self, nat_rule_type: str, uuid: str, toggle_on_off: str | None = None

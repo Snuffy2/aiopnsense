@@ -11,6 +11,7 @@ import aiohttp
 
 from .client_endpoint import ClientEndpointMixin
 from .client_queue import ClientQueueMixin
+from .client_toggle import ClientToggleMixin
 from .client_transport import ClientTransportMixin
 from .const import DEFAULT_CACHE_TTL_SECONDS
 from .exceptions import OPNsenseInvalidArgument
@@ -18,7 +19,11 @@ from .exceptions import OPNsenseInvalidArgument
 _UNSET: object = object()
 
 
-class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixin):
+# ClientToggleMixin stays last: it subclasses AiopnsenseClientProtocol, whose stub members
+# would otherwise shadow the real transport methods in the MRO.
+class ClientBaseMixin(
+    ClientEndpointMixin, ClientQueueMixin, ClientTransportMixin, ClientToggleMixin
+):
     """ClientBase methods for OPNsenseClient."""
 
     def __init__(

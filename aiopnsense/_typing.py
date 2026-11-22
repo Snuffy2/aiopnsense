@@ -3,9 +3,12 @@
 import asyncio
 from collections.abc import AsyncGenerator, MutableMapping
 from datetime import tzinfo
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import aiohttp
+
+if TYPE_CHECKING:
+    from .client_toggle import ToggleSpec, ToggleTarget
 
 
 class AiopnsenseClientProtocol(Protocol):
@@ -85,3 +88,8 @@ class AiopnsenseClientProtocol(Protocol):
     async def _is_post_endpoint_available(
         self, path: str, force_refresh: bool = False
     ) -> bool | None: ...
+
+    @staticmethod
+    def _parse_toggle_target(toggle_on_off: object) -> ToggleTarget: ...
+
+    async def _run_toggle(self, spec: ToggleSpec) -> bool: ...
