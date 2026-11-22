@@ -50,6 +50,17 @@ entry = "uv run --exact --group dev mypy --config-file=pyproject.toml"
 types = ["python"]
 require_serial = true
 
+[[repos.hooks]]
+id = "docs-build"
+name = "docs-build"
+language = "system"
+# Mirrors the Read the Docs build, which fails on any Sphinx warning. Manual
+# because the build is slow; run it with `prek run --all-files --hook-stage manual docs-build`.
+entry = "uv run --locked --extra docs sphinx-build -W --keep-going -b html docs/source docs/_build/html"
+pass_filenames = false
+always_run = true
+stages = ["manual"]
+
 [[repos]]
 repo = "https://github.com/jsh9/pydoclint"
 rev = "0.12.0"

@@ -11,6 +11,7 @@ Standards for code in `aiopnsense/` and `tests/`. Rules that `ruff`, `mypy` or `
 ## Structure
 
 - Each domain lives in its own module as a `<Domain>Mixin(AiopnsenseClientProtocol)`, and `OPNsenseClient` in `client.py` composes the mixins. Shared transport, queue and endpoint logic belongs in the `client_*` modules, not in a domain mixin.
+- Expose new public functionality as a method on its domain mixin (a `@staticmethod` is fine when it needs no client state) and its models as nested frozen dataclasses. `docs/source/_ext/opnsense_client_api.py` generates the API reference from their docstrings, so add no module-level public functions, no package-root exports for them and no hand-written `docs/source/api` entries.
 - A domain mixin reaches other mixins and shared state only through `AiopnsenseClientProtocol` in `_typing.py`. Add the member there instead of importing another mixin.
 - `_typing.py` holds protocol members as typed signatures ending in `...`, with no per-method docstrings and no `abstractmethod`.
 - Endpoint paths are module-level `UPPER_CASE` constants at the top of the module that uses them. Firmware thresholds and shared tunables live in `const.py`.
