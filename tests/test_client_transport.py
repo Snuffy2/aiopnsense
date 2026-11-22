@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, MutableMapping
 import json
+import logging
 from types import TracebackType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -15,6 +16,7 @@ from aiopnsense.const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
+    OPNsenseInvalidAuth,
     OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
@@ -1213,5 +1215,111 @@ async def test_stream_json_events_raises_when_throw_errors_enabled(
         with pytest.raises(OPNsensePrivilegeMissing):
             async for _event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
                 pass
+    finally:
+        await client.async_close()
+
+
+_LADDER_PATHS: dict[str, tuple[str, Any]] = {
+    "get_json": ("get", None),
+    "get_text": ("get", None),
+    "post": ("post", None),
+    "stream_once": ("get", {}),
+    "stream_events": ("get", []),
+    "probe": ("get", False),
+}
+"""Request path name mapped to its session method and non-throwing empty value."""
+
+
+async def _call_ladder_path(client: Any, path_name: str) -> Any:
+    """Invoke one low-level request path against a fixed API path.
+
+    Args:
+        client (Any): Client whose transport method is invoked.
+        path_name (str): Key of ``_LADDER_PATHS`` selecting the request path.
+
+    Returns:
+        Any: Value returned by the selected request path.
+    """
+    if path_name == "get_json":
+        return await client._do_get("/api/x", caller="t")
+    if path_name == "get_text":
+        return await client._do_get("/api/x", caller="t", response_format="text")
+    if path_name == "post":
+        return await client._do_post("/api/x", {}, caller="t")
+    if path_name == "stream_once":
+        return await client._do_get_from_stream("/api/x", caller="t")
+    if path_name == "stream_events":
+        return [event async for event in client._stream_json_events("/api/x")]
+    return await client._is_get_endpoint_available("/api/x")
+
+
+@pytest.mark.parametrize("path_name", list(_LADDER_PATHS))
+@pytest.mark.parametrize(
+    ("failure", "expected_exception", "probe_level"),
+    [
+        (401, OPNsenseInvalidAuth, logging.WARNING),
+        (403, OPNsensePrivilegeMissing, logging.ERROR),
+        (500, OPNsenseConnectionError, logging.WARNING),
+        (aiohttp.ClientConnectionError("down"), OPNsenseConnectionError, logging.WARNING),
+        (TimeoutError("slow"), OPNsenseTimeoutError, logging.WARNING),
+    ],
+    ids=["401", "403", "500", "connection-error", "timeout"],
+)
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["empty", "throw"])
+@pytest.mark.asyncio
+async def test_request_failure_ladder_is_identical_across_request_paths(
+    path_name: str,
+    failure: int | Exception,
+    expected_exception: type[OPNsenseError],
+    probe_level: int,
+    throw_errors: bool,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every request path classifies a failure the same way and logs it once at first sight.
+
+    Args:
+        path_name (str): Key of ``_LADDER_PATHS`` selecting the request path.
+        failure (int | Exception): HTTP status served by the session, or the transport
+            error the session raises.
+        expected_exception (type[OPNsenseError]): Public exception expected in throw mode.
+        probe_level (int): Level of the first failure record for the availability probe,
+            which logs transient failures below ERROR.
+        throw_errors (bool): Whether the client raises public errors instead of returning
+            the documented empty value.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    session_method, empty_value = _LADDER_PATHS[path_name]
+    session = MagicMock()
+    if isinstance(failure, Exception):
+        setattr(session, session_method, MagicMock(side_effect=failure))
+    else:
+        setattr(
+            session,
+            session_method,
+            lambda *_a, **_k: FakeResponse(
+                status=failure,
+                reason="Failure",
+                ok=False,
+                stream_chunks=[b""],
+                include_request_info=True,
+            ),
+        )
+    client = make_client(session=session, throw_errors=throw_errors)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            if throw_errors:
+                with pytest.raises(expected_exception) as exc_info:
+                    await _call_ladder_path(client, path_name)
+                if isinstance(failure, Exception):
+                    assert exc_info.value.__cause__ is failure
+            else:
+                assert await _call_ladder_path(client, path_name) == empty_value
+
+        failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
+        expected_level = probe_level if path_name == "probe" else logging.ERROR
+        assert failures
+        assert failures[0].levelno == expected_level
     finally:
         await client.async_close()
