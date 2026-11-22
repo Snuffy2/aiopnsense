@@ -163,6 +163,7 @@ async def test_outcome_requests_override_session_raise_for_status(
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, session = make_mock_session_client(make_client)
+    session.raise_for_status = True
     request_options: dict[str, dict[str, Any]] = {}
 
     def fake_get(_url: str, **kwargs: Any) -> FakeResponse:
@@ -178,8 +179,16 @@ async def test_outcome_requests_override_session_raise_for_status(
     try:
         assert (await client._do_get_outcome("/api/missing")).is_absent
         assert (await client._do_post_outcome("/api/missing", {})).is_absent
-        assert request_options["get"]["raise_for_status"] is False
-        assert request_options["post"]["raise_for_status"] is False
+        assert callable(request_options["get"]["raise_for_status"])
+        assert callable(request_options["post"]["raise_for_status"])
+        for method in ("get", "post"):
+            response = MagicMock(spec=aiohttp.ClientResponse)
+            response.status = 404
+            response.raise_for_status = MagicMock(
+                side_effect=AssertionError("boolean session policy must stay suppressed")
+            )
+            await request_options[method]["raise_for_status"](response)
+            response.raise_for_status.assert_not_called()
     finally:
         await client.async_close()
 

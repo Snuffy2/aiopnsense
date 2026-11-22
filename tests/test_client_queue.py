@@ -15,6 +15,7 @@ from aiopnsense import OPNsenseError, client_queue as aiopnsense_client_queue, v
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseInvalidAuth,
+    OPNsenseInvalidURL,
     OPNsensePrivilegeMissing,
 )
 from tests.conftest import (
@@ -303,6 +304,198 @@ async def test_nested_auth_404_is_transient_and_retried(
             ("GET", endpoint_path),
             ("GET", auth_path),
         ]
+
+
+@pytest.mark.parametrize(
+    "validator_error",
+    [
+        aiohttp.ClientPayloadError("body read failed"),
+        aiohttp.ContentTypeError(
+            aiohttp.RequestInfo(
+                aiohttp.client_reqrep.URL("http://localhost/api/missing"),
+                "GET",
+                None,
+            ),
+            (),
+            message="unexpected content type",
+        ),
+        json.JSONDecodeError("invalid JSON", "", 0),
+    ],
+)
+async def test_delivered_404_body_read_failure_is_absent(
+    validator_error: BaseException,
+    make_client: MakeClientFactory,
+) -> None:
+    """A validator body-read failure on a delivered 404 remains endpoint absence.
+
+    Args:
+        validator_error (BaseException): Body or decoding failure raised by the validator.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    trace_events: list[str] = []
+
+    async def validate_response(response: aiohttp.ClientResponse) -> None:
+        """Read the 404 body and reproduce a caller-side decoding failure.
+
+        Args:
+            response (aiohttp.ClientResponse): Response passed by aiohttp.
+
+        """
+        await response.json()
+
+    async def respond(
+        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Return an endpoint 404 whose body read fails in the validator.
+
+        Args:
+            request (aiohttp.ClientRequest): Request prepared by the real session.
+            _handler (aiohttp.ClientHandlerType): Network handler replaced by middleware.
+
+        Returns:
+            aiohttp.ClientResponse: Simulated 404 response.
+        """
+        response = MagicMock(spec=aiohttp.ClientResponse)
+        response.status = 404
+        response.ok = False
+        response.reason = "Not Found"
+        response.request_info = request.request_info
+        response.connection = None
+        response._raw_cookie_headers = ()
+        response.__aenter__.return_value = response
+        response.json.side_effect = validator_error
+        return response
+
+    trace = aiohttp.TraceConfig()
+
+    async def request_failed(
+        _session: aiohttp.ClientSession,
+        _context: Any,
+        _params: aiohttp.TraceRequestExceptionParams,
+    ) -> None:
+        """Record the native request exception trace from validator rejection.
+
+        Args:
+            _session (aiohttp.ClientSession): Session handling the request.
+            _context (Any): Trace context for the request.
+            _params (aiohttp.TraceRequestExceptionParams): Failed request details.
+        """
+        trace_events.append("exception")
+
+    trace.on_request_exception.append(request_failed)
+    async with aiohttp.ClientSession(
+        middlewares=[respond], raise_for_status=validate_response, trace_configs=[trace]
+    ) as session:
+        client = make_client(session=session, throw_errors=True)
+        assert await client.get_nut_ups_status() == {}
+        assert trace_events == ["exception"]
+
+
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_invalid_endpoint_url_uses_aiohttp_error_mapping(
+    throw_errors: bool,
+    make_client: MakeClientFactory,
+) -> None:
+    """An invalid endpoint URL follows normal and throwing status-check policy.
+
+    Args:
+        throw_errors (bool): Whether transport errors are raised to the caller.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    async with aiohttp.ClientSession() as session:
+        client = make_client(session=session, throw_errors=throw_errors)
+        client._url = "http://localhost:invalid-port"
+        if throw_errors:
+            with pytest.raises(OPNsenseInvalidURL):
+                await client.is_endpoint_available("/api/status")  # type: ignore[deprecated]
+        else:
+            assert await client.is_endpoint_available("/api/status") is False  # type: ignore[deprecated]
+
+
+async def test_trace_hook_404_after_response_is_transient_and_retried(
+    make_client: MakeClientFactory,
+) -> None:
+    """A trace hook's synthetic 404 after HTTP 200 does not cache endpoint absence.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    requests = 0
+    trace_events: list[str] = []
+
+    async def respond(
+        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Supply successful endpoint responses through a real session.
+
+        Args:
+            request (aiohttp.ClientRequest): Request prepared by the real session.
+            _handler (aiohttp.ClientHandlerType): Network handler replaced by middleware.
+
+        Returns:
+            aiohttp.ClientResponse: Simulated healthy response.
+        """
+        nonlocal requests
+        requests += 1
+        response = MagicMock(spec=aiohttp.ClientResponse)
+        response.status = 200
+        response.ok = True
+        response.reason = "OK"
+        response.request_info = request.request_info
+        response.connection = None
+        response._raw_cookie_headers = ()
+        response.__aenter__.return_value = response
+        response.json.return_value = {"status": {"ups.status": "OL"}}
+        return response
+
+    trace = aiohttp.TraceConfig()
+
+    async def request_ended(
+        _session: aiohttp.ClientSession,
+        _context: Any,
+        params: aiohttp.TraceRequestEndParams,
+    ) -> None:
+        """Raise a matching but synthetic 404 after the first healthy response.
+
+        Args:
+            _session (aiohttp.ClientSession): Session completing the request.
+            _context (Any): Trace context for the request.
+            params (aiohttp.TraceRequestEndParams): Completed request details.
+
+        Raises:
+            aiohttp.ClientResponseError: The synthetic completion-hook rejection.
+        """
+        trace_events.append("end")
+        if len(trace_events) == 1:
+            raise aiohttp.ClientResponseError(
+                params.response.request_info, (), status=404, message="trace rejection"
+            )
+
+    async def request_failed(
+        _session: aiohttp.ClientSession,
+        _context: Any,
+        _params: aiohttp.TraceRequestExceptionParams,
+    ) -> None:
+        """Record aiohttp's exception trace for the synthetic hook failure.
+
+        Args:
+            _session (aiohttp.ClientSession): Session handling the request.
+            _context (Any): Trace context for the request.
+            _params (aiohttp.TraceRequestExceptionParams): Failed request details.
+        """
+        trace_events.append("exception")
+
+    trace.on_request_end.append(request_ended)
+    trace.on_request_exception.append(request_failed)
+    async with aiohttp.ClientSession(middlewares=[respond], trace_configs=[trace]) as session:
+        client = make_client(session=session, throw_errors=True)
+        with pytest.raises(OPNsenseConnectionError) as error:
+            await client.get_nut_ups_status()
+        assert isinstance(error.value.__cause__, aiohttp.ClientResponseError)
+        assert error.value.__cause__.status == 404
+        assert await client.get_nut_ups_status() == {"status": {"ups.status": "OL"}}
+        assert requests == 2
+        assert trace_events == ["end", "exception", "end"]
 
 
 @pytest.mark.asyncio

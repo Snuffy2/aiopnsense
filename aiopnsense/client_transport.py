@@ -19,27 +19,27 @@ from .helpers import _LOGGER, _log_request_failure, _log_request_recovery
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
 
 type _ResponseStatusValidator = Callable[[aiohttp.ClientResponse], Awaitable[None]]
-type _ValidatorErrors = list[tuple[aiohttp.ClientResponseError, aiohttp.ClientResponse]]
+type _ValidatorFailure = aiohttp.ClientError | TimeoutError | json.JSONDecodeError
+type _ValidatorErrors = list[tuple[_ValidatorFailure, aiohttp.ClientResponse]]
+type _OutcomeResponses = list[aiohttp.ClientResponse]
 
 
 def _outcome_raise_for_status(
     session: aiohttp.ClientSession,
-) -> tuple[bool | _ResponseStatusValidator, _ValidatorErrors]:
+) -> tuple[_ResponseStatusValidator, _OutcomeResponses, _ValidatorErrors]:
     """Wrap a custom session validator for endpoint outcome requests.
 
     Args:
         session (aiohttp.ClientSession): Session whose validator applies to requests.
 
     Returns:
-        tuple[bool | _ResponseStatusValidator, _ValidatorErrors]:
-            Request validator override and errors raised by the session validator.
-            The override keeps aiohttp's boolean auto-raise disabled while running
-            callable validators for endpoint outcome classification.
+        tuple[_ResponseStatusValidator, _OutcomeResponses, _ValidatorErrors]:
+            Per-request validator, responses it receives, and exceptions it raises.
+            The validator records responses before aiohttp's request completion hooks.
     """
     validator = session.raise_for_status
+    responses: _OutcomeResponses = []
     validator_errors: _ValidatorErrors = []
-    if not callable(validator):
-        return False, validator_errors
 
     async def validate_response(response: aiohttp.ClientResponse) -> None:
         """Run the session validator for every delivered response.
@@ -48,23 +48,28 @@ def _outcome_raise_for_status(
             response (aiohttp.ClientResponse): HTTP response returned by aiohttp.
 
         Raises:
-            aiohttp.ClientResponseError: Propagated from the caller's session validator.
+            aiohttp.ClientError: Propagated from the session validator or aiohttp response.
+            TimeoutError: Propagated from the session validator.
+            json.JSONDecodeError: Propagated from the session validator.
         """
+        responses.append(response)
         try:
-            await validator(response)
-        except aiohttp.ClientResponseError as error:
+            if callable(validator):
+                await validator(response)
+        except (aiohttp.ClientError, TimeoutError, json.JSONDecodeError) as error:
             validator_errors.append((error, response))
             raise
 
-    return validate_response, validator_errors
+    return validate_response, responses, validator_errors
 
 
 def _classify_outcome_response_error(
     error: aiohttp.ClientResponseError,
     *,
     response_entered: bool,
+    responses: _OutcomeResponses,
     method: str,
-    url: URL,
+    url: str,
     validator_errors: _ValidatorErrors,
 ) -> EndpointOutcome | None:
     """Classify middleware or validator errors that carry an HTTP status.
@@ -72,8 +77,9 @@ def _classify_outcome_response_error(
     Args:
         error (aiohttp.ClientResponseError): Raised HTTP response error.
         response_entered (bool): Whether transport received the response context.
+        responses (_OutcomeResponses): Responses delivered to aiohttp's status callback.
         method (str): HTTP method of the endpoint request.
-        url (URL): Normalized endpoint request URL.
+        url (str): Raw endpoint request URL passed to aiohttp.
         validator_errors (_ValidatorErrors):
             Errors raised by the session callback and the response being validated.
 
@@ -81,11 +87,7 @@ def _classify_outcome_response_error(
         EndpointOutcome | None: Classified status outcome, or ``None`` when the
             error came from response processing or does not match its response.
     """
-    if (
-        response_entered
-        or isinstance(error, aiohttp.ClientHttpProxyError)
-        or not 400 <= error.status <= 599
-    ):
+    if isinstance(error, aiohttp.ClientHttpProxyError) or not 400 <= error.status <= 599:
         return None
 
     for validator_error, response in validator_errors:
@@ -94,10 +96,13 @@ def _classify_outcome_response_error(
                 error.request_info, response
             ):
                 return None
-            break
-    else:
-        if not _response_error_matches_request(error, method, url):
-            return None
+            outcome = EndpointOutcome.from_http_status(error.status, error.message)
+            if outcome.error is not None:
+                outcome.error.__cause__ = error
+            return outcome
+
+    if response_entered or responses or not _response_error_matches_request(error, method, url):
+        return None
 
     outcome = EndpointOutcome.from_http_status(error.status, error.message)
     if outcome.error is not None:
@@ -105,22 +110,49 @@ def _classify_outcome_response_error(
     return outcome
 
 
+def _classify_outcome_payload_error(
+    error: aiohttp.ClientPayloadError | aiohttp.ContentTypeError | json.JSONDecodeError,
+    validator_errors: _ValidatorErrors,
+) -> EndpointOutcome | None:
+    """Treat a validator body-read error as absence only for its actual 404 response.
+
+    Args:
+        error (aiohttp.ClientPayloadError | aiohttp.ContentTypeError | json.JSONDecodeError):
+            Raised response body or decoding error.
+        validator_errors (_ValidatorErrors): Errors raised while validating a response.
+
+    Returns:
+        EndpointOutcome | None: Absent for a body-read error on a delivered 404,
+            or ``None`` for unrelated and transient errors.
+    """
+    for validator_error, response in validator_errors:
+        if validator_error is error:
+            if response.status == 404:
+                return EndpointOutcome.absent()
+            return None
+    return None
+
+
 def _request_info_matches_request(
-    request_info: aiohttp.RequestInfo | None, method: str, url: URL
+    request_info: aiohttp.RequestInfo | None, method: str, url: str
 ) -> bool:
     """Check whether aiohttp request metadata identifies the endpoint request.
 
     Args:
         request_info (aiohttp.RequestInfo | None): Metadata attached to a response error.
         method (str): Expected HTTP method.
-        url (URL): Expected normalized URL, including its query string.
+        url (str): Expected URL, including its query string.
 
     Returns:
         bool: Whether both the method and URL match the expected request.
     """
     if request_info is None:
         return False
-    return request_info.method == method and request_info.url.with_fragment(None) == url
+    try:
+        expected_url = URL(url).with_fragment(None)
+    except ValueError:
+        return False
+    return request_info.method == method and request_info.url.with_fragment(None) == expected_url
 
 
 def _request_info_matches_response(
@@ -145,14 +177,14 @@ def _request_info_matches_response(
 
 
 def _response_error_matches_request(
-    error: aiohttp.ClientResponseError, method: str, url: URL
+    error: aiohttp.ClientResponseError, method: str, url: str
 ) -> bool:
     """Match an HTTP error to the endpoint request that produced it.
 
     Args:
         error (aiohttp.ClientResponseError): Raised HTTP status error.
         method (str): Expected HTTP method.
-        url (URL): Expected normalized URL, including its query string.
+        url (str): Expected URL, including its query string.
 
     Returns:
         bool: Whether the error metadata or initial redirect response identifies the request.
@@ -533,8 +565,8 @@ class ClientTransportMixin:
         outcome instead of being logged and raised, so the endpoint module can
         tell a missing endpoint from a transient failure and apply the
         ``throw_errors`` policy itself. A callable session validator runs through
-        aiohttp before request completion for each response except a 404, which
-        remains available for endpoint absence classification.
+        aiohttp before request completion for each response. The outcome layer
+        classifies an attributable 404 as absent.
 
         Args:
             path (str): API endpoint path to request.
@@ -553,9 +585,8 @@ class ClientTransportMixin:
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        request_url = URL(url).with_fragment(None)
         _LOGGER.debug("[get_outcome] url: %s (called by %s)", url, caller)
-        raise_for_status, validator_errors = _outcome_raise_for_status(self._session)
+        raise_for_status, responses, validator_errors = _outcome_raise_for_status(self._session)
         response_entered = False
         try:
             async with self._session.get(
@@ -574,15 +605,24 @@ class ClientTransportMixin:
                 if response_format == "text":
                     return EndpointOutcome.data(await response.text())
                 return EndpointOutcome.data(await response.json(content_type=None))
-        except (aiohttp.ClientError, TimeoutError) as e:
-            if isinstance(e, aiohttp.ClientResponseError):
+        except (aiohttp.ClientError, TimeoutError, json.JSONDecodeError) as e:
+            if isinstance(e, aiohttp.ClientResponseError) and not isinstance(
+                e, aiohttp.ContentTypeError
+            ):
                 outcome = _classify_outcome_response_error(
                     e,
                     response_entered=response_entered,
+                    responses=responses,
                     method="GET",
-                    url=request_url,
+                    url=url,
                     validator_errors=validator_errors,
                 )
+                if outcome is not None:
+                    return outcome
+            elif isinstance(
+                e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError | json.JSONDecodeError
+            ):
+                outcome = _classify_outcome_payload_error(e, validator_errors)
                 if outcome is not None:
                     return outcome
             error = _map_opnsense_exception(e)
@@ -725,9 +765,9 @@ class ClientTransportMixin:
         outcome instead of being logged and raised, so the endpoint module can
         tell a missing endpoint from a transient failure and apply the
         ``throw_errors`` policy itself. A callable session validator runs through
-        aiohttp before request completion for each response except a 404, which
-        remains available for endpoint absence classification. The request always
-        carries the caller's payload; no payload-less probe is sent.
+        aiohttp before request completion for each response. The outcome layer
+        classifies an attributable 404 as absent. The request always carries the
+        caller's payload; no payload-less probe is sent.
 
         Args:
             path (str): API endpoint path to request.
@@ -741,9 +781,8 @@ class ClientTransportMixin:
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        request_url = URL(url).with_fragment(None)
         _LOGGER.debug("[post_outcome] url: %s (called by %s)", url, caller)
-        raise_for_status, validator_errors = _outcome_raise_for_status(self._session)
+        raise_for_status, responses, validator_errors = _outcome_raise_for_status(self._session)
         response_entered = False
         try:
             async with self._session.post(
@@ -759,15 +798,24 @@ class ClientTransportMixin:
                 if not response.ok:
                     return EndpointOutcome.from_http_status(response.status, response.reason)
                 return EndpointOutcome.data(await response.json(content_type=None))
-        except (aiohttp.ClientError, TimeoutError) as e:
-            if isinstance(e, aiohttp.ClientResponseError):
+        except (aiohttp.ClientError, TimeoutError, json.JSONDecodeError) as e:
+            if isinstance(e, aiohttp.ClientResponseError) and not isinstance(
+                e, aiohttp.ContentTypeError
+            ):
                 outcome = _classify_outcome_response_error(
                     e,
                     response_entered=response_entered,
+                    responses=responses,
                     method="POST",
-                    url=request_url,
+                    url=url,
                     validator_errors=validator_errors,
                 )
+                if outcome is not None:
+                    return outcome
+            elif isinstance(
+                e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError | json.JSONDecodeError
+            ):
+                outcome = _classify_outcome_payload_error(e, validator_errors)
                 if outcome is not None:
                     return outcome
             error = _map_opnsense_exception(e)
