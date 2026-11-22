@@ -21,7 +21,7 @@ The backends differ on purpose in these ways. Keep them unless a change says oth
   ``duid``; ISC copies none of them.
 - Expiry: Kea and dnsmasq read epoch seconds from ``expire`` and report the raw value when it
   cannot be converted to a nonzero integer, or timestamp conversion returns None or raises
-  ``OverflowError`` or ``OSError``; ISC reads ``ends`` in the Router timezone and drops a row
+  ``OverflowError`` or ``OSError``. ISC reads ``ends`` in the Router timezone and drops a row
   whose ``ends`` cannot be parsed.
 - MAC: a value that is not a non-empty string is reported as None.
 """
@@ -86,18 +86,6 @@ def _clean_hostname(value: object, backend: LeaseBackend) -> str | None:
     if not isinstance(value, str) or not value or value in backend.placeholder_hostnames:
         return None
     return value.strip(".") if backend.strip_hostname_dots else value
-
-
-def _clean_mac(value: object) -> str | None:
-    """Return a row MAC address, or None when it is not a non-empty string.
-
-    Args:
-        value (object): Raw MAC value from a lease row.
-
-    Returns:
-        str | None: The MAC address when it is a non-empty string; otherwise None.
-    """
-    return value if isinstance(value, str) and value else None
 
 
 def _is_reserved_lease(raw_reserved: object) -> bool:
@@ -182,8 +170,9 @@ def normalize_leases(
             "if_descr": row.get("if_descr"),
             "if_name": _read_if_name(row, backend.if_name_keys),
             "type": backend.lease_type(row),
-            "mac": _clean_mac(row.get(backend.mac_key)),
         }
+        mac = row.get(backend.mac_key)
+        lease["mac"] = mac if isinstance(mac, str) and mac else None
         if backend.copy_duid and "duid" in row:
             lease["duid"] = row["duid"]
         if backend.copy_identity_fields:
@@ -233,7 +222,7 @@ def _read_epoch_expiry(
         tuple[bool, object]: Whether the lease is still live and the value to report as
             ``expires``. The raw value is retained when ``expire`` cannot be converted to a
             nonzero integer, or timestamp conversion returns None or raises ``OverflowError``
-            or ``OSError``; a past timestamp is not live.
+            or ``OSError``. A past timestamp is not live.
     """
     raw_expire = row.get("expire")
     expiration = try_to_int(raw_expire)
