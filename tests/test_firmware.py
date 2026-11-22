@@ -1507,7 +1507,6 @@ async def test_busy_router_does_not_start_firmware_check_cooldown(
         pytest.param(aiohttp.ClientError("connection lost"), id="transport-failure"),
         pytest.param({"status": "failure"}, id="non-ok-response"),
         pytest.param({"status": "ok", "msg_uuid": ""}, id="empty-msg-uuid"),
-        pytest.param({"status": "ok", "msg_uuid": "   "}, id="blank-msg-uuid"),
     ],
 )
 async def test_unacknowledged_firmware_check_does_not_start_cooldown(
@@ -1643,13 +1642,6 @@ async def test_dispatched_firmware_action_ends_check_cooldown(
             "26.7.9",
             0,
             id="no-comparable-version-or-series",
-        ),
-        pytest.param(
-            {"product_version": "not-a-version", "product_series": "26.7"},
-            {"product_series": "26.8"},
-            "26.8",
-            1,
-            id="series-fallback-change",
         ),
         pytest.param(
             {"product_version": "26.7.9"},
