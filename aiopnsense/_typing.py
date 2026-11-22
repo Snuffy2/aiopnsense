@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import aiohttp
 
+from ._endpoint_outcome import EndpointOutcome
+
 if TYPE_CHECKING:
     from .client_toggle import ToggleSpec, ToggleTarget
 
@@ -77,6 +79,8 @@ class AiopnsenseClientProtocol(Protocol):
     async def get_host_firmware_version(self) -> str | None: ...
 
     async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str: ...
+
+    async def _fetch_endpoint_outcome(self, path: str) -> EndpointOutcome: ...
 
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool: ...
 

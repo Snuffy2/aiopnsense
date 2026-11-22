@@ -1,12 +1,14 @@
 """Tests for client endpoint availability and endpoint-style selection."""
 
 from datetime import datetime, timedelta
+import logging
 from typing import Any
 from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
 
+from aiopnsense._endpoint_outcome import EndpointOutcome
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseInvalidAuth,
@@ -14,7 +16,12 @@ from aiopnsense.exceptions import (
     OPNsenseSSLError,
     OPNsenseUnknownFirmware,
 )
-from tests.conftest import FakeResponse, MakeClientFactory, make_mock_session_client
+from tests.conftest import (
+    FakeResponse,
+    MakeClientFactory,
+    install_fake_router,
+    make_mock_session_client,
+)
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):
@@ -1025,3 +1032,184 @@ async def test_get_endpoint_path_lazily_initializes_snake_case_state(
         set_use_snake_case.assert_awaited_once_with()
     finally:
         await client.async_close()
+
+
+# The tests below drive NUT status, a plain availability-gated read, through the public
+# client over a fake Router to pin the shared outcome and cache behavior.
+NUT_PATH = "/api/nut/diagnostics/upsstatus"
+NUT_DATA = {"status": {"ups.status": "OL"}}
+
+
+@pytest.mark.asyncio
+async def test_present_endpoint_costs_one_request_per_read(make_client: MakeClientFactory) -> None:
+    """A present endpoint sends exactly one request per read, with no separate probe.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): NUT_DATA})
+    try:
+        assert await client.get_nut_ups_status() == NUT_DATA
+        assert router.count("GET", NUT_PATH) == 1
+        assert await client.get_nut_ups_status() == NUT_DATA
+        assert router.count("GET", NUT_PATH) == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize("status", [404, 403])
+@pytest.mark.asyncio
+async def test_absent_endpoint_is_cached_until_ttl_expires(
+    make_client: MakeClientFactory, status: int
+) -> None:
+    """A missing or forbidden endpoint is not requested again until the cache TTL expires.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        status (int): HTTP status the Router returns while the endpoint is absent.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): status})
+    try:
+        assert await client.get_nut_ups_status() == {}
+        assert await client.get_nut_ups_status() == {}
+        assert router.count("GET", NUT_PATH) == 1
+
+        client._endpoint_cache_ttl_seconds = 0
+        router.routes[("GET", NUT_PATH)] = NUT_DATA
+        assert await client.get_nut_ups_status() == NUT_DATA
+        assert router.count("GET", NUT_PATH) == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_endpoint_lost_after_success_is_recorded_as_absent(
+    make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A 404 on a previously present endpoint is cached as absent and logged quietly.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): NUT_DATA})
+    try:
+        assert await client.get_nut_ups_status() == NUT_DATA
+        router.routes[("GET", NUT_PATH)] = 404
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            assert await client.get_nut_ups_status() == {}
+            assert await client.get_nut_ups_status() == {}
+        assert router.count("GET", NUT_PATH) == 2
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize("failure", [500, TimeoutError("timed out")])
+@pytest.mark.asyncio
+async def test_transient_failure_is_not_cached_and_logs_once_per_outage(
+    make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture, failure: Any
+) -> None:
+    """A transient failure is retried on the next read and warns once per outage.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
+        failure (Any): Router response that models the transient failure.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): failure})
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            assert await client.get_nut_ups_status() == {}
+            assert await client.get_nut_ups_status() == {}
+            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert len(warnings) == 1
+            assert router.count("GET", NUT_PATH) == 2
+
+            router.routes[("GET", NUT_PATH)] = NUT_DATA
+            assert await client.get_nut_ups_status() == NUT_DATA
+        recovered = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(recovered) == 1
+        assert "recovered" in recovered[0].getMessage()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("throw_errors", "expected_requests"),
+    [
+        pytest.param(False, 1, id="default-mode-trusts-cached-403"),
+        pytest.param(True, 2, id="throw-mode-rechecks"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_cached_permission_error_is_rechecked_only_in_throw_mode(
+    make_client: MakeClientFactory, throw_errors: bool, expected_requests: int
+) -> None:
+    """A cached 403 is trusted in default mode but requested again, and raised, in throw mode.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Whether the client raises public errors.
+        expected_requests (int): Requests the Router should see across two reads.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): 403})
+    try:
+        assert await client.get_nut_ups_status() == {}
+        client.toggle_throwing_errors(throw_errors)
+        if throw_errors:
+            with pytest.raises(OPNsensePrivilegeMissing):
+                await client.get_nut_ups_status()
+        else:
+            assert await client.get_nut_ups_status() == {}
+        assert router.count("GET", NUT_PATH) == expected_requests
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_cached_404_is_trusted_in_throw_mode(make_client: MakeClientFactory) -> None:
+    """A cached missing endpoint stays an empty result in throw mode without another request.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): 404})
+    client.toggle_throwing_errors(True)
+    try:
+        assert await client.get_nut_ups_status() == {}
+        assert await client.get_nut_ups_status() == {}
+        assert router.count("GET", NUT_PATH) == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("payload", "mapping", "sequence"),
+    [
+        ({"a": 1}, {"a": 1}, []),
+        ([1, 2], {}, [1, 2]),
+        (None, {}, []),
+    ],
+)
+def test_endpoint_outcome_coerces_payload_shape(
+    payload: Any, mapping: dict[str, Any], sequence: list
+) -> None:
+    """Outcome accessors return the payload shape asked for or its empty value.
+
+    Args:
+        payload (Any): Decoded payload carried by the outcome.
+        mapping (dict[str, Any]): Expected ``mapping()`` result.
+        sequence (list): Expected ``sequence()`` result.
+    """
+    outcome = EndpointOutcome.data(payload)
+
+    assert outcome.is_data
+    assert outcome.mapping() == mapping
+    assert outcome.sequence() == sequence

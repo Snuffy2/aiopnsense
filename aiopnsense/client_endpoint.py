@@ -1,12 +1,14 @@
 """Endpoint selection and availability helpers for OPNsenseClient."""
 
+from collections.abc import MutableMapping
 from datetime import datetime
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from warnings import deprecated
 
 import aiohttp
 
+from ._endpoint_outcome import EndpointOutcome
 from ._error_policy import _error_if_throwing, _raise_if_throwing, _throws_errors
 from ._typing import AiopnsenseClientProtocol
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS, LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
@@ -39,6 +41,24 @@ class ClientEndpointMixin:
         _use_snake_case: bool | None
         _username: str
         _verify_ssl: bool
+
+        async def _queue_request(
+            self,
+            method: str,
+            path: str,
+            payload: MutableMapping[str, Any] | None = None,
+        ) -> Any:
+            """Queue one API request and return its result.
+
+            Args:
+                method (str): Internal request method handled by the queue worker.
+                path (str): API endpoint path to request.
+                payload (MutableMapping[str, Any] | None): Request body for POST requests.
+
+            Returns:
+                Any: Result set by the queue worker.
+            """
+            ...
 
     _UNSAFE_POST_ENDPOINT_PROBE_PATHS: frozenset[str] = frozenset()
     _UNSAFE_POST_ENDPOINT_PROBE_PREFIXES: tuple[str, ...] = ()
@@ -200,6 +220,100 @@ class ClientEndpointMixin:
         self._endpoint_permission_denied.discard(cache_key)
         self._endpoint_availability.pop(cache_key, None)
         self._endpoint_checked_at.pop(cache_key, None)
+
+    async def _fetch_endpoint_outcome(self, path: str) -> EndpointOutcome:
+        """Fetch a GET endpoint once and report whether it returned data, is absent or failed.
+
+        A single request both checks availability and returns the data. The
+        availability status (never the payload) is cached for the endpoint cache
+        TTL, so a known-absent endpoint is answered without a request.
+
+        Args:
+            path (str): API endpoint path to request. A query string is sent but
+                excluded from the availability cache key.
+
+        Returns:
+            EndpointOutcome: ``DATA`` with the decoded payload, ``ABSENT`` when the
+                Router reports the endpoint missing (404) or not permitted (403), or
+                ``TRANSIENT`` for any other failure. A 403 or a transient failure
+                raises the mapped ``OPNsenseError`` instead when ``self._throw_errors``
+                is ``True``; a 404 never raises.
+
+        Raises:
+            error: OPNsenseError raised for a 403 or a transient HTTP or transport
+                failure when ``self._throw_errors`` is ``True``.
+
+        Side Effects:
+            Updates endpoint availability caches. A 200 caches the endpoint as present
+            and a 404 as absent. Outside throw mode a 403 also caches the endpoint as
+            absent with the permission-denied marker. Transient failures and, in throw
+            mode, a 403 clear the cache entry so the next call requests again.
+        """
+        cache_key = path.partition("?")[0]
+        now = datetime.now().astimezone()
+        cache_is_fresh = (
+            cache_key in self._endpoint_checked_at
+            and (now - self._endpoint_checked_at[cache_key]).total_seconds()
+            < self._endpoint_cache_ttl_seconds
+        )
+        if (
+            cache_is_fresh
+            and self._endpoint_availability.get(cache_key) is False
+            and not (self._throw_errors and cache_key in self._endpoint_permission_denied)
+        ):
+            return EndpointOutcome.absent()
+
+        outcome: EndpointOutcome = await self._queue_request("get_outcome", path)
+
+        if outcome.is_data:
+            _log_request_recovery(self, "get", path, "request")
+            self._endpoint_permission_denied.discard(cache_key)
+            self._endpoint_availability[cache_key] = True
+            self._endpoint_checked_at[cache_key] = now
+            return outcome
+
+        if outcome.is_absent and outcome.http_status != 403:
+            _LOGGER.debug("Endpoint %s not found", path)
+            self._endpoint_permission_denied.discard(cache_key)
+            self._endpoint_availability[cache_key] = False
+            self._endpoint_checked_at[cache_key] = now
+            return outcome
+
+        error = outcome.error
+        if outcome.is_absent:
+            _log_request_failure(
+                self,
+                "get",
+                path,
+                "request",
+                logging.ERROR,
+                "Permission Error in fetch_endpoint_outcome. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
+                f"{self._url}{path}",
+                error=error if self._throw_errors else None,
+            )
+            if self._throw_errors and error is not None:
+                self._clear_endpoint_cache_entry(cache_key)
+                raise error
+            self._endpoint_permission_denied.add(cache_key)
+            self._endpoint_availability[cache_key] = False
+            self._endpoint_checked_at[cache_key] = now
+            return outcome
+
+        self._clear_endpoint_cache_entry(cache_key)
+        _log_request_failure(
+            self,
+            "get",
+            path,
+            "request",
+            logging.WARNING,
+            "Transient GET failure for %s. %s. Not caching result.",
+            path,
+            outcome.detail,
+            error=error if self._throw_errors else None,
+        )
+        if self._throw_errors and error is not None:
+            raise error
+        return outcome
 
     async def _is_endpoint_available(
         self,

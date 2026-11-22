@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from ._endpoint_outcome import EndpointOutcome
 from ._error_policy import _attempt
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
@@ -53,6 +54,22 @@ class ClientQueueMixin:
             Returns:
                 MutableMapping[str, Any] | list | str | None: Decoded transport
                     response, if available.
+            """
+            ...
+
+        async def _do_get_outcome(
+            self,
+            path: str,
+            caller: str = "Unknown",
+        ) -> EndpointOutcome:
+            """Execute an immediate GET request and classify the response.
+
+            Args:
+                path (str): API endpoint path to request.
+                caller (str): Calling method name used for diagnostics.
+
+            Returns:
+                EndpointOutcome: Classified transport response.
             """
             ...
 
@@ -303,6 +320,10 @@ class ClientQueueMixin:
                         future.set_result(result)
                 elif method == "get_text":
                     result = await self._do_get(path, caller, response_format="text")
+                    if future is not None and not future.done():
+                        future.set_result(result)
+                elif method == "get_outcome":
+                    result = await self._do_get_outcome(path, caller)
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "post":

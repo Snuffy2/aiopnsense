@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
 
+from ._endpoint_outcome import EndpointOutcome
 from ._error_policy import _error_if_throwing, _raise_if_throwing
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception, _opnsense_http_error
@@ -382,6 +383,46 @@ class ClientTransportMixin:
             _raise_if_throwing(self, error, e)
 
         return None
+
+    async def _do_get_outcome(
+        self,
+        path: str,
+        caller: str = "Unknown",
+    ) -> EndpointOutcome:
+        """Execute a GET request immediately and classify the response.
+
+        Unlike ``_do_get``, an HTTP or transport failure is returned as an
+        outcome instead of being logged and raised, so the endpoint module can
+        tell a missing endpoint from a transient failure and apply the
+        ``throw_errors`` policy itself.
+
+        Args:
+            path (str): API endpoint path to request.
+            caller (str): Caller name used for diagnostics.
+
+        Returns:
+            EndpointOutcome: ``DATA`` with the decoded payload for a successful response,
+                ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any other
+                HTTP status, timeout or client error.
+        """
+        self._rest_api_query_count += 1
+        url: str = f"{self._url}{path}"
+        _LOGGER.debug("[get_outcome] url: %s (called by %s)", url, caller)
+        try:
+            async with self._session.get(
+                url,
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
+                ssl=self._verify_ssl,
+            ) as response:
+                _LOGGER.debug("[get_outcome] Response %s: %s", response.status, response.reason)
+                if not response.ok:
+                    return EndpointOutcome.from_http_status(response.status, response.reason)
+                return EndpointOutcome.data(await response.json(content_type=None))
+        except (aiohttp.ClientError, TimeoutError) as e:
+            error = _map_opnsense_exception(e)
+            error.__cause__ = e
+            return EndpointOutcome.transient(error, f"{type(e).__name__}: {e}")
 
     def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
         """Normalize per-call timeout values to a positive float in seconds.

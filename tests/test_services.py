@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import make_mock_session_client
+from tests.conftest import install_fake_router, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
+SERVICE_SEARCH_PATH = "/api/core/service/search"
 
 
 @pytest.mark.asyncio
@@ -23,16 +24,19 @@ async def test_service_management_and_get_services(make_client: ClientType) -> N
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"name": "svc1", "running": 1, "id": "svc1"},
-                    "malformed",
-                    123,
-                    None,
-                ]
-            }
+        install_fake_router(
+            client,
+            _session,
+            routes={
+                ("GET", SERVICE_SEARCH_PATH): {
+                    "rows": [
+                        {"name": "svc1", "running": 1, "id": "svc1"},
+                        "malformed",
+                        123,
+                        None,
+                    ]
+                }
+            },
         )
         services = await client.get_services()
         assert len(services) == 1
@@ -119,9 +123,14 @@ async def test_restart_service_if_running_matches_composite_service_identifier(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={"rows": [{"name": "openvpn", "id": "openvpn/INSTANCE_ID", "running": 1}]}
+        install_fake_router(
+            client,
+            _session,
+            routes={
+                ("GET", SERVICE_SEARCH_PATH): {
+                    "rows": [{"name": "openvpn", "id": "openvpn/INSTANCE_ID", "running": 1}]
+                }
+            },
         )
         client._safe_dict_post = AsyncMock(return_value={"result": "ok"})
 
@@ -135,19 +144,30 @@ async def test_restart_service_if_running_matches_composite_service_identifier(
         await client.async_close()
 
 
+@pytest.mark.parametrize(
+    ("route_value", "expected_requests"),
+    [
+        pytest.param(404, 1, id="missing-endpoint-is-cached"),
+        pytest.param(403, 1, id="permission-denied-is-cached"),
+        pytest.param(500, 4, id="transient-failure-is-retried"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_service_unknown_state_fails_closed(make_client: ClientType) -> None:
+async def test_service_unknown_state_fails_closed(
+    make_client: ClientType, route_value: int, expected_requests: int
+) -> None:
     """Unavailable service-search endpoint should produce fail-closed restart behavior.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates unknown service-state handling when endpoint probing fails.
+        route_value (int): HTTP status the Router returns for the service search endpoint.
+        expected_requests (int): Requests the Router should see across the four reads.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(
+        client, session, routes={("GET", SERVICE_SEARCH_PATH): route_value}
+    )
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
         client.restart_service = AsyncMock(return_value=True)
 
         assert await client.get_services() == []
@@ -155,8 +175,7 @@ async def test_service_unknown_state_fails_closed(make_client: ClientType) -> No
         assert await client.get_service_is_running("svc1") is False
         assert await client.restart_service_if_running("svc1") is False
         client.restart_service.assert_not_awaited()
-        client._is_get_endpoint_available.assert_any_await("/api/core/service/search")
-        assert client._is_get_endpoint_available.await_count == 4
+        assert router.count("GET", SERVICE_SEARCH_PATH) == expected_requests
     finally:
         await client.async_close()
 
@@ -175,18 +194,17 @@ async def test_get_services_handles_non_list_rows_and_running_coercion(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"rows": "bad-shape"})
+        router = install_fake_router(
+            client, _session, routes={("GET", SERVICE_SEARCH_PATH): {"rows": "bad-shape"}}
+        )
         assert await client.get_services() == []
 
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"name": "svc1", "running": object(), "id": "svc1"},
-                    {"name": "svc2", "running": "1", "id": "svc2"},
-                ]
-            }
-        )
+        router.routes[("GET", SERVICE_SEARCH_PATH)] = {
+            "rows": [
+                {"name": "svc1", "running": 1.5, "id": "svc1"},
+                {"name": "svc2", "running": "1", "id": "svc2"},
+            ]
+        }
         services = await client.get_services()
         assert len(services) == 2
         assert services[0]["status"] is False
