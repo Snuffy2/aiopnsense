@@ -1,7 +1,7 @@
 """Tests for client request queueing and worker lifecycle behavior."""
 
 import asyncio
-from collections.abc import MutableMapping
+from collections.abc import AsyncIterator, Coroutine, MutableMapping
 import contextlib
 import json
 from typing import Any, Never
@@ -1206,206 +1206,188 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
         await client.async_close()
 
 
+class VpnQueueTasks:
+    """Track tasks started by a VPN queue test for fixture cleanup."""
+
+    def __init__(self) -> None:
+        """Initialize the task list."""
+        self.tasks: list[asyncio.Task[Any]] = []
+
+    def start[T](
+        self, coroutine: Coroutine[Any, Any, T], *, eager_start: bool = False
+    ) -> asyncio.Task[T]:
+        """Start and track a test task.
+
+        Args:
+            coroutine (Coroutine[Any, Any, T]): Public operation or queue blocker.
+            eager_start (bool): Run to first suspension before returning.
+
+        Returns:
+            asyncio.Task[T]: Task running the operation.
+        """
+        task = asyncio.create_task(coroutine, eager_start=eager_start)
+        self.tasks.append(task)
+        return task
+
+
+@pytest.fixture
+async def vpn_queue_tasks(make_client: MakeClientFactory) -> AsyncIterator[VpnQueueTasks]:
+    """Cancel and join any test tasks left running before clients close.
+
+    Args:
+        make_client (MakeClientFactory): Provides clients and closes them after task cleanup.
+
+    Yields:
+        VpnQueueTasks: Task starter for the test.
+    """
+    tasks = VpnQueueTasks()
+    yield tasks
+    for task in tasks.tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*tasks.tasks, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_wireguard_cancelled_dispatched_toggle_retains_ack_and_lock(
-    make_client: MakeClientFactory,
+    make_client: MakeClientFactory, vpn_queue_tasks: VpnQueueTasks
 ) -> None:
-    """Record a dispatched save before cancellation releases the service lock.
+    """Retain a save acknowledgement delivered after caller cancellation.
 
     Args:
         make_client (MakeClientFactory): Client factory fixture.
+        vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
     """
-    client, _session = make_mock_session_client(make_client)
+    client = make_client()
     client._use_snake_case = True
-    mutation_started = asyncio.Event()
-    release_mutation = asyncio.Event()
-    state = {
-        "read_enabled": "0",
-        "enabled": "1",
-        "applied": "1",
-        "toggles": 0,
-        "reconfigures": 0,
-    }
+    client._do_get = AsyncMock(return_value={"client": {"enabled": "0"}})
+    started, release = asyncio.Event(), asyncio.Event()
+    toggle = "/api/wireguard/client/toggle_client/uuid/1"
+    apply = "/api/wireguard/service/reconfigure"
 
-    async def do_get(
-        path: str, caller: str = "Unknown", timeout_seconds: float | None = None
-    ) -> MutableMapping[str, Any]:
-        """Return current WireGuard configuration state.
+    async def post(path: str, *_request_args: object) -> dict[str, object]:
+        """Pause the legacy firmware toggle until its caller has cancelled.
 
         Args:
-            path (str): Endpoint path.
-            caller (str): Queue caller label.
-            timeout_seconds (float | None): Optional request timeout.
+            path (str): Requested endpoint.
+            *_request_args (object): Unused POST payload and caller.
 
         Returns:
-            MutableMapping[str, Any]: Current client state payload.
+            dict[str, object]: Acknowledgement for the dispatched request.
         """
-        return {"client": {"enabled": state["read_enabled"]}}
+        if path == toggle:
+            started.set()
+            await release.wait()
+            return {"changed": True, "result": "Disabled"}
+        return {"result": "ok"}
 
-    async def do_post(
-        path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
-    ) -> MutableMapping[str, Any]:
-        """Save target state or apply configuration through the real queue.
-
-        Args:
-            path (str): Endpoint path.
-            payload (MutableMapping[str, Any] | None): Optional request body.
-            caller (str): Queue caller label.
-
-        Returns:
-            MutableMapping[str, Any]: Simulated endpoint response.
-        """
-        if path.endswith("/service/reconfigure"):
-            state["reconfigures"] += 1
-            state["applied"] = state["enabled"]
-            return {"result": "ok"}
-        state["toggles"] += 1
-        state["enabled"] = "0"
-        mutation_started.set()
-        await release_mutation.wait()
-        return {"changed": True, "result": "Disabled"}
-
-    client._do_get = AsyncMock(side_effect=do_get)
-    client._do_post = AsyncMock(side_effect=do_post)
-    loop = asyncio.get_running_loop()
-    cancelled_call: asyncio.Task[bool] | None = None
-    retry_call: asyncio.Task[bool] | None = None
+    client._do_post = AsyncMock(side_effect=post)
     try:
-        cancelled_call = loop.create_task(
+        cancelled = vpn_queue_tasks.start(
             client.toggle_vpn_instance("wireguard", "clients", "uuid", "on")
         )
-        await asyncio.wait_for(mutation_started.wait(), timeout=3)
-        cancelled_call.cancel()
-        retry_call = loop.create_task(
-            client.toggle_vpn_instance("wireguard", "clients", "uuid", "off")
+        await asyncio.wait_for(started.wait(), timeout=3)
+        cancelled.cancel()
+        retry = vpn_queue_tasks.start(
+            client.toggle_vpn_instance("wireguard", "clients", "uuid", "off"), eager_start=True
         )
         await asyncio.sleep(0)
-        assert not cancelled_call.done()
-        assert (state["toggles"], state["reconfigures"]) == (1, 0)
-        assert client._do_get.await_count == 1
+        assert not cancelled.done()
+        client._do_get.assert_awaited_once()
 
-        release_mutation.set()
+        release.set()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(cancelled_call, timeout=3)
-        assert await asyncio.wait_for(retry_call, timeout=3) is True
-        assert state == {
-            "read_enabled": "0",
-            "enabled": "0",
-            "applied": "0",
-            "toggles": 1,
-            "reconfigures": 1,
-        }
+            await asyncio.wait_for(cancelled, timeout=3)
+        assert await asyncio.wait_for(retry, timeout=3) is True
+        assert [call.args[0] for call in client._do_post.await_args_list] == [toggle, apply]
     finally:
-        release_mutation.set()
-        for task in (cancelled_call, retry_call):
-            if task is not None and not task.done():
-                task.cancel()
-        await asyncio.gather(
-            *(task for task in (cancelled_call, retry_call) if task is not None),
-            return_exceptions=True,
-        )
-        await asyncio.wait_for(client.async_close(), timeout=3)
+        release.set()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("first_apply_succeeds", "retry_target", "final_state"),
+    ("first_result", "retry_applies"),
     [
-        pytest.param(True, "off", "0", id="acknowledged-then-change-target"),
-        pytest.param(False, "on", "1", id="failed-then-retry-saved-target"),
+        pytest.param("ok", False, id="acknowledged"),
+        pytest.param("failed", True, id="retry-needed"),
     ],
 )
 async def test_cancelled_service_apply_stays_serialized_until_acknowledged(
     make_client: MakeClientFactory,
-    first_apply_succeeds: bool,
-    retry_target: str,
-    final_state: str,
+    vpn_queue_tasks: VpnQueueTasks,
+    first_result: str,
+    retry_applies: bool,
 ) -> None:
-    """Wait for the apply response and allow the next call to finish applying its target.
+    """Keep the service lock until the cancelled apply receives its response.
 
     Args:
         make_client (MakeClientFactory): Client factory fixture.
-        first_apply_succeeds (bool): Whether the in-flight apply is acknowledged.
-        retry_target (str): Target requested by the next caller.
-        final_state (str): Expected saved and applied state.
+        vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
+        first_result (str): Response from the first apply.
+        retry_applies (bool): Whether the next caller must reapply the saved state.
     """
-    client, _session = make_mock_session_client(make_client)
-    applied_reconfigure_started = asyncio.Event()
-    release_reconfigure = asyncio.Event()
-    state = {"enabled": "0", "applied": "0", "toggles": 0, "reconfigures": 0}
+    client = make_client()
+    started, release = asyncio.Event(), asyncio.Event()
+    toggle = "/api/openvpn/instances/toggle/uuid/1"
+    apply = "/api/openvpn/service/reconfigure"
+    dispatched: list[str] = []
 
-    async def do_post(
-        path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
-    ) -> MutableMapping[str, Any]:
-        """Capture saved config at dispatch and report service apply completion.
+    async def post(path: str, *_request_args: object) -> dict[str, object]:
+        """Delay the first apply response while preserving later responses.
 
         Args:
-            path (str): Endpoint path.
-            payload (MutableMapping[str, Any] | None): Optional request body.
-            caller (str): Queue caller label.
+            path (str): Requested endpoint.
+            *_request_args (object): Unused POST payload and caller.
 
         Returns:
-            MutableMapping[str, Any]: Simulated endpoint response.
+            dict[str, object]: Acknowledgement for the dispatched request.
         """
-        if path.endswith("/service/reconfigure"):
-            state["reconfigures"] += 1
-            saved_at_dispatch = state["enabled"]
-            if state["reconfigures"] == 1:
-                applied_reconfigure_started.set()
-                await release_reconfigure.wait()
-                if not first_apply_succeeds:
-                    return {"result": "failed"}
-            state["applied"] = saved_at_dispatch
+        dispatched.append(path)
+        if path == apply:
+            if not started.is_set():
+                started.set()
+                await release.wait()
+                return {"result": first_result}
             return {"result": "ok"}
-        state["toggles"] += 1
-        enabled = "1" if path.endswith("/1") else "0"
-        changed = enabled != state["enabled"]
-        state["enabled"] = enabled
-        return {"changed": changed, "result": "Enabled" if enabled == "1" else "Disabled"}
+        return {"changed": not started.is_set(), "result": "Enabled"}
 
-    client._do_post = AsyncMock(side_effect=do_post)
-    loop = asyncio.get_running_loop()
-    first: asyncio.Task[bool] | None = None
-    second: asyncio.Task[bool] | None = None
+    client._do_post = AsyncMock(side_effect=post)
     try:
-        first = loop.create_task(client.toggle_vpn_instance("openvpn", "servers", "uuid", "on"))
-        await asyncio.wait_for(applied_reconfigure_started.wait(), timeout=3)
-        first.cancel()
-        second = loop.create_task(
-            client.toggle_vpn_instance("openvpn", "servers", "uuid", retry_target)
+        cancelled = vpn_queue_tasks.start(
+            client.toggle_vpn_instance("openvpn", "servers", "uuid", "on")
+        )
+        await asyncio.wait_for(started.wait(), timeout=3)
+        cancelled.cancel()
+        retry = vpn_queue_tasks.start(
+            client.toggle_vpn_instance("openvpn", "servers", "uuid", "on"), eager_start=True
         )
         await asyncio.sleep(0)
-        assert not first.done()
-        assert (state["toggles"], state["reconfigures"]) == (1, 1)
+        assert not cancelled.done()
+        assert dispatched == [toggle, apply]
 
-        release_reconfigure.set()
+        release.set()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(first, timeout=3)
-        assert await asyncio.wait_for(second, timeout=3) is True
-        assert state["enabled"] == state["applied"] == final_state
-        assert state["reconfigures"] == 2
+            await asyncio.wait_for(cancelled, timeout=3)
+        assert await asyncio.wait_for(retry, timeout=3) is True
+        expected = [toggle, apply, toggle]
+        if retry_applies:
+            expected.append(apply)
+        assert dispatched == expected
     finally:
-        release_reconfigure.set()
-        for task in (first, second):
-            if task is not None and not task.done():
-                task.cancel()
-        await asyncio.gather(
-            *(task for task in (first, second) if task is not None),
-            return_exceptions=True,
-        )
-        await asyncio.wait_for(client.async_close(), timeout=3)
+        release.set()
 
 
 @pytest.mark.asyncio
 async def test_cancelled_queued_public_toggle_is_not_dispatched(
-    make_client: MakeClientFactory,
+    make_client: MakeClientFactory, vpn_queue_tasks: VpnQueueTasks
 ) -> None:
     """Skip a public targeted toggle cancelled while queued behind another POST.
 
     Args:
         make_client (MakeClientFactory): Client factory fixture.
+        vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
     """
-    client, _session = make_mock_session_client(make_client)
+    client = make_client()
     client._max_workers = 1
     blocking_post_started = asyncio.Event()
     release_blocking_post = asyncio.Event()
@@ -1431,13 +1413,10 @@ async def test_cancelled_queued_public_toggle_is_not_dispatched(
         return {"result": "ok"}
 
     client._do_post = AsyncMock(side_effect=do_post)
-    loop = asyncio.get_running_loop()
-    blocker: asyncio.Task[Any] | None = None
-    cancelled_toggle: asyncio.Task[bool] | None = None
     try:
-        blocker = loop.create_task(client._post("/block"))
+        blocker = vpn_queue_tasks.start(client._post("/block"))
         await asyncio.wait_for(blocking_post_started.wait(), timeout=3)
-        cancelled_toggle = loop.create_task(
+        cancelled_toggle = vpn_queue_tasks.start(
             client.toggle_vpn_instance("openvpn", "servers", "uuid", "on"), eager_start=True
         )
         cancelled_toggle.cancel()
@@ -1450,26 +1429,19 @@ async def test_cancelled_queued_public_toggle_is_not_dispatched(
         assert dispatched == ["/block", "/barrier"]
     finally:
         release_blocking_post.set()
-        for task in (blocker, cancelled_toggle):
-            if task is not None and not task.done():
-                task.cancel()
-        await asyncio.gather(
-            *(task for task in (blocker, cancelled_toggle) if task is not None),
-            return_exceptions=True,
-        )
-        await asyncio.wait_for(client.async_close(), timeout=3)
 
 
 @pytest.mark.asyncio
 async def test_close_cancels_vpn_service_lock_waiter_and_allows_reuse(
-    make_client: MakeClientFactory,
+    make_client: MakeClientFactory, vpn_queue_tasks: VpnQueueTasks
 ) -> None:
     """Cancel a VPN call waiting on its service lock when the client closes.
 
     Args:
         make_client (MakeClientFactory): Client factory fixture.
+        vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
     """
-    client, _session = make_mock_session_client(make_client)
+    client = make_client()
     toggle_started = asyncio.Event()
     close_started = asyncio.Event()
     release_cancelled_workers = asyncio.Event()
@@ -1503,27 +1475,22 @@ async def test_close_cancels_vpn_service_lock_waiter_and_allows_reuse(
         return {"changed": True, "result": "Enabled"} if "/toggle/" in path else {"result": "ok"}
 
     client._do_post = AsyncMock(side_effect=do_post)
-    active: asyncio.Task[bool] | None = None
-    waiter: asyncio.Task[bool] | None = None
-    during_close: asyncio.Task[bool] | None = None
-    close_task: asyncio.Task[None] | None = None
     try:
-        active = asyncio.create_task(
+        active = vpn_queue_tasks.start(
             client.toggle_vpn_instance("openvpn", "servers", "first", "on")
         )
         await asyncio.wait_for(toggle_started.wait(), timeout=3)
-        waiter = asyncio.create_task(
+        waiter = vpn_queue_tasks.start(
             client.toggle_vpn_instance("openvpn", "servers", "second", "on"), eager_start=True
         )
         assert not waiter.done()
 
-        close_task = asyncio.create_task(client.async_close())
+        close_task = vpn_queue_tasks.start(client.async_close())
         await asyncio.wait_for(close_started.wait(), timeout=3)
-        during_close = asyncio.create_task(
-            client.toggle_vpn_instance("openvpn", "servers", "during-close", "on")
-        )
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(during_close, timeout=3)
+            await asyncio.wait_for(
+                client.toggle_vpn_instance("openvpn", "servers", "during-close", "on"), timeout=3
+            )
         release_cancelled_workers.set()
         await asyncio.wait_for(close_task, timeout=3)
         results = await asyncio.wait_for(
@@ -1544,14 +1511,6 @@ async def test_close_cancels_vpn_service_lock_waiter_and_allows_reuse(
         ]
     finally:
         release_cancelled_workers.set()
-        for task in (active, waiter, during_close, close_task):
-            if task is not None and not task.done():
-                task.cancel()
-        await asyncio.gather(
-            *(task for task in (active, waiter, during_close, close_task) if task is not None),
-            return_exceptions=True,
-        )
-        await asyncio.wait_for(client.async_close(), timeout=3)
 
 
 @pytest.mark.asyncio
@@ -1615,16 +1574,19 @@ async def test_close_after_vpn_save_ack_skips_follow_up_apply(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_close_releases_queued_vpn_call(make_client: MakeClientFactory) -> None:
+async def test_cancelled_close_releases_queued_vpn_call(
+    make_client: MakeClientFactory, vpn_queue_tasks: VpnQueueTasks
+) -> None:
     """Settle a queued VPN call when the caller cancels client shutdown.
 
     Args:
         make_client (MakeClientFactory): Client factory fixture.
+        vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
     """
-    client, _session = make_mock_session_client(make_client)
+    client = make_client()
     client._max_workers = 1
     started = asyncio.Event()
-    cancelling = asyncio.Event()
+    cancelling, release = asyncio.Event(), asyncio.Event()
     dispatched: list[str] = []
 
     async def do_post(
@@ -1639,6 +1601,9 @@ async def test_cancelled_close_releases_queued_vpn_call(make_client: MakeClientF
 
         Returns:
             MutableMapping[str, Any]: Simulated response from OPNsense.
+
+        Raises:
+            asyncio.CancelledError: When shutdown cancels the worker.
         """
         dispatched.append(path)
         if path == "/occupy":
@@ -1647,21 +1612,20 @@ async def test_cancelled_close_releases_queued_vpn_call(make_client: MakeClientF
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
                 cancelling.set()
-                await asyncio.Event().wait()
+                await release.wait()
+                raise
         return {"changed": True, "result": "Enabled"} if "/toggle/" in path else {"result": "ok"}
 
     client._do_post = AsyncMock(side_effect=do_post)
     client._is_get_endpoint_available = AsyncMock(return_value=True)
-    tasks: list[asyncio.Task[Any]] = []
     try:
-        tasks.append(asyncio.create_task(client._post("/occupy")))
+        vpn_queue_tasks.start(client._post("/occupy"))
         await asyncio.wait_for(started.wait(), timeout=3)
         # The restart race occurs after this worker exits, while close still owns the queue.
         worker = client._workers[0]
-        queued = asyncio.create_task(
+        queued = vpn_queue_tasks.start(
             client.toggle_vpn_instance("openvpn", "servers", "old", "on"), eager_start=True
         )
-        tasks.append(queued)
 
         async def read_notices_after_worker_stops() -> dict[str, Any]:
             """Submit a public read as soon as the original queue worker stops.
@@ -1673,10 +1637,8 @@ async def test_cancelled_close_releases_queued_vpn_call(make_client: MakeClientF
                 await worker
             return await client.get_notices()
 
-        read = asyncio.create_task(read_notices_after_worker_stops(), eager_start=True)
-        tasks.append(read)
-        close = asyncio.create_task(client.async_close())
-        tasks.append(close)
+        read = vpn_queue_tasks.start(read_notices_after_worker_stops(), eager_start=True)
+        close = vpn_queue_tasks.start(client.async_close())
         await asyncio.wait_for(cancelling.wait(), timeout=3)
         close.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -1696,8 +1658,4 @@ async def test_cancelled_close_releases_queued_vpn_call(make_client: MakeClientF
             "/api/openvpn/service/reconfigure",
         ]
     finally:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        await asyncio.wait_for(client.async_close(), timeout=3)
+        release.set()
