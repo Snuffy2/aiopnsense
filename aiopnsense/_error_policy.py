@@ -4,7 +4,10 @@ Public client methods either return a documented empty value after logging a
 failure (``throw_errors`` off) or raise a subclass of ``OPNsenseError``
 (``throw_errors`` on). Every raise-or-empty decision, the mapping of arbitrary
 errors to the public exception hierarchy, the redacted exception logging and the
-"already logged" marker live here, so each failure is logged once.
+"already logged" marker live here. The policy marks exceptions it reports at the
+default level before propagating them. Wrappers skip exceptions that the policy
+or transport has already marked. Best-effort steps can log at debug and still
+receive the usual outer report. Outer handlers report newly detected failures.
 """
 
 import asyncio

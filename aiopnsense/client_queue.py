@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from ._error_policy import _attempt
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
 from .helpers import _LOGGER, _is_request_error_logged, _mark_request_error_logged
@@ -126,7 +127,10 @@ class ClientQueueMixin:
             inspection is unavailable.
         """
         try:
-            return sys._getframe(3).f_code.co_name
+            frame = sys._getframe(3)
+            if frame.f_code is _attempt.__code__:
+                frame = frame.f_back or frame
+            return frame.f_code.co_name
         except ValueError, AttributeError:
             return "Unknown"
 
