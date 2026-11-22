@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cached_property, partial
+import logging
 from typing import Any, Literal
 
 from ._typing import AiopnsenseClientProtocol
@@ -70,6 +71,7 @@ class ToggleStep:
         payload: POST body, if any.
         camel_case_endpoint: API path on older camelCase firmware, or ``None`` when
             ``endpoint`` is the same on every firmware.
+        failure_log_level: Log level for an unconfirmed response.
     """
 
     endpoint: str
@@ -78,6 +80,7 @@ class ToggleStep:
     method: Literal["GET", "POST"] = "POST"
     payload: MutableMapping[str, Any] | None = None
     camel_case_endpoint: str | None = None
+    failure_log_level: int = logging.DEBUG
 
     @classmethod
     def save(
@@ -88,6 +91,7 @@ class ToggleStep:
         response_key: str = TOGGLE_RESULT_KEY,
         payload: MutableMapping[str, Any] | None = None,
         camel_case_endpoint: str | None = None,
+        failure_log_level: int = logging.DEBUG,
     ) -> ToggleStep:
         """Describe a POST that saves a change.
 
@@ -99,11 +103,20 @@ class ToggleStep:
             response_key (str): Key that reports the outcome.
             payload (MutableMapping[str, Any] | None): POST body, if any.
             camel_case_endpoint (str | None): API path on older camelCase firmware.
+            failure_log_level (int): Log level for an unconfirmed response.
 
         Returns:
             ToggleStep: The save step.
         """
-        return cls(endpoint, response_key, accepted_results, "POST", payload, camel_case_endpoint)
+        return cls(
+            endpoint,
+            response_key,
+            accepted_results,
+            "POST",
+            payload,
+            camel_case_endpoint,
+            failure_log_level,
+        )
 
     @classmethod
     def apply(
@@ -113,6 +126,7 @@ class ToggleStep:
         response_key: str = "status",
         method: Literal["GET", "POST"] = "POST",
         payload: MutableMapping[str, Any] | None = None,
+        failure_log_level: int = logging.DEBUG,
     ) -> ToggleStep:
         """Describe a request that makes a saved change take effect.
 
@@ -121,11 +135,14 @@ class ToggleStep:
             response_key (str): Key that reports the outcome.
             method (Literal["GET", "POST"]): HTTP method.
             payload (MutableMapping[str, Any] | None): POST body, if any.
+            failure_log_level (int): Log level for an unconfirmed response.
 
         Returns:
             ToggleStep: The apply step.
         """
-        return cls(endpoint, response_key, None, method, payload)
+        return cls(
+            endpoint, response_key, None, method, payload, failure_log_level=failure_log_level
+        )
 
     def succeeded(self, response: MutableMapping[str, Any]) -> bool:
         """Return whether the Router's response confirms this step.
@@ -281,13 +298,13 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
             for step in steps:
                 response = await self._send_toggle_step(step)
                 if not step.succeeded(response):
-                    _LOGGER.debug(
-                        "[%s] %s step %s not confirmed for target %s. response: %s",
+                    _LOGGER.log(
+                        step.failure_log_level,
+                        "[%s] %s step %s not confirmed for target %s",
                         spec.label,
                         phase,
                         step.endpoint,
                         spec.target,
-                        response,
                     )
                     return False
         return True
