@@ -59,18 +59,6 @@ def interface_client(
     return client
 
 
-def saves(router: ScriptedRouter) -> list[Any]:
-    """Return the bodies of the saves the Router received.
-
-    Args:
-        router (ScriptedRouter): Router that recorded the requests.
-
-    Returns:
-        list[Any]: Payload of each save request.
-    """
-    return [r.payload for r in router.requests if r.path == SET_ITEM]
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("target", "current", "desired"),
@@ -99,7 +87,10 @@ async def test_toggle_interface_saves_then_applies(
     scripted_router.reply(RECONFIGURE, {"status": "ok"})
 
     assert await client.toggle_interface("opt8", target) is True
-    assert saves(scripted_router) == [{"interface": {"enable": desired}}]
+    saved_payloads = [
+        request.payload for request in scripted_router.requests if request.path == SET_ITEM
+    ]
+    assert saved_payloads == [{"interface": {"enable": desired}}]
     assert scripted_router.requested(RECONFIGURE)
 
 
