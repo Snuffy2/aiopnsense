@@ -8,7 +8,6 @@ import pytest
 from aiopnsense._dhcp_leases import (
     DNSMASQ_LEASE_BACKEND,
     ISC_LEASE_BACKEND,
-    has_authoritative_reservation_metadata,
     is_live_row,
     kea_lease_backend,
     normalize_leases,
@@ -307,6 +306,27 @@ def _kea_row(**overrides: object) -> dict[str, Any]:
             _kea_row(is_reserved=[]), True, None, _expected_lease(), id="authoritative-empty-list"
         ),
         pytest.param(
+            _kea_row(is_reserved=0),
+            True,
+            RESERVATIONS,
+            _expected_lease(),
+            id="integer-zero-overrides-matching-reservation",
+        ),
+        pytest.param(
+            _kea_row(is_reserved=1),
+            True,
+            None,
+            _expected_lease(type="static"),
+            id="integer-one-classifies-as-static",
+        ),
+        pytest.param(
+            _kea_row(is_reserved=1.0),
+            True,
+            None,
+            _expected_lease(type="unknown"),
+            id="float-is-not-an-authoritative-flag",
+        ),
+        pytest.param(
             _kea_row(is_reserved=None),
             True,
             None,
@@ -376,29 +396,3 @@ def test_normalize_kea_leases(
 
     assert leases == ([] if expected is None else [expected])
     assert is_live_row(row, backend, now=NOW) is (expected is not None)
-
-
-@pytest.mark.parametrize(
-    ("raw_reserved", "expected"),
-    [
-        ("0", True),
-        ("1", True),
-        (0, True),
-        (1, True),
-        (True, True),
-        ([], True),
-        (["host1"], True),
-        ("2", False),
-        ("yes", False),
-        (None, False),
-        (1.0, False),
-    ],
-)
-def test_has_authoritative_reservation_metadata(raw_reserved: object, expected: bool) -> None:
-    """Only list, string, integer and boolean flags classify a Kea lease authoritatively.
-
-    Args:
-        raw_reserved (object): Raw ``is_reserved`` value from Kea.
-        expected (bool): Whether the value is authoritative.
-    """
-    assert has_authoritative_reservation_metadata(raw_reserved) is expected

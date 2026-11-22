@@ -2753,23 +2753,8 @@ async def _get_public_leases(make_client: ClientType, routes: dict[str, object])
         await client.async_close()
 
 
-def _epoch(lease: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of a lease with a datetime ``expires`` replaced by its epoch seconds.
-
-    Args:
-        lease (dict[str, Any]): Lease returned by ``get_dhcp_leases``.
-
-    Returns:
-        dict[str, Any]: Lease whose ``expires`` is an ``int`` when it was a ``datetime``.
-    """
-    expires = lease.get("expires")
-    if isinstance(expires, datetime):
-        return {**lease, "expires": int(expires.timestamp())}
-    return lease
-
-
 def _leases_by_address(result: dict[str, Any], if_name: str = "lan") -> dict[str, dict[str, Any]]:
-    """Return the leases of one interface keyed by address, with epoch expirations.
+    """Return the leases of one interface keyed by address.
 
     Args:
         result (dict[str, Any]): ``get_dhcp_leases`` result.
@@ -2778,7 +2763,7 @@ def _leases_by_address(result: dict[str, Any], if_name: str = "lan") -> dict[str
     Returns:
         dict[str, dict[str, Any]]: Leases keyed by address.
     """
-    return {lease["address"]: _epoch(lease) for lease in result["leases"].get(if_name, [])}
+    return {lease["address"]: lease for lease in result["leases"].get(if_name, [])}
 
 
 @pytest.mark.asyncio
@@ -2891,7 +2876,7 @@ async def test_get_dhcp_leases_kea_row_rules(
         "aa:00:00:00:00:02",
         hostname="host.example",
         type="static",
-        expires=future,
+        expires=datetime.fromtimestamp(future, tz=UTC),
         client_id="01:aa",
         reserved_by=["res-1"],
     )
@@ -2978,7 +2963,7 @@ async def test_get_dhcp_leases_dnsmasq_row_rules(make_client: ClientType) -> Non
             "hostname": None,
             "type": "dynamic",
             "mac": "bb:00:00:00:00:01",
-            "expires": now + 200,
+            "expires": datetime.fromtimestamp(now + 200, tz=UTC),
         },
         # Dnsmasq does not strip dots, and an empty MAC becomes None.
         "192.0.2.2": {
@@ -3054,7 +3039,7 @@ async def test_get_dhcp_leases_isc_row_rules(
             "hostname": "*.",
             "type": "static",
             "mac": "cc:00:00:00:00:01",
-            "expires": int(ends_at.timestamp()),
+            "expires": ends_at,
         },
         "no-ends": {
             "address": "no-ends",
