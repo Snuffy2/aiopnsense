@@ -39,7 +39,9 @@ class _ThrowErrorsClient(Protocol):
     _throw_errors: bool
 
 
-def _handle_error(client: _ThrowErrorsClient, error: Exception, name: str) -> None:
+def _handle_error(
+    client: _ThrowErrorsClient, error: Exception, name: str, log_level: int | None = None
+) -> None:
     """Log one failure and raise its public form when the client throws errors.
 
     Args:
@@ -47,6 +49,9 @@ def _handle_error(client: _ThrowErrorsClient, error: Exception, name: str) -> No
             between raising and returning to the caller.
         error (Exception): Caught failure to report.
         name (str): Operation name used in the log message.
+        log_level (int | None): Level for the failure log record, for best-effort
+            steps whose failure is routine. ``None`` logs timeouts as warnings
+            and every other failure as errors.
 
     Raises:
         public_error: The failure itself when it is already an ``OPNsenseError``,
@@ -54,7 +59,9 @@ def _handle_error(client: _ThrowErrorsClient, error: Exception, name: str) -> No
             It is marked as logged so wrappers further up do not log it again.
     """
     if not _is_request_error_logged(error):
-        if isinstance(error, (TimeoutError, aiohttp.ServerTimeoutError, OPNsenseTimeoutError)):
+        if log_level is not None:
+            _LOGGER.log(log_level, "Error in %s. %s", name, _ExceptionLogDetails(error))
+        elif isinstance(error, (TimeoutError, aiohttp.ServerTimeoutError, OPNsenseTimeoutError)):
             _LOGGER.warning("Timeout Error in %s. Will retry. %s", name, error)
         else:
             _LOGGER.error("Error in %s. %s", name, _ExceptionLogDetails(error))
@@ -119,6 +126,7 @@ async def _attempt[T, E](
     empty: E,
     name: str,
     errors: tuple[type[Exception], ...] = _DEFAULT_SCOPED_ERRORS,
+    log_level: int | None = None,
 ) -> T | E:
     """Run one step of a public method that has its own documented empty value.
 
@@ -131,6 +139,9 @@ async def _attempt[T, E](
         name (str): Step name used in the log message.
         errors (tuple[type[Exception], ...]): Failures the step handles. Anything
             else, and cancellation, propagates untouched.
+        log_level (int | None): Level for the failure log record when the step is
+            best-effort and its failure is routine. ``None`` uses the default
+            levels.
 
     Returns:
         T | E: The step result, or ``empty`` when the step fails and
@@ -140,5 +151,5 @@ async def _attempt[T, E](
     try:
         return await call()
     except errors as err:
-        _handle_error(client, err, name)
+        _handle_error(client, err, name, log_level)
         return empty
