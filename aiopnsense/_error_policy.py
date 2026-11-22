@@ -1,13 +1,12 @@
-"""Single home of the ``throw_errors`` contract.
+"""Centralize throw-or-return decisions and shared wrapper error handling.
 
 Public client methods either return a documented empty value after logging a
 failure (``throw_errors`` off) or raise a subclass of ``OPNsenseError``
-(``throw_errors`` on). Every raise-or-empty decision, the mapping of arbitrary
-errors to the public exception hierarchy, the redacted exception logging and the
-"already logged" marker live here. The policy marks exceptions it reports at the
-default level before propagating them. Wrappers skip exceptions that the policy
-or transport has already marked. Best-effort steps can log at debug and still
-receive the usual outer report. Outer handlers report newly detected failures.
+(``throw_errors`` on). Request, endpoint and queue layers also map and log
+errors. The policy marks exceptions it reports at the default level before
+propagating them. Wrappers skip exceptions that the policy or transport has
+already marked. Best-effort steps can log at debug and still receive the usual
+outer report. Outer handlers report newly detected failures.
 """
 
 import asyncio
