@@ -15,13 +15,14 @@
 
 ## Agent permissions and venv policy
 
-- Agents may create and use a repository-local venv at `./.venv`. Use `./.venv/bin/python`, `./.venv/bin/pytest`, and `./.venv/bin/prek` for local commands unless using the main checkout venv for a git worktree with no dependency changes.
+- Agents may create and use a repository-local venv at `./.venv`. Use `./.venv/bin/python`, `./.venv/bin/pytest`, and `./.venv/bin/prek` for local commands unless using the main checkout venv for a git worktree with no dependency changes. With the main checkout venv, run ad hoc Python (`python -c`, scripts) from the worktree root: from any other directory `import aiopnsense` resolves to the main checkout. `pytest` always imports the worktree's package.
 - The project uses `pyproject.toml` dependency groups (`lint`, `pytest`, `dev`). Installing packages from repo manifests into `./.venv` is allowed for running tests or local tooling after approval; avoid unrelated network operations without explicit consent.
 
 ## Folder structure (repo-specific)
 
 - `aiopnsense`: integration code.
 - `tests`: pytest test suite and fixtures.
+- `docs/source`: Sphinx documentation. The API reference is generated from docstrings; see `CODING_STANDARDS.md` (Structure) before adding public API.
 - `README.md`: primary documentation.
 - `.github/workflows`: GitHub Workflows
 - `.github/scripts`: scripts for GitHub Workflows
@@ -41,6 +42,7 @@
 
 - Use the repo's `prek` and `pytest` commands through the applicable repo venv path (`./.venv` here, or the main checkout venv for a worktree with no dependency changes). Do not use system Python.
 - By default, run the full pytest suite. If running targeted tests, explain why.
+- After changing docs, public API docstrings or `docs/source/api`, run `prek run --all-files --hook-stage manual docs-build` (without `--all-files` prek stashes unstaged edits and builds only the staged tree). It builds the docs with warnings as errors, as Read the Docs does, and installs the `docs` extra from `uv.lock` on first use.
 
 ## Error handling & logging
 
