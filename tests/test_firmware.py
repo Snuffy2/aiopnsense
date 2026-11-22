@@ -1599,19 +1599,42 @@ async def test_dispatched_firmware_action_ends_check_cooldown(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("initial_product", "changed_product", "expected_version"),
+    ("initial_product", "changed_product", "expected_version", "expected_reads"),
     [
         pytest.param(
             {"product_version": "26.7.9"},
             {"product_version": "26.7.10"},
             "26.7.10",
+            1,
             id="out-of-band-upgrade",
         ),
         pytest.param(
             {"product_version": "not-a-version", "product_series": "26.7"},
             {"product_series": "26.8"},
             "26.7",
+            0,
             id="incomparable-status-version",
+        ),
+        pytest.param(
+            {"product_version": "26.7.9"},
+            {"product_version": "26.7.9"},
+            "26.7.9",
+            0,
+            id="unchanged-version",
+        ),
+        pytest.param(
+            {"product_version": "26.7.9_1"},
+            {"product_version": "26.7.9_1"},
+            "26.7.9_1",
+            0,
+            id="unchanged-hotfix",
+        ),
+        pytest.param(
+            {"product_version": "26.7.9_1"},
+            {"product_version": "26.7.9_2"},
+            "26.7.9_2",
+            1,
+            id="hotfix-bump",
         ),
     ],
 )
@@ -1622,10 +1645,14 @@ async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
     initial_product: dict[str, Any],
     changed_product: dict[str, Any],
     expected_version: str,
+    expected_reads: int,
 ) -> None:
-    """A version change seen during cooldown refreshes the cache without a check POST.
+    """A comparable version change seen during cooldown refreshes the cache without a check POST.
 
-    A non-comparable status version leaves the cached version in place.
+    An unchanged version or a non-comparable status version leaves the cached
+    version in place. The returned version alone cannot show a wrongly cleared
+    cache, because the next read returns the same value either way, so the test
+    counts the status reads made by the final lookup instead.
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
@@ -1634,12 +1661,14 @@ async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
         initial_product (dict[str, Any]): Product fields before the cooldown poll.
         changed_product (dict[str, Any]): Product fields that change during cooldown.
         expected_version (str): Version returned after the cooldown poll.
+        expected_reads (int): Status reads expected from the final version lookup.
     """
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
     client, session = make_mock_session_client(make_client)
     try:
         status = _firmware_status(status="error", product=initial_product)
         _configure_firmware_polls(client, status)
+        status_reads = cast(AsyncMock, client._safe_dict_get)
         session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
 
         await client.get_firmware_update_info()
@@ -1649,7 +1678,9 @@ async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
         status["product"].update(changed_product)
         await client.get_firmware_update_info()
 
+        reads_before = status_reads.await_count
         assert await client.get_host_firmware_version() == expected_version
+        assert status_reads.await_count - reads_before == expected_reads
         assert session.post.call_count == 1
     finally:
         await client.async_close()
