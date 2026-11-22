@@ -1411,7 +1411,7 @@ def _firmware_status_for_shape(shape: FirmwareVersionShape) -> dict[str, Any]:
         shape (FirmwareVersionShape): Version form reported by the Router.
 
     Returns:
-        dict[str, Any]: Error status without product data, or an error status with the shape's product.
+        dict[str, Any]: Error status, with the shape's product when it has a version.
     """
     if shape.product_version is None:
         return {
