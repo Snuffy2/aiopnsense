@@ -286,17 +286,6 @@ class ScriptedRouter:
         client._post = self._post  # type: ignore[method-assign]
         client._do_post = self._do_post  # type: ignore[method-assign]
 
-    def _path(self, url: str) -> str:
-        """Return the request path for a full URL.
-
-        Args:
-            url (str): Full request URL.
-
-        Returns:
-            str: Path portion relative to the client's base URL.
-        """
-        return url.removeprefix(self._base_url)
-
     def _payload(self, path: str) -> Any:
         """Return the scripted JSON payload for a path.
 
@@ -325,7 +314,7 @@ class ScriptedRouter:
         Raises:
             aiohttp.ClientConnectionError: The firmware status endpoint is unreachable.
         """
-        path = self._path(url)
+        path = url.removeprefix(self._base_url)
         self.probe_paths.append(path)
         if path == FIRMWARE_STATUS_PATH and not self.firmware_reachable:
             raise aiohttp.ClientConnectionError("router unreachable")
