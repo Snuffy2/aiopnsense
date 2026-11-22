@@ -722,8 +722,20 @@ class VPNMixin(AiopnsenseClientProtocol):
         clients_servers: str,
         uuid: str,
         toggle_on_off: str | None = None,
-    ) -> bool | None:
+    ) -> bool:
         """Toggle a VPN instance and retry known unapplied changes.
+
+        WireGuard reads state before toggling because firmware through 26.7.9
+        ignores its target path, then best-effort corrects a mismatched result. A
+        per-service client lock serializes this client's toggles, but independent
+        clients and external writers can still race. Known saved changes are
+        retained only on this client and retried by a later matching request;
+        transport failures can leave remote apply state unknown. If the caller
+        cancels after a VPN POST dispatch, the call waits for its response before
+        propagating cancellation so an acknowledged save can be tracked. Closing
+        the client can cancel the queue worker before the response arrives. If
+        OPNsense saved the change, the client may not track it, and a later
+        matching request can skip the service reconfigure.
 
         Args:
             vpn_type (str): VPN implementation to toggle: ``openvpn``, ``wireguard``
@@ -734,28 +746,16 @@ class VPNMixin(AiopnsenseClientProtocol):
             uuid (str): VPN instance UUID.
             toggle_on_off (str | None): ``on`` or ``off`` for an explicit state,
                 or ``None`` or ``toggle`` to flip the current state.
-                WireGuard reads state before toggling because firmware through
-                26.7.9 ignores its target path, then best-effort corrects a
-                mismatched result. A per-service client lock serializes this
-                client's toggles. Independent clients and external writers can
-                still race. Known saved changes are retained only on this
-                client and retried by a later matching request; transport
-                failures can leave remote apply state unknown. If the caller
-                cancels after a VPN POST dispatch, the call waits for its
-                response before propagating cancellation so an acknowledged
-                save can be tracked. Closing the client can cancel the queue
-                worker before the response arrives. If OPNsense saved the
-                change, the client may not track it, and a later matching
-                request can skip the service reconfigure.
 
         Returns:
-            bool | None: Whether the requested toggle or pending service apply
-                succeeded. A matching explicit target returns ``True`` without a
-                service reconfigure unless this client tracks an earlier unapplied
-                save. An unknown VPN type or collection, or an empty WireGuard UUID,
-                returns ``False``. An unrecognised ``toggle_on_off`` is an error:
-                it is raised when ``throw_errors`` is enabled and otherwise logged,
-                returning ``None``.
+            bool: True when the toggle and service apply succeeded. A matching
+                explicit target returns ``True`` without a service reconfigure
+                unless this client tracks an earlier unapplied save. False when the
+                save was not acknowledged or the apply was not confirmed, for an
+                unknown VPN type or collection, or for an empty WireGuard UUID. An
+                unrecognised ``toggle_on_off`` raises ``OPNsenseInvalidArgument``
+                when ``throw_errors`` is enabled, as do transport errors;
+                otherwise the error is logged and the call returns None.
                 Closing the client raises ``asyncio.CancelledError`` from a call in
                 progress or a new call; a completed service apply can still report
                 success during shutdown.
@@ -783,9 +783,9 @@ class VPNMixin(AiopnsenseClientProtocol):
             ToggleSpec | None: The Toggle, or ``None`` for an unknown VPN type or
                 collection, or an empty WireGuard UUID.
         """
-        suffix = target.endpoint_suffix()
         if vpn_type == "wireguard":
             return VPNMixin._wireguard_toggle_spec(clients_servers, uuid, target)
+        suffix = target.endpoint_suffix()
         if vpn_type == "openvpn":
             item = ("instances", uuid)
             save = ToggleStep.save(

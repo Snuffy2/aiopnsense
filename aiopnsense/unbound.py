@@ -206,7 +206,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 for legacy firmware where regular DNSBL has no per-entry UUID.
 
         Returns:
-            bool: True when the operation succeeds; otherwise, False.
+            bool: True when the operation succeeds; otherwise, False. Transport
+                errors during the save or apply raise when ``throw_errors`` is
+                enabled.
         """
         use_legacy = await self._uses_legacy_unbound_blocklist()
         state_name = "enable" if set_state else "disable"

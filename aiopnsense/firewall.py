@@ -345,9 +345,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         )
 
     @_log_errors
-    async def toggle_firewall_rule(
-        self, uuid: str, toggle_on_off: str | None = None
-    ) -> bool | None:
+    async def toggle_firewall_rule(self, uuid: str, toggle_on_off: str | None = None) -> bool:
         """Toggle a Firewall Rule on or off and apply the filter.
 
         Args:
@@ -357,11 +355,12 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 the current state.
 
         Returns:
-            bool | None: True when the Router acknowledged the save and confirmed
+            bool: True when the Router acknowledged the save and confirmed
                 the apply; False when the save was not acknowledged (no apply is
                 sent) or the apply was not confirmed. An invalid ``toggle_on_off``
-                returns None, or raises ``OPNsenseInvalidArgument`` when
-                ``throw_errors`` is enabled, as do transport errors.
+                raises ``OPNsenseInvalidArgument`` when ``throw_errors`` is
+                enabled, as do transport errors; otherwise the error is logged
+                and the call returns None.
         """
         target = self._parse_toggle_target(toggle_on_off)
         url = f"{FIREWALL_FILTER_TOGGLE_RULE_ENDPOINT_PREFIX}{uuid}{target.endpoint_suffix()}"
@@ -378,7 +377,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
     @_log_errors
     async def toggle_nat_rule(
         self, nat_rule_type: str, uuid: str, toggle_on_off: str | None = None
-    ) -> bool | None:
+    ) -> bool:
         """Toggle a NAT rule on or off and apply the NAT changes.
 
         Args:
@@ -390,11 +389,12 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 the current state.
 
         Returns:
-            bool | None: True when the Router acknowledged the save and confirmed
+            bool: True when the Router acknowledged the save and confirmed
                 the apply; False when the save was not acknowledged (no apply is
                 sent) or the apply was not confirmed. An invalid ``toggle_on_off``
-                returns None, or raises ``OPNsenseInvalidArgument`` when
-                ``throw_errors`` is enabled, as do transport errors.
+                raises ``OPNsenseInvalidArgument`` when ``throw_errors`` is
+                enabled, as do transport errors; otherwise the error is logged
+                and the call returns None.
         """
         target = self._parse_toggle_target(toggle_on_off)
         # d_nat stores a *disabled* flag, so on/off map to the opposite URL suffix.
@@ -439,7 +439,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         }
 
     @_log_errors
-    async def toggle_alias(self, alias: str, toggle_on_off: str | None = None) -> bool | None:
+    async def toggle_alias(self, alias: str, toggle_on_off: str | None = None) -> bool:
         """Toggle an alias on or off, commit it and reconfigure the aliases.
 
         Args:
@@ -449,13 +449,13 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 the current state.
 
         Returns:
-            bool | None: True when the Router acknowledged the toggle and the
+            bool: True when the Router acknowledged the toggle and the
                 commit and confirmed the reconfigure; False when the alias cannot
                 be found, a save step was not acknowledged (nothing further is
                 sent) or the reconfigure was not confirmed. An invalid
-                ``toggle_on_off`` returns None, or raises
-                ``OPNsenseInvalidArgument`` when ``throw_errors`` is enabled, as
-                do transport errors.
+                ``toggle_on_off`` raises ``OPNsenseInvalidArgument`` when
+                ``throw_errors`` is enabled, as do transport errors; otherwise
+                the error is logged and the call returns None.
         """
         target = self._parse_toggle_target(toggle_on_off)
         alias_search_endpoint = await self._get_endpoint_path(
