@@ -1580,31 +1580,46 @@ async def test_one_shot_non_mapping_stream_payload_does_not_report_recovery(
         await client.async_close()
 
 
+@pytest.mark.parametrize(
+    ("path_name", "level"), [("get_json", logging.ERROR), ("probe", logging.WARNING)]
+)
 @pytest.mark.asyncio
-async def test_transport_failure_log_omits_credentials_from_configured_url(
+async def test_transport_failure_log_omits_url_credentials(
+    path_name: str,
+    level: int,
     make_client: MakeClientFactory,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Transport failure logs identify the API path without exposing URL userinfo.
+    """Keep the endpoint in failure logs while redacting credentials from URLs.
 
     Args:
+        path_name (str): Request path to exercise.
+        level (int): Expected failure log level.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
         caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
     """
     session = MagicMock()
-    session.get = MagicMock(side_effect=TimeoutError("stalled"))
+    session.get = MagicMock(
+        side_effect=TimeoutError(
+            "Timed out reading https://error-user:error-password@opnsense.invalid"
+        )
+    )
     client = make_client(
         session=session,
         url="https://synthetic-user:synthetic-password@opnsense.invalid",
     )
     try:
-        with caplog.at_level(logging.ERROR, logger="aiopnsense"):
-            assert await client._do_get("/api/x", caller="test") is None
+        with caplog.at_level(logging.WARNING, logger="aiopnsense"):
+            await _call_ladder_path(client, path_name)
 
-        messages = "\n".join(record.getMessage() for record in caplog.records)
-        assert "/api/x" in messages
-        assert "synthetic-user" not in messages
-        assert "synthetic-password" not in messages
+        assert [record.levelno for record in caplog.records] == [level]
+        message = caplog.records[0].getMessage()
+        assert "/api/x" in message
+        assert "opnsense.invalid" in message
+        assert "synthetic-user" not in message
+        assert "synthetic-password" not in message
+        assert "error-user" not in message
+        assert "error-password" not in message
     finally:
         await client.async_close()
 
