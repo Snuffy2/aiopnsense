@@ -126,3 +126,45 @@ Check firmware or control a service
                print(f"Restarted unbound: {restarted}")
 
    asyncio.run(main())
+
+Read the supported firmware requirements
+----------------------------------------
+
+``OPNsenseClient.get_firmware_requirements()`` returns the Minimum Firmware and
+Recommended Firmware as an ``OPNsenseClient.FirmwareRequirements`` object. It is
+a static method that never contacts the Router, so it works before any client
+exists, for example to show the requirements in a setup form. Entering the
+client with ``async with`` calls ``validate()``, which raises
+``OPNsenseBelowMinFirmware`` for firmware older than the minimum.
+
+.. code-block:: python
+
+   import asyncio
+
+   import aiohttp
+   from aiopnsense import OPNsenseBelowMinFirmware, OPNsenseClient
+   from aiopnsense.helpers import firmware_is_at_least
+
+   async def main() -> None:
+       requirements = OPNsenseClient.get_firmware_requirements()
+       print(f"Minimum Firmware: {requirements.minimum}")
+       print(f"Recommended Firmware: {requirements.recommended}")
+
+       async with aiohttp.ClientSession() as session:
+           try:
+               async with OPNsenseClient(
+                   url="https://opnsense.example.com",
+                   username="YOUR_API_KEY",
+                   password="YOUR_API_SECRET",
+                   session=session,
+               ) as client:
+                   firmware = await client.get_host_firmware_version()
+                   if firmware_is_at_least(firmware, requirements.recommended) is False:
+                       print(
+                           f"Firmware {firmware} is supported, but some features "
+                           f"need {requirements.recommended} or later"
+                       )
+           except OPNsenseBelowMinFirmware:
+               print(f"Upgrade the Router to {requirements.minimum} or later")
+
+   asyncio.run(main())
