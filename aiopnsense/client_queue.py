@@ -58,6 +58,7 @@ class ClientQueueMixin:
             path: str,
             caller: str = "Unknown",
             *,
+            read_body: bool = True,
             response_format: Literal["json", "text"] = "json",
         ) -> EndpointOutcome:
             """Execute an immediate GET request and classify the response.
@@ -65,6 +66,7 @@ class ClientQueueMixin:
             Args:
                 path (str): API endpoint path to request.
                 caller (str): Calling method name used for diagnostics.
+                read_body (bool): Whether to decode a successful response body.
                 response_format (Literal["json", "text"], optional): Decoding mode for
                     a successful response body.
 

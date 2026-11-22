@@ -2748,32 +2748,31 @@ async def _get_public_leases(make_client: ClientType, routes: dict[str, object])
 
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
-        routes (dict[str, object]): JSON payload served for each API path. Every other
-            path answers 404, so the matching DHCP backend looks not installed.
+        routes (dict[str, object]): JSON payload served for each API path. Other DHCP
+            endpoints answer 404, so the matching backend looks not installed.
 
     Returns:
         dict[str, Any]: The ``get_dhcp_leases`` result.
     """
     client, session = make_mock_session_client(make_client)
-    client._get = AsyncMock(side_effect=client._do_get)
     client._use_snake_case = True
-
-    def respond(url: str, **_kwargs: object) -> FakeResponse:
-        """Serve the payload registered for the requested path, or a 404.
-
-        Args:
-            url (str): Full request URL.
-            **_kwargs (object): Ignored request options.
-
-        Returns:
-            FakeResponse: Fake HTTP response for the path.
-        """
-        path = url.removeprefix("http://localhost")
-        if path in routes:
-            return FakeResponse(json_payload=routes[path])
-        return FakeResponse(status=404, ok=False)
-
-    session.get.side_effect = respond
+    install_fake_router(
+        client,
+        session,
+        routes={
+            ("GET", path): routes.get(path, 404)
+            for path in (
+                _KEA_LEASES4,
+                _KEA_LEASES6,
+                _KEA_RESERVATIONS,
+                _DNSMASQ_LEASES,
+                _ISC_LEASES4,
+                _ISC_LEASES6,
+                "/api/kea/dhcpv4/get",
+                "/api/dnsmasq/settings/search_range",
+            )
+        },
+    )
     try:
         return await client.get_dhcp_leases(opnsense_tz=_LEASE_ROUTER_TZ)
     finally:
