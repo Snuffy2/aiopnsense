@@ -7,6 +7,7 @@ from warnings import deprecated
 
 import aiohttp
 
+from ._error_policy import _error_if_throwing, _raise_if_throwing, _throws_errors
 from ._typing import AiopnsenseClientProtocol
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS, LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
 from .exceptions import (
@@ -245,7 +246,7 @@ class ClientEndpointMixin:
 
         if not force_refresh and cache_is_fresh and cache_key in self._endpoint_availability:
             cached_availability = self._endpoint_availability[cache_key]
-            if not (self._throw_errors and cache_key in self._endpoint_permission_denied):
+            if not (_throws_errors(self) and cache_key in self._endpoint_permission_denied):
                 return cached_availability
 
         self._rest_api_query_count += 1
@@ -283,9 +284,9 @@ class ClientEndpointMixin:
                         "Permission Error in is_%s_endpoint_available. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                         normalized_method,
                         url,
-                        error=error if self._throw_errors else None,
+                        error=_error_if_throwing(self, error),
                     )
-                    if self._throw_errors:
+                    if _throws_errors(self):
                         self._clear_endpoint_cache_entry(cache_key)
                         raise error
                     self._endpoint_permission_denied.add(cache_key)
@@ -306,10 +307,9 @@ class ClientEndpointMixin:
                     path,
                     response.status,
                     response.reason,
-                    error=error if self._throw_errors else None,
+                    error=_error_if_throwing(self, error),
                 )
-                if self._throw_errors:
-                    raise error
+                _raise_if_throwing(self, error)
                 return False
         except (aiohttp.ClientError, TimeoutError) as e:
             self._clear_endpoint_cache_entry(cache_key)
@@ -325,10 +325,9 @@ class ClientEndpointMixin:
                 path,
                 type(e).__name__,
                 e,
-                error=error if self._throw_errors else None,
+                error=_error_if_throwing(self, error),
             )
-            if self._throw_errors:
-                raise error from e
+            _raise_if_throwing(self, error, e)
             return False
 
     async def _is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:

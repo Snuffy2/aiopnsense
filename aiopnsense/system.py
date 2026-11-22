@@ -9,6 +9,7 @@ import warnings
 import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
+from ._error_policy import _log_errors, _raise_if_throwing
 from ._typing import AiopnsenseClientProtocol
 from .const import (
     AMBIGUOUS_TZINFOS,
@@ -18,7 +19,6 @@ from .const import (
 from .exceptions import OPNsenseError, OPNsenseInvalidArgument, OPNsenseMissingDeviceUniqueID
 from .helpers import (
     _LOGGER,
-    _log_errors,
     api_value_matches,
     coerce_bool,
     firmware_is_at_least,
@@ -197,15 +197,11 @@ class SystemMixin(AiopnsenseClientProtocol):
         """Raise when device unique ID resolution failed in throwing mode.
 
         Returns:
-            None: This helper only raises when the client is configured to
-                propagate public errors.
-
-        Raises:
-            OPNsenseMissingDeviceUniqueID: No device unique ID could be
-                resolved and ``throw_errors`` is enabled.
+            None: Nothing when ``throw_errors`` is disabled. When it is enabled,
+                ``OPNsenseMissingDeviceUniqueID`` is raised through the error
+                policy because no device unique ID could be resolved.
         """
-        if self._throw_errors:
-            raise OPNsenseMissingDeviceUniqueID
+        _raise_if_throwing(self, OPNsenseMissingDeviceUniqueID())
 
     def _parse_carp_vip_rows(self, rows: list[Any]) -> list[dict[str, Any]]:
         """Normalize CARP VIP rows from OPNsense responses.

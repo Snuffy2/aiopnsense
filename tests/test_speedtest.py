@@ -2,12 +2,15 @@
 
 from collections.abc import Callable
 from datetime import timedelta, timezone
+from typing import Any
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from aiopnsense import OPNsenseClient
+from aiopnsense.exceptions import OPNsenseConnectionError
+from aiopnsense.system import SYSTEM_TIME_ENDPOINT
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -497,5 +500,66 @@ async def test_run_speedtest_returns_empty_for_non_mapping_response(
         client._safe_dict_get_with_timeout.assert_awaited_once_with(
             "/api/speedtest/service/run", timeout_seconds=180
         )
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_speedtest_survives_failed_system_time_lookup(
+    make_client: ClientType, throw_errors: bool
+) -> None:
+    """A failed system-time lookup only drops naive timestamps in either error mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Whether strict request errors are enabled.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._throw_errors = throw_errors
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        client._safe_list_get = AsyncMock(
+            return_value=[
+                [
+                    "2026-03-14T03:09:45+01:30",
+                    "198.51.100.10",
+                    "72800",
+                    "Test ISP",
+                    "United States",
+                    "1",
+                    "2",
+                    "3",
+                    "https://www.speedtest.net/result/c/abc",
+                ]
+            ]
+        )
+
+        async def fake_get(path: str) -> dict[str, Any]:
+            """Fail the system-time request and return the stat payload otherwise.
+
+            Args:
+                path (str): API endpoint requested by the getter.
+
+            Returns:
+                dict[str, Any]: Canned showstat payload.
+
+            Raises:
+                OPNsenseConnectionError: For the system-time endpoint.
+            """
+            if path == SYSTEM_TIME_ENDPOINT:
+                raise OPNsenseConnectionError("system time unavailable")
+            return {
+                "samples": 10717,
+                "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
+            }
+
+        client._safe_dict_get = AsyncMock(side_effect=fake_get)
+
+        result = await client.get_speedtest()
+
+        assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
+        assert result["average"]["download"]["oldest"] is None
+        assert result["average"]["download"]["youngest"] is None
     finally:
         await client.async_close()

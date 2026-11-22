@@ -3,18 +3,14 @@
 import asyncio
 from collections.abc import MutableMapping
 from datetime import datetime, timedelta
+from functools import partial
+import logging
 from typing import Any
 
+from ._error_policy import _attempt, _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .exceptions import OPNsenseError
-from .helpers import (
-    _LOGGER,
-    _log_errors,
-    api_value_matches,
-    dict_get,
-    timestamp_to_datetime,
-    try_to_int,
-)
+from .helpers import _LOGGER, api_value_matches, dict_get, timestamp_to_datetime, try_to_int
 
 OPENVPN_SESSIONS_SNAKE_ENDPOINT = "/api/openvpn/service/search_sessions"
 OPENVPN_SESSIONS_CAMELCASE_ENDPOINT = "/api/openvpn/service/searchSessions"
@@ -101,14 +97,12 @@ class VPNMixin(AiopnsenseClientProtocol):
                 Route-derived ``clients`` and ``connected_clients`` are omitted
                 when routes cannot be fetched or have missing or malformed rows,
                 rather than reporting zero clients.
-
-        Raises:
-            OPNsenseError: Raised when ``self._throw_errors`` is ``True`` and a
-                request or endpoint probe fails, including a forbidden (403)
-                instance or provider configuration endpoint. A known missing
-                (404) instance or provider endpoint still allows partial results.
-                Structurally malformed required payloads return ``None`` rather
-                than raising.
+                When ``self._throw_errors`` is ``True``, a failed request or
+                endpoint probe raises ``OPNsenseError`` instead, including a
+                forbidden (403) instance or provider configuration endpoint. A
+                known missing (404) instance or provider endpoint still allows
+                partial results. Structurally malformed required payloads return
+                ``None`` rather than raising.
         """
         # https://docs.opnsense.org/development/api/core/openvpn.html
         # https://github.com/opnsense/core/blob/master/src/opnsense/www/js/widgets/OpenVPNClients.js
@@ -133,14 +127,18 @@ class VPNMixin(AiopnsenseClientProtocol):
             snake_case_path=OPENVPN_ROUTES_SNAKE_ENDPOINT,
             camel_case_path=OPENVPN_ROUTES_CAMELCASE_ENDPOINT,
         )
+        routes_info: dict[str, Any]
         if await self._is_get_endpoint_available(routes_endpoint):
-            try:
-                routes_info = await self._safe_dict_get(routes_endpoint)
-            except OPNsenseError as err:
-                if self._throw_errors:
-                    raise
-                _LOGGER.debug("[get_openvpn] routes unavailable. %s: %s", type(err).__name__, err)
-                routes_info = {}
+            # An optional sub-request: its failure degrades to empty routes so the
+            # sessions data still returns.
+            routes_info = await _attempt(
+                self,
+                lambda: self._safe_dict_get(routes_endpoint),
+                empty={},
+                name="get_openvpn routes",
+                errors=(OPNsenseError,),
+                log_level=logging.DEBUG,
+            )
         else:
             _LOGGER.debug("OpenVPN routes endpoint unavailable")
             routes_info = {}
@@ -1392,12 +1390,10 @@ class VPNMixin(AiopnsenseClientProtocol):
                 plus children seen only in the sessions API, with installed SA
                 counts and aggregated counters. ``None`` when the child
                 configuration or any phase 2 session list could not be read this
-                time, so a missing reply is never reported as a down child.
-
-        Raises:
-            OPNsenseError: Raised when a phase 2 sessions request fails, for
-                example with a reply that is not valid JSON, and
-                ``self._throw_errors`` is ``True``.
+                time, so a missing reply is never reported as a down child. When
+                ``self._throw_errors`` is ``True``, a failed phase 2 sessions
+                request, for example a reply that is not valid JSON, raises
+                ``OPNsenseError`` instead.
         """
         configured = await self._get_ipsec_configured_rows(
             IPSEC_CHILDREN_SNAKE_ENDPOINT, IPSEC_CHILDREN_CAMELCASE_ENDPOINT
@@ -1414,17 +1410,17 @@ class VPNMixin(AiopnsenseClientProtocol):
             camel_case_path=IPSEC_PHASE2_SESSIONS_CAMELCASE_ENDPOINT,
         )
         for session_name in connected_session_names:
-            try:
-                payload = await self._safe_dict_post(phase2_endpoint, {"id": session_name})
-            except OPNsenseError as err:
-                if self._throw_errors:
-                    raise
-                _LOGGER.debug(
-                    "[get_ipsec] phase 2 sessions unavailable for %s. %s: %s",
-                    session_name,
-                    type(err).__name__,
-                    err,
-                )
+            # A failed request returns None for the whole read, so a missing reply is
+            # never reported as a down child.
+            payload = await _attempt(
+                self,
+                partial(self._safe_dict_post, phase2_endpoint, {"id": session_name}),
+                empty=None,
+                name=f"get_ipsec phase 2 sessions for {session_name}",
+                errors=(OPNsenseError,),
+                log_level=logging.DEBUG,
+            )
+            if payload is None:
                 return None
             sa_rows = payload.get("rows")
             if not isinstance(sa_rows, list):

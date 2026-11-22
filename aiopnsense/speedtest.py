@@ -17,8 +17,9 @@ from __future__ import annotations
 from collections.abc import MutableMapping
 from typing import Any
 
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, dict_get, normalize_datetime, try_to_float, try_to_int
+from .helpers import _LOGGER, dict_get, normalize_datetime, try_to_float, try_to_int
 
 SPEEDTEST_SHOW_LOG_ENDPOINT = "/api/speedtest/service/showlog"
 SPEEDTEST_SHOW_STAT_ENDPOINT = "/api/speedtest/service/showstat"

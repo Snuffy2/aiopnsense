@@ -1,9 +1,7 @@
 """Shared aiopnsense helper utilities and decorators."""
 
-import asyncio
-from collections.abc import Callable, MutableMapping
+from collections.abc import MutableMapping
 from datetime import UTC, datetime, tzinfo
-from functools import wraps
 import ipaddress
 import logging
 import re
@@ -14,12 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import aiohttp
 import awesomeversion
 
-from .exceptions import (
-    _INVALID_URL_ERROR_MESSAGE,
-    OPNsenseError,
-    OPNsenseTimeoutError,
-    _map_opnsense_exception,
-)
+from .exceptions import _INVALID_URL_ERROR_MESSAGE
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 _REQUEST_ERROR_LOGGED_ATTRIBUTE = "_aiopnsense_request_error_logged"
@@ -65,74 +58,6 @@ class _ExceptionLogDetails:
                 f"{''.join(self._traceback_snapshot.format())}"
             )
         return self._rendered
-
-
-def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap coroutine methods with shared timeout/error logging behavior.
-
-    Args:
-        func (Callable[..., Any]): Coroutine function to decorate and execute
-            with shared behavior.
-
-    Returns:
-        Callable[..., Any]: Decorator wrapper that applies shared exception
-            logging and returns the wrapped coroutine result.
-    """
-
-    @wraps(func)
-    async def inner(self: Any, *args: Any, **kwargs: Any) -> Any:
-        """Execute wrapped coroutine with shared timeout/exception logging.
-
-        Args:
-            self (Any): Client instance whose ``_throw_errors`` setting controls
-                whether caught errors are mapped and propagated or logged and
-                suppressed.
-            args (Any): Positional arguments forwarded to the wrapped coroutine.
-            kwargs (Any): Keyword arguments forwarded to the wrapped coroutine.
-
-        Returns:
-            Any: Wrapped coroutine result, or ``None`` when an error is
-                suppressed.
-
-        Raises:
-            asyncio.CancelledError: Re-raised when the wrapped coroutine is
-                cancelled.
-            OPNsenseTimeoutError: Re-raised when ``_throw_errors`` is true
-                and the wrapped coroutine raises this OPNsense error.
-            TimeoutError: Caught and mapped to an OPNsense error when
-                ``_throw_errors`` is true.
-            aiohttp.ServerTimeoutError: Caught and mapped to an OPNsense error
-                when ``_throw_errors`` is true.
-            Exception: Re-raised or mapped to an OPNsense error when
-                ``_throw_errors`` is true.
-            _map_opnsense_exception: Maps caught errors to an OPNsense error
-                when ``_throw_errors`` is true.
-        """
-        try:
-            return await func(self, *args, **kwargs)
-        except asyncio.CancelledError:
-            raise
-        except (TimeoutError, aiohttp.ServerTimeoutError, OPNsenseTimeoutError) as e:
-            if not _is_request_error_logged(e):
-                _LOGGER.warning("Timeout Error in %s. Will retry. %s", func.__name__.strip("_"), e)
-            if self._throw_errors:
-                if isinstance(e, OPNsenseError):
-                    raise
-                raise _map_opnsense_exception(e) from e
-        except Exception as e:
-            if not _is_request_error_logged(e):
-                _LOGGER.error(
-                    "Error in %s. %s",
-                    func.__name__.strip("_"),
-                    _ExceptionLogDetails(e),
-                )
-            if self._throw_errors:
-                if isinstance(e, OPNsenseError):
-                    raise
-                raise _map_opnsense_exception(e) from e
-        return None
-
-    return inner
 
 
 def _log_request_failure(

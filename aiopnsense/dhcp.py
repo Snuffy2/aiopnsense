@@ -17,16 +17,9 @@ from ._dhcp_leases import (
     _kea_lease_backend,
     _normalize_leases,
 )
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
-from .helpers import (
-    _LOGGER,
-    _log_errors,
-    api_value_matches,
-    coerce_bool,
-    dict_get,
-    get_ip_key,
-    try_to_int,
-)
+from .helpers import _LOGGER, api_value_matches, coerce_bool, dict_get, get_ip_key, try_to_int
 
 ARP_TABLE_ENDPOINT = "/api/diagnostics/interface/search_arp"
 NDP_TABLE_ENDPOINT = "/api/diagnostics/interface/search_ndp"

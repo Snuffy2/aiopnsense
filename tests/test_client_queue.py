@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import MutableMapping
 import contextlib
 import json
+import logging
 from typing import Any, Never
 from unittest.mock import AsyncMock
 
@@ -302,6 +303,35 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        await client.async_close()
+
+
+async def test_unbound_attempt_keeps_domain_caller_in_queue_diagnostics(
+    make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Keep Unbound's domain method in transport failure diagnostics.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning client instances.
+        caplog (pytest.LogCaptureFixture): Captured transport diagnostics.
+
+    Returns:
+        None: This test asserts the caller label in the actual transport report.
+    """
+    client, session = make_mock_session_client(make_client)
+    try:
+        client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
+        client._safe_dict_get = AsyncMock(return_value={"unbound": {"dnsbl": {}}})
+        session.post.return_value = FakeResponse(
+            status=500, reason="Internal Server Error", ok=False
+        )
+
+        with caplog.at_level(logging.ERROR, logger="aiopnsense"):
+            result = await client.enable_unbound_blocklist()
+
+        assert result is False
+        assert "called by _set_unbound_blocklist_legacy" in caplog.text
+    finally:
         await client.async_close()
 
 

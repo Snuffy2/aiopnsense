@@ -7,8 +7,9 @@ from datetime import UTC, date, datetime, timedelta, tzinfo
 import re
 from typing import Any
 
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, normalize_lookup_token, try_to_float
+from .helpers import _LOGGER, normalize_lookup_token, try_to_float
 
 _VSTAT_HEADER_RE = re.compile(
     r"^\s*(?P<interface>[^\s]+)\s*/\s*(?P<period>hourly|daily|monthly|yearly)\s*$",

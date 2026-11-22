@@ -126,6 +126,38 @@ async def test_get_device_unique_id_raises_when_missing(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True])
+@pytest.mark.parametrize("missing", ["endpoint-unavailable", "no-physical-mac"])
+async def test_get_device_unique_id_missing_follows_throw_errors_contract(
+    make_client: ClientType, throw_errors: bool, missing: str
+) -> None:
+    """Verify a missing device ID is ``None`` with throw off and raises with throw on.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Whether the client raises public errors.
+        missing (str): How the ID is unavailable, endpoint absent or no physical MAC.
+
+    Returns:
+        None: This test validates both throw modes for a missing unique ID.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.toggle_throwing_errors(throw_errors)
+        client._is_get_endpoint_available = AsyncMock(
+            return_value=missing != "endpoint-unavailable"
+        )
+        client._safe_list_get = AsyncMock(return_value=[{"is_physical": False}])
+        if throw_errors:
+            with pytest.raises(OPNsenseMissingDeviceUniqueID):
+                await client.get_device_unique_id()
+        else:
+            assert await client.get_device_unique_id() is None
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_opnsense_timezone_parse_and_fallback(make_client: ClientType) -> None:
     """Verify timezone parsing succeeds and falls back gracefully on invalid data.
 

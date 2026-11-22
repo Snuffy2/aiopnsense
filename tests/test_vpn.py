@@ -10,6 +10,7 @@ import pytest
 
 import aiopnsense as aiopnsense_module
 from aiopnsense import OPNsenseClient, vpn as aiopnsense_vpn
+from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -829,6 +830,97 @@ async def test_get_openvpn_rejects_malformed_required_inventory_entries(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_openvpn_routes_request_failure(
+    make_client: ClientType, throw_errors: bool
+) -> None:
+    """Degrade a failed optional routes request to partial data, or raise in throw mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Whether strict request errors are enabled.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._throw_errors = throw_errors
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+
+        async def fake_get(path: str) -> dict[str, Any]:
+            """Fail routes and return a connected server's inventory otherwise.
+
+            Args:
+                path (str): API endpoint requested by the getter.
+
+            Returns:
+                dict[str, Any]: Session or instance rows for other endpoints.
+
+            Raises:
+                OPNsenseConnectionError: For the routes endpoint.
+            """
+            if path == aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT:
+                raise OPNsenseConnectionError("routes unavailable")
+            if path == aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT:
+                return {"rows": [{"type": "server", "id": "server", "status": "connected"}]}
+            if path == aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT:
+                return {"rows": [{"role": "server", "uuid": "server", "enabled": "1"}]}
+            return {"rows": []}
+
+        client._safe_dict_get = AsyncMock(side_effect=fake_get)
+        client._get = AsyncMock(return_value={})
+
+        if throw_errors:
+            with pytest.raises(OPNsenseConnectionError):
+                await client.get_openvpn()
+        else:
+            result = await client.get_openvpn()
+            assert result is not None
+            server = result["servers"]["server"]
+            assert server["status"] == "up"
+            assert "clients" not in server
+            assert "connected_clients" not in server
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_openvpn_routes_cancellation_propagates(make_client: ClientType) -> None:
+    """Never swallow cancellation raised by the optional routes request.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+
+        async def fake_get(path: str) -> dict[str, Any]:
+            """Cancel the routes request and return empty payloads otherwise.
+
+            Args:
+                path (str): API endpoint requested by the getter.
+
+            Returns:
+                dict[str, Any]: Empty row payload for non-cancelled endpoints.
+
+            Raises:
+                asyncio.CancelledError: For the routes endpoint.
+            """
+            if path == aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT:
+                raise asyncio.CancelledError
+            return {"rows": []}
+
+        client._safe_dict_get = AsyncMock(side_effect=fake_get)
+        client._get = AsyncMock(return_value={})
+
+        with pytest.raises(asyncio.CancelledError):
+            await client.get_openvpn()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_openvpn_ignores_explicit_unsupported_role(make_client: ClientType) -> None:
     """Ignore an explicit unsupported role while validating required records.
 
@@ -1551,6 +1643,62 @@ async def test_get_ipsec_children_fail_closed(
         else:
             assert set(ipsec["children"]) == expected_children
             assert ipsec["children"]["child-x"]["enabled"] is None
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_ipsec_phase2_request_failure(
+    make_client: ClientType, throw_errors: bool
+) -> None:
+    """Omit children when a phase 2 request fails, or raise in throw mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Whether strict request errors are enabled.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._throw_errors = throw_errors
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": True}]}
+        client._safe_dict_get = AsyncMock(
+            side_effect=lambda path: _ipsec_get_response(path, sessions, {"rows": []})
+        )
+        client._safe_dict_post = AsyncMock(side_effect=OPNsenseConnectionError("phase 2 failed"))
+
+        if throw_errors:
+            with pytest.raises(OPNsenseConnectionError):
+                await client.get_ipsec()
+        else:
+            result = await client.get_ipsec()
+            assert set(result["connections"]) == {"ike-1"}
+            assert "children" not in result
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_ipsec_phase2_cancellation_propagates(make_client: ClientType) -> None:
+    """Never swallow cancellation raised by a phase 2 sessions request.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": True}]}
+        client._safe_dict_get = AsyncMock(
+            side_effect=lambda path: _ipsec_get_response(path, sessions, {"rows": []})
+        )
+        client._safe_dict_post = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with pytest.raises(asyncio.CancelledError):
+            await client.get_ipsec()
     finally:
         await client.async_close()
 

@@ -11,6 +11,7 @@ from warnings import deprecated
 import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .const import (
     AMBIGUOUS_TZINFOS,
@@ -27,7 +28,6 @@ from .exceptions import (
 )
 from .helpers import (
     _LOGGER,
-    _log_errors,
     dict_get,
     firmware_is_at_least,
     firmware_is_newer,
