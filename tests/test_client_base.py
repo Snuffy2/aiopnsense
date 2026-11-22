@@ -519,6 +519,79 @@ async def test_cancelled_outcome_reads_release_queue_workers(
 
 
 @pytest.mark.asyncio
+async def test_cancelled_transport_child_does_not_stop_queue_worker(
+    make_client: MakeClientFactory,
+) -> None:
+    """A transport cancellation fails one request and leaves queued work running.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    two_reads_started = asyncio.Event()
+    release_reads = asyncio.Event()
+    active_reads = 0
+    service_read_started = asyncio.Event()
+
+    class CancelledResponse:
+        """Raise cancellation from an independently aborted Router request."""
+
+        async def __aenter__(self) -> FakeResponse:
+            nonlocal active_reads
+            active_reads += 1
+            if active_reads == 2:
+                two_reads_started.set()
+            await release_reads.wait()
+            raise asyncio.CancelledError("Router request was independently cancelled")
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            _tb: object,
+        ) -> bool:
+            return False
+
+    def session_get(url: str, **_kwargs: Any) -> CancelledResponse | FakeResponse:
+        """Return a cancelable NUT request or a service listing.
+
+        Args:
+            url (str): Requested URL.
+            _kwargs (Any): HTTP options supplied by aiohttp callers.
+
+        Returns:
+            CancelledResponse | FakeResponse: Response context for the requested path.
+        """
+        if url.endswith("/api/nut/diagnostics/upsstatus"):
+            return CancelledResponse()
+        service_read_started.set()
+        return FakeResponse(json_payload={"rows": [{"name": "service", "running": "1"}]})
+
+    session.get = session_get
+    try:
+        nut_calls = [asyncio.create_task(client.get_nut_ups_status()) for _ in range(2)]
+        await asyncio.wait_for(two_reads_started.wait(), timeout=2)
+
+        services_call = asyncio.create_task(client.get_services())
+        for _attempt in range(10):
+            if client._request_queue.qsize() == 1:
+                break
+            await asyncio.sleep(0)
+        assert client._request_queue.qsize() == 1
+
+        release_reads.set()
+        nut_results = await asyncio.gather(*nut_calls, return_exceptions=True)
+        assert all(isinstance(result, asyncio.CancelledError) for result in nut_results)
+        assert await asyncio.wait_for(services_call, timeout=2) == [
+            {"name": "service", "running": "1", "status": True}
+        ]
+        assert service_read_started.is_set()
+    finally:
+        release_reads.set()
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_outcome_post_cancelled_before_transport_dispatch_sends_no_request(
     make_client: MakeClientFactory,
 ) -> None:

@@ -203,6 +203,9 @@ class ClientQueueMixin:
                 request_task.cancel()
                 await asyncio.gather(request_task, return_exceptions=True)
                 return None
+            if request_task.cancelled():
+                future.cancel()
+                return None
             return await request_task
         except asyncio.CancelledError:
             if not request_task.done():
