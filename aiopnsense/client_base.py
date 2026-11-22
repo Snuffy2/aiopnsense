@@ -90,6 +90,8 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
             "wireguard": set(),
             "ipsec": set(),
         }
+        self._vpn_shutdown_generation = 0
+        self._vpn_close_count = 0
         self._use_snake_case: bool | None = None
         self._endpoint_availability: dict[str, bool] = {}
         self._endpoint_checked_at: dict[str, datetime] = {}

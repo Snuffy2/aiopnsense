@@ -1,5 +1,6 @@
 """OpenVPN, WireGuard, and IPsec methods for OPNsenseClient."""
 
+import asyncio
 from collections.abc import MutableMapping
 from datetime import datetime, timedelta
 from typing import Any
@@ -774,6 +775,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         vpn_type: str,
         item: tuple[str, str],
         toggle_on_off: str | None,
+        shutdown_generation: int,
     ) -> dict[str, Any]:
         """Post a VPN toggle and retain any acknowledged save on cancellation.
 
@@ -782,6 +784,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             vpn_type (str): VPN service owning the changed item.
             item (tuple[str, str]): Collection and instance UUID.
             toggle_on_off (str | None): Explicit target or legacy flip mode.
+            shutdown_generation (int): Generation captured when the VPN call began.
 
         Returns:
             dict[str, Any]: Toggle response when the caller remains active.
@@ -790,11 +793,15 @@ class VPNMixin(AiopnsenseClientProtocol):
             cancellation: The original ``asyncio.CancelledError`` received after
                 dispatch.
         """
+        self._ensure_vpn_operation_current(shutdown_generation)
         response, cancellation = await self._safe_dict_post_with_cancellation(url)
+        if self._vpn_toggle_acknowledges_save(response, toggle_on_off) and (
+            cancellation is not None or shutdown_generation != self._vpn_shutdown_generation
+        ):
+            self._vpn_pending_apply[vpn_type].add(item)
         if cancellation is not None:
-            if self._vpn_toggle_acknowledges_save(response, toggle_on_off):
-                self._vpn_pending_apply[vpn_type].add(item)
             raise cancellation
+        self._ensure_vpn_operation_current(shutdown_generation)
         return response
 
     async def _wireguard_is_in_target_state(
@@ -832,7 +839,11 @@ class VPNMixin(AiopnsenseClientProtocol):
         return enabled == ("1" if toggle_on_off == "on" else "0")
 
     async def _post_wireguard_toggle(
-        self, url: str, item: tuple[str, str], toggle_on_off: str | None = None
+        self,
+        url: str,
+        item: tuple[str, str],
+        toggle_on_off: str | None,
+        shutdown_generation: int,
     ) -> dict[str, Any]:
         """Post a WireGuard toggle and undo a flip in the wrong direction.
 
@@ -846,11 +857,14 @@ class VPNMixin(AiopnsenseClientProtocol):
             item (tuple[str, str]): WireGuard collection and instance UUID.
             toggle_on_off (str | None, optional): Validated target state, or
                 ``None`` for a flip request.
+            shutdown_generation (int): Generation captured when the VPN call began.
 
         Returns:
             dict[str, Any]: Response from the last toggle request.
         """
-        response = await self._post_vpn_toggle(url, "wireguard", item, toggle_on_off)
+        response = await self._post_vpn_toggle(
+            url, "wireguard", item, toggle_on_off, shutdown_generation
+        )
         if (
             toggle_on_off is not None
             and response.get("changed") is True
@@ -864,7 +878,9 @@ class VPNMixin(AiopnsenseClientProtocol):
                 toggle_on_off,
                 url,
             )
-            response = await self._post_vpn_toggle(url, "wireguard", item, toggle_on_off)
+            response = await self._post_vpn_toggle(
+                url, "wireguard", item, toggle_on_off, shutdown_generation
+            )
         return response
 
     async def _apply_vpn_service(self, vpn_type: str) -> bool:
@@ -941,21 +957,41 @@ class VPNMixin(AiopnsenseClientProtocol):
             bool: Whether the requested toggle or pending service apply succeeded.
                 A matching explicit target returns ``True`` without a service
                 reconfigure unless this client tracks an earlier unapplied save.
+
+        Raises:
+            asyncio.CancelledError: If client shutdown begins during this operation.
         """
         lock = self._vpn_service_locks.get(vpn_type)
         if lock is None:
             return False
+        if self._vpn_close_count > 0:
+            raise asyncio.CancelledError("OPNsenseClient is closing")
+        shutdown_generation = self._vpn_shutdown_generation
         async with lock:
+            self._ensure_vpn_operation_current(shutdown_generation)
             return await self._toggle_vpn_instance_locked(
-                vpn_type, clients_servers, uuid, toggle_on_off
+                vpn_type, clients_servers, uuid, toggle_on_off, shutdown_generation
             )
+
+    def _ensure_vpn_operation_current(self, shutdown_generation: int) -> None:
+        """Cancel VPN work that crossed a client shutdown boundary.
+
+        Args:
+            shutdown_generation (int): Generation captured when the call began.
+
+        Raises:
+            asyncio.CancelledError: If client shutdown began after this call started.
+        """
+        if self._vpn_close_count > 0 or shutdown_generation != self._vpn_shutdown_generation:
+            raise asyncio.CancelledError("OPNsenseClient closed during VPN operation")
 
     async def _toggle_vpn_instance_locked(
         self,
         vpn_type: str,
         clients_servers: str,
         uuid: str,
-        toggle_on_off: str | None = None,
+        toggle_on_off: str | None,
+        shutdown_generation: int,
     ) -> bool:
         """Toggle an instance while holding its service-local client lock.
 
@@ -964,12 +1000,14 @@ class VPNMixin(AiopnsenseClientProtocol):
             clients_servers (str): Collection containing the instance.
             uuid (str): VPN instance UUID.
             toggle_on_off (str | None): Target state or legacy flip mode.
+            shutdown_generation (int): Generation captured when the public call began.
 
         Returns:
             bool: Whether the toggle or any matching pending apply succeeded.
         """
         if toggle_on_off not in {"on", "off"}:
             toggle_on_off = None
+        generation = shutdown_generation
         if vpn_type == "openvpn":
             item = ("instances", uuid)
             url = f"{OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX}{uuid}"
@@ -977,7 +1015,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 url = f"{url}/1"
             elif toggle_on_off == "off":
                 url = f"{url}/0"
-            success = await self._post_vpn_toggle(url, "openvpn", item, toggle_on_off)
+            success = await self._post_vpn_toggle(url, "openvpn", item, toggle_on_off, generation)
             _LOGGER.debug(
                 "[toggle_vpn_instance] OpenVPN instance toggle response for UUID %s: %s",
                 uuid,
@@ -1030,9 +1068,11 @@ class VPNMixin(AiopnsenseClientProtocol):
             else:
                 return False
             item = (clients_servers, uuid)
+            self._ensure_vpn_operation_current(generation)
             in_target_state = await self._wireguard_is_in_target_state(
                 get_snake, get_camel, item_key, toggle_on_off
             )
+            self._ensure_vpn_operation_current(generation)
             if in_target_state is None:
                 return False
             if in_target_state:
@@ -1043,7 +1083,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 url = f"{url}/1"
             elif toggle_on_off == "off":
                 url = f"{url}/0"
-            success = await self._post_wireguard_toggle(url, item, toggle_on_off)
+            success = await self._post_wireguard_toggle(url, item, toggle_on_off, generation)
             early_result = self._vpn_toggle_early_result(success, toggle_on_off)
             if early_result is not None:
                 if early_result and item in self._vpn_pending_apply["wireguard"]:
@@ -1061,11 +1101,12 @@ class VPNMixin(AiopnsenseClientProtocol):
                 snake_case_path=f"{IPSEC_CONNECTION_TOGGLE_SNAKE_ENDPOINT_PREFIX}{uuid}",
                 camel_case_path=f"{IPSEC_CONNECTION_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}",
             )
+            self._ensure_vpn_operation_current(generation)
             if toggle_on_off == "on":
                 url = f"{url}/1"
             elif toggle_on_off == "off":
                 url = f"{url}/0"
-            success = await self._post_vpn_toggle(url, "ipsec", item, toggle_on_off)
+            success = await self._post_vpn_toggle(url, "ipsec", item, toggle_on_off, generation)
             _LOGGER.debug(
                 "[toggle_vpn_instance] IPsec connection toggle response for UUID %s: %s",
                 uuid,

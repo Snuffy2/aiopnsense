@@ -1453,3 +1453,192 @@ async def test_cancelled_queued_public_toggle_is_not_dispatched(
             return_exceptions=True,
         )
         await asyncio.wait_for(client.async_close(), timeout=3)
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_vpn_service_lock_waiter_and_allows_reuse(
+    make_client: MakeClientFactory,
+) -> None:
+    """Cancel a VPN call waiting on its service lock when the client closes.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._max_workers = 2
+    toggle_started = asyncio.Event()
+    get_started = asyncio.Event()
+    close_started = asyncio.Event()
+    release_cancelled_workers = asyncio.Event()
+    dispatched: list[str] = []
+
+    async def do_get(
+        path: str, caller: str = "Unknown", timeout_seconds: float | None = None
+    ) -> MutableMapping[str, Any]:
+        """Occupy a second worker until shutdown cancels it.
+
+        Args:
+            path (str): Endpoint path.
+            caller (str): Queue caller label.
+            timeout_seconds (float | None): Optional request timeout.
+
+        Returns:
+            MutableMapping[str, Any]: Simulated response.
+
+        Raises:
+            asyncio.CancelledError: When shutdown cancels the worker.
+        """
+        get_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            close_started.set()
+            await release_cancelled_workers.wait()
+            raise
+        return {}
+
+    async def do_post(
+        path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
+    ) -> MutableMapping[str, Any]:
+        """Hold the first VPN mutation and record dispatched POSTs.
+
+        Args:
+            path (str): Endpoint path.
+            payload (MutableMapping[str, Any] | None): Optional request body.
+            caller (str): Queue caller label.
+
+        Returns:
+            MutableMapping[str, Any]: Simulated response.
+
+        Raises:
+            asyncio.CancelledError: When shutdown cancels the worker.
+        """
+        dispatched.append(path)
+        if path.endswith("/first/1"):
+            toggle_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                close_started.set()
+                await release_cancelled_workers.wait()
+                raise
+        return {"changed": True, "result": "Enabled"} if "/toggle/" in path else {"result": "ok"}
+
+    client._do_get = AsyncMock(side_effect=do_get)
+    client._do_post = AsyncMock(side_effect=do_post)
+    active: asyncio.Task[bool] | None = None
+    waiter: asyncio.Task[bool] | None = None
+    during_close: asyncio.Task[bool] | None = None
+    blocker: asyncio.Task[Any] | None = None
+    close_task: asyncio.Task[None] | None = None
+    try:
+        active = asyncio.create_task(
+            client.toggle_vpn_instance("openvpn", "servers", "first", "on")
+        )
+        await asyncio.wait_for(toggle_started.wait(), timeout=3)
+        blocker = asyncio.create_task(client._get("/unrelated"))
+        await asyncio.wait_for(get_started.wait(), timeout=3)
+        waiter = asyncio.create_task(
+            client.toggle_vpn_instance("openvpn", "servers", "second", "on")
+        )
+        await asyncio.sleep(0)
+        assert not waiter.done()
+
+        close_task = asyncio.create_task(client.async_close())
+        await asyncio.wait_for(close_started.wait(), timeout=3)
+        during_close = asyncio.create_task(
+            client.toggle_vpn_instance("openvpn", "servers", "during-close", "on")
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(during_close, timeout=3)
+        release_cancelled_workers.set()
+        await asyncio.wait_for(close_task, timeout=3)
+        results = await asyncio.wait_for(
+            asyncio.gather(active, waiter, blocker, return_exceptions=True), timeout=3
+        )
+        assert all(isinstance(result, asyncio.CancelledError) for result in results)
+        assert len(dispatched) == 1
+        assert not any(path.endswith("/reconfigure") for path in dispatched)
+
+        assert (
+            await asyncio.wait_for(
+                client.toggle_vpn_instance("openvpn", "servers", "reused", "on"), timeout=3
+            )
+            is True
+        )
+        assert len(dispatched) == 3
+        assert dispatched[-1].endswith("/reconfigure")
+    finally:
+        release_cancelled_workers.set()
+        for task in (active, waiter, during_close, blocker, close_task):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(
+                task
+                for task in (active, waiter, during_close, blocker, close_task)
+                if task is not None
+            ),
+            return_exceptions=True,
+        )
+        await asyncio.wait_for(client.async_close(), timeout=3)
+
+
+@pytest.mark.asyncio
+async def test_close_after_vpn_save_ack_skips_follow_up_apply(
+    make_client: MakeClientFactory,
+) -> None:
+    """Do not begin a VPN service apply after shutdown follows a save ACK.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+    """
+    client, _session = make_mock_session_client(make_client)
+    dispatched: list[str] = []
+    close_task: asyncio.Task[None] | None = None
+
+    async def do_post(
+        path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
+    ) -> MutableMapping[str, Any]:
+        """Return a saved toggle response while scheduling client shutdown.
+
+        Args:
+            path (str): Endpoint path.
+            payload (MutableMapping[str, Any] | None): Optional request body.
+            caller (str): Queue caller label.
+
+        Returns:
+            MutableMapping[str, Any]: Simulated save acknowledgement or apply result.
+        """
+        nonlocal close_task
+        dispatched.append(path)
+        if path.endswith("/uuid/1") and close_task is None:
+            close_task = asyncio.create_task(client.async_close())
+            return {"changed": True, "result": "Enabled"}
+        if path.endswith("/uuid/1"):
+            return {"changed": False, "result": "Enabled"}
+        return {"changed": True, "result": "Enabled"} if "/toggle/" in path else {"result": "ok"}
+
+    client._do_post = AsyncMock(side_effect=do_post)
+    try:
+        result = await asyncio.gather(
+            client.toggle_vpn_instance("openvpn", "servers", "uuid", "on"),
+            return_exceptions=True,
+        )
+        if close_task is not None:
+            await asyncio.wait_for(close_task, timeout=3)
+        assert isinstance(result[0], asyncio.CancelledError)
+        assert len(dispatched) == 1
+        assert "/service/reconfigure" not in dispatched[-1]
+
+        assert (
+            await asyncio.wait_for(
+                client.toggle_vpn_instance("openvpn", "servers", "uuid", "on"), timeout=3
+            )
+            is True
+        )
+        assert len(dispatched) == 3
+    finally:
+        if close_task is not None and not close_task.done():
+            await asyncio.gather(close_task, return_exceptions=True)
+        await asyncio.wait_for(client.async_close(), timeout=3)

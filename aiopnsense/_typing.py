@@ -15,6 +15,8 @@ class AiopnsenseClientProtocol(Protocol):
     _firmware_action_lock: asyncio.Lock
     _vpn_service_locks: dict[str, asyncio.Lock]
     _vpn_pending_apply: dict[str, set[tuple[str, str]]]
+    _vpn_shutdown_generation: int
+    _vpn_close_count: int
     _session: aiohttp.ClientSession
     _url: str
     _username: str

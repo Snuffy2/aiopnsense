@@ -27,6 +27,8 @@ class ClientQueueMixin:
         _max_workers: int
         _request_queue: asyncio.Queue[Any]
         _workers: list[asyncio.Task[Any]]
+        _vpn_shutdown_generation: int
+        _vpn_close_count: int
 
         async def _do_get(
             self,
@@ -319,34 +321,42 @@ class ClientQueueMixin:
             await asyncio.sleep(QUEUE_REQUEST_INTERVAL_SECONDS)
 
     async def async_close(self) -> None:
-        """Cancel all running background tasks and clear the request queue."""
+        """Cancel background work, invalidate VPN waiters, and clear the queue.
+
+        Cancellation increments the VPN generation, so in-progress VPN callers
+        cannot dispatch follow-up writes after this close operation begins.
+        """
         _LOGGER.debug("Closing OPNsenseClient and cancelling background tasks")
+        self._vpn_shutdown_generation += 1
+        self._vpn_close_count += 1
+        try:
+            tasks_to_cancel = []
 
-        tasks_to_cancel = []
+            if self._workers:
+                for worker in self._workers:
+                    if not worker.done():
+                        worker.cancel()
+                    tasks_to_cancel.append(worker)
 
-        if self._workers:
-            for worker in self._workers:
-                if not worker.done():
-                    worker.cancel()
-                tasks_to_cancel.append(worker)
+            if tasks_to_cancel:
+                try:
+                    await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+                    _LOGGER.debug("All background tasks cancelled successfully")
+                except Exception as e:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Error during background task cancellation. %s: %s", type(e).__name__, e
+                    )
 
-        if tasks_to_cancel:
-            try:
-                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-                _LOGGER.debug("All background tasks cancelled successfully")
-            except Exception as e:  # noqa: BLE001
-                _LOGGER.warning(
-                    "Error during background task cancellation. %s: %s", type(e).__name__, e
-                )
-
-        while not self._request_queue.empty():
-            try:
-                entry = self._request_queue.get_nowait()
-                future = entry[3]
-                if future is not None and not future.done():
-                    future.set_exception(asyncio.CancelledError("OPNsenseClient is closing"))
-            except asyncio.QueueEmpty:
-                break
-        self._workers = []
-        self._loop = None
-        _LOGGER.debug("Request queue cleared")
+            while not self._request_queue.empty():
+                try:
+                    entry = self._request_queue.get_nowait()
+                    future = entry[3]
+                    if future is not None and not future.done():
+                        future.set_exception(asyncio.CancelledError("OPNsenseClient is closing"))
+                except asyncio.QueueEmpty:
+                    break
+            self._workers = []
+            self._loop = None
+            _LOGGER.debug("Request queue cleared")
+        finally:
+            self._vpn_close_count -= 1
