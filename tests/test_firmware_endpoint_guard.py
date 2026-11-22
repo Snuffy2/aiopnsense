@@ -3,15 +3,19 @@
 The guard is a static AST check that reads each module on its own. It resolves string
 constants, f-strings, concatenation and imports that rename a guarded constant, then
 reports each expression that builds a firmware path the rule does not allow. Status reads
-are allowed only through the GET helpers, the check path only in the one dispatch in
+are allowed only through the GET helpers and the ``_endpoint_availability.get`` lookup,
+which sends no request. The check path is allowed only in the one dispatch in
 ``FirmwareMixin._request_firmware_check``, and the action prefix and the ``update`` and
 ``upgrade`` paths only in ``FirmwareMixin.install_firmware`` and
 ``FirmwareMixin.upgrade_firmware``.
 
 Known limits: it does not follow values held in local variables, class attributes, ``+=``
 or values imported from another module, other than the guarded constants. It does not
-cover other literal firmware actions. Any use of the action prefix outside the two install
-methods still fails, including the assignment that copies it into a local. It cannot see
+cover other literal firmware actions. Outside the two install methods, the action prefix
+fails when it is bare, followed by a runtime value or another suffix, or copied into a
+local. A prefix-built path that resolves to ``status`` or ``check`` is judged as that
+literal request: ``f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}status"`` is accepted in a GET helper,
+and ``f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}check"`` in the check dispatch. It cannot see
 paths built with ``str.format``, ``%`` or ``join``.
 """
 
@@ -414,6 +418,8 @@ def test_production_code_follows_firmware_endpoint_rule() -> None:
         ("await self._do_post(path=FIRMWARE_CHECK_ENDPOINT)", "check"),
         ("path = FIRMWARE_CHECK_ENDPOINT", "check"),
         ("await self._do_post(fw.FIRMWARE_CHECK_ENDPOINT)", "check"),
+        ("await self._safe_dict_get(FIRMWARE_CHECK_ENDPOINT)", "check"),
+        ("self._endpoint_availability.get(FIRMWARE_CHECK_ENDPOINT)", "check"),
         ('await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{value}")', "action"),
         (
             'action = "check"\n        await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{action}")',
