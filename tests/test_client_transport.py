@@ -1319,7 +1319,7 @@ async def test_request_failure_ladder_is_identical_across_request_paths(
 
         failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
         expected_level = probe_level if path_name == "probe" else logging.ERROR
-        assert failures
+        assert len(failures) == 1
         assert failures[0].levelno == expected_level
     finally:
         await client.async_close()
@@ -1426,5 +1426,55 @@ async def test_stream_outage_does_not_suppress_data_call_failure_on_same_path(
 
         errors = [record for record in caplog.records if record.levelno >= logging.WARNING]
         assert [record.levelno for record in errors] == [logging.ERROR, logging.ERROR]
+    finally:
+        await client.async_close()
+
+
+class _StalledChunks:
+    """Async chunk iterator whose first read times out."""
+
+    __anext__ = AsyncMock(side_effect=TimeoutError("stalled"))
+
+    def __aiter__(self) -> _StalledChunks:
+        """Return the iterator itself.
+
+        Returns:
+            _StalledChunks: This iterator.
+        """
+        return self
+
+
+@pytest.mark.parametrize("path_name", ["stream_once", "stream_events"])
+@pytest.mark.asyncio
+async def test_stream_that_connects_then_stalls_logs_one_error_per_outage(
+    path_name: str,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stream answering OK but failing before any message never reports a recovery.
+
+    Args:
+        path_name (str): Key of ``_LADDER_PATHS`` selecting the streaming path.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    stalled = _StalledChunks()
+    stalled_response = MagicMock(
+        status=200,
+        reason="OK",
+        ok=True,
+        content=MagicMock(iter_chunked=MagicMock(return_value=stalled)),
+    )
+    stalled_response.__aenter__.return_value = stalled_response
+    session = MagicMock()
+    session.get = lambda *_a, **_k: stalled_response
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            for _attempt in range(3):
+                await _call_ladder_path(client, path_name)
+
+        assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
+        assert not [r for r in caplog.records if " recovered for " in r.getMessage()]
     finally:
         await client.async_close()

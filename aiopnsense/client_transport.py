@@ -104,7 +104,6 @@ class ClientTransportMixin:
                 )
 
                 if response.ok:
-                    _log_request_recovery(self, "get", path, STREAM_PHASE)
                     buffer = ""
                     message_count = 0
 
@@ -119,6 +118,7 @@ class ClientTransportMixin:
                                     if message_count == 2:
                                         response_str: str = line[len("data:") :].strip()
                                         response_json = json.loads(response_str)
+                                        _log_request_recovery(self, "get", path, STREAM_PHASE)
                                         return (
                                             dict(response_json)
                                             if isinstance(response_json, MutableMapping)
@@ -204,8 +204,8 @@ class ClientTransportMixin:
                     )
                     _raise_if_throwing(self, http_error)
                     return
-                _log_request_recovery(self, "get", path, STREAM_PHASE)
 
+                recovered = False
                 decoder = codecs.getincrementaldecoder("utf-8")()
                 buffer = ""
                 pending_cr = False
@@ -282,6 +282,9 @@ class ClientTransportMixin:
 
                     buffer += chunk_text.replace("\r\n", "\n").replace("\r", "\n")
                     buffer, events = _drain_buffer(buffer)
+                    if events and not recovered:
+                        _log_request_recovery(self, "get", path, STREAM_PHASE)
+                        recovered = True
                     for event in events:
                         yield event
                 try:
@@ -304,6 +307,8 @@ class ClientTransportMixin:
                     buffer += "\n"
 
                 buffer, events = _drain_buffer(buffer)
+                if events and not recovered:
+                    _log_request_recovery(self, "get", path, STREAM_PHASE)
                 for event in events:
                     yield event
         except (aiohttp.ClientError, TimeoutError) as err:
