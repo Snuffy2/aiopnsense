@@ -260,8 +260,31 @@ def trim_firmware_suffix(firmware_version: str | None) -> str | None:
     return trimmed_version.split("_", 1)[0]
 
 
+def _numeric_base_components(base_version: str) -> tuple[int, ...] | None:
+    """Return numeric components with insignificant trailing zeros removed.
+
+    Args:
+        base_version (str): Firmware base version without a hotfix suffix.
+
+    Returns:
+        tuple[int, ...] | None: Numeric components for a dotted numeric
+            version, or ``None`` when the base contains a release suffix.
+    """
+    components = base_version.split(".")
+    if not all(component.isascii() and component.isdecimal() for component in components):
+        return None
+    numeric_components = tuple(int(component) for component in components)
+    while len(numeric_components) > 1 and numeric_components[-1] == 0:
+        numeric_components = numeric_components[:-1]
+    return numeric_components
+
+
 def firmware_is_at_least(firmware_version: str | None, minimum_version: str) -> bool | None:
     """Compare firmware versions after trimming optional build suffixes.
+
+    Numeric versions that differ only by trailing zero components, such as
+    ``25.1.0`` and ``25.1``, are treated as equal, so each satisfies the other
+    as a minimum. Other versions retain AwesomeVersion's ordering.
 
     Args:
         firmware_version (str | None): Raw firmware version reported by OPNsense.
@@ -275,6 +298,11 @@ def firmware_is_at_least(firmware_version: str | None, minimum_version: str) -> 
     comparable_firmware = trim_firmware_suffix(firmware_version)
     if comparable_firmware is None:
         return None
+    firmware_components = _numeric_base_components(comparable_firmware)
+    if firmware_components is not None and firmware_components == _numeric_base_components(
+        minimum_version
+    ):
+        return True
     try:
         return awesomeversion.AwesomeVersion(comparable_firmware) >= awesomeversion.AwesomeVersion(
             minimum_version
@@ -327,24 +355,6 @@ def firmware_is_newer(firmware_version: str | None, comparison_version: str | No
         if not base_version or not revision.isdecimal():
             return None
         return base_version, int(revision)
-
-    def _numeric_base_components(base_version: str) -> tuple[int, ...] | None:
-        """Return numeric components with insignificant trailing zeros removed.
-
-        Args:
-            base_version (str): Firmware base version without a hotfix suffix.
-
-        Returns:
-            tuple[int, ...] | None: Numeric components for a dotted numeric
-                version, or ``None`` when the base contains a release suffix.
-        """
-        components = base_version.split(".")
-        if not all(component.isascii() and component.isdecimal() for component in components):
-            return None
-        numeric_components = tuple(int(component) for component in components)
-        while len(numeric_components) > 1 and numeric_components[-1] == 0:
-            numeric_components = numeric_components[:-1]
-        return numeric_components
 
     try:
         comparable_firmware = _normalize_firmware_version_for_update(firmware_version)
