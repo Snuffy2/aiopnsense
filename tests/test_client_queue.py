@@ -1518,6 +1518,85 @@ async def test_cancelled_queued_firewall_rule_toggle_sends_no_post(
 
 
 @pytest.mark.asyncio
+async def test_cancelled_firewall_rule_toggle_skips_queued_apply_after_acknowledged_save(
+    make_client: MakeClientFactory, vpn_queue_tasks: VpnQueueTasks
+) -> None:
+    """Skip a queued apply when cancellation follows an acknowledged Firewall save.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._max_workers = 1
+    save_started = asyncio.Event()
+    release_save = asyncio.Event()
+    read_started = asyncio.Event()
+    release_read = asyncio.Event()
+
+    async def blocked_save_json(*, content_type: str | None = None) -> dict[str, str]:
+        """Hold the save response until a public read is queued behind it.
+
+        Args:
+            content_type (str | None): Unused response decoding option.
+
+        Returns:
+            dict[str, str]: Acknowledged Firewall Rule save.
+        """
+        save_started.set()
+        await release_save.wait()
+        return {"result": "Enabled"}
+
+    async def blocked_read_json(*, content_type: str | None = None) -> dict[str, str]:
+        """Hold the public status read while the Toggle queues its apply.
+
+        Args:
+            content_type (str | None): Unused response decoding option.
+
+        Returns:
+            dict[str, str]: Controlled upgrade status.
+        """
+        read_started.set()
+        await release_read.wait()
+        return {"status": "running"}
+
+    save_response = FakeResponse()
+    save_response.json = AsyncMock(side_effect=blocked_save_json)
+    blocked_response = FakeResponse()
+    blocked_response.json = AsyncMock(side_effect=blocked_read_json)
+    session.get.side_effect = [
+        FakeResponse(),  # Endpoint availability probe.
+        blocked_response,
+        FakeResponse(json_payload={"status": "done"}),
+    ]
+    session.post.return_value = save_response
+    try:
+        toggle = vpn_queue_tasks.start(client.toggle_firewall_rule("uuid", "on"), eager_start=True)
+        await asyncio.wait_for(save_started.wait(), timeout=3)
+        read = vpn_queue_tasks.start(client.upgrade_status(), eager_start=True)
+        assert client._request_queue.qsize() == 1
+
+        release_save.set()
+        await asyncio.wait_for(read_started.wait(), timeout=3)
+        # The worker resolves the save before it begins this queued public read.
+        # The Toggle then enqueues its apply behind the read.
+        assert client._request_queue.qsize() == 1
+        toggle.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(toggle, timeout=3)
+
+        release_read.set()
+        assert await asyncio.wait_for(read, timeout=3) == {"status": "running"}
+        assert await asyncio.wait_for(client.upgrade_status(), timeout=3) == {"status": "done"}
+
+        session.post.assert_called_once()
+        assert session.post.call_args.args[0].endswith("/api/firewall/filter/toggle_rule/uuid/1")
+    finally:
+        release_save.set()
+        release_read.set()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("firmware", "item"),
     [("25.7.7", None), ("25.7.8", "blocklist-id")],

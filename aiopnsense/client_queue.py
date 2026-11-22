@@ -284,11 +284,11 @@ class ClientQueueMixin:
                     method, path, payload, future, caller, cancellation_state = entry
                 else:
                     method, path, payload, future, caller = entry
-                    if method == "post" and future is not None and future.cancelled():
-                        continue
+                if method == "post" and future is not None and future.cancelled():
+                    continue
                 if cancellation_state is not None:
                     waiter = cancellation_state.waiter
-                    if future is not None and (future.cancelled() or waiter.cancelled()):
+                    if future is not None and waiter.cancelled():
                         if not future.done():
                             future.cancel()
                         continue
