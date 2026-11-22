@@ -67,7 +67,7 @@
             <a id="nextFileLink" class="nav" href="z_d74336722521b1a0_client_base_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.3">coverage.py v7.17.3</a>,
-            created at 2026-11-22 02:49 +0000
+            created at 2026-11-22 03:08 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -91,7 +91,7 @@
     <p class="run"><span class="n"><a id="t7" href="#t7">7</a></span><span class="t"><span class="key">import</span> <span class="nam">aiohttp</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t8" href="#t8">8</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t9" href="#t9">9</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">client_base</span> <span class="key">import</span> <span class="nam">ClientBaseMixin</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t10" href="#t10">10</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">const</span> <span class="key">import</span> <span class="nam">OPNSENSE_LTD_FIRMWARE</span><span class="op">,</span> <span class="nam">OPNSENSE_MIN_FIRMWARE</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t10" href="#t10">10</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">const</span> <span class="key">import</span> <span class="nam">OPNSENSE_MIN_FIRMWARE</span><span class="op">,</span> <span class="nam">OPNSENSE_RECOMMENDED_FIRMWARE</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t11" href="#t11">11</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">dhcp</span> <span class="key">import</span> <span class="nam">DHCPMixin</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t12" href="#t12">12</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">exceptions</span> <span class="key">import</span> <span class="nam">OPNsenseBelowMinFirmware</span><span class="op">,</span> <span class="nam">OPNsenseUnknownFirmware</span><span class="op">,</span> <span class="nam">_map_opnsense_exception</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t13" href="#t13">13</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">firewall</span> <span class="key">import</span> <span class="nam">FirewallMixin</span>&nbsp;</span><span class="r"></span></p>
@@ -211,14 +211,14 @@
     <p class="run run2"><span class="n"><a id="t127" href="#t127">127</a></span><span class="t">                <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t128" href="#t128">128</a></span><span class="t">                <span class="key">raise</span> <span class="nam">OPNsenseBelowMinFirmware</span><span class="op">(</span><span class="nam">msg</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t129" href="#t129">129</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t130" href="#t130">130</a></span><span class="t">            <span class="nam">meets_recommended_firmware</span> <span class="op">=</span> <span class="nam">firmware_is_at_least</span><span class="op">(</span><span class="nam">fw_ver</span><span class="op">,</span> <span class="nam">OPNSENSE_LTD_FIRMWARE</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t130" href="#t130">130</a></span><span class="t">            <span class="nam">meets_recommended_firmware</span> <span class="op">=</span> <span class="nam">firmware_is_at_least</span><span class="op">(</span><span class="nam">fw_ver</span><span class="op">,</span> <span class="nam">OPNSENSE_RECOMMENDED_FIRMWARE</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t131" href="#t131">131</a></span><span class="t">            <span class="key">if</span> <span class="nam">meets_recommended_firmware</span> <span class="key">is</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t132" href="#t132">132</a></span><span class="t">                <span class="key">raise</span> <span class="nam">OPNsenseUnknownFirmware</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t133" href="#t133">133</a></span><span class="t">            <span class="key">if</span> <span class="key">not</span> <span class="nam">meets_recommended_firmware</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t134" href="#t134">134</a></span><span class="t">                <span class="nam">_LOGGER</span><span class="op">.</span><span class="nam">warning</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t135" href="#t135">135</a></span><span class="t">                    <span class="str">&quot;OPNsense Firmware of %s is below the recommended &gt;= %s. aiopnsense will work, but there may be some missing features.&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t136" href="#t136">136</a></span><span class="t">                    <span class="nam">fw_ver</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run run2"><span class="n"><a id="t137" href="#t137">137</a></span><span class="t">                    <span class="nam">OPNSENSE_LTD_FIRMWARE</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t137" href="#t137">137</a></span><span class="t">                    <span class="nam">OPNSENSE_RECOMMENDED_FIRMWARE</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t138" href="#t138">138</a></span><span class="t">                <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t139" href="#t139">139</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t140" href="#t140">140</a></span><span class="t">            <span class="key">if</span> <span class="nam">require_device_id</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
@@ -234,7 +234,7 @@
             <a class="nav" href="z_d74336722521b1a0_client_base_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.3">coverage.py v7.17.3</a>,
-            created at 2026-11-22 02:49 +0000
+            created at 2026-11-22 03:08 +0000
         </p>
     </div>
 </footer>
