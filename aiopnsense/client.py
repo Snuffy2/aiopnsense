@@ -52,8 +52,9 @@ class OPNsenseClient(
 
         Python does not call ``__aexit__`` when ``__aenter__`` raises, so a failed or
         cancelled validation closes the client here before its original exception
-        propagates. A failure while closing is logged and never replaces that exception.
-        Closing the client again afterwards is safe.
+        propagates. A failure while closing is logged and does not replace that exception;
+        only cancellation of the close itself propagates, with the validation error
+        kept as its ``__context__``. Closing the client again afterwards is safe.
 
         Returns:
             Self: Validated client instance. Validation errors, including cancellation,
