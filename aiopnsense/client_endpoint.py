@@ -9,7 +9,7 @@ from warnings import deprecated
 import aiohttp
 
 from ._endpoint_outcome import EndpointOutcome
-from ._error_policy import _error_if_throwing, _raise_if_throwing, _throws_errors
+from ._error_policy import _error_if_throwing, _throws_errors
 from ._typing import AiopnsenseClientProtocol
 from .const import LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
 from .exceptions import OPNsenseUnknownFirmware
@@ -282,7 +282,7 @@ class ClientEndpointMixin:
             not force_refresh
             and cache_is_fresh
             and self._endpoint_availability.get(cache_key) is False
-            and not (self._throw_errors and cache_key in self._endpoint_permission_denied)
+            and not (_throws_errors(self) and cache_key in self._endpoint_permission_denied)
         ):
             return EndpointOutcome.absent()
         if (
@@ -321,7 +321,7 @@ class ClientEndpointMixin:
             self._endpoint_checked_at[cache_key] = now
             return outcome
 
-        error = outcome.error
+        error = _error_if_throwing(self, outcome.error) if outcome.error is not None else None
         if outcome.is_absent:
             _log_request_failure(
                 self,
@@ -330,9 +330,9 @@ class ClientEndpointMixin:
                 logging.ERROR,
                 "Permission Error in fetch_endpoint_outcome. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                 f"{self._url}{path}",
-                error=error if self._throw_errors else None,
+                error=error,
             )
-            if self._throw_errors and error is not None:
+            if error is not None:
                 self._clear_endpoint_cache_entry(cache_key)
                 raise error
             self._endpoint_permission_denied.add(cache_key)
@@ -350,9 +350,9 @@ class ClientEndpointMixin:
             method.upper(),
             path,
             outcome.detail,
-            error=error if self._throw_errors else None,
+            error=error,
         )
-        if self._throw_errors and error is not None:
+        if error is not None:
             raise error
         return outcome
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
@@ -874,7 +874,6 @@ _TRAFFIC_FAILURE_CASES: tuple[Any, ...] = (
 
 @pytest.mark.parametrize("throw_errors", [False, True])
 @pytest.mark.parametrize(("make_error", "expected_error"), _TRAFFIC_FAILURE_CASES)
-@pytest.mark.parametrize("failing_step", ["probe", "fetch"])
 @pytest.mark.asyncio
 async def test_get_interface_traffic_failure_follows_throw_errors_contract(
     make_client: MakeClientFactory,
@@ -882,7 +881,6 @@ async def test_get_interface_traffic_failure_follows_throw_errors_contract(
     throw_errors: bool,
     make_error: Callable[[], Exception],
     expected_error: type[OPNsenseError],
-    failing_step: str,
 ) -> None:
     """A handled failure yields an empty sample, logged quietly, or a mapped error.
 
@@ -892,17 +890,10 @@ async def test_get_interface_traffic_failure_follows_throw_errors_contract(
         throw_errors (bool): Whether the client raises public errors.
         make_error (Callable[[], Exception]): Factory for a fresh injected error.
         expected_error (type[OPNsenseError]): Public error expected with throw on.
-        failing_step (str): Request step that raises, the probe or the sample fetch.
     """
     client = make_client(throw_errors=throw_errors)
     try:
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=make_error() if failing_step == "probe" else None,
-            return_value=True,
-        )
-        client._safe_dict_get = AsyncMock(
-            side_effect=make_error() if failing_step == "fetch" else None
-        )
+        client._fetch_endpoint_outcome = AsyncMock(side_effect=make_error())
 
         with caplog.at_level("DEBUG", logger="aiopnsense"):
             if throw_errors:
@@ -918,14 +909,14 @@ async def test_get_interface_traffic_failure_follows_throw_errors_contract(
 @pytest.mark.parametrize("throw_errors", [False, True])
 @pytest.mark.parametrize(("make_error", "expected_error"), _TRAFFIC_FAILURE_CASES)
 @pytest.mark.asyncio
-async def test_stream_interface_traffic_probe_failure_follows_throw_errors_contract(
+async def test_stream_interface_traffic_check_failure_follows_throw_errors_contract(
     make_client: MakeClientFactory,
     caplog: pytest.LogCaptureFixture,
     throw_errors: bool,
     make_error: Callable[[], Exception],
     expected_error: type[OPNsenseError],
 ) -> None:
-    """A handled probe failure ends the stream empty, logged quietly, or raises a mapped error.
+    """A handled check failure ends the stream empty, logged quietly, or raises a mapped error.
 
     Args:
         make_client (MakeClientFactory): Client factory.
@@ -936,7 +927,7 @@ async def test_stream_interface_traffic_probe_failure_follows_throw_errors_contr
     """
     client = make_client(throw_errors=throw_errors)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=make_error())
+        client._check_endpoint_status = AsyncMock(side_effect=make_error())
         client._stream_json_events = MagicMock()
 
         with caplog.at_level("DEBUG", logger="aiopnsense"):
@@ -959,7 +950,7 @@ async def test_stream_interface_traffic_probe_failure_follows_throw_errors_contr
     ids=["cancelled", "unhandled-keyerror"],
 )
 @pytest.mark.asyncio
-async def test_traffic_probe_propagates_cancellation_and_unhandled_errors(
+async def test_traffic_propagates_cancellation_and_unhandled_errors(
     make_client: MakeClientFactory,
     throw_errors: bool,
     method: str,
@@ -976,7 +967,10 @@ async def test_traffic_probe_propagates_cancellation_and_unhandled_errors(
     client = make_client(throw_errors=throw_errors)
     try:
         error = make_error()
-        client._is_get_endpoint_available = AsyncMock(side_effect=error)
+        if method == "sample":
+            client._fetch_endpoint_outcome = AsyncMock(side_effect=error)
+        else:
+            client._check_endpoint_status = AsyncMock(side_effect=error)
 
         with pytest.raises(type(error)):
             if method == "sample":

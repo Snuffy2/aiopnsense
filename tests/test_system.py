@@ -342,13 +342,11 @@ async def test_get_device_unique_id_missing_follows_throw_errors_contract(
     Returns:
         None: This test validates both throw modes for a missing unique ID.
     """
-    client, _session = make_mock_session_client(make_client)
+    answer = 404 if missing == "endpoint-unavailable" else [{"is_physical": False}]
+    client, _router = _client_with_router(
+        make_client, {("GET", INTERFACE_OVERVIEW_PATH): answer}, throw_errors=throw_errors
+    )
     try:
-        client.toggle_throwing_errors(throw_errors)
-        client._is_get_endpoint_available = AsyncMock(
-            return_value=missing != "endpoint-unavailable"
-        )
-        client._safe_list_get = AsyncMock(return_value=[{"is_physical": False}])
         if throw_errors:
             with pytest.raises(OPNsenseMissingDeviceUniqueID):
                 await client.get_device_unique_id()
