@@ -1581,12 +1581,20 @@ async def test_one_shot_non_mapping_stream_payload_does_not_report_recovery(
 
 
 @pytest.mark.parametrize(
-    ("path_name", "level"), [("get_json", logging.ERROR), ("probe", logging.WARNING)]
+    ("path_name", "level", "status"),
+    [
+        ("get_json", logging.ERROR, None),
+        ("probe", logging.WARNING, None),
+        ("get_json", logging.ERROR, 403),
+        ("get_json", logging.ERROR, 503),
+    ],
+    ids=["get-timeout", "probe-timeout", "forbidden", "unavailable"],
 )
 @pytest.mark.asyncio
 async def test_transport_failure_log_omits_url_credentials(
     path_name: str,
     level: int,
+    status: int | None,
     make_client: MakeClientFactory,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1595,15 +1603,17 @@ async def test_transport_failure_log_omits_url_credentials(
     Args:
         path_name (str): Request path to exercise.
         level (int): Expected failure log level.
+        status (int | None): HTTP failure status, or ``None`` for a timeout.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
         caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
     """
     session = MagicMock()
-    session.get = MagicMock(
-        side_effect=TimeoutError(
+    if status is None:
+        session.get.side_effect = TimeoutError(
             "Timed out reading https://error-user:error-password@opnsense.invalid"
         )
-    )
+    else:
+        session.get.return_value = FakeResponse(status=status, ok=False)
     client = make_client(
         session=session,
         url="https://synthetic-user:synthetic-password@opnsense.invalid",
@@ -1629,7 +1639,7 @@ async def test_invalid_url_transport_logs_omit_credentials(
     make_client: MakeClientFactory,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Real aiohttp URL validation failures redact credentials in probe and request logs.
+    """Keep URL credentials out of probe and request logs at every level.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1648,7 +1658,7 @@ async def test_invalid_url_transport_logs_omit_credentials(
             failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
             assert [record.levelno for record in failures] == [logging.WARNING, logging.ERROR]
             assert all("/api/x" in record.getMessage() for record in failures)
-            messages = "\n".join(record.getMessage() for record in failures)
+            messages = "\n".join(record.getMessage() for record in caplog.records)
             assert "synthetic-user" not in messages
             assert "synthetic-secret" not in messages
         finally:

@@ -1,9 +1,10 @@
 """Classification and logging of failed HTTP responses and transport errors.
 
 The immediate GET and POST, endpoint availability probe and both streaming reads report failures
-here. Firmware installation requests use their own polling and error policy. This module maps
-reported failures to public exceptions, logs through outage suppression and marks raised
-exceptions as already logged. It never decides whether the caller raises or returns an empty value.
+here. Endpoint probes cache HTTP 404 as unavailable. Firmware installation requests use their own
+polling and error policy. This module maps reported failures to public exceptions, suppresses
+repeated logs and marks raised exceptions as already logged. Callers decide whether to raise or
+return an empty value.
 """
 
 import logging
@@ -18,13 +19,13 @@ from .exceptions import (
 )
 from .helpers import _log_request_failure, _redacted_exception_message, _RequestLoggingClient
 
-REQUEST_PHASE = "request"
+_REQUEST_PHASE = "request"
 """Request phase of immediate GET and POST data calls."""
 
-PROBE_PHASE = "probe"
+_PROBE_PHASE = "probe"
 """Request phase of endpoint availability probes, which log transient failures as warnings."""
 
-STREAM_PHASE = "stream"
+_STREAM_PHASE = "stream"
 """Request phase of the streaming reads."""
 
 _PERMISSION_GUIDANCE = (
@@ -48,7 +49,7 @@ def _stream_auth_status(phase: str, error: OPNsenseError) -> int | None:
             or ``None`` for the standard outage classification.
     """
     if (
-        phase == STREAM_PHASE
+        phase == _STREAM_PHASE
         and isinstance(error, OPNsenseConnectionError)
         and error.status in (401, 403)
     ):
@@ -77,7 +78,7 @@ def _report_http_failure(
         phase (str): Request phase used for outage suppression, such as ``request``,
             ``probe`` or ``stream``.
         operation (str): Name of the request operation used in the log message.
-        url (str): Full requested URL used in the log message.
+        url (str): Requested URL whose credentials are omitted from the log.
         status (int): HTTP response status.
         reason (str | None): HTTP response reason phrase.
         caller (str | None): Caller name used in the log message, when known.
@@ -88,6 +89,10 @@ def _report_http_failure(
     """
     error = _opnsense_http_error(status, reason)
     logged_error = _error_if_throwing(client, error)
+    scheme, separator, location = url.partition("://")
+    authority, slash, endpoint = location.partition("/")
+    host = authority.rsplit("@", 1)[-1]
+    logged_url = f"{scheme}{separator}{host}{slash}{endpoint}"
     origin = "" if caller is None else " (called by %s)"
     origin_args: tuple[str, ...] = () if caller is None else (caller,)
     if status == 403:
@@ -99,11 +104,11 @@ def _report_http_failure(
             logging.ERROR,
             "Permission Error in " + operation + origin + ". Path: %s. " + _PERMISSION_GUIDANCE,
             *origin_args,
-            url,
+            logged_url,
             error=logged_error,
             failure_status=_stream_auth_status(phase, error),
         )
-    elif phase == PROBE_PHASE:
+    elif phase == _PROBE_PHASE:
         _log_request_failure(
             client,
             method,
@@ -126,7 +131,7 @@ def _report_http_failure(
             logging.ERROR,
             "Error in " + operation + origin + ". Path: %s. Response %s: %s",
             *origin_args,
-            url,
+            logged_url,
             status,
             reason,
             error=logged_error,
@@ -163,7 +168,7 @@ def _report_transport_failure(
     """
     error = _map_opnsense_exception(exc)
     logged_error = _error_if_throwing(client, error)
-    if phase == PROBE_PHASE:
+    if phase == _PROBE_PHASE:
         _log_request_failure(
             client,
             method,

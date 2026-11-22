@@ -10,8 +10,8 @@ import aiohttp
 
 from ._error_policy import _raise_if_throwing
 from ._request_failure import (
-    REQUEST_PHASE,
-    STREAM_PHASE,
+    _REQUEST_PHASE,
+    _STREAM_PHASE,
     _report_http_failure,
     _report_transport_failure,
 )
@@ -89,7 +89,7 @@ class ClientTransportMixin:
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        _LOGGER.debug("[get_from_stream] url: %s", url)
+        _LOGGER.debug("[get_from_stream] path: %s", path)
         try:
             async with self._session.get(
                 url,
@@ -108,7 +108,7 @@ class ClientTransportMixin:
                         self,
                         method="get",
                         path=path,
-                        phase=STREAM_PHASE,
+                        phase=_STREAM_PHASE,
                         operation="do_get_from_stream",
                         url=url,
                         status=response.status,
@@ -134,14 +134,14 @@ class ClientTransportMixin:
                             response_json = json.loads(response_str)
                             if not isinstance(response_json, MutableMapping):
                                 return {}
-                            _log_request_recovery(self, "get", path, STREAM_PHASE)
+                            _log_request_recovery(self, "get", path, _STREAM_PHASE)
                             return dict(response_json)
         except (aiohttp.ClientError, TimeoutError) as e:
             transport_error = _report_transport_failure(
                 self,
                 method="get",
                 path=path,
-                phase=STREAM_PHASE,
+                phase=_STREAM_PHASE,
                 operation="do_get_from_stream",
                 exc=e,
                 caller=caller,
@@ -174,7 +174,7 @@ class ClientTransportMixin:
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        _LOGGER.debug("[stream_json_events] url: %s", url)
+        _LOGGER.debug("[stream_json_events] path: %s", path)
         try:
             async with self._session.get(
                 url,
@@ -191,7 +191,7 @@ class ClientTransportMixin:
                         self,
                         method="get",
                         path=path,
-                        phase=STREAM_PHASE,
+                        phase=_STREAM_PHASE,
                         operation="stream_json_events",
                         url=url,
                         status=response.status,
@@ -251,7 +251,7 @@ class ClientTransportMixin:
                                 events.append({_STREAM_JSON_EVENT_RESET_KEY: True})
                             continue
                         if not recovered:
-                            _log_request_recovery(self, "get", path, STREAM_PHASE)
+                            _log_request_recovery(self, "get", path, _STREAM_PHASE)
                             recovered = True
                         events.append(dict(response_json))
 
@@ -310,7 +310,7 @@ class ClientTransportMixin:
                 self,
                 method="get",
                 path=path,
-                phase=STREAM_PHASE,
+                phase=_STREAM_PHASE,
                 operation="stream_json_events",
                 exc=err,
             )
@@ -340,7 +340,7 @@ class ClientTransportMixin:
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        _LOGGER.debug("[get] url: %s", url)
+        _LOGGER.debug("[get] path: %s", path)
         timeout_total: float = self._normalize_timeout_seconds(timeout_seconds)
         try:
             async with self._session.get(
@@ -355,13 +355,13 @@ class ClientTransportMixin:
                         result = await response.text()
                     else:
                         result = await response.json(content_type=None)
-                    _log_request_recovery(self, "get", path, REQUEST_PHASE)
+                    _log_request_recovery(self, "get", path, _REQUEST_PHASE)
                     return result
                 http_error = _report_http_failure(
                     self,
                     method="get",
                     path=path,
-                    phase=REQUEST_PHASE,
+                    phase=_REQUEST_PHASE,
                     operation="do_get",
                     url=url,
                     status=response.status,
@@ -374,7 +374,7 @@ class ClientTransportMixin:
                 self,
                 method="get",
                 path=path,
-                phase=REQUEST_PHASE,
+                phase=_REQUEST_PHASE,
                 operation="do_get",
                 exc=e,
                 caller=caller,
@@ -463,7 +463,7 @@ class ClientTransportMixin:
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        _LOGGER.debug("[post] url: %s", url)
+        _LOGGER.debug("[post] path: %s", path)
         try:
             async with self._session.post(
                 url,
@@ -475,13 +475,13 @@ class ClientTransportMixin:
                 _LOGGER.debug("[post] Response %s: %s", response.status, response.reason)
                 if response.ok:
                     response_json: dict[str, Any] | list = await response.json(content_type=None)
-                    _log_request_recovery(self, "post", path, REQUEST_PHASE)
+                    _log_request_recovery(self, "post", path, _REQUEST_PHASE)
                     return response_json
                 http_error = _report_http_failure(
                     self,
                     method="post",
                     path=path,
-                    phase=REQUEST_PHASE,
+                    phase=_REQUEST_PHASE,
                     operation="do_post",
                     url=url,
                     status=response.status,
@@ -494,7 +494,7 @@ class ClientTransportMixin:
                 self,
                 method="post",
                 path=path,
-                phase=REQUEST_PHASE,
+                phase=_REQUEST_PHASE,
                 operation="do_post",
                 exc=e,
                 caller=caller,

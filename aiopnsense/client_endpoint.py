@@ -7,7 +7,7 @@ from warnings import deprecated
 import aiohttp
 
 from ._error_policy import _raise_if_throwing, _throws_errors
-from ._request_failure import PROBE_PHASE, _report_http_failure, _report_transport_failure
+from ._request_failure import _PROBE_PHASE, _report_http_failure, _report_transport_failure
 from ._typing import AiopnsenseClientProtocol
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS, LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
 from .exceptions import OPNsenseUnknownFirmware
@@ -243,7 +243,7 @@ class ClientEndpointMixin:
 
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        _LOGGER.debug("[is_%s_endpoint_available] url: %s", normalized_method, url)
+        _LOGGER.debug("[is_%s_endpoint_available] path: %s", normalized_method, path)
 
         try:
             request = getattr(self._session, normalized_method)
@@ -254,7 +254,7 @@ class ClientEndpointMixin:
                 ssl=self._verify_ssl,
             ) as response:
                 if response.ok:
-                    _log_request_recovery(self, normalized_method, path, PROBE_PHASE)
+                    _log_request_recovery(self, normalized_method, path, _PROBE_PHASE)
                     self._endpoint_permission_denied.discard(cache_key)
                     self._endpoint_availability[cache_key] = True
                     self._endpoint_checked_at[cache_key] = now
@@ -269,7 +269,7 @@ class ClientEndpointMixin:
                     self,
                     method=normalized_method,
                     path=path,
-                    phase=PROBE_PHASE,
+                    phase=_PROBE_PHASE,
                     operation=f"is_{normalized_method}_endpoint_available",
                     url=url,
                     status=response.status,
@@ -289,7 +289,7 @@ class ClientEndpointMixin:
                 self,
                 method=normalized_method,
                 path=path,
-                phase=PROBE_PHASE,
+                phase=_PROBE_PHASE,
                 operation=f"is_{normalized_method}_endpoint_available",
                 exc=e,
             )
