@@ -247,7 +247,9 @@ class ClientEndpointMixin:
                 a GET in the ``DATA`` outcome; ``"json"`` returns the decoded body.
             status_only (bool): Whether to check availability without reading the
                 payload (GET only). Status checks bypass the request queue, as the
-                availability probe always has; data fetches go through the queue.
+                availability probe always has, and are answered from a fresh cached
+                present answer without a request; data fetches go through the queue
+                and always send a request.
             force_refresh (bool): Whether to ignore a cached absent answer for this call.
 
         Returns:
@@ -283,6 +285,13 @@ class ClientEndpointMixin:
             and not (self._throw_errors and cache_key in self._endpoint_permission_denied)
         ):
             return EndpointOutcome.absent()
+        if (
+            status_only
+            and not force_refresh
+            and cache_is_fresh
+            and self._endpoint_availability.get(cache_key) is True
+        ):
+            return EndpointOutcome.data(None)
 
         if status_only:
             outcome: EndpointOutcome = await self._do_get_outcome(

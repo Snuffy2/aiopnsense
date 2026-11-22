@@ -238,6 +238,33 @@ async def test_endpoint_status_caches_absent_answer_until_force_refresh(
 
 
 @pytest.mark.asyncio
+async def test_endpoint_status_reuses_cached_present_answer_until_force_refresh(
+    make_client: MakeClientFactory,
+) -> None:
+    """A cached present answer is reused without a request until the caller forces a refresh.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", STATUS_PATH): 200})
+    try:
+        for _ in range(3):
+            with pytest.warns(DeprecationWarning):
+                assert await client.is_endpoint_available(STATUS_PATH) is True  # type: ignore[deprecated]
+        assert router.count("GET", STATUS_PATH) == 1
+
+        with pytest.warns(DeprecationWarning):
+            assert (
+                await client.is_endpoint_available(STATUS_PATH, force_refresh=True)  # type: ignore[deprecated]
+                is True
+            )
+        assert router.count("GET", STATUS_PATH) == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_endpoint_status_transient_failure_is_not_cached(
     make_client: MakeClientFactory,
 ) -> None:
