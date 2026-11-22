@@ -9,9 +9,13 @@ from typing import TYPE_CHECKING, Any, Literal
 import aiohttp
 
 from ._error_policy import _raise_if_throwing, _throws_errors
-from ._request_failure import REQUEST_PHASE, _report_http_failure, _report_transport_failure
+from ._request_failure import (
+    REQUEST_PHASE,
+    STREAM_PHASE,
+    _report_http_failure,
+    _report_transport_failure,
+)
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
-from .exceptions import _map_opnsense_exception, _opnsense_http_error
 from .helpers import _LOGGER, _log_request_recovery
 
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
@@ -100,6 +104,7 @@ class ClientTransportMixin:
                 )
 
                 if response.ok:
+                    _log_request_recovery(self, "get", path, STREAM_PHASE)
                     buffer = ""
                     message_count = 0
 
@@ -120,24 +125,32 @@ class ClientTransportMixin:
                                             else {}
                                         )
                 else:
-                    if response.status == 403:
-                        _LOGGER.error(
-                            "Permission Error in do_get_from_stream (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
-                            caller,
-                            url,
-                        )
-                    else:
-                        _LOGGER.error(
-                            "Error in do_get_from_stream (called by %s). Path: %s. Response %s: %s",
-                            caller,
-                            url,
-                            response.status,
-                            response.reason,
-                        )
-                    _raise_if_throwing(self, _opnsense_http_error(response.status, response.reason))
+                    http_error = _report_http_failure(
+                        self,
+                        method="get",
+                        path=path,
+                        phase=STREAM_PHASE,
+                        operation="do_get_from_stream",
+                        url=url,
+                        status=response.status,
+                        reason=response.reason,
+                        will_raise=_throws_errors(self),
+                        caller=caller,
+                    )
+                    _raise_if_throwing(self, http_error)
         except (aiohttp.ClientError, TimeoutError) as e:
-            _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
-            _raise_if_throwing(self, _map_opnsense_exception(e), e)
+            transport_error = _report_transport_failure(
+                self,
+                method="get",
+                path=path,
+                phase=STREAM_PHASE,
+                operation="do_get_from_stream",
+                url=url,
+                exc=e,
+                will_raise=_throws_errors(self),
+                caller=caller,
+            )
+            _raise_if_throwing(self, transport_error, e)
 
         return {}
 
@@ -178,20 +191,20 @@ class ClientTransportMixin:
                 ssl=self._verify_ssl,
             ) as response:
                 if not response.ok:
-                    if response.status == 403:
-                        _LOGGER.error(
-                            "Permission Error in stream_json_events. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
-                            url,
-                        )
-                    else:
-                        _LOGGER.error(
-                            "Error in stream_json_events. Path: %s. Response %s: %s",
-                            url,
-                            response.status,
-                            response.reason,
-                        )
-                    _raise_if_throwing(self, _opnsense_http_error(response.status, response.reason))
+                    http_error = _report_http_failure(
+                        self,
+                        method="get",
+                        path=path,
+                        phase=STREAM_PHASE,
+                        operation="stream_json_events",
+                        url=url,
+                        status=response.status,
+                        reason=response.reason,
+                        will_raise=_throws_errors(self),
+                    )
+                    _raise_if_throwing(self, http_error)
                     return
+                _log_request_recovery(self, "get", path, STREAM_PHASE)
 
                 decoder = codecs.getincrementaldecoder("utf-8")()
                 buffer = ""
@@ -294,8 +307,17 @@ class ClientTransportMixin:
                 for event in events:
                     yield event
         except (aiohttp.ClientError, TimeoutError) as err:
-            _LOGGER.error("Client error in stream_json_events. %s: %s", type(err).__name__, err)
-            _raise_if_throwing(self, _map_opnsense_exception(err), err)
+            transport_error = _report_transport_failure(
+                self,
+                method="get",
+                path=path,
+                phase=STREAM_PHASE,
+                operation="stream_json_events",
+                url=url,
+                exc=err,
+                will_raise=_throws_errors(self),
+            )
+            _raise_if_throwing(self, transport_error, err)
 
     async def _do_get(
         self,

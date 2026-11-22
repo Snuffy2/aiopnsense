@@ -1346,7 +1346,7 @@ _OUTAGE_PHASES = {
 """Request path name mapped to the phase word used in its recovery log line."""
 
 
-@pytest.mark.parametrize("path_name", ["get_json", "get_text", "post", "probe"])
+@pytest.mark.parametrize("path_name", list(_LADDER_PATHS))
 @pytest.mark.asyncio
 async def test_repeated_request_failures_log_once_per_outage_until_recovery(
     path_name: str,
@@ -1400,5 +1400,31 @@ async def test_repeated_request_failures_log_once_per_outage_until_recovery(
             caplog.clear()
             await _call_ladder_path(client, path_name)
             assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_outage_does_not_suppress_data_call_failure_on_same_path(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stream outage and a data call outage on one path are reported independently.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    session = MagicMock()
+    session.get = lambda *_a, **_k: FakeResponse(status=500, reason="Failure", ok=False)
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            await _call_ladder_path(client, "stream_once")
+            await _call_ladder_path(client, "get_json")
+            await _call_ladder_path(client, "get_json")
+
+        errors = [record for record in caplog.records if record.levelno >= logging.WARNING]
+        assert [record.levelno for record in errors] == [logging.ERROR, logging.ERROR]
     finally:
         await client.async_close()
