@@ -38,8 +38,12 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 ``average`` sections for download, upload, and latency. Latest
                 results include server, date, and URL metadata; averages
                 include min, max, sample count, and period bounds. Returns
-                ``{"available": False}`` when the plugin endpoint is absent or
-                the request fails.
+                ``{"available": False}`` when the show-log endpoint is absent (404) in
+                either mode, or returns 403 or a transient HTTP/transport failure with
+                ``throw_errors`` disabled. A 403 and transient failures raise
+                ``OPNsenseError`` when errors are enabled.
+                Undecodable JSON follows the client's configured error handling unless
+                this method handles the decoding error explicitly.
         """
         outcome = await self._fetch_endpoint_outcome(SPEEDTEST_SHOW_LOG_ENDPOINT)
         if not outcome.is_data:
@@ -129,8 +133,15 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Response mapping from the Speedtest ``run``
-                endpoint, or an empty mapping when the plugin endpoint is
-                absent, the run request fails, or it returns a malformed payload.
+                endpoint, or an empty mapping when the availability check finds the
+                endpoint absent (404) or returns 403 with ``throw_errors`` disabled. The
+                availability check's 404 remains absent in either mode. The run request
+                itself is ungated: HTTP or transport failures, including a 404, raise
+                ``OPNsenseError`` when ``throw_errors`` is enabled; with errors disabled
+                they return an empty mapping. A syntactically valid non-mapping response
+                also returns an empty mapping in either mode. Undecodable JSON follows the
+                client's configured error handling unless this method handles the decoding
+                error explicitly.
         """
         status = await self._check_endpoint_status(SPEEDTEST_SHOW_LOG_ENDPOINT)
         if not status.is_data:

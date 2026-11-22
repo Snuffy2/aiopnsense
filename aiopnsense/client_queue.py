@@ -323,7 +323,9 @@ class ClientQueueMixin:
                     method, path, payload, future, caller, cancellation_state = entry
                 else:
                     method, path, payload, future, caller = entry
-                if method == "post" and future is not None and future.cancelled():
+                if method in {"post", "get_outcome", "get_text_outcome", "post_outcome"} and (
+                    future is not None and future.cancelled()
+                ):
                     continue
                 if cancellation_state is not None:
                     waiter = cancellation_state.waiter

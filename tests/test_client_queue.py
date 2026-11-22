@@ -5,7 +5,7 @@ from collections.abc import MutableMapping
 import contextlib
 import json
 import logging
-from typing import Any, Never
+from typing import Any, Never, Self
 from unittest.mock import AsyncMock
 
 import pytest
@@ -1878,3 +1878,72 @@ async def test_cancelled_close_releases_queued_vpn_call(
         ]
     finally:
         release.set()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_queued_smart_info_is_skipped_and_queue_progresses(
+    make_client: MakeClientFactory,
+) -> None:
+    """Skip a cancelled outcome POST while preserving later queue progress.
+
+    Args:
+        make_client (MakeClientFactory): Factory for clients using a mocked HTTP session.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._max_workers = 1
+    started = asyncio.Event()
+    release = asyncio.Event()
+    enqueued = asyncio.Event()
+
+    class BlockingResponse(FakeResponse):
+        """Fake response that holds the first HTTP request open."""
+
+        async def __aenter__(self) -> Self:
+            """Signal that transport began, then wait for test release.
+
+            Returns:
+                Self: This fake HTTP response.
+            """
+            started.set()
+            await release.wait()
+            return self
+
+    session.get.side_effect = [
+        BlockingResponse(json_payload={"ok": True}),
+        FakeResponse(json_payload={"ok": "/later"}),
+    ]
+    session.post.return_value = FakeResponse(json_payload={"output": {"model": "test"}})
+    original_put = client._request_queue.put
+    queued_count = 0
+
+    async def signal_enqueue(item: Any) -> None:
+        """Signal after a request is registered in the initially empty queue.
+
+        Args:
+            item (Any): Internal request tuple being queued.
+        """
+        nonlocal queued_count
+        await original_put(item)
+        queued_count += 1
+        if queued_count == 2:
+            enqueued.set()
+
+    client._request_queue.put = signal_enqueue
+    try:
+        occupying = asyncio.create_task(client._get("/occupy"))
+        await asyncio.wait_for(started.wait(), timeout=3)
+
+        smart_info = asyncio.create_task(client.get_smart_info("ada0"))
+        await asyncio.wait_for(enqueued.wait(), timeout=3)
+        smart_info.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await smart_info
+
+        later_read = asyncio.create_task(client._get("/later"))
+        release.set()
+        assert await asyncio.wait_for(occupying, timeout=3) == {"ok": True}
+        assert await asyncio.wait_for(later_read, timeout=3) == {"ok": "/later"}
+        session.post.assert_not_called()
+    finally:
+        release.set()
+        await asyncio.wait_for(client.async_close(), timeout=3)

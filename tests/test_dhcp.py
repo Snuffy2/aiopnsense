@@ -323,40 +323,30 @@ async def test_get_arp_table_distinguishes_empty_and_failed_lookups(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("route", "expected", "expected_requests"),
-    [
-        pytest.param({"rows": []}, [], 2, id="present-one-request-per-read"),
-        pytest.param(404, None, 1, id="absent-cached-for-second-read"),
-    ],
-)
-async def test_arp_resolve_values_share_one_availability_status(
+async def test_arp_resolve_values_keep_distinct_availability_statuses(
     make_client: ClientType,
-    route: Any,
-    expected: list | None,
-    expected_requests: int,
 ) -> None:
-    """ARP with ``resolve`` yes and no shares one availability status and sends no extra request.
+    """A denied resolved ARP lookup does not suppress a successful unresolved lookup.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route (Any): Router answer for both ARP ``resolve`` values.
-        expected (list | None): Public result for each read.
-        expected_requests (int): Requests the Router should receive across both reads.
     """
     client, session = make_mock_session_client(make_client)
     router = install_fake_router(
         client,
         session,
         routes={
-            ("GET", ARP_TABLE_PATH_RESOLVE_YES): route,
-            ("GET", ARP_TABLE_PATH_RESOLVE_NO): route,
+            ("GET", ARP_TABLE_PATH_RESOLVE_YES): 403,
+            ("GET", ARP_TABLE_PATH_RESOLVE_NO): {"rows": []},
         },
     )
     try:
-        assert await client.get_arp_table(resolve_hostnames=True) == expected  # type: ignore[deprecated]
-        assert await client.get_arp_table(resolve_hostnames=False) == expected  # type: ignore[deprecated]
-        assert router.count("GET") == expected_requests
+        assert await client.get_arp_table(resolve_hostnames=True) is None  # type: ignore[deprecated]
+        assert await client.get_arp_table(resolve_hostnames=True) is None  # type: ignore[deprecated]
+        assert await client.get_arp_table(resolve_hostnames=False) == []  # type: ignore[deprecated]
+        assert await client.get_arp_table(resolve_hostnames=False) == []  # type: ignore[deprecated]
+        assert router.count("GET", ARP_TABLE_PATH_RESOLVE_YES) == 1
+        assert router.count("GET", ARP_TABLE_PATH_RESOLVE_NO) == 2
     finally:
         await client.async_close()
 

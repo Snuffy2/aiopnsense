@@ -388,7 +388,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
         Returns:
             HostObservations | None: Validated discovery entries, an empty timestamp-free
                 result when discovery is disabled, or None when the endpoint is unavailable
-                or the response is incomplete or malformed.
+                or the response is incomplete or malformed. At most one POST is sent; a
+                fresh cached absent status can return without sending a request.
         """
         outcome = await self._fetch_post_endpoint_outcome(
             HOST_OBSERVATIONS_ENDPOINT, {"rowCount": -1}
@@ -474,7 +475,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
         Returns:
             HostObservations | None: Frozen normalized observations, including an empty
                 ``arp-ndp`` result when host discovery is disabled. None means unavailable
-                or malformed data. Each call sends one observation request.
+                or malformed data. Each call sends at most one observation request; a
+                fresh cached absent status can avoid the request.
         """
         return await self._fetch_host_observations()
 

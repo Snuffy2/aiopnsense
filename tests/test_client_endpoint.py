@@ -265,6 +265,37 @@ async def test_endpoint_status_reuses_cached_present_answer_until_force_refresh(
 
 
 @pytest.mark.asyncio
+async def test_endpoint_status_cache_keeps_query_variants_separate(
+    make_client: MakeClientFactory,
+) -> None:
+    """The deprecated public status alias caches outcomes per exact query path.
+
+    Args:
+        make_client (MakeClientFactory): Factory for clients using a mocked HTTP session.
+    """
+    client, session = make_mock_session_client(make_client)
+    yes_path = "/api/diagnostics/interface/search_arp?resolve=yes"
+    no_path = "/api/diagnostics/interface/search_arp?resolve=no"
+    router = install_fake_router(
+        client,
+        session,
+        routes={("GET", yes_path): 403, ("GET", no_path): 200},
+    )
+    try:
+        for _ in range(2):
+            with pytest.warns(DeprecationWarning):
+                assert await client.is_endpoint_available(yes_path) is False  # type: ignore[deprecated]
+        for _ in range(2):
+            with pytest.warns(DeprecationWarning):
+                assert await client.is_endpoint_available(no_path) is True  # type: ignore[deprecated]
+
+        assert router.count("GET", yes_path) == 1
+        assert router.count("GET", no_path) == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_endpoint_status_transient_failure_is_not_cached(
     make_client: MakeClientFactory,
 ) -> None:

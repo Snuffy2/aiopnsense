@@ -162,8 +162,8 @@ class ClientEndpointMixin:
         """Fetch a GET endpoint once and report whether it returned data, is absent or failed.
 
         Args:
-            path (str): API endpoint path to request. A query string is sent but
-                excluded from the availability cache key.
+            path (str): API endpoint path to request. The exact path, including
+                its query string, is used for the availability cache key.
             response_format (Literal["json", "text"], optional): ``"text"`` returns the
                 body text in the ``DATA`` outcome; ``"json"`` returns the decoded body.
 
@@ -206,8 +206,8 @@ class ClientEndpointMixin:
         payload. Outcomes and cache rules are the same as ``_fetch_endpoint_outcome``.
 
         Args:
-            path (str): API endpoint path to check. A query string is sent but
-                excluded from the availability cache key.
+            path (str): API endpoint path to check. The exact path, including
+                its query string, is used for the availability cache key.
             force_refresh (bool): Whether to bypass a cached availability answer.
                 The request is sent and its result is cached.
 
@@ -236,12 +236,13 @@ class ClientEndpointMixin:
         A single request both checks availability and returns the data. The
         availability status (never the payload) is cached for the endpoint cache
         TTL, so a known-absent endpoint is answered without a request. GET and
-        POST share this logic; POST availability is cached under a ``post:`` key.
+        POST share this logic; the HTTP method and exact path, including query,
+        distinguish cache entries.
 
         Args:
             method (Literal["get", "post"]): HTTP method of the data request.
-            path (str): API endpoint path to request. A query string is sent but
-                excluded from the availability cache key.
+            path (str): API endpoint path to request. The exact path, including
+                its query string, is used for the availability cache key.
             payload (MutableMapping[str, Any] | None): Request body, sent with POST requests.
             response_format (Literal["json", "text"]): ``"text"`` returns the body text of
                 a GET in the ``DATA`` outcome; ``"json"`` returns the decoded body.
@@ -269,7 +270,7 @@ class ClientEndpointMixin:
             absent with the permission-denied marker. Transient failures and, in throw
             mode, a 403 clear the cache entry so the next call requests again.
         """
-        cache_key = path.partition("?")[0]
+        cache_key = path
         if method == "post":
             cache_key = f"post:{cache_key}"
         now = datetime.now().astimezone()
