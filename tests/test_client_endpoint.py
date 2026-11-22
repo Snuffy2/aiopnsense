@@ -1,6 +1,7 @@
 """Tests for client endpoint availability and endpoint-style selection."""
 
 from datetime import datetime, timedelta
+import logging
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -14,7 +15,10 @@ from aiopnsense.exceptions import (
     OPNsenseSSLError,
     OPNsenseUnknownFirmware,
 )
-from tests.conftest import FakeResponse, MakeClientFactory, make_mock_session_client
+from tests.conftest import FakeResponse, MakeClientFactory, ScriptedRouter, make_mock_session_client
+
+DISMISS_SNAKE_PATH = "/api/core/system/dismiss_status"
+DISMISS_CAMEL_PATH = "/api/core/system/dismissStatus"
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):
@@ -922,14 +926,14 @@ async def test_set_use_snake_case_deprecated_wrapper(
         ("25.7", True, "/snake_case"),
         ("25.7_1", True, "/snake_case"),
         ("26.1.1", True, "/snake_case"),
-        (None, True, "/snake_case"),
-        ("invalid-version", True, "/snake_case"),
+        (None, None, "/snake_case"),
+        ("invalid-version", None, "/snake_case"),
     ],
 )
 @pytest.mark.asyncio
 async def test_set_use_snake_case_selects_expected_endpoint_style(
     firmware_version: str | None,
-    expected_use_snake_case: bool,
+    expected_use_snake_case: bool | None,
     expected_path: str,
     make_client: MakeClientFactory,
 ) -> None:
@@ -937,7 +941,8 @@ async def test_set_use_snake_case_selects_expected_endpoint_style(
 
     Args:
         firmware_version (str | None): Firmware version returned by the mocked client.
-        expected_use_snake_case (bool): Expected endpoint-style flag after initialization.
+        expected_use_snake_case (bool | None): Expected endpoint-style flag after initialization;
+            ``None`` when unknown firmware leaves the style unresolved.
         expected_path (str): Expected endpoint path returned by the selector helper.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
@@ -960,7 +965,7 @@ async def test_set_use_snake_case_selects_expected_endpoint_style(
 @pytest.mark.parametrize(
     ("firmware_version", "expected_use_snake_case"),
     [
-        pytest.param("invalid-version", True, id="invalid-version"),
+        pytest.param("invalid-version", None, id="invalid-version"),
         pytest.param(None, None, id="missing-version"),
     ],
 )
@@ -1025,3 +1030,120 @@ async def test_get_endpoint_path_lazily_initializes_snake_case_state(
         set_use_snake_case.assert_awaited_once_with()
     finally:
         await client.async_close()
+
+
+@pytest.fixture
+def dismiss_router(
+    scripted_router: tuple[Any, ScriptedRouter],
+) -> tuple[Any, ScriptedRouter]:
+    """Return a scripted Router that serves both notice-dismiss endpoint styles.
+
+    Args:
+        scripted_router (tuple[Any, ScriptedRouter]): Client and the Router that scripts it.
+
+    Returns:
+        tuple[Any, ScriptedRouter]: Client and Router that accept either dismiss path.
+    """
+    client, router = scripted_router
+    router.endpoints[DISMISS_SNAKE_PATH] = {"status": "ok"}
+    router.endpoints[DISMISS_CAMEL_PATH] = {"status": "ok"}
+    return client, router
+
+
+@pytest.mark.parametrize(
+    ("firmware", "expected_path"),
+    [
+        pytest.param("25.1", DISMISS_CAMEL_PATH, id="below-threshold"),
+        pytest.param("25.6.4", DISMISS_CAMEL_PATH, id="just-below-threshold"),
+        pytest.param("25.7", DISMISS_SNAKE_PATH, id="at-threshold"),
+        pytest.param("26.1.6", DISMISS_SNAKE_PATH, id="above-threshold"),
+    ],
+)
+async def test_public_call_uses_endpoint_style_for_known_firmware(
+    dismiss_router: tuple[Any, ScriptedRouter], firmware: str, expected_path: str
+) -> None:
+    """Verify a public method calls the endpoint style that the Router firmware uses.
+
+    Args:
+        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+        firmware (str): Firmware version reported by the Router.
+        expected_path (str): Dismiss endpoint the client is expected to call.
+    """
+    client, router = dismiss_router
+    router.firmware = firmware
+
+    assert await client.close_notice("notice") is True
+
+    assert router.post_paths == [expected_path]
+
+
+async def test_unknown_firmware_does_not_pin_endpoint_style(
+    dismiss_router: tuple[Any, ScriptedRouter],
+) -> None:
+    """Verify a first call with unknown firmware does not fix the endpoint style.
+
+    Args:
+        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+    """
+    client, router = dismiss_router
+    router.firmware = None
+
+    assert await client.close_notice("first") is True
+    router.firmware = "25.1"
+    assert await client.close_notice("second") is True
+
+    assert router.post_paths == [DISMISS_SNAKE_PATH, DISMISS_CAMEL_PATH]
+
+
+async def test_unreachable_firmware_status_does_not_pin_endpoint_style(
+    dismiss_router: tuple[Any, ScriptedRouter],
+) -> None:
+    """Verify a failed firmware lookup is retried instead of being remembered.
+
+    Args:
+        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+    """
+    client, router = dismiss_router
+    router.firmware = "25.1"
+    router.firmware_reachable = False
+
+    assert await client.close_notice("first") is True
+    router.firmware_reachable = True
+    assert await client.close_notice("second") is True
+
+    assert router.post_paths == [DISMISS_SNAKE_PATH, DISMISS_CAMEL_PATH]
+
+
+@pytest.mark.parametrize(
+    ("firmware", "expected_level", "expected_text"),
+    [
+        pytest.param(None, logging.DEBUG, "firmware version is unavailable", id="missing"),
+        pytest.param("weird", logging.ERROR, "cannot be compared", id="not-comparable"),
+    ],
+)
+async def test_unknown_firmware_is_logged_once_per_condition(
+    dismiss_router: tuple[Any, ScriptedRouter],
+    caplog: pytest.LogCaptureFixture,
+    firmware: str | None,
+    expected_level: int,
+    expected_text: str,
+) -> None:
+    """Verify unknown firmware logs its reason once however many calls hit it.
+
+    Args:
+        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+        caplog (pytest.LogCaptureFixture): Log capture fixture.
+        firmware (str | None): Unknown firmware value reported by the Router.
+        expected_level (int): Level the unknown-firmware message must use.
+        expected_text (str): Text identifying the unknown-firmware reason.
+    """
+    client, router = dismiss_router
+    router.firmware = firmware
+    caplog.set_level(logging.DEBUG, logger="aiopnsense")
+
+    for _ in range(3):
+        assert await client.close_notice("notice") is True
+
+    assert router.post_paths == [DISMISS_SNAKE_PATH] * 3
+    records = [record for record in caplog.records if expected_text in record.getMessage()]
+    assert [record.levelno for record in records] == [expected_level]

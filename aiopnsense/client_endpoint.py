@@ -9,9 +9,13 @@ import aiohttp
 from ._error_policy import _raise_if_throwing, _throws_errors
 from ._request_failure import _PROBE_PHASE, _report_http_failure, _report_transport_failure
 from ._typing import AiopnsenseClientProtocol
-from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS, LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
+from .const import (
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
+    SNAKE_CASE_ENDPOINTS_CAPABILITY,
+)
 from .exceptions import OPNsenseUnknownFirmware
-from .helpers import _LOGGER, _log_request_recovery, firmware_is_at_least
+from .helpers import _LOGGER, _log_request_recovery
 
 
 class ClientEndpointMixin:
@@ -128,6 +132,10 @@ class ClientEndpointMixin:
     async def _set_use_snake_case(self, initial: bool = False) -> None:
         """Set endpoint naming mode from the detected firmware version.
 
+        The mode is only stored once the firmware version is known and comparable.
+        While the firmware is unknown the mode stays unresolved so a later call can
+        resolve it.
+
         Args:
             initial (bool): Whether to preserve the legacy unknown-firmware raise behavior.
 
@@ -138,35 +146,21 @@ class ClientEndpointMixin:
             OPNsenseUnknownFirmware: Raised when ``initial`` is ``True`` and the firmware
                 version cannot be compared reliably.
         """
-        firmware_version = await cast(
+        uses_snake_case = await cast(
             AiopnsenseClientProtocol,
             self,
-        ).get_host_firmware_version()
-        self._use_snake_case = True
-        if firmware_version is None:
-            _LOGGER.debug("Using snake_case endpoints because firmware version is unavailable")
+        )._firmware_capability(SNAKE_CASE_ENDPOINTS_CAPABILITY)
+        if uses_snake_case is None:
             if initial:
                 raise OPNsenseUnknownFirmware
             return
-        uses_snake_case = firmware_is_at_least(firmware_version, LEGACY_CAMELCASE_ENDPOINT_FIRMWARE)
-        if uses_snake_case is False:
-            _LOGGER.debug(
-                "Using camelCase endpoints for OPNsense < %s",
-                LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
-            )
-            self._use_snake_case = False
-        elif uses_snake_case is True:
-            _LOGGER.debug(
-                "Using snake_case endpoints for OPNsense >= %s",
-                LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
-            )
-        else:
-            _LOGGER.debug(
-                "Unable to compare firmware version %s for endpoint style",
-                firmware_version,
-            )
-            if initial:
-                raise OPNsenseUnknownFirmware
+        self._use_snake_case = uses_snake_case
+        _LOGGER.debug(
+            "Using %s endpoints for OPNsense %s %s",
+            "snake_case" if uses_snake_case else "camelCase",
+            ">=" if uses_snake_case else "<",
+            LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
+        )
 
     async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str:
         """Return the firmware-appropriate endpoint path.
@@ -176,15 +170,20 @@ class ClientEndpointMixin:
             camel_case_path (str): Endpoint path for older camelCase firmware.
 
         Returns:
-            str: Selected endpoint path for the active firmware family.
+            str: Selected endpoint path for the active firmware family. While the
+                firmware is unknown this is the capability's unknown answer, which is
+                not remembered.
         """
         if self._use_snake_case is None:
             await self._set_use_snake_case()
-        # _get_endpoint_path treats _use_snake_case as a three-state flag:
-        # None means _set_use_snake_case has not determined the endpoint style yet,
-        # True selects snake_case, and False selects camelCase. Use "is not False"
-        # so an indeterminate or newer-firmware value stays on the snake_case path.
-        return snake_case_path if self._use_snake_case is not False else camel_case_path
+        # _use_snake_case is None until a known firmware version resolves it, so the
+        # unknown-firmware answer is used per call without being stored.
+        use_snake_case = (
+            SNAKE_CASE_ENDPOINTS_CAPABILITY.unknown_answer
+            if self._use_snake_case is None
+            else self._use_snake_case
+        )
+        return snake_case_path if use_snake_case else camel_case_path
 
     def _clear_endpoint_cache_entry(self, cache_key: str) -> None:
         """Clear all cached endpoint state for a method-aware key.

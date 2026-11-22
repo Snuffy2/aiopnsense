@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import aiohttp
 
+from .const import FirmwareCapability
+
 if TYPE_CHECKING:
     from .client_toggle import ToggleSpec, ToggleTarget
 
@@ -75,6 +77,8 @@ class AiopnsenseClientProtocol(Protocol):
     async def _get_opnsense_timezone(self, datetime_str: str | None = None) -> tzinfo: ...
 
     async def get_host_firmware_version(self) -> str | None: ...
+
+    async def _firmware_capability(self, capability: FirmwareCapability) -> bool | None: ...
 
     async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str: ...
 

@@ -1,5 +1,6 @@
 """Constants for aiopnsense."""
 
+from dataclasses import dataclass
 from typing import Any
 
 from dateutil.tz import gettz
@@ -14,6 +15,32 @@ LEGACY_UNBOUND_BLOCKLIST_FIRMWARE = "25.7.8"
 LEGACY_CAMELCASE_ENDPOINT_FIRMWARE = "25.7"
 OPNSENSE_26_1_11_COMPAT_FIRMWARE = "26.1.11"
 OPNSENSE_INTERFACE_ASSIGNMENT_FIRMWARE = "26.7.6"
+
+
+@dataclass(frozen=True, slots=True)
+class FirmwareCapability:
+    """A library behavior that depends on the Router's firmware release.
+
+    Attributes:
+        name (str): Human-readable name used in logs.
+        minimum (str): Oldest firmware release that supports the behavior.
+        unknown_answer (bool): Whether the behavior is treated as supported while the
+            firmware is unknown (missing, or present but not comparable). Unknown
+            firmware is never remembered, so the next use asks again.
+    """
+
+    name: str
+    minimum: str
+    unknown_answer: bool
+
+
+# Declared Firmware Capabilities. Each one names its threshold and its answer for
+# unknown firmware here, so no feature chooses its own unknown behavior.
+SNAKE_CASE_ENDPOINTS_CAPABILITY = FirmwareCapability(
+    name="snake_case endpoint style",
+    minimum=LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
+    unknown_answer=True,
+)
 
 
 # Default timeout, in seconds, for API requests.

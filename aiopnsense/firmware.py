@@ -18,6 +18,7 @@ from .const import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     OPNSENSE_MIN_FIRMWARE,
     OPNSENSE_RECOMMENDED_FIRMWARE,
+    FirmwareCapability,
 )
 from .exceptions import (
     OPNsenseConnectionError,
@@ -61,6 +62,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         recommended: str
 
     _firmware_version: str | None
+    _firmware_unknown_logged: set[tuple[str, str | None]]
     _firmware_install_active: bool
 
     @staticmethod
@@ -78,11 +80,56 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             minimum=OPNSENSE_MIN_FIRMWARE, recommended=OPNSENSE_RECOMMENDED_FIRMWARE
         )
 
+    def _record_firmware_version(self, version: str | None) -> None:
+        """Set or clear the cached firmware version.
+
+        Every write of the cached version goes through this method so that the
+        firmware module is the only owner of the value.
+
+        Args:
+            version (str | None): Version to cache, or ``None`` to force the next
+                lookup to read it from the Router.
+        """
+        self._firmware_version = version
+
+    async def _firmware_capability(self, capability: FirmwareCapability) -> bool | None:
+        """Return whether the Router firmware supports a Firmware Capability.
+
+        Unknown firmware is logged once per capability and version: at debug level when
+        the version is missing and at error level when it cannot be compared.
+
+        Args:
+            capability (FirmwareCapability): Capability to evaluate.
+
+        Returns:
+            bool | None: ``True`` when supported, ``False`` when not, or ``None`` when
+                the firmware is unknown. Callers fall back to
+                ``capability.unknown_answer`` and must not remember the fallback.
+        """
+        firmware_version = await self.get_host_firmware_version()
+        supported = firmware_is_at_least(firmware_version, capability.minimum)
+        if supported is None and (capability.name, firmware_version) not in (
+            self._firmware_unknown_logged
+        ):
+            self._firmware_unknown_logged.add((capability.name, firmware_version))
+            if firmware_version is None:
+                _LOGGER.debug(
+                    "Using the unknown-firmware answer for %s because the firmware version is unavailable",
+                    capability.name,
+                )
+            else:
+                _LOGGER.error(
+                    "Using the unknown-firmware answer for %s because firmware version %s cannot be compared",
+                    capability.name,
+                    firmware_version,
+                )
+        return supported
+
     async def _store_host_firmware_version(self) -> None:
         """Cache the installed OPNsense firmware version or product series."""
         if not await self._is_get_endpoint_available(FIRMWARE_STATUS_ENDPOINT):
             _LOGGER.debug("Firmware status endpoint unavailable")
-            self._firmware_version = None
+            self._record_firmware_version(None)
             return
 
         firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
@@ -99,7 +146,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 )
         else:
             _LOGGER.debug("[get_host_firmware_version] firmware: %s", firmware)
-        self._firmware_version = firmware
+        self._record_firmware_version(firmware)
 
     @_log_errors
     async def get_host_firmware_version(self) -> None | str:
@@ -197,7 +244,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                     running = await self._safe_dict_get(FIRMWARE_RUNNING_ENDPOINT)
                     if running.get("status") == "ready":
                         _LOGGER.info("Triggering firmware check")
-                        self._firmware_version = None
+                        self._record_firmware_version(None)
                         # Do not queue this mutation: a cancelled queue caller
                         # can leave a CHECK that runs after the action lock releases.
                         await self._do_post(FIRMWARE_CHECK_ENDPOINT)
@@ -292,7 +339,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         if self._firmware_install_active:
             raise OPNsenseError("A firmware installation is already active on this client")
         self._firmware_install_active = True
-        self._firmware_version = None
+        self._record_firmware_version(None)
         try:
             async with asyncio.timeout(timeout):
                 # An already-dispatched local check must finish before preflight.
@@ -427,7 +474,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                         installed = dict_get(status, "product.product_version")
                         target_is_newer = firmware_is_newer(target, installed)
                         if target_is_newer is False:
-                            self._firmware_version = installed
+                            self._record_firmware_version(installed)
                             return
                         if not reboot:
                             raise OPNsenseError(
@@ -472,7 +519,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             async with self._firmware_action_lock:
                 if self._firmware_install_active:
                     raise OPNsenseError("A firmware installation is already active on this client")
-                self._firmware_version = None
+                self._record_firmware_version(None)
                 response = await self._do_post(
                     f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}", caller="upgrade_firmware"
                 )
