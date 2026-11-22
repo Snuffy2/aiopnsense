@@ -297,7 +297,6 @@ class ClientEndpointMixin:
                 path=path,
                 phase=PROBE_PHASE,
                 operation=f"is_{normalized_method}_endpoint_available",
-                url=url,
                 exc=e,
                 will_raise=_throws_errors(self),
             )

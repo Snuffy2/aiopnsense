@@ -118,12 +118,10 @@ class ClientTransportMixin:
                                     if message_count == 2:
                                         response_str: str = line[len("data:") :].strip()
                                         response_json = json.loads(response_str)
-                                        _log_request_recovery(self, "get", path, STREAM_PHASE)
-                                        return (
-                                            dict(response_json)
-                                            if isinstance(response_json, MutableMapping)
-                                            else {}
-                                        )
+                                        if isinstance(response_json, MutableMapping):
+                                            _log_request_recovery(self, "get", path, STREAM_PHASE)
+                                            return dict(response_json)
+                                        return {}
                 else:
                     http_error = _report_http_failure(
                         self,
@@ -145,7 +143,6 @@ class ClientTransportMixin:
                 path=path,
                 phase=STREAM_PHASE,
                 operation="do_get_from_stream",
-                url=url,
                 exc=e,
                 will_raise=_throws_errors(self),
                 caller=caller,
@@ -222,6 +219,7 @@ class ClientTransportMixin:
                         tuple[str, list[dict[str, Any]]]: Remaining unparsed buffer
                             text and decoded JSON events.
                     """
+                    nonlocal recovered
                     events: list[dict[str, Any]] = []
                     drain_buffer = source_buffer
                     while "\n\n" in drain_buffer:
@@ -254,6 +252,9 @@ class ClientTransportMixin:
                             if yield_reset_events:
                                 events.append({_STREAM_JSON_EVENT_RESET_KEY: True})
                             continue
+                        if not recovered:
+                            _log_request_recovery(self, "get", path, STREAM_PHASE)
+                            recovered = True
                         events.append(dict(response_json))
 
                     return drain_buffer, events
@@ -282,9 +283,6 @@ class ClientTransportMixin:
 
                     buffer += chunk_text.replace("\r\n", "\n").replace("\r", "\n")
                     buffer, events = _drain_buffer(buffer)
-                    if events and not recovered:
-                        _log_request_recovery(self, "get", path, STREAM_PHASE)
-                        recovered = True
                     for event in events:
                         yield event
                 try:
@@ -307,8 +305,6 @@ class ClientTransportMixin:
                     buffer += "\n"
 
                 buffer, events = _drain_buffer(buffer)
-                if events and not recovered:
-                    _log_request_recovery(self, "get", path, STREAM_PHASE)
                 for event in events:
                     yield event
         except (aiohttp.ClientError, TimeoutError) as err:
@@ -318,7 +314,6 @@ class ClientTransportMixin:
                 path=path,
                 phase=STREAM_PHASE,
                 operation="stream_json_events",
-                url=url,
                 exc=err,
                 will_raise=_throws_errors(self),
             )
@@ -385,7 +380,6 @@ class ClientTransportMixin:
                 path=path,
                 phase=REQUEST_PHASE,
                 operation="do_get",
-                url=url,
                 exc=e,
                 will_raise=_throws_errors(self),
                 caller=caller,
@@ -508,7 +502,6 @@ class ClientTransportMixin:
                 path=path,
                 phase=REQUEST_PHASE,
                 operation="do_post",
-                url=url,
                 exc=e,
                 will_raise=_throws_errors(self),
                 caller=caller,

@@ -1478,3 +1478,108 @@ async def test_stream_that_connects_then_stalls_logs_one_error_per_outage(
         assert not [r for r in caplog.records if " recovered for " in r.getMessage()]
     finally:
         await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_reset_event_does_not_clear_outage(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Malformed events are emitted without reporting stream recovery.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    stalled = _StalledChunks()
+    stalled_response = MagicMock(
+        status=200,
+        reason="OK",
+        ok=True,
+        content=MagicMock(iter_chunked=MagicMock(return_value=stalled)),
+    )
+    stalled_response.__aenter__.return_value = stalled_response
+    session = MagicMock()
+    session.get = MagicMock(
+        side_effect=[
+            stalled_response,
+            FakeResponse(stream_chunks=[b"data: not-json\n\n"]),
+            stalled_response,
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            await _call_ladder_path(client, "stream_events")
+            events = [
+                event
+                async for event in client._stream_json_events("/api/x", yield_reset_events=True)
+            ]
+            await _call_ladder_path(client, "stream_events")
+
+        assert events == [{_STREAM_JSON_EVENT_RESET_KEY: True}]
+        assert len([record for record in caplog.records if record.levelno >= logging.WARNING]) == 1
+        assert not [record for record in caplog.records if " recovered for " in record.getMessage()]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_one_shot_non_mapping_stream_payload_does_not_report_recovery(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A non-mapping one-shot payload returns empty without clearing an outage.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    session = MagicMock()
+    session.get = MagicMock(
+        side_effect=[
+            FakeResponse(status=500, reason="Failure", ok=False),
+            FakeResponse(stream_chunks=[b"data: ignored\n\ndata: []\n\n"]),
+            FakeResponse(status=500, reason="Failure", ok=False),
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            await _call_ladder_path(client, "stream_once")
+            assert await client._do_get_from_stream("/api/x", caller="t") == {}
+            await _call_ladder_path(client, "stream_once")
+
+        assert len([record for record in caplog.records if record.levelno >= logging.WARNING]) == 1
+        assert not [record for record in caplog.records if " recovered for " in record.getMessage()]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_log_omits_credentials_from_configured_url(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Transport failure logs identify the API path without exposing URL userinfo.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    session = MagicMock()
+    session.get = MagicMock(side_effect=TimeoutError("stalled"))
+    client = make_client(
+        session=session,
+        url="https://synthetic-user:synthetic-password@opnsense.invalid",
+    )
+    try:
+        with caplog.at_level(logging.ERROR, logger="aiopnsense"):
+            assert await client._do_get("/api/x", caller="test") is None
+
+        messages = "\n".join(record.getMessage() for record in caplog.records)
+        assert "/api/x" in messages
+        assert "synthetic-user" not in messages
+        assert "synthetic-password" not in messages
+    finally:
+        await client.async_close()

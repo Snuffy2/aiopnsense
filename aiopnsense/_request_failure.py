@@ -1,9 +1,9 @@
 """Classification and logging of failed HTTP responses and transport errors.
 
-Every HTTP request path (immediate GET and POST, the endpoint availability probe and both
-streaming reads) reports a failure here. The module maps the failure to the public exception,
-logs it through outage suppression and marks that exception as already logged. It never decides
-whether the caller raises the exception or returns an empty value.
+The immediate GET and POST, endpoint availability probe and both streaming reads report failures
+here. Firmware installation requests use their own polling and error policy. This module maps
+reported failures to public exceptions, logs through outage suppression and marks raised
+exceptions as already logged. It never decides whether the caller raises or returns an empty value.
 """
 
 import logging
@@ -117,7 +117,6 @@ def _report_transport_failure(
     path: str,
     phase: str,
     operation: str,
-    url: str,
     exc: Exception,
     will_raise: bool,
     caller: str | None = None,
@@ -131,7 +130,6 @@ def _report_transport_failure(
         phase (str): Request phase used for outage suppression, such as ``request``,
             ``probe`` or ``stream``.
         operation (str): Name of the request operation used in the log message.
-        url (str): Full requested URL used in the log message.
         exc (Exception): Caught aiohttp client error or timeout.
         will_raise (bool): Whether the caller raises the returned exception, so it is
             marked as already logged.
@@ -168,7 +166,7 @@ def _report_transport_failure(
             logging.ERROR,
             "Client error in " + operation + origin + ". Path: %s. %s: %s",
             *origin_args,
-            url,
+            path,
             type(exc).__name__,
             exc,
             error=logged_error,
