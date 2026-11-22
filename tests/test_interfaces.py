@@ -425,4 +425,5 @@ async def test_toggle_interface_transport_failures_stop_at_the_failed_step(
             await client.toggle_interface("opt8", "off")
     else:
         assert await client.toggle_interface("opt8", "off") is False
+    assert scripted_router.requested(failing, method=method)
     assert scripted_router.requested(RECONFIGURE) is expect_reconfigure

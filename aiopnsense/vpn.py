@@ -748,17 +748,20 @@ class VPNMixin(AiopnsenseClientProtocol):
                 or ``None`` or ``toggle`` to flip the current state.
 
         Returns:
-            bool: True when the toggle and service apply succeeded. A matching
-                explicit target returns ``True`` without a service reconfigure
-                unless this client tracks an earlier unapplied save. False when the
-                save was not acknowledged or the apply was not confirmed, for an
-                unknown VPN type or collection, for an empty WireGuard UUID,
-                or when an error was suppressed. With ``throw_errors`` enabled,
-                an invalid ``toggle_on_off`` raises ``OPNsenseInvalidArgument``
-                and transport errors raise ``OPNsenseError``.
-                Closing the client raises ``asyncio.CancelledError`` from a call in
-                progress or a new call. A completed service apply can still report
-                success during shutdown.
+            bool: True when the toggle and service apply succeeded. A flip uses
+                the save reply's ``changed`` field to decide whether to apply.
+                An explicit target requires confirmation of the requested state.
+                A matching explicit target returns ``True`` without a service
+                reconfigure unless this client tracks an earlier unapplied save.
+                False when the toggle or apply cannot be confirmed, for an unknown
+                VPN type or collection, for an empty WireGuard UUID, or when an
+                error was suppressed. With ``throw_errors`` enabled, an invalid
+                ``toggle_on_off`` raises ``OPNsenseInvalidArgument`` and transport
+                errors raise ``OPNsenseError``.
+                Supported requests that reach the VPN runner raise
+                ``asyncio.CancelledError`` if the client is closing or shutdown
+                interrupts the operation. A completed service apply can still
+                report success during shutdown.
         """
         target = self._parse_toggle_target(toggle_on_off)
         spec = self._vpn_toggle_spec(vpn_type, clients_servers, uuid, target)

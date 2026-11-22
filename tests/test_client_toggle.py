@@ -250,6 +250,8 @@ async def test_toggle_unacknowledged_save_returns_false_without_apply(
     client = scripted_router.client()
 
     assert await case.toggle(client, target) is False
+    if case.name == "alias":
+        assert not scripted_router.requested(_ALIAS_SET)
     assert not scripted_router.requested(case.apply_path)
 
 
@@ -279,6 +281,8 @@ async def test_toggle_acknowledged_save_and_confirmed_apply_returns_true(
 
     assert await case.toggle(client, toggle_on_off) is True
     assert scripted_router.requested(case.save_paths[target])
+    if case.name == "alias":
+        assert scripted_router.requested(_ALIAS_SET)
     assert scripted_router.requested(case.apply_path)
 
 
