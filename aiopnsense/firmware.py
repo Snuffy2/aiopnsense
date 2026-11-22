@@ -179,6 +179,37 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         supported = await self._firmware_capability(capability)
         return capability.unknown_answer if supported is None else supported
 
+    def _status_firmware_version(self, firmware_info: MutableMapping[str, Any]) -> str | None:
+        """Return the firmware version from a status payload, or its product series.
+
+        A product version that is missing or not comparable falls back to the product
+        series, which is logged at debug level. The result can still be incomparable,
+        so callers cache it only when it compares.
+
+        Args:
+            firmware_info (MutableMapping[str, Any]): Firmware status payload from OPNsense.
+
+        Returns:
+            str | None: Product version, or the product series when the version is not
+                comparable, or ``None`` when neither value is a string.
+        """
+        raw_firmware = dict_get(firmware_info, "product.product_version")
+        firmware: str | None = raw_firmware if isinstance(raw_firmware, str) else None
+        comparable_firmware = trim_firmware_suffix(firmware)
+        if not comparable_firmware or firmware_is_at_least(comparable_firmware, "0") is None:
+            old = firmware
+            product_series = dict_get(firmware_info, "product.product_series")
+            firmware = product_series if isinstance(product_series, str) else old
+            if firmware != old:
+                _LOGGER.debug(
+                    "[get_host_firmware_version] firmware: %s not valid SemVer, using %s",
+                    old,
+                    firmware,
+                )
+        else:
+            _LOGGER.debug("[get_host_firmware_version] firmware: %s", firmware)
+        return firmware
+
     async def _store_host_firmware_version(self) -> str | None:
         """Read and cache the installed OPNsense firmware version or product series.
 
@@ -215,21 +246,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         else:
             return None
 
-        raw_firmware = dict_get(firmware_info, "product.product_version")
-        firmware: str | None = raw_firmware if isinstance(raw_firmware, str) else None
-        comparable_firmware = trim_firmware_suffix(firmware)
-        if not comparable_firmware or firmware_is_at_least(comparable_firmware, "0") is None:
-            old = firmware
-            product_series = dict_get(firmware_info, "product.product_series")
-            firmware = product_series if isinstance(product_series, str) else old
-            if firmware != old:
-                _LOGGER.debug(
-                    "[get_host_firmware_version] firmware: %s not valid SemVer, using %s",
-                    old,
-                    firmware,
-                )
-        else:
-            _LOGGER.debug("[get_host_firmware_version] firmware: %s", firmware)
+        firmware = self._status_firmware_version(firmware_info)
         return self._record_firmware_version(firmware, observation_id=payload_id)
 
     @_log_errors
@@ -337,16 +354,16 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                         _LOGGER.debug("Skipping firmware check during cooldown")
                         # A check would otherwise have refreshed the cached version after
                         # an upgrade made outside this client. Only a comparable version
-                        # clears the cache, so a non-SemVer status does not clear it on
+                        # that the normal lookup would use clears the cache, so a status
+                        # with no comparable version or series does not clear it on
                         # every poll.
-                        if (
-                            self._firmware_version is not None
-                            and isinstance(product_version, str)
-                            and product_version != self._firmware_version
-                            and firmware_is_at_least(trim_firmware_suffix(product_version), "0")
-                            is not None
-                        ):
-                            self._record_firmware_version(None)
+                        if self._firmware_version is not None:
+                            status_version = self._status_firmware_version(status)
+                            if (
+                                status_version != self._firmware_version
+                                and firmware_is_at_least(status_version, "0") is not None
+                            ):
+                                self._record_firmware_version(None)
                     else:
                         running = await self._safe_dict_get(FIRMWARE_RUNNING_ENDPOINT)
                         if running.get("status") == "ready":
@@ -358,11 +375,15 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                             # Do not queue this mutation: a cancelled queue caller
                             # can leave a CHECK that runs after the action lock releases.
                             response = await self._do_post(FIRMWARE_CHECK_ENDPOINT)
-                            # Only an acknowledged check starts the cooldown. A failed,
-                            # rejected or cancelled POST leaves the next poll free to retry.
+                            # Only an acknowledged check starts the cooldown. OPNsense
+                            # returns status ok even when configd fails, leaving msg_uuid
+                            # empty, so an acknowledgement needs a non-empty msg_uuid. A
+                            # failed, rejected or cancelled POST leaves the next poll free to retry.
                             if (
                                 isinstance(response, MutableMapping)
                                 and response.get("status") == "ok"
+                                and isinstance(response.get("msg_uuid"), str)
+                                and response["msg_uuid"].strip()
                             ):
                                 self._firmware_check_requested_at = monotonic()
 
