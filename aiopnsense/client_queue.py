@@ -1,7 +1,7 @@
 """Request queue helpers for OPNsenseClient."""
 
 import asyncio
-from collections.abc import MutableMapping
+from collections.abc import Coroutine, MutableMapping
 from dataclasses import dataclass
 import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -157,6 +157,45 @@ class ClientQueueMixin:
         if self._loop is None:
             raise OPNsenseError("Event loop is not initialized")
         return self._loop
+
+    async def _run_cancellable_outcome_request(
+        self,
+        request: Coroutine[Any, Any, EndpointOutcome],
+        future: asyncio.Future[Any] | None,
+    ) -> EndpointOutcome | None:
+        """Run an outcome request without retaining a worker after caller cancellation.
+
+        Args:
+            request (Coroutine[Any, Any, EndpointOutcome]): Transport request to dispatch.
+            future (asyncio.Future[Any] | None): Queue future owned by the requesting
+                caller, or ``None`` for a queue entry without a waiter.
+
+        Returns:
+            EndpointOutcome | None: Request result, or ``None`` when the caller
+                cancelled the request while it was in flight.
+
+        Raises:
+            asyncio.CancelledError: If the queue worker is cancelled while closing.
+        """
+        if future is None:
+            return await request
+
+        request_task = asyncio.create_task(request)
+        try:
+            await asyncio.wait(
+                (request_task, future),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if future.cancelled():
+                request_task.cancel()
+                await asyncio.gather(request_task, return_exceptions=True)
+                return None
+            return await request_task
+        except asyncio.CancelledError:
+            if not request_task.done():
+                request_task.cancel()
+            await asyncio.gather(request_task, return_exceptions=True)
+            raise
 
     @staticmethod
     def _get_caller_name() -> str:
@@ -324,11 +363,16 @@ class ClientQueueMixin:
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "get_outcome":
-                    result = await self._do_get_outcome(path, caller)
+                    result = await self._run_cancellable_outcome_request(
+                        self._do_get_outcome(path, caller), future
+                    )
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "get_text_outcome":
-                    result = await self._do_get_outcome(path, caller, response_format="text")
+                    result = await self._run_cancellable_outcome_request(
+                        self._do_get_outcome(path, caller, response_format="text"),
+                        future,
+                    )
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "post":
@@ -336,7 +380,9 @@ class ClientQueueMixin:
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "post_outcome":
-                    result = await self._do_post_outcome(path, payload, caller)
+                    result = await self._run_cancellable_outcome_request(
+                        self._do_post_outcome(path, payload, caller), future
+                    )
                     if future is not None and not future.done():
                         future.set_result(result)
                 else:

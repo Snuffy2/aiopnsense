@@ -442,6 +442,83 @@ async def test_async_context_manager_stays_open_until_exit_when_validation_succe
 
 
 @pytest.mark.asyncio
+async def test_cancelled_outcome_reads_release_queue_workers(
+    make_client: MakeClientFactory,
+) -> None:
+    """Cancelling in-flight outcome reads cancels transport and frees workers.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    two_reads_started = asyncio.Event()
+    two_reads_cancelled = asyncio.Event()
+    service_read_started = asyncio.Event()
+    release_reads = asyncio.Event()
+    active_reads = 0
+    cancelled_reads = 0
+
+    class BlockingResponse:
+        """Hold NUT requests in response acquisition until the test cancels them."""
+
+        async def __aenter__(self) -> FakeResponse:
+            nonlocal active_reads
+            active_reads += 1
+            if active_reads == 2:
+                two_reads_started.set()
+            try:
+                await release_reads.wait()
+            except asyncio.CancelledError:
+                nonlocal cancelled_reads
+                cancelled_reads += 1
+                if cancelled_reads == 2:
+                    two_reads_cancelled.set()
+                raise
+            return FakeResponse(json_payload={"status": {"ups.status": "OL"}})
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            _tb: object,
+        ) -> bool:
+            return False
+
+    def session_get(url: str, **_kwargs: Any) -> BlockingResponse | FakeResponse:
+        """Return a blocking NUT response or a successful service response.
+
+        Args:
+            url (str): Requested URL.
+            _kwargs (Any): HTTP options supplied by aiohttp callers.
+
+        Returns:
+            BlockingResponse | FakeResponse: Response context for the requested path.
+        """
+        if url.endswith("/api/nut/diagnostics/upsstatus"):
+            return BlockingResponse()
+        service_read_started.set()
+        return FakeResponse(json_payload={"rows": []})
+
+    session.get = session_get
+    try:
+        cancelled_calls = [asyncio.create_task(client.get_nut_ups_status()) for _ in range(2)]
+        await asyncio.wait_for(two_reads_started.wait(), timeout=2)
+
+        for call in cancelled_calls:
+            call.cancel()
+        await asyncio.gather(*cancelled_calls, return_exceptions=True)
+        await asyncio.wait_for(two_reads_cancelled.wait(), timeout=2)
+
+        assert cancelled_reads == 2
+        assert await asyncio.wait_for(client.get_services(), timeout=2) == []
+        assert service_read_started.is_set()
+        assert not release_reads.is_set()
+    finally:
+        release_reads.set()
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_validate_can_skip_device_unique_id_requirement(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,

@@ -56,6 +56,7 @@ async def test_outcome_reads_respect_custom_response_validator(
     """
     status = 200
     validator_http_status: int | None = None
+    middleware_raises_404 = False
     requests: list[str] = []
     validated_statuses: list[int] = []
     trace_events: list[str] = []
@@ -71,14 +72,14 @@ async def test_outcome_reads_respect_custom_response_validator(
             aiohttp.ClientResponseError: When the caller rejects an HTTP status.
         """
         validated_statuses.append(response.status)
+        if response.status in {200, 404} and validator_http_status is not None:
+            raise aiohttp.ClientResponseError(
+                response.request_info,
+                (),
+                status=validator_http_status,
+                message="synthetic validator rejection",
+            )
         if response.status == 200:
-            if validator_http_status is not None:
-                raise aiohttp.ClientResponseError(
-                    response.request_info,
-                    (),
-                    status=validator_http_status,
-                    message="synthetic validator rejection",
-                )
             raise aiohttp.ClientPayloadError("response rejected by caller")
         if response.status == 403:
             raise aiohttp.ClientResponseError(
@@ -102,7 +103,7 @@ async def test_outcome_reads_respect_custom_response_validator(
             aiohttp.ClientResponseError: When middleware rejects an HTTP response.
         """
         requests.append(request.method)
-        if status == 404:
+        if status == 404 and middleware_raises_404:
             raise aiohttp.ClientResponseError(
                 request.request_info, (), status=404, message="Not Found"
             )
@@ -194,10 +195,24 @@ async def test_outcome_reads_respect_custom_response_validator(
         assert isinstance(proxy_error.value.__cause__, aiohttp.ClientHttpProxyError)
 
         status = 404
+        validator_http_status = 404
         assert await read() == absent
-        assert await read() == absent
+        assert validated_statuses == [200, 401, 403, 200, 200, 404]
         assert requests == [request_method] * 7
-        assert validated_statuses == [200, 401, 403, 200, 200]
+        assert trace_events[-1] == "exception"
+
+        cache_key = (
+            "/api/nut/diagnostics/upsstatus"
+            if request_method == "GET"
+            else "post:/api/diagnostics/interface/search_ndp"
+        )
+        client._clear_endpoint_cache_entry(cache_key)
+        validator_http_status = None
+        middleware_raises_404 = True
+        assert await read() == absent
+        assert await read() == absent
+        assert requests == [request_method] * 8
+        assert validated_statuses == [200, 401, 403, 200, 200, 404]
         assert trace_events == [
             "exception",
             "end",
@@ -206,6 +221,87 @@ async def test_outcome_reads_respect_custom_response_validator(
             "exception",
             "exception",
             "exception",
+            "exception",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_nested_auth_404_is_transient_and_retried(
+    make_client: MakeClientFactory,
+) -> None:
+    """An auth middleware 404 does not mark the endpoint absent or cache it.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    endpoint_path = "/api/nut/diagnostics/upsstatus"
+    auth_path = "/auth/refresh"
+    requests: list[tuple[str, str]] = []
+    auth_requests = 0
+    session: aiohttp.ClientSession
+
+    async def respond(
+        request: aiohttp.ClientRequest, handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Refresh authentication before passing the endpoint request through.
+
+        Args:
+            request (aiohttp.ClientRequest): Request prepared by the real session.
+            handler (aiohttp.ClientHandlerType): Network handler used for non-endpoint requests.
+
+        Returns:
+            aiohttp.ClientResponse: Simulated response for the endpoint or auth refresh.
+
+        Raises:
+            aiohttp.ClientResponseError: The first auth refresh returns an unrelated 404.
+        """
+        nonlocal auth_requests
+        requests.append((request.method, request.url.path))
+        if request.url.path == auth_path:
+            auth_requests += 1
+            if auth_requests == 1:
+                raise aiohttp.ClientResponseError(
+                    request.request_info, (), status=404, message="Auth route missing"
+                )
+            response = MagicMock(spec=aiohttp.ClientResponse)
+            response.status = 200
+            response.ok = True
+            response.reason = "OK"
+            response.connection = None
+            response._raw_cookie_headers = ()
+            response.__aenter__.return_value = response
+            response.json.return_value = {"status": {"ups.status": "OL"}}
+            return response
+
+        if request.url.path == endpoint_path:
+            async with session.get(f"http://localhost{auth_path}"):
+                pass
+            response = MagicMock(spec=aiohttp.ClientResponse)
+            response.status = 200
+            response.ok = True
+            response.reason = "OK"
+            response.connection = None
+            response._raw_cookie_headers = ()
+            response.__aenter__.return_value = response
+            response.json.return_value = {"status": {"ups.status": "OL"}}
+            return response
+
+        return await handler(request)
+
+    async with aiohttp.ClientSession(middlewares=[respond]) as session:
+        client = make_client(session=session, throw_errors=True)
+        with pytest.raises(OPNsenseConnectionError) as error:
+            await client.get_nut_ups_status()
+        assert isinstance(error.value.__cause__, aiohttp.ClientResponseError)
+        assert error.value.__cause__.status == 404
+        assert error.value.__cause__.request_info.url.path == auth_path
+
+        assert await client.get_nut_ups_status() == {"status": {"ups.status": "OL"}}
+        assert requests == [
+            ("GET", endpoint_path),
+            ("GET", auth_path),
+            ("GET", endpoint_path),
+            ("GET", auth_path),
         ]
 
 
