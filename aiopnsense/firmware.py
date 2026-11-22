@@ -66,6 +66,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
     _last_known_firmware_version: str | None
     _firmware_observation_id: int
     _firmware_version_observation_id: int
+    _firmware_invalidation_id: int
     _firmware_install_active: bool
 
     @staticmethod
@@ -92,15 +93,15 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         firmware module is the only owner of the value. When a known version differs
         from the last known one, everything derived from the old version is discarded.
         Clearing the cached version, a lookup that returns nothing, or a version that
-        cannot be compared is not a change. Lookups pass the observation ID allocated
-        before their first await, so a late response cannot overwrite a newer result
-        or an explicit invalidation.
+        cannot be compared is not a change. Failed probes use their probe ID, while
+        successful lookups use an ID allocated immediately before their payload read.
+        Explicit clears and verified versions advance the invalidation watermark.
 
         Args:
             version (str | None): Version to cache, or ``None`` to force the next
                 lookup to read it from the Router.
-            observation_id (int | None): Lookup generation allocated before its first
-                await, or ``None`` for an explicit state change at the current point.
+            observation_id (int | None): Probe or payload request ordering ID, or
+                ``None`` for an explicit state change at the current point.
 
         Returns:
             str | None: The observation's value when current, or the established
@@ -109,6 +110,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         if observation_id is None:
             self._firmware_observation_id += 1
             observation_id = self._firmware_observation_id
+            self._firmware_invalidation_id = observation_id
         if observation_id <= self._firmware_version_observation_id:
             return self._firmware_version
         self._firmware_version_observation_id = observation_id
@@ -185,15 +187,19 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             str | None: Firmware version or product series from this response.
         """
         self._firmware_observation_id += 1
-        observation_id = self._firmware_observation_id
+        probe_id = self._firmware_observation_id
         force_refresh = self._endpoint_availability.get(FIRMWARE_STATUS_ENDPOINT) is False
         endpoint_available = await self._is_get_endpoint_available(
             FIRMWARE_STATUS_ENDPOINT, force_refresh=force_refresh
         )
         if not endpoint_available:
             _LOGGER.debug("Firmware status endpoint unavailable")
-            return self._record_firmware_version(None, observation_id=observation_id)
+            return self._record_firmware_version(None, observation_id=probe_id)
 
+        if probe_id < self._firmware_invalidation_id:
+            return self._firmware_version
+        self._firmware_observation_id += 1
+        payload_id = self._firmware_observation_id
         firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
         raw_firmware = dict_get(firmware_info, "product.product_version")
         firmware: str | None = raw_firmware if isinstance(raw_firmware, str) else None
@@ -210,7 +216,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 )
         else:
             _LOGGER.debug("[get_host_firmware_version] firmware: %s", firmware)
-        return self._record_firmware_version(firmware, observation_id=observation_id)
+        return self._record_firmware_version(firmware, observation_id=payload_id)
 
     @_log_errors
     async def get_host_firmware_version(self) -> None | str:

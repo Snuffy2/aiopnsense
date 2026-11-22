@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -135,6 +135,72 @@ async def test_delayed_firmware_read_cannot_overwrite_a_newer_observation(
 
     assert await client.get_host_firmware_version() == "25.7"
     assert router.post_paths == [
+        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
+        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
+    scripted_router: tuple[aiopnsense.OPNsenseClient, ScriptedRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A delayed successful probe must order its later payload request correctly.
+
+    Args:
+        scripted_router (tuple[aiopnsense.OPNsenseClient, ScriptedRouter]): Client and Router.
+        monkeypatch (pytest.MonkeyPatch): Enables the fixture's real queue worker.
+    """
+    client, router = scripted_router
+    monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
+    router.firmware = "25.1"
+    router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}
+    router.endpoints[CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT] = {"status": "ok"}
+    first_probe_started = asyncio.Event()
+    release_first_probe = asyncio.Event()
+    firmware_probe_count = 0
+    session = cast(MagicMock, client._session)
+    router_probe = session.get.side_effect
+
+    class DelayedProbeResponse(FakeResponse):
+        async def __aenter__(self) -> Self:
+            first_probe_started.set()
+            await release_first_probe.wait()
+            return self
+
+    def delay_first_firmware_probe(url: str, **kwargs: Any) -> FakeResponse:
+        nonlocal firmware_probe_count
+        response = router_probe(url, **kwargs)
+        if url.endswith(firmware_module.FIRMWARE_STATUS_ENDPOINT):
+            firmware_probe_count += 1
+            if firmware_probe_count == 1:
+                return DelayedProbeResponse(
+                    status=response.status,
+                    reason=response.reason,
+                    ok=response.ok,
+                )
+        return response
+
+    session.get.side_effect = delay_first_firmware_probe
+    delayed_call = asyncio.create_task(client.close_notice("delayed-probe"))
+    try:
+        async with asyncio.timeout(1):
+            await first_probe_started.wait()
+        assert await client.close_notice("second-lookup") is True
+        router.firmware = "25.7"
+        release_first_probe.set()
+        async with asyncio.timeout(1):
+            assert await delayed_call is True
+        assert await client.close_notice("after-recovery") is True
+    finally:
+        release_first_probe.set()
+        if not delayed_call.done():
+            delayed_call.cancel()
+        await asyncio.gather(delayed_call, return_exceptions=True)
+
+    assert await client.get_host_firmware_version() == "25.7"
+    assert router.post_paths == [
+        CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
     ]
