@@ -1,6 +1,7 @@
 """Tests for `aiopnsense.firewall`."""
 
 from collections.abc import Callable
+import logging
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -299,44 +300,6 @@ async def test_nat_rule_helpers_parse_rows(
 
 
 @pytest.mark.asyncio
-async def test_uses_unified_nat_template_handles_invalid_firmware_string(
-    make_client: ClientType,
-) -> None:
-    """Legacy normalization fallback should be used when version comparison raises.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client = make_client()
-    try:
-        result = client._uses_unified_nat_template("foo")
-
-        assert result is False
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_filters_automatic_source_nat_rules_handles_invalid_firmware_string(
-    make_client: ClientType,
-) -> None:
-    """Verify source NAT filtering is disabled when version comparison fails.
-
-    Args:
-        make_client (ClientType): Fixture factory returning OPNsense clients.
-    Returns:
-        None: This test validates the source NAT firmware fallback.
-    """
-    client = make_client()
-    try:
-        result = client._filters_automatic_source_nat_rules("foo")
-
-        assert result is False
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method_name", "api_endpoint", "expected"),
     [
@@ -491,3 +454,104 @@ async def test_kill_states_returns_normalized_result(make_client: ClientType) ->
         )
     finally:
         await client.async_close()
+
+
+SOURCE_NAT_PATH = "/api/firewall/source_nat/search_rule"
+DNAT_PATH = "/api/firewall/d_nat/search_rule"
+SOURCE_NAT_ROWS = {
+    "rows": [
+        {"uuid": "manual-src", "description": "Manual", "enabled": "1"},
+        {"uuid": "auto-src", "description": "Automatic", "enabled": "1", "is_automatic": True},
+    ]
+}
+DNAT_ROWS = {"rows": [{"uuid": "dnat-1", "descr": "Web", "category": "c1", "%category": "Web"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("firmware", "automatic_rows_hidden"),
+    [
+        pytest.param("26.1.10", False, id="below-threshold"),
+        pytest.param("26.1.11", True, id="at-threshold"),
+        pytest.param("26.2", True, id="above-threshold"),
+        pytest.param(None, False, id="missing"),
+        pytest.param("not-a-version", False, id="not-comparable"),
+    ],
+)
+async def test_get_firewall_source_nat_filters_automatic_rows_by_firmware(
+    scripted_router: tuple[OPNsenseClient, Any], firmware: str | None, automatic_rows_hidden: bool
+) -> None:
+    """Source NAT hides generated rows only on known firmware that generates them.
+
+    Args:
+        scripted_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
+        firmware (str | None): Firmware version reported by the Router.
+        automatic_rows_hidden (bool): Whether generated rows are expected to be hidden.
+    """
+    client, router = scripted_router
+    router.firmware = firmware
+    router.endpoints[SOURCE_NAT_PATH] = SOURCE_NAT_ROWS
+
+    firewall = await client.get_firewall()
+
+    assert set(firewall["nat"]["source_nat"]) == (
+        {"manual-src"} if automatic_rows_hidden else {"manual-src", "auto-src"}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("firmware", "categories_mirrored"),
+    [
+        pytest.param("26.1.3", False, id="below-threshold"),
+        pytest.param("26.1.4", True, id="at-threshold"),
+        pytest.param("26.2", True, id="above-threshold"),
+        pytest.param(None, False, id="missing"),
+        pytest.param("not-a-version", False, id="not-comparable"),
+    ],
+)
+async def test_get_firewall_dnat_mirrors_categories_by_firmware(
+    scripted_router: tuple[OPNsenseClient, Any], firmware: str | None, categories_mirrored: bool
+) -> None:
+    """Destination NAT mirrors category keys only on known unified-NAT firmware.
+
+    Args:
+        scripted_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
+        firmware (str | None): Firmware version reported by the Router.
+        categories_mirrored (bool): Whether plural category keys are expected.
+    """
+    client, router = scripted_router
+    router.firmware = firmware
+    router.endpoints[DNAT_PATH] = DNAT_ROWS
+
+    rule = (await client.get_firewall())["nat"]["d_nat"]["dnat-1"]
+
+    assert ("categories" in rule) is categories_mirrored
+    assert ("%categories" in rule) is categories_mirrored
+
+
+@pytest.mark.asyncio
+async def test_unknown_firmware_for_nat_is_logged_once_per_condition(
+    scripted_router: tuple[OPNsenseClient, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """An uncomparable firmware version is logged once at error level, not per query.
+
+    Args:
+        scripted_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
+        caplog (pytest.LogCaptureFixture): Log capture fixture.
+    """
+    client, router = scripted_router
+    router.firmware = "not-a-version"
+    router.endpoints[SOURCE_NAT_PATH] = SOURCE_NAT_ROWS
+    router.endpoints[DNAT_PATH] = DNAT_ROWS
+    caplog.set_level(logging.DEBUG, logger="aiopnsense")
+
+    await client.get_firewall()
+    await client.get_firewall()
+
+    errors = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.ERROR and "cannot be compared" in record.getMessage()
+    ]
+    assert len(errors) == 2  # one per capability (source NAT, unified NAT), not per call

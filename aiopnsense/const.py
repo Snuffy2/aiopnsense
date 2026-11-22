@@ -41,6 +41,28 @@ SNAKE_CASE_ENDPOINTS_CAPABILITY = FirmwareCapability(
     minimum=LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
     unknown_answer=True,
 )
+SOURCE_NAT_AUTOMATIC_ROW_FILTER_CAPABILITY = FirmwareCapability(
+    name="source NAT automatic rule filtering",
+    minimum=OPNSENSE_26_1_11_COMPAT_FIRMWARE,
+    unknown_answer=False,
+)
+UNIFIED_NAT_TEMPLATE_CAPABILITY = FirmwareCapability(
+    name="unified NAT template category normalization",
+    minimum=UNIFIED_NAT_TEMPLATE_FIRMWARE,
+    unknown_answer=False,
+)
+INTERFACE_ASSIGNMENT_CAPABILITY = FirmwareCapability(
+    name="interface assignment API",
+    minimum=OPNSENSE_INTERFACE_ASSIGNMENT_FIRMWARE,
+    unknown_answer=False,
+)
+# Only evaluated when the snake_case CARP status endpoint is in use. Unknown firmware
+# stays on the older endpoint.
+NEW_CARP_STATUS_ENDPOINT_CAPABILITY = FirmwareCapability(
+    name="new CARP status endpoint",
+    minimum=OPNSENSE_26_1_11_COMPAT_FIRMWARE,
+    unknown_answer=False,
+)
 
 
 # Default timeout, in seconds, for API requests.

@@ -138,6 +138,19 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 )
         return supported
 
+    async def _firmware_capability_enabled(self, capability: FirmwareCapability) -> bool:
+        """Return whether a Firmware Capability is enabled, resolving Unknown Firmware.
+
+        Args:
+            capability (FirmwareCapability): Capability to evaluate.
+
+        Returns:
+            bool: ``True`` or ``False`` when the firmware is known, otherwise
+                ``capability.unknown_answer``. The fallback is not remembered.
+        """
+        supported = await self._firmware_capability(capability)
+        return capability.unknown_answer if supported is None else supported
+
     async def _store_host_firmware_version(self) -> None:
         """Cache the installed OPNsense firmware version or product series."""
         if not await self._is_get_endpoint_available(FIRMWARE_STATUS_ENDPOINT):
