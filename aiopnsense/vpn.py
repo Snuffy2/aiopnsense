@@ -783,7 +783,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         return enabled == ("1" if toggle_on_off == "on" else "0")
 
     async def _post_wireguard_toggle(
-        self, url: str, toggle_on_off: str | None = None
+        self, url: str, item: tuple[str, str], toggle_on_off: str | None = None
     ) -> dict[str, Any]:
         """Post a WireGuard toggle and undo a flip in the wrong direction.
 
@@ -794,6 +794,7 @@ class VPNMixin(AiopnsenseClientProtocol):
 
         Args:
             url (str): Toggle URL including the item UUID and any target state.
+            item (tuple[str, str]): WireGuard collection and instance UUID.
             toggle_on_off (str | None, optional): Validated target state, or
                 ``None`` for a flip request.
 
@@ -808,6 +809,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             and response.get("result") in {"Enabled", "Disabled"}
             and response.get("result") != ("Enabled" if toggle_on_off == "on" else "Disabled")
         ):
+            self._vpn_pending_apply["wireguard"].add(item)
             _LOGGER.debug(
                 "[toggle_vpn_instance] WireGuard toggle moved away from target %s, correcting: %s",
                 toggle_on_off,
@@ -981,7 +983,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 url = f"{url}/1"
             elif toggle_on_off == "off":
                 url = f"{url}/0"
-            success = await self._post_wireguard_toggle(url, toggle_on_off)
+            success = await self._post_wireguard_toggle(url, item, toggle_on_off)
             early_result = self._vpn_toggle_early_result(success, toggle_on_off)
             if early_result is not None:
                 if early_result and item in self._vpn_pending_apply["wireguard"]:

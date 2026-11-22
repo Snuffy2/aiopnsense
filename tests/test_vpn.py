@@ -1994,6 +1994,15 @@ async def test_toggle_vpn_instance_wireguard_handles_change_after_read(
         assert result is expected
         assert api.enabled == final
         assert api.reconfigure_count == reconfigures
+        if fail_toggle_number == 2:
+            assert api.toggle_count == 2
+            assert await client.toggle_vpn_instance("wireguard", collection, "uuid", "off") is True
+            assert (api.enabled, api.applied_enabled, api.toggle_count, api.reconfigure_count) == (
+                "0",
+                "0",
+                2,
+                1,
+            )
     finally:
         await client.async_close()
 
@@ -2069,7 +2078,7 @@ async def test_toggle_vpn_instance_retries_known_failed_apply(
     honors_target: bool,
     external_change: bool,
 ) -> None:
-    """Retry a known failed service apply on a matching request without toggling again.
+    """Retry a failed apply after revalidating the requested item state.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
