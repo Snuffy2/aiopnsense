@@ -59,3 +59,15 @@ _Avoid_: Required firmware
 **Recommended Firmware**:
 The oldest OPNsense release on which every library feature works. Routers running an older release are accepted, but some features return empty or missing data.
 _Avoid_: LTD firmware, limited firmware
+
+**Firmware Capability**:
+A behavior of the library that depends on the Router's firmware release, such as which Endpoint Style it calls or which Unbound blocklist method it uses. Each has a threshold release and a fixed fallback for Unknown Firmware.
+_Avoid_: Feature flag, version gate
+
+**Unknown Firmware**:
+A Router whose firmware release is missing or cannot be compared. Startup validation rejects it; everywhere else each Firmware Capability uses its fallback and checks again on its next use.
+_Avoid_: Invalid firmware, undetected firmware
+
+**Endpoint Style**:
+The naming form, snake_case or camelCase, that a Router's API endpoints use for its firmware release. Older Routers use camelCase and newer ones use snake_case.
+_Avoid_: Endpoint format, API version

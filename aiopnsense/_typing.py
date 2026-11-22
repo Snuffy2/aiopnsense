@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import aiohttp
 
 from ._endpoint_outcome import _EndpointOutcome
+from .const import FirmwareCapability
 
 if TYPE_CHECKING:
     from .client_toggle import ToggleSpec, ToggleTarget
@@ -18,6 +19,7 @@ class AiopnsenseClientProtocol(Protocol):
 
     _firmware_install_active: bool
     _firmware_action_lock: asyncio.Lock
+    _firmware_check_requested_at: float | None
     _active_close_count: int
     _session: aiohttp.ClientSession
     _url: str
@@ -73,10 +75,20 @@ class AiopnsenseClientProtocol(Protocol):
 
     async def get_host_firmware_version(self) -> str | None: ...
 
+    async def _firmware_capability(self, capability: FirmwareCapability) -> bool | None: ...
+
+    def _reset_endpoint_state(self) -> None: ...
+
+    async def _firmware_capability_enabled(self, capability: FirmwareCapability) -> bool: ...
+
     async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str: ...
 
     async def _fetch_endpoint_outcome(
-        self, path: str, response_format: Literal["json", "text"] = "json"
+        self,
+        path: str,
+        response_format: Literal["json", "text"] = "json",
+        *,
+        force_refresh: bool = False,
     ) -> _EndpointOutcome: ...
 
     async def _fetch_post_endpoint_outcome(

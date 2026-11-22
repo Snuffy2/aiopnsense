@@ -1,8 +1,9 @@
 """Tests for client endpoint availability and endpoint-style selection."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 import logging
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock
 
 import aiohttp
@@ -18,7 +19,17 @@ from aiopnsense.exceptions import (
     OPNsenseSSLError,
     OPNsenseUnknownFirmware,
 )
-from tests.conftest import MakeClientFactory, install_fake_router, make_mock_session_client
+from tests.conftest import (
+    FakeResponse,
+    FirmwareRouter,
+    MakeClientFactory,
+    install_fake_router,
+    make_mock_session_client,
+)
+
+DISMISS_SNAKE_PATH = "/api/core/system/dismiss_status"
+DISMISS_CAMEL_PATH = "/api/core/system/dismissStatus"
+SYSTEM_INFORMATION_SNAKE_PATH = "/api/diagnostics/system/system_information"
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):
@@ -79,7 +90,6 @@ async def test_validate_requests_again_for_cached_403_in_throw_mode(
     path = "/api/core/firmware/status"
     router = install_fake_router(client, session, routes={("GET", path): 403})
     try:
-        assert await client.get_host_firmware_version() is None
         assert await client.get_host_firmware_version() is None
         assert router.count("GET", path) == 1
 
@@ -409,14 +419,14 @@ async def test_set_use_snake_case_deprecated_wrapper(
         ("25.7", True, "/snake_case"),
         ("25.7_1", True, "/snake_case"),
         ("26.1.1", True, "/snake_case"),
-        (None, True, "/snake_case"),
-        ("invalid-version", True, "/snake_case"),
+        (None, None, "/snake_case"),
+        ("invalid-version", None, "/snake_case"),
     ],
 )
 @pytest.mark.asyncio
 async def test_set_use_snake_case_selects_expected_endpoint_style(
     firmware_version: str | None,
-    expected_use_snake_case: bool,
+    expected_use_snake_case: bool | None,
     expected_path: str,
     make_client: MakeClientFactory,
 ) -> None:
@@ -424,7 +434,8 @@ async def test_set_use_snake_case_selects_expected_endpoint_style(
 
     Args:
         firmware_version (str | None): Firmware version returned by the mocked client.
-        expected_use_snake_case (bool): Expected endpoint-style flag after initialization.
+        expected_use_snake_case (bool | None): Expected endpoint-style flag after initialization;
+            ``None`` when unknown firmware leaves the style unresolved.
         expected_path (str): Expected endpoint path returned by the selector helper.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
@@ -445,25 +456,22 @@ async def test_set_use_snake_case_selects_expected_endpoint_style(
 
 
 @pytest.mark.parametrize(
-    ("firmware_version", "expected_use_snake_case"),
+    "firmware_version",
     [
-        pytest.param("invalid-version", True, id="invalid-version"),
-        pytest.param(None, None, id="missing-version"),
+        pytest.param("invalid-version", id="invalid-version"),
+        pytest.param(None, id="missing-version"),
     ],
 )
 @pytest.mark.asyncio
 async def test_set_use_snake_case_initial_raises_unknown_firmware(
     make_client: MakeClientFactory,
     firmware_version: str | None,
-    expected_use_snake_case: bool | None,
 ) -> None:
     """Verify legacy initial setup raises when firmware cannot be identified.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
         firmware_version (str | None): Invalid or missing firmware version returned by the client.
-        expected_use_snake_case (bool | None): Expected state to assert, when covered by the
-            original case.
 
     Returns:
         None: This test asserts the preserved compatibility path.
@@ -476,8 +484,7 @@ async def test_set_use_snake_case_initial_raises_unknown_firmware(
             await client._set_use_snake_case(initial=True)
 
         client.get_host_firmware_version.assert_awaited_once_with()
-        if expected_use_snake_case is not None:
-            assert client._use_snake_case is expected_use_snake_case
+        assert client._use_snake_case is None
     finally:
         await client.async_close()
 
@@ -748,3 +755,343 @@ def test_endpoint_outcome_coerces_payload_shape(
     assert outcome.is_data
     assert outcome.mapping() == mapping
     assert outcome.sequence() == sequence
+
+
+@pytest.fixture
+def dismiss_router(
+    firmware_router: tuple[Any, FirmwareRouter],
+) -> tuple[Any, FirmwareRouter]:
+    """Return a scripted Router that serves both notice-dismiss endpoint styles.
+
+    Args:
+        firmware_router (tuple[Any, FirmwareRouter]): Client and the Router that scripts it.
+
+    Returns:
+        tuple[Any, FirmwareRouter]: Client and Router that accept either dismiss path.
+    """
+    client, router = firmware_router
+    router.endpoints[DISMISS_SNAKE_PATH] = {"status": "ok"}
+    router.endpoints[DISMISS_CAMEL_PATH] = {"status": "ok"}
+    return client, router
+
+
+@pytest.mark.parametrize(
+    ("firmware", "expected_path"),
+    [
+        pytest.param("25.1", DISMISS_CAMEL_PATH, id="below-threshold"),
+        pytest.param("25.6.4", DISMISS_CAMEL_PATH, id="just-below-threshold"),
+        pytest.param("25.7", DISMISS_SNAKE_PATH, id="at-threshold"),
+        pytest.param("26.1.6", DISMISS_SNAKE_PATH, id="above-threshold"),
+    ],
+)
+async def test_public_call_uses_endpoint_style_for_known_firmware(
+    dismiss_router: tuple[Any, FirmwareRouter], firmware: str, expected_path: str
+) -> None:
+    """Verify a public method calls the endpoint style that the Router firmware uses.
+
+    Args:
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
+        firmware (str): Firmware version reported by the Router.
+        expected_path (str): Dismiss endpoint the client is expected to call.
+    """
+    client, router = dismiss_router
+    router.firmware = firmware
+
+    assert await client.close_notice("notice") is True
+
+    assert router.post_paths == [expected_path]
+
+
+@pytest.mark.parametrize(
+    "firmware",
+    [pytest.param(None, id="missing"), pytest.param("not-a-version", id="uncomparable")],
+)
+async def test_unknown_firmware_does_not_pin_endpoint_style(
+    dismiss_router: tuple[Any, FirmwareRouter],
+    firmware: str | None,
+) -> None:
+    """Verify a first call with unknown firmware does not fix the endpoint style.
+
+    Args:
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
+        firmware (str | None): Initial firmware version reported by the Router.
+    """
+    client, router = dismiss_router
+    router.firmware = firmware
+
+    assert await client.close_notice("first") is True
+    router.firmware = "25.1"
+    assert await client.close_notice("second") is True
+
+    assert router.post_paths == [DISMISS_SNAKE_PATH, DISMISS_CAMEL_PATH]
+
+
+async def test_unreachable_firmware_status_does_not_pin_endpoint_style(
+    dismiss_router: tuple[Any, FirmwareRouter],
+) -> None:
+    """Verify a failed firmware lookup is retried instead of being remembered.
+
+    Args:
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
+    """
+    client, router = dismiss_router
+    router.firmware = "25.1"
+    router.firmware_reachable = False
+
+    assert await client.close_notice("first") is True
+    router.firmware_reachable = True
+    assert await client.close_notice("second") is True
+
+    assert router.post_paths == [DISMISS_SNAKE_PATH, DISMISS_CAMEL_PATH]
+
+
+@pytest.mark.parametrize(
+    ("firmware", "expected_level", "expected_text"),
+    [
+        pytest.param(None, logging.DEBUG, "firmware version is unavailable", id="missing"),
+        pytest.param("weird", logging.ERROR, "cannot be compared", id="not-comparable"),
+    ],
+)
+async def test_unknown_firmware_is_logged_once_per_condition(
+    dismiss_router: tuple[Any, FirmwareRouter],
+    caplog: pytest.LogCaptureFixture,
+    firmware: str | None,
+    expected_level: int,
+    expected_text: str,
+) -> None:
+    """Verify unknown firmware logs its reason once however many calls hit it.
+
+    Args:
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
+        caplog (pytest.LogCaptureFixture): Log capture fixture.
+        firmware (str | None): Unknown firmware value reported by the Router.
+        expected_level (int): Level the unknown-firmware message must use.
+        expected_text (str): Text identifying the unknown-firmware reason.
+    """
+    client, router = dismiss_router
+    router.firmware = firmware
+    caplog.set_level(logging.DEBUG, logger="aiopnsense")
+
+    for _ in range(3):
+        assert await client.close_notice("notice") is True
+
+    assert router.post_paths == [DISMISS_SNAKE_PATH] * 3
+    records = [record for record in caplog.records if expected_text in record.getMessage()]
+    assert [record.levelno for record in records] == [expected_level]
+
+
+UPGRADE_PATH = "/api/core/firmware/upgrade"
+UPDATE_PATH = "/api/core/firmware/update"
+LATE_PATH = "/api/example/feature/get"
+
+
+@pytest.fixture
+def upgrade_router(
+    dismiss_router: tuple[Any, FirmwareRouter],
+) -> tuple[Any, FirmwareRouter]:
+    """Return a scripted Router that accepts firmware update and upgrade actions.
+
+    Args:
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
+
+    Returns:
+        tuple[Any, FirmwareRouter]: Client and Router that accept firmware actions.
+    """
+    client, router = dismiss_router
+    router.endpoints[UPGRADE_PATH] = {"status": "ok"}
+    router.endpoints[UPDATE_PATH] = {"status": "ok"}
+    return client, router
+
+
+async def test_firmware_upgrade_across_threshold_switches_endpoint_style(
+    upgrade_router: tuple[Any, FirmwareRouter],
+) -> None:
+    """Verify the client switches endpoint style after the Router upgrades across 25.7.
+
+    Args:
+        upgrade_router (tuple[Any, FirmwareRouter]): Client and Router accepting upgrades.
+    """
+    client, router = upgrade_router
+    router.firmware = "25.1"
+    assert await client.close_notice("before") is True
+
+    await client.upgrade_firmware("upgrade")
+    router.firmware = "25.7"
+    await client.get_host_firmware_version()
+    assert await client.close_notice("after") is True
+
+    assert router.post_paths == [DISMISS_CAMEL_PATH, UPGRADE_PATH, DISMISS_SNAKE_PATH]
+
+
+async def test_firmware_upgrade_refreshes_endpoint_availability(
+    upgrade_router: tuple[Any, FirmwareRouter],
+) -> None:
+    """Verify endpoints that the new firmware adds are used without waiting for the TTL.
+
+    Args:
+        upgrade_router (tuple[Any, FirmwareRouter]): Client and Router accepting upgrades.
+    """
+    client, router = upgrade_router
+    router.firmware = "25.1"
+    assert await client.get_host_firmware_version() == "25.1"
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    router.endpoints[LATE_PATH] = {}
+    assert await client.is_endpoint_available(LATE_PATH) is False  # cached until a change
+    await client.upgrade_firmware("upgrade")
+    router.firmware = "25.7"
+    await client.get_host_firmware_version()
+
+    assert await client.is_endpoint_available(LATE_PATH) is True
+
+
+async def test_unchanged_firmware_version_keeps_endpoint_cache(
+    upgrade_router: tuple[Any, FirmwareRouter],
+) -> None:
+    """Verify re-reading an unchanged firmware version does not discard cached endpoints.
+
+    Args:
+        upgrade_router (tuple[Any, FirmwareRouter]): Client and Router accepting upgrades.
+    """
+    client, router = upgrade_router
+    router.firmware = "25.1"
+    assert await client.is_endpoint_available(LATE_PATH) is False
+    await client.get_host_firmware_version()
+
+    router.endpoints[LATE_PATH] = {}
+    await client.upgrade_firmware("update")
+    assert await client.get_host_firmware_version() == "25.1"
+
+    assert await client.is_endpoint_available(LATE_PATH) is False
+    assert router.get_paths.count(LATE_PATH) == 1
+
+
+async def test_first_known_firmware_version_keeps_endpoint_cache(
+    dismiss_router: tuple[Any, FirmwareRouter],
+) -> None:
+    """Verify the first known version has nothing to discard.
+
+    Args:
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
+    """
+    client, router = dismiss_router
+    router.firmware = "25.1"
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    assert await client.get_host_firmware_version() == "25.1"
+
+    router.endpoints[LATE_PATH] = {}
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+
+async def test_failed_firmware_lookup_after_known_version_resets_nothing(
+    upgrade_router: tuple[Any, FirmwareRouter],
+) -> None:
+    """Verify an unreachable Router during an upgrade is not treated as a version change.
+
+    Args:
+        upgrade_router (tuple[Any, FirmwareRouter]): Client and Router accepting upgrades.
+    """
+    client, router = upgrade_router
+    router.firmware = "25.1"
+    assert await client.close_notice("before") is True
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    await client.upgrade_firmware("upgrade")
+    router.firmware_reachable = False
+    router.endpoints[LATE_PATH] = {}
+    assert await client.get_host_firmware_version() is None
+    assert await client.close_notice("during") is True
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    assert router.post_paths == [DISMISS_CAMEL_PATH, UPGRADE_PATH, DISMISS_CAMEL_PATH]
+
+
+async def test_not_comparable_firmware_version_resets_nothing(
+    upgrade_router: tuple[Any, FirmwareRouter],
+) -> None:
+    """Verify a version that cannot be compared is not treated as a version change.
+
+    Args:
+        upgrade_router (tuple[Any, FirmwareRouter]): Client and Router accepting upgrades.
+    """
+    client, router = upgrade_router
+    router.firmware = "25.1"
+    assert await client.get_host_firmware_version() == "25.1"
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    await client.upgrade_firmware("update")
+    router.firmware = "weird"
+    router.endpoints[LATE_PATH] = {}
+    assert await client.get_host_firmware_version() == "weird"
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    await client.upgrade_firmware("update")
+    router.firmware = "25.1"
+    assert await client.get_host_firmware_version() == "25.1"
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+
+@pytest.mark.asyncio
+async def test_old_endpoint_probe_cannot_restore_cache_after_firmware_change(
+    make_client: MakeClientFactory,
+) -> None:
+    """Keep a delayed old-firmware probe from overwriting refreshed endpoint state.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = FirmwareRouter(client, session)
+    router.firmware = "26.1.1"
+    original_probe = session.get.side_effect
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+    delayed_probe_pending = True
+
+    class DelayedNotFoundResponse(FakeResponse):
+        """404 response held until the test releases an old firmware probe."""
+
+        async def __aenter__(self) -> Self:
+            """Wait for release after the stale probe reaches its response.
+
+            Returns:
+                Self: This response after the test releases the probe.
+            """
+            probe_started.set()
+            await release_probe.wait()
+            return self
+
+    def _probe(url: str, **kwargs: Any) -> FakeResponse:
+        """Delay the first system-information probe and delegate all others.
+
+        Args:
+            url (str): Full URL requested by the availability check.
+            kwargs (Any): Request options passed to the scripted Router.
+
+        Returns:
+            FakeResponse: Delayed 404 or the scripted Router response.
+        """
+        nonlocal delayed_probe_pending
+        if url.endswith(SYSTEM_INFORMATION_SNAKE_PATH) and delayed_probe_pending:
+            delayed_probe_pending = False
+            return DelayedNotFoundResponse(status=404, ok=False)
+        return original_probe(url, **kwargs)
+
+    session.get.side_effect = _probe
+    old_probe_task = asyncio.create_task(client.get_system_info())
+    try:
+        await asyncio.wait_for(probe_started.wait(), timeout=1)
+        router.firmware = "26.1.11"
+        await client.validate(require_device_id=False)
+
+        router.endpoints[SYSTEM_INFORMATION_SNAKE_PATH] = {"name": "router"}
+        assert await client.get_system_info() == {"name": "router"}
+
+        release_probe.set()
+        assert await old_probe_task == {}
+        assert await client.get_system_info() == {"name": "router"}
+    finally:
+        release_probe.set()
+        if not old_probe_task.done():
+            await asyncio.gather(old_probe_task, return_exceptions=True)

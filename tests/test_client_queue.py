@@ -1212,7 +1212,7 @@ async def test_legacy_unbound_apply_http_failure_through_queue(
     caplog: pytest.LogCaptureFixture,
     throw_errors: bool,
 ) -> None:
-    """Log the DNSBL apply HTTP failure and skip the service restart.
+    """Log the DNSBL apply URL without credentials and skip the service restart.
 
     Args:
         make_client (MakeClientFactory): Client factory fixture.
@@ -1221,9 +1221,11 @@ async def test_legacy_unbound_apply_http_failure_through_queue(
         throw_errors (bool): Whether the client raises public request errors.
     """
     base_url = "https://router.example.invalid"
+    url_username, url_password = "fake-url-user", "fake-url-password"
+    configured_url = f"https://{url_username}:{url_password}@router.example.invalid"
     username, password = "fake-api-key", "fake-api-secret"
     client, session = make_mock_session_client(
-        make_client, username=username, password=password, url=base_url
+        make_client, username=username, password=password, url=configured_url
     )
     client.toggle_throwing_errors(throw_errors)
     client._firmware_version = "25.7.7"
@@ -1246,11 +1248,11 @@ async def test_legacy_unbound_apply_http_failure_through_queue(
                 assert await client.enable_unbound_blocklist() is False
 
         assert [call.args[0] for call in session.get.call_args_list] == [
-            f"{base_url}{aiopnsense_unbound.UNBOUND_SETTINGS_GET_ENDPOINT}",
-            apply_url,
+            f"{configured_url}{aiopnsense_unbound.UNBOUND_SETTINGS_GET_ENDPOINT}",
+            f"{configured_url}{aiopnsense_unbound.UNBOUND_SERVICE_DNSBL_ENDPOINT}",
         ]
         assert [call.args[0] for call in session.post.call_args_list] == [
-            f"{base_url}{aiopnsense_unbound.UNBOUND_SETTINGS_SET_ENDPOINT}"
+            f"{configured_url}{aiopnsense_unbound.UNBOUND_SETTINGS_SET_ENDPOINT}"
         ]
         http_failures = [
             record.getMessage()
@@ -1263,6 +1265,8 @@ async def test_legacy_unbound_apply_http_failure_through_queue(
         assert apply_url in http_failures[0]
         assert username not in caplog.text
         assert password not in caplog.text
+        assert url_username not in caplog.text
+        assert url_password not in caplog.text
     finally:
         await client.async_close()
 

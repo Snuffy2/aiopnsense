@@ -1397,7 +1397,7 @@ async def _call_ladder_path(client: Any, path_name: str) -> Any:
 
 @pytest.mark.parametrize("path_name", list(_LADDER_PATHS))
 @pytest.mark.parametrize(
-    ("failure", "expected_exception", "probe_level"),
+    ("failure", "expected_exception", "outcome_level"),
     [
         (401, OPNsenseInvalidAuth, logging.WARNING),
         (403, OPNsensePrivilegeMissing, logging.ERROR),
@@ -1413,20 +1413,20 @@ async def test_request_failure_ladder_is_identical_across_request_paths(
     path_name: str,
     failure: int | Exception,
     expected_exception: type[OPNsenseError],
-    probe_level: int,
+    outcome_level: int,
     throw_errors: bool,
     make_client: MakeClientFactory,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Every request path classifies a failure the same way and logs it once at first sight.
+    """Classify each request failure and log it once without configured URL credentials.
 
     Args:
         path_name (str): Key of ``_LADDER_PATHS`` selecting the request path.
         failure (int | Exception): HTTP status served by the session, or the transport
             error the session raises.
         expected_exception (type[OPNsenseError]): Public exception expected in throw mode.
-        probe_level (int): Level of the first failure record for the availability probe,
-            which logs transient failures below ERROR.
+        outcome_level (int): Level of the first failure log for outcome requests,
+            which log transient failures below ERROR.
         throw_errors (bool): Whether the client raises public errors instead of returning
             the documented empty value.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1449,7 +1449,11 @@ async def test_request_failure_ladder_is_identical_across_request_paths(
                 include_request_info=True,
             ),
         )
-    client = make_client(session=session, throw_errors=throw_errors)
+    client = make_client(
+        session=session,
+        throw_errors=throw_errors,
+        url="https://synthetic-user:synthetic-password@opnsense.invalid",
+    )
     try:
         with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
             if throw_errors:
@@ -1461,9 +1465,17 @@ async def test_request_failure_ladder_is_identical_across_request_paths(
                 assert await _call_ladder_path(client, path_name) == empty_value
 
         failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
-        expected_level = probe_level if path_name in {"probe", "get_text"} else logging.ERROR
+        uses_outcome = path_name in {"probe", "get_text"}
+        expected_level = outcome_level if uses_outcome else logging.ERROR
         assert len(failures) == 1
         assert failures[0].levelno == expected_level
+        message = failures[0].getMessage()
+        assert "/api/x" in message
+        # Transient outcome warnings identify the endpoint by path alone.
+        if isinstance(failure, int) and (not uses_outcome or failure == 403):
+            assert "opnsense.invalid" in message
+        assert "synthetic-user" not in caplog.text
+        assert "synthetic-password" not in caplog.text
     finally:
         await client.async_close()
 
@@ -1724,55 +1736,41 @@ async def test_one_shot_non_mapping_stream_payload_does_not_report_recovery(
 
 
 @pytest.mark.parametrize(
-    ("path_name", "level", "status"),
-    [
-        ("get_json", logging.ERROR, None),
-        ("probe", logging.WARNING, None),
-        ("get_json", logging.ERROR, 403),
-        ("get_json", logging.ERROR, 503),
-    ],
-    ids=["get-timeout", "probe-timeout", "forbidden", "unavailable"],
+    ("path_name", "level"),
+    [("get_json", logging.ERROR), ("probe", logging.WARNING)],
+    ids=["get-timeout", "probe-timeout"],
 )
 @pytest.mark.asyncio
-async def test_transport_failure_log_omits_url_credentials(
+async def test_timeout_log_omits_exception_url_credentials(
     path_name: str,
     level: int,
-    status: int | None,
     make_client: MakeClientFactory,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Keep the endpoint in failure logs while redacting credentials from URLs.
+    """Keep the endpoint and host while redacting URL credentials in a timeout.
 
     Args:
         path_name (str): Request path to exercise.
         level (int): Expected failure log level.
-        status (int | None): HTTP failure status, or ``None`` for a timeout.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
         caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
     """
     session = MagicMock()
-    if status is None:
-        session.get.side_effect = TimeoutError(
-            "Timed out reading https://error-user:error-password@opnsense.invalid"
-        )
-    else:
-        session.get.return_value = FakeResponse(status=status, ok=False)
-    client = make_client(
-        session=session,
-        url="https://synthetic-user:synthetic-password@opnsense.invalid",
+    session.get.side_effect = TimeoutError(
+        "Timed out reading https://error-user:error-password@opnsense.invalid"
     )
+    client = make_client(session=session)
     try:
-        with caplog.at_level(logging.WARNING, logger="aiopnsense"):
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
             await _call_ladder_path(client, path_name)
 
-        assert [record.levelno for record in caplog.records] == [level]
-        message = caplog.records[0].getMessage()
+        failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
+        assert [record.levelno for record in failures] == [level]
+        message = failures[0].getMessage()
         assert "/api/x" in message
         assert "opnsense.invalid" in message
-        assert "synthetic-user" not in message
-        assert "synthetic-password" not in message
-        assert "error-user" not in message
-        assert "error-password" not in message
+        assert "error-user" not in caplog.text
+        assert "error-password" not in caplog.text
     finally:
         await client.async_close()
 

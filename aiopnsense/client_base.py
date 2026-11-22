@@ -83,13 +83,19 @@ class ClientBaseMixin(
             if throw_errors is _UNSET:
                 self._throw_errors = initial
         self._firmware_version: str | None = None
+        self._firmware_unknown_logged: set[tuple[str, str | None]] = set()
+        self._last_known_firmware_version: str | None = None
+        self._firmware_observation_id: int = 0
+        self._firmware_version_observation_id: int = 0
         self._firmware_install_active: bool = False
         self._firmware_action_lock = asyncio.Lock()
+        self._firmware_check_requested_at: float | None = None
         self._active_close_count = 0
         self._use_snake_case: bool | None = None
         self._endpoint_availability: dict[str, bool] = {}
         self._endpoint_checked_at: dict[str, datetime] = {}
         self._endpoint_permission_denied: set[str] = set()
+        self._endpoint_cache_generation: int = 0
         self._request_outages: dict[tuple[str, str, str], int | None] = {}
         self._endpoint_cache_ttl_seconds = DEFAULT_CACHE_TTL_SECONDS
         self._rest_api_query_count = 0

@@ -20,10 +20,10 @@ from .exceptions import (
 from .helpers import _log_request_failure, _redacted_exception_message, _RequestLoggingClient
 
 _REQUEST_PHASE = "request"
-"""Request phase of immediate GET and POST data calls."""
+"""Request phase of immediate GET and POST calls and bounded endpoint reads."""
 
 _PROBE_PHASE = "probe"
-"""Request phase of endpoint outcome reads and status checks."""
+"""Request phase of status-only endpoint checks."""
 
 _STREAM_PHASE = "stream"
 """Request phase of the streaming reads."""

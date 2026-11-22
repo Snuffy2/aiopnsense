@@ -1,5 +1,6 @@
 """Constants for aiopnsense."""
 
+from dataclasses import dataclass
 from typing import Any
 
 from dateutil.tz import gettz
@@ -14,6 +15,67 @@ LEGACY_UNBOUND_BLOCKLIST_FIRMWARE = "25.7.8"
 LEGACY_CAMELCASE_ENDPOINT_FIRMWARE = "25.7"
 OPNSENSE_26_1_11_COMPAT_FIRMWARE = "26.1.11"
 OPNSENSE_INTERFACE_ASSIGNMENT_FIRMWARE = "26.7.6"
+
+# Minimum time, in seconds, between automatic firmware checks from one client.
+FIRMWARE_CHECK_COOLDOWN_SECONDS = 3600
+
+
+@dataclass(frozen=True, slots=True)
+class FirmwareCapability:
+    """A library behavior that depends on the Router's firmware release.
+
+    Attributes:
+        name (str): Human-readable name used in logs.
+        minimum (str): Oldest firmware release that supports the behavior.
+        unknown_answer (bool): Whether the behavior is treated as supported while the
+            firmware is unknown (missing, or present but not comparable). Unknown
+            firmware is never remembered, so the next use asks again.
+    """
+
+    name: str
+    minimum: str
+    unknown_answer: bool
+
+
+# Declared Firmware Capabilities. Each one names its threshold and its answer for
+# unknown firmware here, so no feature chooses its own unknown behavior.
+SNAKE_CASE_ENDPOINTS_CAPABILITY = FirmwareCapability(
+    name="snake_case endpoint style",
+    minimum=LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
+    unknown_answer=True,
+)
+SOURCE_NAT_AUTOMATIC_ROW_FILTER_CAPABILITY = FirmwareCapability(
+    name="source NAT automatic rule filtering",
+    minimum=OPNSENSE_26_1_11_COMPAT_FIRMWARE,
+    unknown_answer=False,
+)
+UNIFIED_NAT_TEMPLATE_CAPABILITY = FirmwareCapability(
+    name="unified NAT template category normalization",
+    minimum=UNIFIED_NAT_TEMPLATE_FIRMWARE,
+    unknown_answer=False,
+)
+INTERFACE_ASSIGNMENT_CAPABILITY = FirmwareCapability(
+    name="interface assignment API",
+    minimum=OPNSENSE_INTERFACE_ASSIGNMENT_FIRMWARE,
+    unknown_answer=False,
+)
+# Only evaluated when the snake_case CARP status endpoint is in use. Unknown firmware
+# stays on the older endpoint.
+NEW_CARP_STATUS_ENDPOINT_CAPABILITY = FirmwareCapability(
+    name="new CARP status endpoint",
+    minimum=OPNSENSE_26_1_11_COMPAT_FIRMWARE,
+    unknown_answer=False,
+)
+# The Unbound feature maps this capability onto its blocklist methods. Reads, and writes
+# without an entry UUID, use the legacy blocklist unless the capability is supported.
+# Known firmware decides writes that carry a UUID. While the firmware is unknown, a write
+# uses the extended blocklist only when an entry UUID is supplied, since only the
+# extended blocklist addresses entries by UUID.
+EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY = FirmwareCapability(
+    name="extended Unbound blocklist",
+    minimum=LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
+    unknown_answer=False,
+)
 
 
 # Default timeout, in seconds, for API requests.

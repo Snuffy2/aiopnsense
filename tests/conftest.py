@@ -405,6 +405,96 @@ def install_fake_router(
     return router
 
 
+FIRMWARE_STATUS_PATH = "/api/core/firmware/status"
+
+
+class FirmwareRouter:
+    """Script firmware and feature responses at the HTTP session boundary.
+
+    Attributes:
+        firmware (str | None): Version served by the firmware status endpoint.
+        firmware_reachable (bool): Whether the firmware status endpoint answers.
+        endpoints (dict[str, Any]): Responses by endpoint path.
+    """
+
+    def __init__(self, client: aiopnsense.OPNsenseClient, session: MagicMock) -> None:
+        """Install Router responses for a client using a mocked HTTP session.
+
+        Args:
+            client (aiopnsense.OPNsenseClient): Client whose requests are scripted.
+            session (MagicMock): Mocked aiohttp session.
+        """
+        self._base_url = client._url
+        self.firmware: str | None = None
+        self.firmware_reachable = True
+        self.endpoints: dict[str, Any] = {}
+        get = session.get
+        post = session.post
+        self._router = install_fake_router(client, session)
+        get.side_effect = partial(self._request, "GET")
+        post.side_effect = partial(self._request, "POST")
+        session.get = get
+        session.post = post
+
+    @property
+    def get_paths(self) -> list[str]:
+        """Return GET paths in the order the Router received them."""
+        return [
+            url.removeprefix(self._base_url)
+            for method, url, _ in self._router.requests
+            if method == "GET"
+        ]
+
+    @property
+    def post_paths(self) -> list[str]:
+        """Return POST paths in the order the Router received them."""
+        return [
+            url.removeprefix(self._base_url)
+            for method, url, _ in self._router.requests
+            if method == "POST"
+        ]
+
+    def _request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
+        """Serve a firmware or feature endpoint request.
+
+        Args:
+            method (str): HTTP method.
+            url (str): Full request URL.
+            kwargs (Any): Request arguments from the client.
+
+        Returns:
+            FakeResponse: The response for the requested path.
+        """
+        path = url.removeprefix(self._base_url)
+        if method == "GET" and path == FIRMWARE_STATUS_PATH:
+            if self.firmware_reachable:
+                value: Any = (
+                    {"product": {"product_version": self.firmware}} if self.firmware else {}
+                )
+            else:
+                value = aiohttp.ClientConnectionError("router unreachable")
+        else:
+            value = self.endpoints.get(path, 404)
+        self._router.routes[method, path] = value
+        return self._router.request(method, url, **kwargs)
+
+
+@pytest.fixture
+def firmware_router(
+    make_client: Callable[..., aiopnsense.OPNsenseClient],
+) -> tuple[aiopnsense.OPNsenseClient, FirmwareRouter]:
+    """Return a client wired to a scripted Router.
+
+    Args:
+        make_client (Callable[..., aiopnsense.OPNsenseClient]): ``make_client`` fixture factory.
+
+    Returns:
+        tuple[aiopnsense.OPNsenseClient, FirmwareRouter]: Client and the Router that scripts it.
+    """
+    client, session = make_mock_session_client(make_client)
+    return client, FirmwareRouter(client, session)
+
+
 @pytest.fixture(autouse=True)
 def _patch_asyncio_create_task(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest

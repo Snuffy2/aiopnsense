@@ -14,15 +14,14 @@ from ._typing import AiopnsenseClientProtocol
 from .client_toggle import ToggleSpec, ToggleStep, ToggleTarget
 from .const import (
     AMBIGUOUS_TZINFOS,
-    OPNSENSE_26_1_11_COMPAT_FIRMWARE,
-    OPNSENSE_INTERFACE_ASSIGNMENT_FIRMWARE,
+    INTERFACE_ASSIGNMENT_CAPABILITY,
+    NEW_CARP_STATUS_ENDPOINT_CAPABILITY,
 )
 from .exceptions import OPNsenseError, OPNsenseInvalidArgument, OPNsenseMissingDeviceUniqueID
 from .helpers import (
     _LOGGER,
     api_value_matches,
     coerce_bool,
-    firmware_is_at_least,
     normalize_lookup_token,
     timestamp_to_datetime,
     try_to_int,
@@ -83,22 +82,6 @@ class SystemMixin(AiopnsenseClientProtocol):
                 "`if_name` must be a logical interface identifier such as 'wan', 'lan', or 'opt1'."
             )
 
-    async def _interface_assignment_is_supported(self) -> bool:
-        """Return whether the firmware supports interface assignment updates.
-
-        Returns:
-            bool: True only when the installed version is known to be 26.7.6 or newer.
-        """
-        firmware_version = await self.get_host_firmware_version()
-        supported = firmware_is_at_least(firmware_version, OPNSENSE_INTERFACE_ASSIGNMENT_FIRMWARE)
-        if supported is None:
-            _LOGGER.debug(
-                "Unable to compare firmware version %s for interface assignment API",
-                firmware_version,
-            )
-            return False
-        return supported
-
     async def _read_interface_config(self, if_name: str) -> dict[str, Any]:
         """Fetch raw settings only when the API confirms the requested item identity.
 
@@ -143,7 +126,7 @@ class SystemMixin(AiopnsenseClientProtocol):
         """
         self._validate_interface_identifier(if_name)
         target = self._parse_toggle_target(toggle_on_off)
-        if not await self._interface_assignment_is_supported():
+        if not await self._firmware_capability_enabled(INTERFACE_ASSIGNMENT_CAPABILITY):
             return False
 
         pending_response = await self._safe_dict_get(INTERFACE_ASSIGNMENT_PENDING_ENDPOINT)
@@ -777,18 +760,11 @@ class SystemMixin(AiopnsenseClientProtocol):
             CARP_STATUS_SNAKE_ENDPOINT,
             CARP_STATUS_CAMELCASE_ENDPOINT,
         )
-        if carp_status_endpoint == CARP_STATUS_SNAKE_ENDPOINT:
-            firmware_version = await self.get_host_firmware_version()
-            supports_new_carp_endpoint = firmware_is_at_least(
-                firmware_version, OPNSENSE_26_1_11_COMPAT_FIRMWARE
-            )
-            if supports_new_carp_endpoint is True:
-                carp_status_endpoint = CARP_STATUS_26_1_11_SNAKE_ENDPOINT
-            elif supports_new_carp_endpoint is None:
-                _LOGGER.debug(
-                    "Unable to compare firmware version %s for CARP status endpoint",
-                    firmware_version,
-                )
+        if (
+            carp_status_endpoint == CARP_STATUS_SNAKE_ENDPOINT
+            and await self._firmware_capability_enabled(NEW_CARP_STATUS_ENDPOINT_CAPABILITY)
+        ):
+            carp_status_endpoint = CARP_STATUS_26_1_11_SNAKE_ENDPOINT
         response = await self._safe_dict_post(
             f"{carp_status_endpoint}{CARP_MAINTENANCE_ENDPOINT_SUFFIX}"
         )
