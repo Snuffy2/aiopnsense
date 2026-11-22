@@ -3,12 +3,9 @@
 from collections.abc import MutableMapping
 from typing import Any
 
-import aiohttp
-
 from ._error_policy import _attempt, _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .const import LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
-from .exceptions import OPNsenseError
 from .helpers import _LOGGER, api_value_matches, firmware_is_at_least
 
 UNBOUND_SETTINGS_GET_ENDPOINT = "/api/unbound/settings/get"
@@ -85,7 +82,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         Returns:
             bool: ``True`` when the settings save, DNSBL apply, and service
-            restart all succeed; otherwise, ``False``.
+            restart all succeed; otherwise, ``False``. When ``throw_errors`` is
+            enabled, a failed save, apply or restart request raises an
+            ``OPNsenseError`` subclass instead of returning ``False``.
         """
         payload: dict[str, Any] = {"unbound": {"dnsbl": await self._get_unbound_blocklist_legacy()}}
         if not payload["unbound"]["dnsbl"]:
@@ -94,16 +93,12 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         payload["unbound"]["dnsbl"]["enabled"] = "1" if set_state else "0"
 
-        try:
-            response = await self._post(UNBOUND_SETTINGS_SET_ENDPOINT, payload=payload)
-        except (OPNsenseError, TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
-            _LOGGER.error(
-                "Error saving legacy unbound blocklist state %s. %s: %s",
-                "On" if set_state else "Off",
-                type(err).__name__,
-                err,
-            )
-            return False
+        response = await _attempt(
+            self,
+            lambda: self._post(UNBOUND_SETTINGS_SET_ENDPOINT, payload=payload),
+            empty=None,
+            name=f"legacy unbound blocklist save ({'On' if set_state else 'Off'})",
+        )
 
         if not isinstance(response, MutableMapping) or response.get("result", "failed") != "saved":
             _LOGGER.error(
@@ -113,16 +108,12 @@ class UnboundMixin(AiopnsenseClientProtocol):
             )
             return False
 
-        try:
-            dnsbl_resp = await self._get(UNBOUND_SERVICE_DNSBL_ENDPOINT)
-        except (OPNsenseError, TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
-            _LOGGER.error(
-                "Error applying legacy unbound blocklist state %s. %s: %s",
-                "On" if set_state else "Off",
-                type(err).__name__,
-                err,
-            )
-            return False
+        dnsbl_resp = await _attempt(
+            self,
+            lambda: self._get(UNBOUND_SERVICE_DNSBL_ENDPOINT),
+            empty=None,
+            name=f"legacy unbound blocklist apply ({'On' if set_state else 'Off'})",
+        )
 
         dnsbl_status = dnsbl_resp.get("status") if isinstance(dnsbl_resp, MutableMapping) else None
         if not isinstance(dnsbl_resp, MutableMapping) or not isinstance(dnsbl_status, str):
@@ -140,16 +131,12 @@ class UnboundMixin(AiopnsenseClientProtocol):
             )
             return False
 
-        try:
-            restart_resp = await self._post(UNBOUND_SERVICE_RESTART_ENDPOINT)
-        except (OPNsenseError, TimeoutError, aiohttp.ClientError, ValueError, TypeError) as err:
-            _LOGGER.error(
-                "Error restarting legacy unbound blocklist state %s. %s: %s",
-                "On" if set_state else "Off",
-                type(err).__name__,
-                err,
-            )
-            return False
+        restart_resp = await _attempt(
+            self,
+            lambda: self._post(UNBOUND_SERVICE_RESTART_ENDPOINT),
+            empty=None,
+            name=f"legacy unbound blocklist restart ({'On' if set_state else 'Off'})",
+        )
 
         _LOGGER.debug(
             "[_set_unbound_blocklist_legacy] set_state: %s, payload: %s, response: %s, dnsbl_resp: %s, restart_resp: %s",
@@ -251,7 +238,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 for legacy firmware where regular DNSBL has no per-entry UUID.
 
         Returns:
-            bool: True when the operation succeeds; otherwise, False.
+            bool: True when the operation succeeds; otherwise, False. When
+                ``throw_errors`` is enabled, a failed save, apply or restart
+                request raises an ``OPNsenseError`` subclass instead.
         """
         use_legacy = await self._uses_legacy_unbound_blocklist()
         state_name = "enable" if set_state else "disable"
@@ -293,7 +282,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 when enabling the legacy regular DNSBL setting.
 
         Returns:
-            bool: True when the operation succeeds; otherwise, False.
+            bool: True when the operation succeeds; otherwise, False. When
+                ``throw_errors`` is enabled, a failed save, apply or restart
+                request raises an ``OPNsenseError`` subclass instead.
         """
         return await self._set_unbound_blocklist(set_state=True, uuid=uuid)
 
@@ -306,6 +297,8 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 when disabling the legacy regular DNSBL setting.
 
         Returns:
-            bool: True when the operation succeeds; otherwise, False.
+            bool: True when the operation succeeds; otherwise, False. When
+                ``throw_errors`` is enabled, a failed save, apply or restart
+                request raises an ``OPNsenseError`` subclass instead.
         """
         return await self._set_unbound_blocklist(set_state=False, uuid=uuid)

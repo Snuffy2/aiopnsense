@@ -611,6 +611,82 @@ async def test_enable_unbound_blocklist_legacy_returns_false_on_apply_exception(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["enable_unbound_blocklist", "disable_unbound_blocklist"])
+@pytest.mark.parametrize("failing_step", ["save", "apply", "restart"])
+@pytest.mark.parametrize(
+    ("make_error", "expected_error"),
+    [
+        (lambda: aiohttp.ClientError("boom"), OPNsenseConnectionError),
+        (
+            lambda: OPNsenseInvalidURL("https://user:password@api.example/api/unbound/x"),
+            OPNsenseInvalidURL,
+        ),
+        (lambda: TimeoutError("slow"), OPNsenseTimeoutError),
+    ],
+)
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_legacy_unbound_blocklist_request_failure_follows_throw_errors(
+    make_client: ClientType,
+    caplog: pytest.LogCaptureFixture,
+    legacy_dnsbl_payload: dict[str, Any],
+    method_name: str,
+    failing_step: str,
+    make_error: Callable[[], Exception],
+    expected_error: type[Exception],
+    throw_errors: bool,
+) -> None:
+    """Verify a failed legacy save, apply or restart request follows ``throw_errors``.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Log capture used to check the failure is logged once
+            when errors are thrown.
+        legacy_dnsbl_payload (dict[str, Any]): Legacy DNSBL settings returned before the save.
+        method_name (str): Client toggle method name.
+        failing_step (str): Legacy step whose request raises: ``save``, ``apply`` or ``restart``.
+        make_error (Callable[[], Exception]): Factory for a fresh exception, because a raised
+            public error is marked as logged.
+        expected_error (type[Exception]): Public error expected when errors are thrown.
+        throw_errors (bool): Client error propagation setting.
+
+    Returns:
+        None: This test validates legacy request failure handling in both error modes.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._throw_errors = throw_errors
+    try:
+        client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
+        client._safe_dict_get = AsyncMock(return_value=deepcopy(legacy_dnsbl_payload))
+        post_results: list[Any] = [{"result": "saved"}, {"response": "OK"}]
+        get_results: list[Any] = [{"status": "OK"}]
+        if failing_step == "save":
+            post_results[0] = make_error()
+        elif failing_step == "apply":
+            get_results[0] = make_error()
+        else:
+            post_results[1] = make_error()
+        client._post = AsyncMock(side_effect=post_results)
+        client._get = AsyncMock(side_effect=get_results)
+
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            if throw_errors:
+                with pytest.raises(expected_error):
+                    await getattr(client, method_name)()
+            else:
+                assert await getattr(client, method_name)() is False
+
+        expected_posts = {"save": 1, "apply": 1, "restart": 2}[failing_step]
+        assert client._post.await_count == expected_posts
+        assert client._get.await_count == (0 if failing_step == "save" else 1)
+        if throw_errors:
+            failure_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
+            assert len(failure_records) == 1
+        assert "password" not in caplog.text
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("save_response", [{}, {"result": "failed"}, []])
 async def test_enable_unbound_blocklist_legacy_does_not_apply_or_restart_after_failed_save(
     make_client: ClientType,
