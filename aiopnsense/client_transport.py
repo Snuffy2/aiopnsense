@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
 
-from ._error_policy import _raise_if_throwing, _throws_errors
+from ._error_policy import _raise_if_throwing
 from ._request_failure import (
     REQUEST_PHASE,
     STREAM_PHASE,
@@ -113,7 +113,6 @@ class ClientTransportMixin:
                         url=url,
                         status=response.status,
                         reason=response.reason,
-                        will_raise=_throws_errors(self),
                         caller=caller,
                     )
                     _raise_if_throwing(self, http_error)
@@ -145,7 +144,6 @@ class ClientTransportMixin:
                 phase=STREAM_PHASE,
                 operation="do_get_from_stream",
                 exc=e,
-                will_raise=_throws_errors(self),
                 caller=caller,
             )
             _raise_if_throwing(self, transport_error, e)
@@ -198,7 +196,6 @@ class ClientTransportMixin:
                         url=url,
                         status=response.status,
                         reason=response.reason,
-                        will_raise=_throws_errors(self),
                     )
                     _raise_if_throwing(self, http_error)
                     return
@@ -316,7 +313,6 @@ class ClientTransportMixin:
                 phase=STREAM_PHASE,
                 operation="stream_json_events",
                 exc=err,
-                will_raise=_throws_errors(self),
             )
             _raise_if_throwing(self, transport_error, err)
 
@@ -370,7 +366,6 @@ class ClientTransportMixin:
                     url=url,
                     status=response.status,
                     reason=response.reason,
-                    will_raise=_throws_errors(self),
                     caller=caller,
                 )
                 _raise_if_throwing(self, http_error)
@@ -382,7 +377,6 @@ class ClientTransportMixin:
                 phase=REQUEST_PHASE,
                 operation="do_get",
                 exc=e,
-                will_raise=_throws_errors(self),
                 caller=caller,
             )
             _raise_if_throwing(self, transport_error, e)
@@ -492,7 +486,6 @@ class ClientTransportMixin:
                     url=url,
                     status=response.status,
                     reason=response.reason,
-                    will_raise=_throws_errors(self),
                     caller=caller,
                 )
                 _raise_if_throwing(self, http_error)
@@ -504,7 +497,6 @@ class ClientTransportMixin:
                 phase=REQUEST_PHASE,
                 operation="do_post",
                 exc=e,
-                will_raise=_throws_errors(self),
                 caller=caller,
             )
             _raise_if_throwing(self, transport_error, e)

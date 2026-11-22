@@ -212,13 +212,8 @@ class ClientEndpointMixin:
 
         Returns:
             bool: True if a specific api endpoint appears to be available; otherwise, False.
-                When no exception is raised, this method always returns a ``bool``.
-
-        Raises:
-            http_error: Public error classified from a non-successful HTTP response
-                when ``self._throw_errors`` is ``True``.
-            transport_error: Public error mapped from an aiohttp client error or
-                timeout when ``self._throw_errors`` is ``True``.
+                When ``throw_errors`` is enabled, a reported HTTP or transport failure
+                raises the mapped public ``OPNsenseError``.
 
         Side Effects:
             Increments the REST query counter for uncached probes and updates
@@ -279,7 +274,6 @@ class ClientEndpointMixin:
                     url=url,
                     status=response.status,
                     reason=response.reason,
-                    will_raise=_throws_errors(self),
                 )
                 if response.status == 403 and not _throws_errors(self):
                     self._endpoint_permission_denied.add(cache_key)
@@ -298,7 +292,6 @@ class ClientEndpointMixin:
                 phase=PROBE_PHASE,
                 operation=f"is_{normalized_method}_endpoint_available",
                 exc=e,
-                will_raise=_throws_errors(self),
             )
             _raise_if_throwing(self, transport_error, e)
             return False
