@@ -146,7 +146,9 @@ client with ``async with`` calls ``validate()``, which raises
    from aiopnsense.helpers import firmware_is_at_least
 
    async def main() -> None:
-       requirements = OPNsenseClient.get_firmware_requirements()
+       requirements: OPNsenseClient.FirmwareRequirements = (
+           OPNsenseClient.get_firmware_requirements()
+       )
        print(f"Minimum Firmware: {requirements.minimum}")
        print(f"Recommended Firmware: {requirements.recommended}")
 
