@@ -15,8 +15,20 @@ A rule on the Router that permits or blocks traffic. Always called a rule, so th
 _Avoid_: Filter, ACL
 
 **Host**:
-A LAN endpoint identified by a MAC address and one or more IP addresses, as seen by the Router.
+A LAN endpoint, identified by its MAC address, that the Router knows about through ARP/NDP Entries, DHCP Leases, or Host Observations. No single record is the main record of a Host; each is evidence about it.
 _Avoid_: Device, machine
+
+**ARP/NDP Entry**:
+A MAC and IP pairing in the Router's IPv4 (ARP) or IPv6 (NDP) neighbor table, showing a Host the Router has recently exchanged traffic with.
+_Avoid_: Neighbor, ARP row
+
+**DHCP Lease**:
+An address the Router's DHCP server assigned to a Host, with its hostname and expiry when known. It does not show that the Host is present.
+_Avoid_: Reservation (a reservation is a configured future assignment, not a lease)
+
+**Host Observation**:
+A timestamped sighting of a Host's MAC and IP by the Router's Host Discovery service, recording when the Host was last seen.
+_Avoid_: Sighting, discovery entry
 
 ### VPN
 
