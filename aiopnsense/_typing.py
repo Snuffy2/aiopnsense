@@ -29,8 +29,6 @@ class AiopnsenseClientProtocol(Protocol):
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None: ...
 
-    async def _get_text(self, path: str) -> str | None: ...
-
     async def _post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
     ) -> MutableMapping[str, Any] | list | None: ...
@@ -54,8 +52,6 @@ class AiopnsenseClientProtocol(Protocol):
     async def _safe_dict_get_with_timeout(
         self, path: str, timeout_seconds: float
     ) -> dict[str, Any]: ...
-
-    async def _safe_list_get(self, path: str) -> list: ...
 
     async def _safe_dict_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None

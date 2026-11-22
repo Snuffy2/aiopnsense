@@ -23,7 +23,7 @@ class ClientTransportMixin:
 
     if TYPE_CHECKING:
         _password: str
-        _request_outages: set[tuple[str, str, str]]
+        _request_outages: set[tuple[str, str]]
         _rest_api_query_count: int
         _session: aiohttp.ClientSession
         _throw_errors: bool
@@ -303,19 +303,16 @@ class ClientTransportMixin:
         path: str,
         caller: str = "Unknown",
         timeout_seconds: float | None = None,
-        *,
-        response_format: Literal["json", "text"] = "json",
-    ) -> MutableMapping[str, Any] | list | str | None:
+    ) -> MutableMapping[str, Any] | list | None:
         """Execute a GET request immediately without queueing.
 
         Args:
             path (str): API endpoint path to request.
             caller (str): Caller name used for diagnostics and logging.
             timeout_seconds (float | None, optional): Request timeout in seconds for this call.
-            response_format (Literal["json", "text"], optional): Response decoding mode.
 
         Returns:
-            MutableMapping[str, Any] | list | str | None: Decoded response payload
+            MutableMapping[str, Any] | list | None: Decoded response payload
                 returned by the GET request, or ``None`` after a logged failure.
                 When ``throw_errors`` is enabled, an HTTP or transport failure is
                 raised as the mapped public ``OPNsenseError`` instead.
@@ -333,11 +330,8 @@ class ClientTransportMixin:
             ) as response:
                 _LOGGER.debug("[get] Response %s: %s", response.status, response.reason)
                 if response.ok:
-                    if response_format == "text":
-                        result = await response.text()
-                    else:
-                        result = await response.json(content_type=None)
-                    _log_request_recovery(self, "get", path, "request")
+                    result = await response.json(content_type=None)
+                    _log_request_recovery(self, "get", path)
                     return result
                 error: OPNsenseError = _opnsense_http_error(response.status, response.reason)
                 if response.status == 403:
@@ -345,7 +339,6 @@ class ClientTransportMixin:
                         self,
                         "get",
                         path,
-                        "request",
                         logging.ERROR,
                         "Permission Error in do_get (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                         caller,
@@ -357,7 +350,6 @@ class ClientTransportMixin:
                         self,
                         "get",
                         path,
-                        "request",
                         logging.ERROR,
                         "Error in do_get (called by %s). Path: %s. Response %s: %s",
                         caller,
@@ -373,7 +365,6 @@ class ClientTransportMixin:
                 self,
                 "get",
                 path,
-                "request",
                 logging.ERROR,
                 "Client error. %s: %s",
                 type(e).__name__,
@@ -487,18 +478,6 @@ class ClientTransportMixin:
         )
         return dict(result) if isinstance(result, MutableMapping) else {}
 
-    async def _safe_list_get(self, path: str) -> list:
-        """Fetch data from the given path, ensuring the result is a list.
-
-        Args:
-            path (str): API endpoint path to request.
-
-        Returns:
-            list: Response payload coerced to a list.
-        """
-        result = await self._get(path=path)
-        return result if isinstance(result, list) else []
-
     async def _do_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
     ) -> MutableMapping[str, Any] | list | None:
@@ -529,7 +508,7 @@ class ClientTransportMixin:
                 _LOGGER.debug("[post] Response %s: %s", response.status, response.reason)
                 if response.ok:
                     response_json: dict[str, Any] | list = await response.json(content_type=None)
-                    _log_request_recovery(self, "post", path, "request")
+                    _log_request_recovery(self, "post", path)
                     return response_json
                 error: OPNsenseError = _opnsense_http_error(response.status, response.reason)
                 if response.status == 403:
@@ -537,7 +516,6 @@ class ClientTransportMixin:
                         self,
                         "post",
                         path,
-                        "request",
                         logging.ERROR,
                         "Permission Error in do_post (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                         caller,
@@ -549,7 +527,6 @@ class ClientTransportMixin:
                         self,
                         "post",
                         path,
-                        "request",
                         logging.ERROR,
                         "Error in do_post (called by %s). Path: %s. Response %s: %s",
                         caller,
@@ -565,7 +542,6 @@ class ClientTransportMixin:
                 self,
                 "post",
                 path,
-                "request",
                 logging.ERROR,
                 "Client error. %s: %s",
                 type(e).__name__,

@@ -600,7 +600,6 @@ class SystemMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Mapping containing the OPNsense host ``name`` when
                 the system-information endpoint is available.
         """
-        system_info: dict[str, Any] = {}
         system_information_endpoint = await self._get_endpoint_path(
             snake_case_path=SYSTEM_INFORMATION_SNAKE_ENDPOINT,
             camel_case_path=SYSTEM_INFORMATION_CAMELCASE_ENDPOINT,
@@ -608,10 +607,9 @@ class SystemMixin(AiopnsenseClientProtocol):
         system_information_outcome = await self._fetch_endpoint_outcome(system_information_endpoint)
         if not system_information_outcome.is_data:
             _LOGGER.debug("System information endpoint unavailable")
-            return system_info
+            return {}
         response = system_information_outcome.mapping()
-        system_info["name"] = response.get("name", None)
-        return system_info
+        return {"name": response.get("name", None)}
 
     @_log_errors
     async def get_carp(self) -> dict[str, Any]:
@@ -639,15 +637,13 @@ class SystemMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("CARP VIP status endpoint unavailable")
             return {}, []
         vip_status = vip_status_outcome.mapping()
-        vip_settings_raw: dict[str, Any] = {"rows": []}
         vip_settings_outcome = await self._fetch_endpoint_outcome(VIP_SETTINGS_ENDPOINT)
         if not vip_settings_outcome.is_data:
             _LOGGER.debug("CARP VIP settings endpoint unavailable; using status-only VIP data")
-        else:
-            vip_settings_raw = vip_settings_outcome.mapping()
+        vip_settings = vip_settings_outcome.mapping()
 
         vip_status_rows = vip_status.get("rows")
-        vip_settings_rows = vip_settings_raw.get("rows")
+        vip_settings_rows = vip_settings.get("rows")
         merged_vips = self._merge_carp_vip_rows(
             vip_status_rows if isinstance(vip_status_rows, list) else [],
             vip_settings_rows if isinstance(vip_settings_rows, list) else [],

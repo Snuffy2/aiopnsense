@@ -155,8 +155,6 @@ class UnboundMixin(AiopnsenseClientProtocol):
             return {}
 
         dnsbl_raw = dnsbl_outcome.mapping()
-        if not isinstance(dnsbl_raw, MutableMapping):
-            return {}
         dnsbl_rows = dnsbl_raw.get("rows", [])
         if not isinstance(dnsbl_rows, list) or not len(dnsbl_rows) > 0:
             return {}

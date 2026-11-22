@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-from collections.abc import MutableMapping
 from typing import Any
 
 from ._error_policy import _log_errors
@@ -38,12 +37,11 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 ``average`` sections for download, upload, and latency. Latest
                 results include server, date, and URL metadata; averages
                 include min, max, sample count, and period bounds. Returns
-                ``{"available": False}`` when the show-log endpoint is absent (404) in
-                either mode, or returns 403 or a transient HTTP/transport failure with
-                ``throw_errors`` disabled. A 403 and transient failures raise
-                ``OPNsenseError`` when errors are enabled.
-                Undecodable JSON follows the client's configured error handling unless
-                this method handles the decoding error explicitly.
+                ``{"available": False}`` when show-log is absent (404 in either mode),
+                or on 403/transient HTTP or transport failures with ``throw_errors`` off.
+                Those failures raise ``OPNsenseError`` when enabled. Undecodable JSON
+                returns ``None`` when errors are disabled and raises ``OPNsenseError``
+                otherwise.
         """
         outcome = await self._fetch_endpoint_outcome(SPEEDTEST_SHOW_LOG_ENDPOINT)
         if not outcome.is_data:
@@ -134,24 +132,20 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, Any]: Response mapping from the Speedtest ``run``
                 endpoint, or an empty mapping when the availability check finds the
-                endpoint absent (404) or returns 403 with ``throw_errors`` disabled. The
-                availability check's 404 remains absent in either mode. The run request
-                itself is ungated: HTTP or transport failures, including a 404, raise
-                ``OPNsenseError`` when ``throw_errors`` is enabled; with errors disabled
-                they return an empty mapping. A syntactically valid non-mapping response
-                also returns an empty mapping in either mode. Undecodable JSON follows the
-                client's configured error handling unless this method handles the decoding
-                error explicitly.
+                endpoint absent (404 in either mode), or a 403/transient HTTP or
+                transport failure with ``throw_errors`` off. Those failures raise
+                ``OPNsenseError`` when enabled. The run request is ungated, so its
+                HTTP/transport failures, including 404, raise ``OPNsenseError`` when
+                enabled and return an empty mapping otherwise. Non-mapping JSON also
+                returns an empty mapping. Undecodable JSON returns ``None`` when errors
+                are disabled and raises ``OPNsenseError`` otherwise.
         """
         status = await self._check_endpoint_status(SPEEDTEST_SHOW_LOG_ENDPOINT)
         if not status.is_data:
             _LOGGER.debug("Speedtest not installed")
             return {}
 
-        response = await self._safe_dict_get_with_timeout(
+        return await self._safe_dict_get_with_timeout(
             SPEEDTEST_RUN_ENDPOINT,
             timeout_seconds=180,
         )
-        if not isinstance(response, MutableMapping):
-            return {}
-        return dict(response)

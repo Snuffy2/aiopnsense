@@ -40,20 +40,16 @@ class ClientQueueMixin:
             path: str,
             caller: str = "Unknown",
             timeout_seconds: float | None = None,
-            *,
-            response_format: Literal["json", "text"] = "json",
-        ) -> MutableMapping[str, Any] | list | str | None:
+        ) -> MutableMapping[str, Any] | list | None:
             """Execute an immediate GET transport request after it is dequeued.
 
             Args:
                 path (str): API endpoint path to request.
                 caller (str): Calling method name used for diagnostics.
                 timeout_seconds (float | None): Optional transport request timeout.
-                response_format (Literal['json', 'text']): Expected response body format.
 
             Returns:
-                MutableMapping[str, Any] | list | str | None: Decoded transport
-                    response, if available.
+                MutableMapping[str, Any] | list | None: Decoded transport response.
             """
             ...
 
@@ -273,23 +269,6 @@ class ClientQueueMixin:
         """
         return await self._queue_request("get", path)
 
-    async def _get_text(self, path: str) -> str | None:
-        """Queue a GET request and return its text body.
-
-        Args:
-            path (str): API endpoint path to request.
-
-        Returns:
-            str | None: Response body text, or ``None`` when the request fails.
-
-        Raises:
-            OPNsenseError: Raised when the queued request returns a non-text response.
-        """
-        result = await self._queue_request("get_text", path)
-        if result is None or isinstance(result, str):
-            return result
-        raise OPNsenseError(f"Expected text response for {path}, got {type(result)}")
-
     async def _post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
     ) -> MutableMapping[str, Any] | list | None:
@@ -340,10 +319,6 @@ class ClientQueueMixin:
                         future.set_result(result)
                 elif method == "get":
                     result = await self._do_get(path, caller)
-                    if future is not None and not future.done():
-                        future.set_result(result)
-                elif method == "get_text":
-                    result = await self._do_get(path, caller, response_format="text")
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "get_outcome":

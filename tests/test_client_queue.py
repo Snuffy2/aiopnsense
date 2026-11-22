@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import OPNsenseError, client_queue as aiopnsense_client_queue, vpn as aiopnsense_vpn
+from aiopnsense._endpoint_outcome import EndpointOutcome
 from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import (
     FakeResponse,
@@ -159,7 +160,7 @@ async def test_process_queue_unknown_method_sets_future_exception(
 
 
 async def test_process_queue_handles_requests(make_client: MakeClientFactory) -> None:
-    """Verify queue worker dispatches get/post/stream requests to the right handlers.
+    """Verify queue worker dispatches outcome, get/post/stream requests correctly.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -171,22 +172,20 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
     task: asyncio.Task | None = None
     try:
         # patch the do_* methods
-        async def fake_do_get(path: Any, caller: str = "x", response_format: str = "json") -> Any:
-            """Fake ``_do_get`` with response format support.
+        async def fake_do_get(path: Any, caller: str = "x") -> Any:
+            """Fake ``_do_get``.
 
             Args:
                 path (Any): API endpoint path.
                 caller (str): Caller name used for diagnostics.
-                response_format (str): Expected response format.
 
             Returns:
-                Any: JSON mapping for JSON format, text marker for text format.
+                Any: JSON mapping.
             """
-            if response_format == "text":
-                return "text"
             return {"g": 1}
 
         client._do_get = AsyncMock(side_effect=fake_do_get)
+        client._do_get_outcome = AsyncMock(return_value=EndpointOutcome.data("text"))
         client._do_post = AsyncMock(return_value={"p": 2})
         client._do_get_from_stream = AsyncMock(return_value={"s": 3})
 
@@ -199,27 +198,27 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
 
         loop = asyncio.get_running_loop()
         fut_get = loop.create_future()
-        fut_get_text = loop.create_future()
         fut_post = loop.create_future()
         fut_stream = loop.create_future()
 
         await q.put(("get", "/g", None, fut_get, "t"))
-        await q.put(("get_text", "/gt", None, fut_get_text, "t"))
+        fut_text_outcome = loop.create_future()
+        await q.put(("get_text_outcome", "/gt", None, fut_text_outcome, "t"))
         await q.put(("post", "/p", {"x": 1}, fut_post, "t"))
         await q.put(("get_from_stream", "/s", None, fut_stream, "t"))
 
         res1 = await asyncio.wait_for(fut_get, timeout=2)
-        res_text = await asyncio.wait_for(fut_get_text, timeout=2)
+        res_text = await asyncio.wait_for(fut_text_outcome, timeout=2)
         res2 = await asyncio.wait_for(fut_post, timeout=2)
         res3 = await asyncio.wait_for(fut_stream, timeout=2)
 
         assert res1 == {"g": 1}
-        assert res_text == "text"
+        assert res_text.payload == "text"
         assert res2 == {"p": 2}
         assert res3 == {"s": 3}
-        assert client._do_get.await_count == 2
+        assert client._do_get.await_count == 1
         client._do_get.assert_any_await("/g", "t")
-        client._do_get.assert_any_await("/gt", "t", response_format="text")
+        client._do_get_outcome.assert_awaited_once_with("/gt", "t", response_format="text")
 
         # cancel the processor task
         task.cancel()
@@ -339,36 +338,6 @@ async def test_unbound_toggle_identifies_failed_save_in_queue_diagnostics(
             for record in caplog.records
         )
     finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_text_rejects_unexpected_type(make_client: MakeClientFactory) -> None:
-    """Raise a public error when text-mode queue responses are not text.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test asserts unexpected response types raise ``OPNsenseError``.
-    """
-    client, _session = make_mock_session_client(make_client)
-    task: asyncio.Task | None = None
-    try:
-        q: asyncio.Queue = asyncio.Queue()
-        client._request_queue = q
-
-        client._do_get = AsyncMock(return_value={"ok": 1})
-
-        task = asyncio.get_running_loop().create_task(client._process_queue())
-
-        with pytest.raises(OPNsenseError, match=r"Expected text response"):
-            await client._get_text("/text")
-    finally:
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
         await client.async_close()
 
 

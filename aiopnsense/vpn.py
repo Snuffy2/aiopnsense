@@ -1004,27 +1004,11 @@ class VPNMixin(AiopnsenseClientProtocol):
         if outcome.is_transient:
             _LOGGER.debug("IPsec configuration endpoint temporarily unavailable: %s", endpoint)
             return None
-        rows = self._validated_uuid_rows(outcome.mapping().get("rows"), endpoint)
-        if rows is None:
-            return None
-        return {row["uuid"]: row for row in rows}
-
-    @staticmethod
-    def _validated_uuid_rows(rows: object, endpoint: str) -> list[MutableMapping[str, Any]] | None:
-        """Validate an inventory field as a list of rows that each carry a UUID.
-
-        Args:
-            rows (object): Raw ``rows`` field from a configuration payload.
-            endpoint (str): Endpoint the rows came from, used in debug logs.
-
-        Returns:
-            list[MutableMapping[str, Any]] | None: The rows when the field is a list
-                and every row is a mapping with a non-empty string ``uuid``; otherwise
-                ``None``.
-        """
+        rows = outcome.mapping().get("rows")
         if not isinstance(rows, list):
             _LOGGER.debug("[get_ipsec] configuration unavailable (malformed rows): %s", endpoint)
             return None
+        configured: dict[str, MutableMapping[str, Any]] = {}
         for row in rows:
             if not isinstance(row, MutableMapping):
                 _LOGGER.debug("[get_ipsec] configuration unavailable (malformed row): %s", endpoint)
@@ -1035,7 +1019,8 @@ class VPNMixin(AiopnsenseClientProtocol):
                     "[get_ipsec] configuration unavailable (malformed identity): %s", endpoint
                 )
                 return None
-        return rows
+            configured[uuid] = row
+        return configured
 
     @staticmethod
     def _new_ipsec_child(

@@ -21,7 +21,7 @@ _REQUEST_ERROR_LOGGED_ATTRIBUTE = "_aiopnsense_request_error_logged"
 class _RequestLoggingClient(Protocol):
     """Client state required by request outage logging helpers."""
 
-    _request_outages: set[tuple[str, str, str]]
+    _request_outages: set[tuple[str, str]]
 
 
 class _ExceptionLogDetails:
@@ -64,25 +64,23 @@ def _log_request_failure(
     client: _RequestLoggingClient,
     method: str,
     path: str,
-    phase: str,
     level: int,
     message: str,
     *args: Any,
     error: BaseException | None = None,
 ) -> None:
-    """Log one request failure per client, method, path, and request phase.
+    """Log one request failure per client, method, and path.
 
     Args:
         client (_RequestLoggingClient): Client holding request outage state.
         method (str): HTTP method used by the request.
         path (str): Requested API path.
-        phase (str): Request phase label; ``request`` for data calls.
         level (int): Log level for the first failure in the current outage.
         message (str): Failure message format.
         args (Any): Values for the failure message format.
         error (BaseException | None): Public exception that will be raised, if any.
     """
-    key = (method.upper(), path, phase)
+    key = (method.upper(), path)
     if key in client._request_outages:
         _LOGGER.debug(message, *args)
     else:
@@ -96,20 +94,18 @@ def _log_request_recovery(
     client: _RequestLoggingClient,
     method: str,
     path: str,
-    phase: str,
 ) -> None:
-    """Log recovery after a successful request in the matching outage phase.
+    """Log recovery after a successful request for a matching outage.
 
     Args:
         client (_RequestLoggingClient): Client holding request outage state.
         method (str): HTTP method used by the request.
         path (str): Requested API path.
-        phase (str): Request phase label; ``request`` for data calls.
     """
-    key = (method.upper(), path, phase)
+    key = (method.upper(), path)
     if key in client._request_outages:
         client._request_outages.remove(key)
-        _LOGGER.info("%s %s recovered for %s", method.upper(), phase, path)
+        _LOGGER.info("%s request recovered for %s", method.upper(), path)
 
 
 def _mark_request_error_logged(error: BaseException) -> None:

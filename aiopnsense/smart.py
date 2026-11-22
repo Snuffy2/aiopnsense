@@ -21,12 +21,10 @@ class SmartMixin(AiopnsenseClientProtocol):
 
         Returns:
             list[dict[str, Any]]: SMART device rows returned by the detailed API, or an
-                empty list when the SMART plugin endpoint is absent (404) in either mode,
-                or returns 403 or a transient HTTP/transport failure with
-                ``throw_errors`` disabled. A 403 and transient failures raise
-                ``OPNsenseError`` when errors are enabled. Undecodable JSON
-                follows the client's configured error handling unless this method handles
-                the decoding error explicitly.
+                empty list when absent (404 in either mode), or on 403/transient HTTP or
+                transport failures with ``throw_errors`` off. Those failures raise
+                ``OPNsenseError`` when enabled. Undecodable JSON returns ``None`` when
+                errors are disabled and raises ``OPNsenseError`` otherwise.
         """
         outcome = await self._fetch_post_endpoint_outcome(SMART_SERVICE_DETAIL_ENDPOINT)
         if not outcome.is_data:
@@ -71,13 +69,11 @@ class SmartMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Decoded SMART detail payload. Non-mapping outputs
-                are wrapped under ``output`` to preserve a stable mapping API. An
-                empty dictionary is returned when the SMART plugin endpoint is absent
-                (404) in either mode, or returns 403 or a transient HTTP/transport
-                failure with ``throw_errors`` disabled. A 403 and transient failures
-                raise ``OPNsenseError`` when errors are enabled.
-                Undecodable JSON follows the client's configured error handling unless
-                this method handles the decoding error explicitly.
+                are wrapped under ``output`` to preserve a stable mapping API. Returns
+                an empty dictionary when absent (404 in either mode), or on 403/transient
+                HTTP or transport failures with ``throw_errors`` off. Those failures raise
+                ``OPNsenseError`` when enabled. Undecodable JSON returns ``None`` when
+                errors are disabled and raises ``OPNsenseError`` otherwise.
         """
         outcome = await self._fetch_post_endpoint_outcome(
             SMART_SERVICE_INFO_ENDPOINT,

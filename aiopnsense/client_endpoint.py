@@ -24,7 +24,7 @@ class ClientEndpointMixin:
         _endpoint_cache_ttl_seconds: int
         _endpoint_checked_at: dict[str, datetime]
         _endpoint_permission_denied: set[str]
-        _request_outages: set[tuple[str, str, str]]
+        _request_outages: set[tuple[str, str]]
         _password: str
         _rest_api_query_count: int
         _session: aiohttp.ClientSession
@@ -202,14 +202,14 @@ class ClientEndpointMixin:
 
         Used for reads that are not a plain bounded fetch, such as streams and
         state-changing actions, where the caller needs the availability answer
-        but must not consume the response. The request is always a GET with no
+        but must not consume the response. A dispatched check is a GET with no
         payload. Outcomes and cache rules are the same as ``_fetch_endpoint_outcome``.
 
         Args:
             path (str): API endpoint path to check. The exact path, including
                 its query string, is used for the availability cache key.
-            force_refresh (bool): Whether to bypass a cached availability answer.
-                The request is sent and its result is cached.
+            force_refresh (bool): Whether to bypass cached present or absent answers.
+                The result of a dispatched request is cached.
 
         Returns:
             EndpointOutcome: ``DATA`` (with no payload) when the endpoint answers
@@ -233,11 +233,11 @@ class ClientEndpointMixin:
     ) -> EndpointOutcome:
         """Send one availability-gated request and report whether it returned data, is absent or failed.
 
-        A single request both checks availability and returns the data. The
+        A dispatched request both checks availability and returns the data. The
         availability status (never the payload) is cached for the endpoint cache
-        TTL, so a known-absent endpoint is answered without a request. GET and
-        POST share this logic; the HTTP method and exact path, including query,
-        distinguish cache entries.
+        TTL, so a known-absent endpoint is answered without a request. Status-only
+        checks also reuse a fresh present answer. GET and POST share this logic;
+        the HTTP method and exact path, including query, distinguish cache entries.
 
         Args:
             method (Literal["get", "post"]): HTTP method of the data request.
@@ -247,11 +247,10 @@ class ClientEndpointMixin:
             response_format (Literal["json", "text"]): ``"text"`` returns the body text of
                 a GET in the ``DATA`` outcome; ``"json"`` returns the decoded body.
             status_only (bool): Whether to check availability without reading the
-                payload (GET only). Status checks bypass the request queue, as the
-                availability probe always has, and are answered from a fresh cached
-                present answer without a request; data fetches go through the queue
-                and always send a request.
-            force_refresh (bool): Whether to ignore a cached absent answer for this call.
+                payload (GET only). Status checks bypass the request queue. A fresh
+                cached present answer skips a status-only request; data fetches
+                dispatch a request unless a fresh absent answer can be reused.
+            force_refresh (bool): Whether to bypass cached present and absent answers.
 
         Returns:
             EndpointOutcome: ``DATA`` with the decoded payload or body text, ``ABSENT`` when the
@@ -268,7 +267,7 @@ class ClientEndpointMixin:
             Updates endpoint availability caches. A 200 caches the endpoint as present
             and a 404 as absent. Outside throw mode a 403 also caches the endpoint as
             absent with the permission-denied marker. Transient failures and, in throw
-            mode, a 403 clear the cache entry so the next call requests again.
+            mode, a 403 also clears the cache entry so the next call requests again.
         """
         cache_key = path
         if method == "post":
@@ -309,7 +308,7 @@ class ClientEndpointMixin:
             outcome = await self._queue_request(queue_method, path, payload)
 
         if outcome.is_data:
-            _log_request_recovery(self, method, path, "request")
+            _log_request_recovery(self, method, path)
             self._endpoint_permission_denied.discard(cache_key)
             self._endpoint_availability[cache_key] = True
             self._endpoint_checked_at[cache_key] = now
@@ -328,7 +327,6 @@ class ClientEndpointMixin:
                 self,
                 method,
                 path,
-                "request",
                 logging.ERROR,
                 "Permission Error in fetch_endpoint_outcome. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                 f"{self._url}{path}",
@@ -347,7 +345,6 @@ class ClientEndpointMixin:
             self,
             method,
             path,
-            "request",
             logging.WARNING,
             "Transient %s failure for %s. %s. Not caching result.",
             method.upper(),
