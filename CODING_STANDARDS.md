@@ -46,7 +46,9 @@ Standards for code in `aiopnsense/` and `tests/`. Rules that `ruff`, `mypy` or `
 
 ## Firmware compatibility
 
-- Behavior that differs between OPNsense releases is gated with `firmware_is_at_least` against a named constant in `const.py`. Do not compare version strings inline.
+- Behavior that differs between OPNsense releases is a Firmware Capability: a `FirmwareCapability` in `const.py` with its threshold constant and its answer for Unknown Firmware. Do not compare version strings or call `firmware_is_at_least` in feature code; ask the firmware module with `_firmware_capability` (known or unknown) or `_firmware_capability_enabled` (unknown mapped to the declared answer).
+- Unknown Firmware is never remembered. A feature uses the capability's declared answer for that call and asks again on its next use. Startup validation (`validate`) is the one place where Unknown Firmware is an error.
+- Only the firmware module writes the cached firmware version, through `_record_firmware_version`. A known version that differs from the last known one resets everything derived from it (Endpoint Style and the endpoint availability cache).
 - Endpoints that exist in both snake_case and camelCase forms are chosen with `_get_endpoint_path`.
 - When a gate changes what a user sees below the Recommended Firmware, update the requirements section of `README.md`.
 
