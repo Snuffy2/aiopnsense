@@ -13,7 +13,7 @@ import contextlib
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
@@ -450,6 +450,163 @@ async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClien
         for client in clients:
             with contextlib.suppress(Exception):
                 await client.async_close()
+
+
+type RouterReply = MutableMapping[str, Any] | list | BaseException | None
+"""A scripted Router reply: a JSON body, ``None`` for a transport failure, or an error to raise."""
+
+
+@dataclass(frozen=True, slots=True)
+class RouterRequest:
+    """One request the client sent to the scripted Router."""
+
+    method: str
+    path: str
+    payload: MutableMapping[str, Any] | None = None
+
+
+class ScriptedRouter:
+    """Router stand-in that replaces a client's ``_post`` and ``_get`` transport.
+
+    The cancellation-aware queued POST that VPN Toggles use is answered from the same
+    script. Replies are scripted per ``(method, path)``. An unscripted request is recorded and
+    answered with ``None``, which is what the transport returns for a failed request
+    when ``throw_errors`` is off. A scripted exception is raised from the transport, as
+    a failed request does when ``throw_errors`` is on.
+    """
+
+    def __init__(self, make_client: MakeClientFactory) -> None:
+        """Initialize an empty script.
+
+        Args:
+            make_client (MakeClientFactory): Client factory used by :meth:`client`.
+        """
+        self._make_client = make_client
+        self._replies: dict[tuple[str, str], RouterReply] = {}
+        self.requests: list[RouterRequest] = []
+
+    def reply(self, path: str, response: RouterReply, *, method: str = "POST") -> None:
+        """Script the Router's reply to one request.
+
+        Args:
+            path (str): API path the reply answers.
+            response (RouterReply): JSON body, ``None`` for a transport failure, or an
+                exception for the transport to raise.
+            method (str): HTTP method, ``POST`` or ``GET``.
+        """
+        self._replies[(method, path)] = response
+
+    def client(self, **client_kwargs: Any) -> aiopnsense.OPNsenseClient:
+        """Create a client whose transport talks to this Router.
+
+        Args:
+            client_kwargs (Any): Keyword arguments forwarded to ``make_client``.
+
+        Returns:
+            aiopnsense.OPNsenseClient: Client with ``_post`` and ``_get`` scripted.
+        """
+        client = self._make_client(**client_kwargs)
+        client._use_snake_case = True
+        client._post = self._post
+        client._get = self._get
+        client._is_get_endpoint_available = self._is_get_endpoint_available
+        client._queue_post_with_cancellation = self._post_with_cancellation
+        return client
+
+    async def _is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
+        """Answer an endpoint availability probe from the script.
+
+        An endpoint is available when the script has a GET reply for it, so a test makes
+        an endpoint unavailable by leaving it unscripted.
+
+        Args:
+            path (str): API path being probed.
+            force_refresh (bool): Ignored; the script has no cache.
+
+        Returns:
+            bool: ``True`` when a GET reply is scripted for ``path``.
+        """
+        return ("GET", path) in self._replies
+
+    def requested(self, path: str, *, method: str = "POST") -> bool:
+        """Return whether the client sent a request.
+
+        Args:
+            path (str): API path to look for.
+            method (str): HTTP method to look for.
+
+        Returns:
+            bool: ``True`` when at least one matching request was sent.
+        """
+        return any(r.method == method and r.path == path for r in self.requests)
+
+    async def _answer(self, request: RouterRequest) -> MutableMapping[str, Any] | list | None:
+        """Record a request and return or raise its scripted reply.
+
+        Args:
+            request (RouterRequest): Request the client sent.
+
+        Returns:
+            MutableMapping[str, Any] | list | None: Scripted JSON body, or ``None``.
+        """
+        self.requests.append(request)
+        reply = self._replies.get((request.method, request.path))
+        if isinstance(reply, BaseException):
+            return await AsyncMock(side_effect=reply)()
+        return reply
+
+    async def _post(
+        self, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> MutableMapping[str, Any] | list | None:
+        """Answer a POST from the script.
+
+        Args:
+            path (str): API path.
+            payload (MutableMapping[str, Any] | None): Request body.
+
+        Returns:
+            MutableMapping[str, Any] | list | None: Scripted JSON body, or ``None``.
+        """
+        return await self._answer(RouterRequest("POST", path, payload))
+
+    async def _post_with_cancellation(
+        self, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> tuple[MutableMapping[str, Any] | list | None, None]:
+        """Answer a cancellation-aware POST (used by VPN Toggles) from the script.
+
+        Args:
+            path (str): API path.
+            payload (MutableMapping[str, Any] | None): Request body.
+
+        Returns:
+            tuple[MutableMapping[str, Any] | list | None, None]: Scripted JSON body, or
+                ``None``, and no caller cancellation.
+        """
+        return await self._post(path, payload), None
+
+    async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
+        """Answer a GET from the script.
+
+        Args:
+            path (str): API path.
+
+        Returns:
+            MutableMapping[str, Any] | list | None: Scripted JSON body, or ``None``.
+        """
+        return await self._answer(RouterRequest("GET", path))
+
+
+@pytest.fixture
+def scripted_router(make_client: MakeClientFactory) -> ScriptedRouter:
+    """Return a Router whose replies the test scripts per request path.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+
+    Returns:
+        ScriptedRouter: Empty script; call ``reply`` then ``client``.
+    """
+    return ScriptedRouter(make_client)
 
 
 class VpnQueueTasks:

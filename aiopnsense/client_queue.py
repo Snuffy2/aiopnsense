@@ -28,8 +28,11 @@ class ClientQueueMixin:
         _max_workers: int
         _request_queue: asyncio.Queue[Any]
         _workers: list[asyncio.Task[Any]]
-        _vpn_shutdown_generation: int
         _active_close_count: int
+
+        def _signal_toggle_shutdown(self) -> None:
+            """Invalidate in-flight VPN Toggles because the client is closing."""
+            ...
 
         async def _do_get(
             self,
@@ -337,7 +340,7 @@ class ClientQueueMixin:
         invalidates in-progress VPN calls so they cannot send follow-up writes.
         """
         _LOGGER.debug("Closing OPNsenseClient and cancelling background tasks")
-        self._vpn_shutdown_generation += 1
+        self._signal_toggle_shutdown()
         self._active_close_count += 1
         try:
             tasks_to_cancel = []

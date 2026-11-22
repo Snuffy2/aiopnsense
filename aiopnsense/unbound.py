@@ -1,10 +1,12 @@
 """Unbound DNS blocklist methods for OPNsenseClient."""
 
 from collections.abc import MutableMapping
+import logging
 from typing import Any
 
-from ._error_policy import _attempt, _log_errors
+from ._error_policy import _log_boolean_errors, _log_errors
 from ._typing import AiopnsenseClientProtocol
+from .client_toggle import ToggleSpec, ToggleStep, ToggleTarget
 from .const import LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
 from .helpers import _LOGGER, api_value_matches, firmware_is_at_least
 
@@ -14,7 +16,6 @@ UNBOUND_SERVICE_DNSBL_ENDPOINT = "/api/unbound/service/dnsbl"
 UNBOUND_SERVICE_RESTART_ENDPOINT = "/api/unbound/service/restart"
 UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT = "/api/unbound/settings/search_dnsbl"
 UNBOUND_SETTINGS_TOGGLE_DNSBL_ENDPOINT_PREFIX = "/api/unbound/settings/toggle_dnsbl/"
-_LEGACY_REQUEST_FAILED = object()
 
 
 class UnboundMixin(AiopnsenseClientProtocol):
@@ -100,7 +101,6 @@ class UnboundMixin(AiopnsenseClientProtocol):
             read, save, apply or restart request raises an
             ``OPNsenseError`` subclass instead of returning ``False``.
         """
-        state_label = "On" if set_state else "Off"
         dnsbl = await self._get_unbound_blocklist_legacy(require_complete=True)
         if not dnsbl:
             _LOGGER.error("Unable to get Unbound Blocklist Status")
@@ -108,72 +108,28 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         dnsbl["enabled"] = "1" if set_state else "0"
         payload = {"unbound": {"dnsbl": dnsbl}}
-
-        response = await _attempt(
-            self,
-            lambda: self._post(UNBOUND_SETTINGS_SET_ENDPOINT, payload=payload),
-            empty=_LEGACY_REQUEST_FAILED,
-            name=f"legacy unbound blocklist save ({state_label})",
-        )
-
-        if response is _LEGACY_REQUEST_FAILED:
-            # The failed request was already logged.
-            return False
-        if not isinstance(response, MutableMapping) or response.get("result", "failed") != "saved":
-            _LOGGER.error(
-                "Unable to save legacy unbound blocklist state %s. Response: %s",
-                state_label,
-                response,
+        return await self._run_toggle(
+            ToggleSpec(
+                label="enable_unbound_blocklist" if set_state else "disable_unbound_blocklist",
+                target=ToggleTarget.ON if set_state else ToggleTarget.OFF,
+                save=(
+                    ToggleStep.save(
+                        UNBOUND_SETTINGS_SET_ENDPOINT,
+                        frozenset({"saved"}),
+                        payload=payload,
+                        failure_log_level=logging.ERROR,
+                    ),
+                ),
+                apply=(
+                    ToggleStep.apply(
+                        UNBOUND_SERVICE_DNSBL_ENDPOINT,
+                        method="GET",
+                        failure_log_level=logging.ERROR,
+                    ),
+                    ToggleStep.apply(UNBOUND_SERVICE_RESTART_ENDPOINT, response_key="response"),
+                ),
             )
-            return False
-
-        dnsbl_resp = await _attempt(
-            self,
-            lambda: self._get(UNBOUND_SERVICE_DNSBL_ENDPOINT),
-            empty=_LEGACY_REQUEST_FAILED,
-            name=f"legacy unbound blocklist apply ({state_label})",
         )
-
-        if dnsbl_resp is _LEGACY_REQUEST_FAILED:
-            # The failed request was already logged.
-            return False
-        dnsbl_status = dnsbl_resp.get("status") if isinstance(dnsbl_resp, MutableMapping) else None
-        if not isinstance(dnsbl_resp, MutableMapping) or not isinstance(dnsbl_status, str):
-            _LOGGER.error(
-                "Malformed legacy unbound dnsbl apply response for state %s. Response: %s",
-                state_label,
-                dnsbl_resp,
-            )
-            return False
-        if not dnsbl_status.startswith("OK"):
-            _LOGGER.error(
-                "Legacy unbound dnsbl apply failed for state %s. Response: %s",
-                state_label,
-                dnsbl_resp,
-            )
-            return False
-
-        restart_resp = await _attempt(
-            self,
-            lambda: self._post(UNBOUND_SERVICE_RESTART_ENDPOINT),
-            empty=_LEGACY_REQUEST_FAILED,
-            name=f"legacy unbound blocklist restart ({state_label})",
-        )
-
-        if restart_resp is _LEGACY_REQUEST_FAILED:
-            # The failed request was already logged.
-            return False
-
-        restart_succeeded = (
-            isinstance(restart_resp, MutableMapping)
-            and restart_resp.get("response", "failed") == "OK"
-        )
-        _LOGGER.debug(
-            "[_set_unbound_blocklist_legacy] set_state: %s, result: %s",
-            state_label,
-            "success" if restart_succeeded else "failure",
-        )
-        return restart_succeeded
 
     @_log_errors
     async def get_unbound_blocklist(self) -> dict[str, Any]:
@@ -220,10 +176,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
             uuid (str | None): UUID of the extended DNSBL entry to toggle.
 
         Returns:
-            bool: ``True`` when OPNsense reports the expected toggle result
-                and the DNSBL apply step succeeds; otherwise, ``False``. When
-                ``throw_errors`` is enabled, a failed apply request raises an
-                ``OPNsenseError`` subclass instead of returning ``False``.
+            bool: ``True`` when OPNsense reports the toggle result matching the
+                requested state and the DNSBL apply step succeeds; otherwise,
+                ``False``. Transport errors raise when ``throw_errors`` is enabled.
         """
         if not uuid:
             _LOGGER.error("Blocklist uuid must be provided for Unbound Extended Blocklists")
@@ -231,27 +186,16 @@ class UnboundMixin(AiopnsenseClientProtocol):
         endpoint = (
             f"{UNBOUND_SETTINGS_TOGGLE_DNSBL_ENDPOINT_PREFIX}{uuid}/{'1' if set_state else '0'}"
         )
-        response = await self._safe_dict_post(endpoint)
-        result = response.get("result")
-        if (set_state and result == "Enabled") or (not set_state and result == "Disabled"):
-            dnsbl_resp = await _attempt(
-                self,
-                lambda: self._post(UNBOUND_SERVICE_DNSBL_ENDPOINT),
-                empty=None,
-                name="unbound blocklist apply",
+        return await self._run_toggle(
+            ToggleSpec(
+                label="enable_unbound_blocklist" if set_state else "disable_unbound_blocklist",
+                target=ToggleTarget.ON if set_state else ToggleTarget.OFF,
+                save=(
+                    ToggleStep.save(endpoint, frozenset({"Enabled" if set_state else "Disabled"})),
+                ),
+                apply=(ToggleStep.apply(UNBOUND_SERVICE_DNSBL_ENDPOINT),),
             )
-            _LOGGER.debug(
-                "[_toggle_unbound_blocklist] uuid: %s, set_state: %s, response: %s, dnsbl_resp: %s",
-                uuid,
-                "On" if set_state else "Off",
-                response,
-                dnsbl_resp,
-            )
-            if isinstance(dnsbl_resp, MutableMapping) and dnsbl_resp.get(
-                "status", "failed"
-            ).startswith("OK"):
-                return True
-        return False
+        )
 
     async def _set_unbound_blocklist(self, set_state: bool, uuid: str | None = None) -> bool:
         """Route an Unbound blocklist state change to the correct backend mode.
@@ -262,9 +206,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 for legacy firmware where regular DNSBL has no per-entry UUID.
 
         Returns:
-            bool: True when the operation succeeds; otherwise, False. When
-                ``throw_errors`` is enabled, a failed save, apply or restart
-                request raises an ``OPNsenseError`` subclass instead.
+            bool: True when the operation succeeds. Otherwise, False. Transport
+                errors during the save or apply raise when ``throw_errors`` is
+                enabled.
         """
         use_legacy = await self._uses_legacy_unbound_blocklist()
         state_name = "enable" if set_state else "disable"
@@ -297,7 +241,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             return await self._toggle_unbound_blocklist(set_state=set_state, uuid=uuid)
         return await self._set_unbound_blocklist_legacy(set_state=set_state)
 
-    @_log_errors
+    @_log_boolean_errors
     async def enable_unbound_blocklist(self, uuid: str | None = None) -> bool:
         """Enable Unbound DNS blocklist filtering.
 
@@ -306,13 +250,12 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 when enabling the legacy regular DNSBL setting.
 
         Returns:
-            bool: True when the operation succeeds; otherwise, False. When
-                ``throw_errors`` is enabled, a failed save, apply or restart
-                request raises an ``OPNsenseError`` subclass instead.
+            bool: True when the operation succeeds. Otherwise, False. Transport
+                errors raise ``OPNsenseError`` when ``throw_errors`` is enabled.
         """
         return await self._set_unbound_blocklist(set_state=True, uuid=uuid)
 
-    @_log_errors
+    @_log_boolean_errors
     async def disable_unbound_blocklist(self, uuid: str | None = None) -> bool:
         """Disable Unbound DNS blocklist filtering.
 
@@ -321,8 +264,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 when disabling the legacy regular DNSBL setting.
 
         Returns:
-            bool: True when the operation succeeds; otherwise, False. When
-                ``throw_errors`` is enabled, a failed save, apply or restart
-                request raises an ``OPNsenseError`` subclass instead.
+            bool: True when the operation succeeds; otherwise, False. Transport
+                errors raise ``OPNsenseError`` when ``throw_errors`` is enabled.
         """
         return await self._set_unbound_blocklist(set_state=False, uuid=uuid)

@@ -11,6 +11,7 @@ import aiohttp
 
 from .client_endpoint import ClientEndpointMixin
 from .client_queue import ClientQueueMixin
+from .client_toggle import ClientToggleMixin
 from .client_transport import ClientTransportMixin
 from .const import DEFAULT_CACHE_TTL_SECONDS
 from .exceptions import OPNsenseInvalidArgument
@@ -18,7 +19,11 @@ from .exceptions import OPNsenseInvalidArgument
 _UNSET: object = object()
 
 
-class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixin):
+# ClientToggleMixin stays last: it subclasses AiopnsenseClientProtocol, whose stub members
+# would otherwise shadow the real transport methods in the MRO.
+class ClientBaseMixin(
+    ClientEndpointMixin, ClientQueueMixin, ClientTransportMixin, ClientToggleMixin
+):
     """ClientBase methods for OPNsenseClient."""
 
     def __init__(
@@ -80,17 +85,6 @@ class ClientBaseMixin(ClientEndpointMixin, ClientQueueMixin, ClientTransportMixi
         self._firmware_version: str | None = None
         self._firmware_install_active: bool = False
         self._firmware_action_lock = asyncio.Lock()
-        self._vpn_service_locks: dict[str, asyncio.Lock] = {
-            "openvpn": asyncio.Lock(),
-            "wireguard": asyncio.Lock(),
-            "ipsec": asyncio.Lock(),
-        }
-        self._vpn_pending_apply: dict[str, set[tuple[str, str]]] = {
-            "openvpn": set(),
-            "wireguard": set(),
-            "ipsec": set(),
-        }
-        self._vpn_shutdown_generation = 0
         self._active_close_count = 0
         self._use_snake_case: bool | None = None
         self._endpoint_availability: dict[str, bool] = {}

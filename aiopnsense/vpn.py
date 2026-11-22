@@ -1,14 +1,14 @@
 """OpenVPN, WireGuard, and IPsec methods for OPNsenseClient."""
 
-import asyncio
 from collections.abc import MutableMapping
 from datetime import datetime, timedelta
 from functools import partial
 import logging
 from typing import Any
 
-from ._error_policy import _attempt, _log_errors
+from ._error_policy import _attempt, _log_boolean_errors, _log_errors
 from ._typing import AiopnsenseClientProtocol
+from .client_toggle import TOGGLE_ITEM_RESULTS, ToggleSpec, ToggleStep, ToggleTarget, VpnInstance
 from .exceptions import OPNsenseError
 from .helpers import _LOGGER, api_value_matches, dict_get, timestamp_to_datetime, try_to_int
 
@@ -715,218 +715,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             ):
                 server_or_client["latest_handshake"] = handshake_time
 
-    @staticmethod
-    def _vpn_toggle_early_result(
-        response: MutableMapping[str, Any], toggle_on_off: str | None = None
-    ) -> bool | None:
-        """Classify a toggle response before the service reconfigure.
-
-        OPNsense reports ``result`` as ``Enabled`` or ``Disabled`` for an
-        existing item and ``failed`` for a missing item or rejected target, so
-        ``changed: false`` alone does not prove the item is in the target state.
-
-        Args:
-            response (MutableMapping[str, Any]): Toggle endpoint response.
-            toggle_on_off (str | None, optional): Validated target state, or
-                ``None`` for a flip request.
-
-        Returns:
-            bool | None: ``None`` when the change needs a service reconfigure,
-                ``True`` when the item is already in the target state, or
-                ``False`` when the toggle failed.
-        """
-        changed = response.get("changed")
-        if toggle_on_off is None:
-            return None if changed else False
-        result = response.get("result")
-        if not isinstance(changed, bool) or not isinstance(result, str):
-            return False
-        if result != ("Enabled" if toggle_on_off == "on" else "Disabled"):
-            return False
-        if changed is False:
-            return True
-        return None if changed else False
-
-    @staticmethod
-    def _vpn_toggle_acknowledges_save(
-        response: MutableMapping[str, Any], toggle_on_off: str | None
-    ) -> bool:
-        """Return whether a toggle response confirms a saved state change.
-
-        Args:
-            response (MutableMapping[str, Any]): Toggle endpoint response.
-            toggle_on_off (str | None): Explicit target or legacy flip mode.
-
-        Returns:
-            bool: Whether the response confirms a changed saved item state.
-        """
-        if response.get("changed") is not True:
-            return False
-        if "result" not in response:
-            return toggle_on_off is None
-        result = response.get("result")
-        return isinstance(result, str) and result in {"Enabled", "Disabled"}
-
-    async def _post_vpn_toggle(
-        self,
-        url: str,
-        vpn_type: str,
-        item: tuple[str, str],
-        toggle_on_off: str | None,
-        shutdown_generation: int,
-    ) -> dict[str, Any]:
-        """Post a VPN toggle and retain any acknowledged save on cancellation.
-
-        Args:
-            url (str): Toggle endpoint path.
-            vpn_type (str): VPN service owning the changed item.
-            item (tuple[str, str]): Collection and instance UUID.
-            toggle_on_off (str | None): Explicit target or legacy flip mode.
-            shutdown_generation (int): Generation captured when the VPN call began.
-
-        Returns:
-            dict[str, Any]: Toggle response when the caller remains active.
-
-        Raises:
-            cancellation: The original ``asyncio.CancelledError`` from caller
-                cancellation, propagated after the dispatched response is
-                processed. Client shutdown can cancel the worker before its
-                response is received.
-        """
-        self._ensure_vpn_operation_current(shutdown_generation)
-        response, cancellation = await self._safe_dict_post_with_cancellation(url)
-        if self._vpn_toggle_acknowledges_save(response, toggle_on_off) and (
-            cancellation is not None or shutdown_generation != self._vpn_shutdown_generation
-        ):
-            self._vpn_pending_apply[vpn_type].add(item)
-        if cancellation is not None:
-            raise cancellation
-        self._ensure_vpn_operation_current(shutdown_generation)
-        return response
-
-    async def _wireguard_is_in_target_state(
-        self,
-        snake_case_path: str,
-        camel_case_path: str,
-        item_key: str,
-        toggle_on_off: str | None = None,
-    ) -> bool | None:
-        """Compare a WireGuard item's current state with the target state.
-
-        Args:
-            snake_case_path (str): Snake case item read endpoint.
-            camel_case_path (str): Camel case item read endpoint.
-            item_key (str): Response key holding the item, ``client`` or ``server``.
-            toggle_on_off (str | None, optional): Validated target state, or
-                ``None`` for a flip request, which has no target to compare.
-
-        Returns:
-            bool | None: Whether the item is in the target state, or ``None``
-                when the item is missing or its state cannot be read. A flip
-                request returns ``False`` without reading the item.
-        """
-        if toggle_on_off is None:
-            return False
-        endpoint = await self._get_endpoint_path(
-            snake_case_path=snake_case_path,
-            camel_case_path=camel_case_path,
-        )
-        payload = await self._safe_dict_get(endpoint)
-        enabled = self._mapping_value(payload, item_key).get("enabled")
-        if not isinstance(enabled, str) or enabled not in {"0", "1"}:
-            _LOGGER.debug("[toggle_vpn_instance] WireGuard state unavailable: %s", endpoint)
-            return None
-        return enabled == ("1" if toggle_on_off == "on" else "0")
-
-    async def _post_wireguard_toggle(
-        self,
-        url: str,
-        item: tuple[str, str],
-        toggle_on_off: str | None,
-        shutdown_generation: int,
-    ) -> dict[str, Any]:
-        """Post a WireGuard toggle and undo a flip in the wrong direction.
-
-        Released firmware through 26.7.9 ignores the target path segment and
-        always flips. If another writer changes the item after the state read,
-        that flip moves it away from the target, so one more flip restores it
-        before the service is reconfigured.
-
-        Args:
-            url (str): Toggle URL including the item UUID and any target state.
-            item (tuple[str, str]): WireGuard collection and instance UUID.
-            toggle_on_off (str | None, optional): Validated target state, or
-                ``None`` for a flip request.
-            shutdown_generation (int): Generation captured when the VPN call began.
-
-        Returns:
-            dict[str, Any]: Response from the last toggle request.
-        """
-        response = await self._post_vpn_toggle(
-            url, "wireguard", item, toggle_on_off, shutdown_generation
-        )
-        if (
-            toggle_on_off is not None
-            and response.get("changed") is True
-            and isinstance(response.get("result"), str)
-            and response.get("result") in {"Enabled", "Disabled"}
-            and response.get("result") != ("Enabled" if toggle_on_off == "on" else "Disabled")
-        ):
-            self._vpn_pending_apply["wireguard"].add(item)
-            _LOGGER.debug(
-                "[toggle_vpn_instance] WireGuard toggle moved away from target %s, correcting: %s",
-                toggle_on_off,
-                url,
-            )
-            response = await self._post_vpn_toggle(
-                url, "wireguard", item, toggle_on_off, shutdown_generation
-            )
-        return response
-
-    async def _apply_vpn_service(self, vpn_type: str) -> bool:
-        """Apply saved VPN changes and clear pending items on success.
-
-        Args:
-            vpn_type (str): VPN service whose saved changes should be applied.
-
-        Returns:
-            bool: Whether OPNsense confirmed the service reconfigure.
-
-        Raises:
-            cancelled: The original ``asyncio.CancelledError`` from caller
-                cancellation, propagated after the dispatched apply response
-                has been processed.
-        """
-        endpoint = {
-            "openvpn": OPENVPN_SERVICE_RECONFIGURE_ENDPOINT,
-            "wireguard": WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT,
-            "ipsec": IPSEC_SERVICE_RECONFIGURE_ENDPOINT,
-        }[vpn_type]
-        response, cancelled = await self._safe_dict_post_with_cancellation(endpoint)
-        succeeded = (
-            response.get("result", "") == "ok"
-            if vpn_type in {"openvpn", "wireguard"}
-            else response.get("status", "") == "ok"
-        )
-        if succeeded:
-            self._vpn_pending_apply[vpn_type].clear()
-        if cancelled is not None:
-            raise cancelled
-        return succeeded
-
-    async def _record_vpn_change_and_apply(self, vpn_type: str, item: tuple[str, str]) -> bool:
-        """Record a saved item before applying, preserving retries on failure.
-
-        Args:
-            vpn_type (str): VPN service with the saved change.
-            item (tuple[str, str]): Collection and instance UUID.
-
-        Returns:
-            bool: Whether the service reconfigure succeeded.
-        """
-        self._vpn_pending_apply[vpn_type].add(item)
-        return await self._apply_vpn_service(vpn_type)
-
+    @_log_boolean_errors
     async def toggle_vpn_instance(
         self,
         vpn_type: str,
@@ -936,207 +725,141 @@ class VPNMixin(AiopnsenseClientProtocol):
     ) -> bool:
         """Toggle a VPN instance and retry known unapplied changes.
 
+        WireGuard reads state before toggling because firmware through 26.7.9
+        ignores its target path, then best-effort corrects a mismatched result. A
+        per-service client lock serializes this client's toggles, but independent
+        clients and external writers can still race. Known saved changes are
+        retained only on this client and retried by a later matching request;
+        transport failures can leave remote apply state unknown. If the caller
+        cancels after a VPN POST dispatch, the call waits for its response before
+        propagating cancellation so an acknowledged save can be tracked. Closing
+        the client can cancel the queue worker before the response arrives. If
+        OPNsense saved the change, the client may not track it, and a later
+        matching request can skip the service reconfigure.
+
         Args:
-            vpn_type (str): VPN implementation to toggle.
+            vpn_type (str): VPN implementation to toggle: ``openvpn``, ``wireguard``
+                or ``ipsec``.
             clients_servers (str): WireGuard collection containing the instance;
                 use ``clients`` or ``servers``. IPsec uses ``connections`` and
                 OpenVPN ignores this value.
             uuid (str): VPN instance UUID.
-            toggle_on_off (str | None): ``on`` or ``off`` for an explicit state.
-                ``None`` or an unrecognized string uses legacy flip behavior.
-                WireGuard reads state before toggling because firmware through
-                26.7.9 ignores its target path, then best-effort corrects a
-                mismatched result. A per-service client lock serializes this
-                client's toggles. Independent clients and external writers can
-                still race. Known saved changes are retained only on this
-                client and retried by a later matching request; transport
-                failures can leave remote apply state unknown. If the caller
-                cancels after a VPN POST dispatch, the call waits for its
-                response before propagating cancellation so an acknowledged
-                save can be tracked. Closing the client can cancel the queue
-                worker before the response arrives. If OPNsense saved the
-                change, the client may not track it, and a later matching
-                request can skip the service reconfigure.
+            toggle_on_off (str | None): ``on`` or ``off`` for an explicit state,
+                or ``None`` or ``toggle`` to flip the current state.
 
         Returns:
-            bool: Whether the requested toggle or pending service apply succeeded.
+            bool: True when the toggle and service apply succeeded. A flip uses
+                the save reply's ``changed`` field to decide whether to apply.
+                An explicit target requires confirmation of the requested state.
                 A matching explicit target returns ``True`` without a service
                 reconfigure unless this client tracks an earlier unapplied save.
-
-        Raises:
-            asyncio.CancelledError: If shutdown interrupts the call. A completed
-                service apply can still report success during shutdown.
+                False when the toggle or apply cannot be confirmed, for an unknown
+                VPN type or collection, for an empty WireGuard UUID, or when an
+                error was suppressed. With ``throw_errors`` enabled, an invalid
+                ``toggle_on_off`` raises ``OPNsenseInvalidArgument`` and transport
+                errors raise ``OPNsenseError``.
+                Supported requests that reach the VPN runner raise
+                ``asyncio.CancelledError`` if the client is closing or shutdown
+                interrupts the operation. A completed service apply can still
+                report success during shutdown.
         """
-        lock = self._vpn_service_locks.get(vpn_type)
-        if lock is None:
+        target = self._parse_toggle_target(toggle_on_off)
+        spec = self._vpn_toggle_spec(vpn_type, clients_servers, uuid, target)
+        if spec is None:
             return False
-        if self._active_close_count > 0:
-            raise asyncio.CancelledError("OPNsenseClient is closing")
-        shutdown_generation = self._vpn_shutdown_generation
-        async with lock:
-            self._ensure_vpn_operation_current(shutdown_generation)
-            return await self._toggle_vpn_instance_locked(
-                vpn_type, clients_servers, uuid, toggle_on_off, shutdown_generation
-            )
+        return await self._run_toggle(spec)
 
-    def _ensure_vpn_operation_current(self, shutdown_generation: int) -> None:
-        """Cancel VPN work that crossed a client shutdown boundary.
+    @staticmethod
+    def _vpn_toggle_spec(
+        vpn_type: str, clients_servers: str, uuid: str, target: ToggleTarget
+    ) -> ToggleSpec | None:
+        """Describe a VPN Instance Toggle.
 
         Args:
-            shutdown_generation (int): Generation captured when the call began.
-
-        Raises:
-            asyncio.CancelledError: If client shutdown began after this call started.
-        """
-        if self._active_close_count > 0 or shutdown_generation != self._vpn_shutdown_generation:
-            raise asyncio.CancelledError("OPNsenseClient closed during VPN operation")
-
-    async def _toggle_vpn_instance_locked(
-        self,
-        vpn_type: str,
-        clients_servers: str,
-        uuid: str,
-        toggle_on_off: str | None,
-        shutdown_generation: int,
-    ) -> bool:
-        """Toggle an instance while holding its service-local client lock.
-
-        Args:
-            vpn_type (str): VPN implementation to toggle.
-            clients_servers (str): Collection containing the instance.
+            vpn_type (str): ``openvpn``, ``wireguard`` or ``ipsec``.
+            clients_servers (str): Collection; WireGuard requires ``clients`` or
+                ``servers``, IPsec requires ``connections`` and OpenVPN ignores it.
             uuid (str): VPN instance UUID.
-            toggle_on_off (str | None): Target state or legacy flip mode.
-            shutdown_generation (int): Generation captured when the public call began.
+            target (ToggleTarget): Requested target.
 
         Returns:
-            bool: Whether the toggle or any matching pending apply succeeded.
+            ToggleSpec | None: The Toggle, or ``None`` for an unknown VPN type or
+                collection, or an empty WireGuard UUID.
         """
-        if toggle_on_off not in {"on", "off"}:
-            toggle_on_off = None
-        generation = shutdown_generation
+        if vpn_type == "wireguard":
+            return VPNMixin._wireguard_toggle_spec(clients_servers, uuid, target)
+        suffix = target.endpoint_suffix()
         if vpn_type == "openvpn":
             item = ("instances", uuid)
-            url = f"{OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX}{uuid}"
-            if toggle_on_off == "on":
-                url = f"{url}/1"
-            elif toggle_on_off == "off":
-                url = f"{url}/0"
-            success = await self._post_vpn_toggle(url, "openvpn", item, toggle_on_off, generation)
-            _LOGGER.debug(
-                "[toggle_vpn_instance] OpenVPN instance toggle response for UUID %s: %s",
-                uuid,
-                success,
+            save = ToggleStep.save(
+                f"{OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX}{uuid}{suffix}", TOGGLE_ITEM_RESULTS
             )
-            early_result = self._vpn_toggle_early_result(success, toggle_on_off)
-            if early_result is not None:
-                _LOGGER.debug(
-                    "[toggle_vpn_instance] OpenVPN instance toggle did not report a change for "
-                    "UUID %s",
-                    uuid,
-                )
-                if early_result and item in self._vpn_pending_apply["openvpn"]:
-                    return await self._apply_vpn_service("openvpn")
-                return early_result
-            reconfigure_succeeded = await self._record_vpn_change_and_apply(
-                "openvpn",
-                item,
-            )
-            _LOGGER.debug(
-                "[toggle_vpn_instance] OpenVPN service reconfigure response after toggling UUID "
-                "%s: %s",
-                uuid,
-                reconfigure_succeeded,
-            )
-            if not reconfigure_succeeded:
-                _LOGGER.debug(
-                    "[toggle_vpn_instance] OpenVPN service reconfigure did not report success "
-                    "after toggling UUID %s",
-                    uuid,
-                )
-            return reconfigure_succeeded
-        if vpn_type == "wireguard":
-            if not uuid:
-                return False
-            if clients_servers == "clients":
-                item_key = "client"
-                get_snake = f"{WIREGUARD_CLIENT_GET_SNAKE_ENDPOINT_PREFIX}{uuid}"
-                get_camel = f"{WIREGUARD_CLIENT_GET_CAMELCASE_ENDPOINT_PREFIX}{uuid}"
-                url = await self._get_endpoint_path(
-                    snake_case_path=f"{WIREGUARD_CLIENT_TOGGLE_SNAKE_ENDPOINT_PREFIX}{uuid}",
-                    camel_case_path=f"{WIREGUARD_CLIENT_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}",
-                )
-            elif clients_servers == "servers":
-                item_key = "server"
-                get_snake = f"{WIREGUARD_SERVER_GET_SNAKE_ENDPOINT_PREFIX}{uuid}"
-                get_camel = f"{WIREGUARD_SERVER_GET_CAMELCASE_ENDPOINT_PREFIX}{uuid}"
-                url = await self._get_endpoint_path(
-                    snake_case_path=f"{WIREGUARD_SERVER_TOGGLE_SNAKE_ENDPOINT_PREFIX}{uuid}",
-                    camel_case_path=f"{WIREGUARD_SERVER_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}",
-                )
-            else:
-                return False
-            item = (clients_servers, uuid)
-            self._ensure_vpn_operation_current(generation)
-            in_target_state = await self._wireguard_is_in_target_state(
-                get_snake, get_camel, item_key, toggle_on_off
-            )
-            self._ensure_vpn_operation_current(generation)
-            if in_target_state is None:
-                return False
-            if in_target_state:
-                if item in self._vpn_pending_apply["wireguard"]:
-                    return await self._apply_vpn_service("wireguard")
-                return True
-            if toggle_on_off == "on":
-                url = f"{url}/1"
-            elif toggle_on_off == "off":
-                url = f"{url}/0"
-            success = await self._post_wireguard_toggle(url, item, toggle_on_off, generation)
-            early_result = self._vpn_toggle_early_result(success, toggle_on_off)
-            if early_result is not None:
-                if early_result and item in self._vpn_pending_apply["wireguard"]:
-                    return await self._apply_vpn_service("wireguard")
-                return early_result
-            return await self._record_vpn_change_and_apply(
-                "wireguard",
-                item,
-            )
-        if vpn_type == "ipsec":
-            if clients_servers != "connections":
-                return False
+            apply = ToggleStep.apply(OPENVPN_SERVICE_RECONFIGURE_ENDPOINT, response_key="result")
+        elif vpn_type == "ipsec" and clients_servers == "connections":
             item = ("connections", uuid)
-            url = await self._get_endpoint_path(
-                snake_case_path=f"{IPSEC_CONNECTION_TOGGLE_SNAKE_ENDPOINT_PREFIX}{uuid}",
-                camel_case_path=f"{IPSEC_CONNECTION_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}",
+            save = ToggleStep.save(
+                f"{IPSEC_CONNECTION_TOGGLE_SNAKE_ENDPOINT_PREFIX}{uuid}{suffix}",
+                TOGGLE_ITEM_RESULTS,
+                camel_case_endpoint=f"{IPSEC_CONNECTION_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}{suffix}",
             )
-            self._ensure_vpn_operation_current(generation)
-            if toggle_on_off == "on":
-                url = f"{url}/1"
-            elif toggle_on_off == "off":
-                url = f"{url}/0"
-            success = await self._post_vpn_toggle(url, "ipsec", item, toggle_on_off, generation)
-            _LOGGER.debug(
-                "[toggle_vpn_instance] IPsec connection toggle response for UUID %s: %s",
-                uuid,
-                success,
-            )
-            early_result = self._vpn_toggle_early_result(success, toggle_on_off)
-            if early_result is not None:
-                if early_result and item in self._vpn_pending_apply["ipsec"]:
-                    return await self._apply_vpn_service("ipsec")
-                return early_result
-            reconfigure_succeeded = await self._record_vpn_change_and_apply(
-                "ipsec",
-                item,
-            )
-            _LOGGER.debug(
-                "[toggle_vpn_instance] IPsec service reconfigure response after toggling UUID "
-                "%s: %s",
-                uuid,
-                reconfigure_succeeded,
-            )
-            return reconfigure_succeeded
-        return False
+            apply = ToggleStep.apply(IPSEC_SERVICE_RECONFIGURE_ENDPOINT)
+        else:
+            return None
+        return ToggleSpec(
+            "toggle_vpn_instance", target, (save,), (apply,), vpn=VpnInstance(vpn_type, item)
+        )
+
+    @staticmethod
+    def _wireguard_toggle_spec(
+        clients_servers: str, uuid: str, target: ToggleTarget
+    ) -> ToggleSpec | None:
+        """Describe a WireGuard Server or WireGuard Client Toggle.
+
+        Released firmware through 26.7.9 ignores the target in the toggle path and
+        flips, so an explicit target reads the item first and corrects a flip that
+        went the wrong way.
+
+        Args:
+            clients_servers (str): ``clients`` or ``servers``.
+            uuid (str): VPN instance UUID.
+            target (ToggleTarget): Requested target.
+
+        Returns:
+            ToggleSpec | None: The Toggle, or ``None`` for an unknown collection or an
+                empty UUID.
+        """
+        if not uuid:
+            return None
+        if clients_servers == "clients":
+            item_key = "client"
+            toggle_snake = WIREGUARD_CLIENT_TOGGLE_SNAKE_ENDPOINT_PREFIX
+            toggle_camel = WIREGUARD_CLIENT_TOGGLE_CAMELCASE_ENDPOINT_PREFIX
+            get_snake = WIREGUARD_CLIENT_GET_SNAKE_ENDPOINT_PREFIX
+            get_camel = WIREGUARD_CLIENT_GET_CAMELCASE_ENDPOINT_PREFIX
+        elif clients_servers == "servers":
+            item_key = "server"
+            toggle_snake = WIREGUARD_SERVER_TOGGLE_SNAKE_ENDPOINT_PREFIX
+            toggle_camel = WIREGUARD_SERVER_TOGGLE_CAMELCASE_ENDPOINT_PREFIX
+            get_snake = WIREGUARD_SERVER_GET_SNAKE_ENDPOINT_PREFIX
+            get_camel = WIREGUARD_SERVER_GET_CAMELCASE_ENDPOINT_PREFIX
+        else:
+            return None
+        suffix = target.endpoint_suffix()
+        save = ToggleStep.save(
+            f"{toggle_snake}{uuid}{suffix}",
+            TOGGLE_ITEM_RESULTS,
+            camel_case_endpoint=f"{toggle_camel}{uuid}{suffix}",
+        )
+        apply = ToggleStep.apply(WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT, response_key="result")
+        vpn = VpnInstance(
+            "wireguard",
+            (clients_servers, uuid),
+            state_read=ToggleStep.read(
+                f"{get_snake}{uuid}", item_key, camel_case_endpoint=f"{get_camel}{uuid}"
+            ),
+            corrects_wrong_direction=True,
+        )
+        return ToggleSpec("toggle_vpn_instance", target, (save,), (apply,), vpn=vpn)
 
     @staticmethod
     def _ipsec_flag(value: Any) -> bool:
