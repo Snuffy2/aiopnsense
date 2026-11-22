@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from functools import partial
 from types import MappingProxyType
 from typing import Any, Literal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 import warnings
 
 import pytest
@@ -2716,9 +2716,7 @@ _ISC_LEASES4 = "/api/dhcpv4/leases/search_lease"
 _ISC_LEASES6 = "/api/dhcpv6/leases/search_lease"
 
 
-async def _get_public_leases(
-    make_client: ClientType, routes: dict[str, object]
-) -> tuple[dict[str, Any], MagicMock]:
+async def _get_public_leases(make_client: ClientType, routes: dict[str, object]) -> dict[str, Any]:
     """Return ``get_dhcp_leases`` output for a router that serves only the given routes.
 
     Args:
@@ -2727,7 +2725,7 @@ async def _get_public_leases(
             path answers 404, so the matching DHCP backend looks not installed.
 
     Returns:
-        tuple[dict[str, Any], MagicMock]: The ``get_dhcp_leases`` result and the mocked session.
+        dict[str, Any]: The ``get_dhcp_leases`` result.
     """
     client, session = make_mock_session_client(make_client)
     client._get = AsyncMock(side_effect=client._do_get)
@@ -2750,7 +2748,7 @@ async def _get_public_leases(
 
     session.get.side_effect = respond
     try:
-        return await client.get_dhcp_leases(opnsense_tz=_LEASE_ROUTER_TZ), session
+        return await client.get_dhcp_leases(opnsense_tz=_LEASE_ROUTER_TZ)
     finally:
         await client.async_close()
 
@@ -2856,7 +2854,7 @@ async def test_get_dhcp_leases_kea_row_rules(
     if reservation_rows is not None:
         routes[_KEA_RESERVATIONS] = {"rows": reservation_rows}
 
-    result, _session = await _get_public_leases(make_client, routes)
+    result = await _get_public_leases(make_client, routes)
     leases = _leases_by_address(result)
 
     def expected(address: str, mac: str, **fields: object) -> dict[str, Any]:
@@ -2930,7 +2928,7 @@ async def test_get_dhcp_leases_kea_dhcpv6_rows_without_mac(make_client: ClientTy
         {"if_name": "lan", "state": "1", "address": "2001:db8::2", "is_reserved": "0"},
     ]
 
-    result, _session = await _get_public_leases(make_client, {_KEA_LEASES6: {"rows": rows}})
+    result = await _get_public_leases(make_client, {_KEA_LEASES6: {"rows": rows}})
 
     assert _leases_by_address(result) == {
         "2001:db8::1": {
@@ -2970,7 +2968,7 @@ async def test_get_dhcp_leases_dnsmasq_row_rules(make_client: ClientType) -> Non
         {**base, "address": "192.0.2.4", "if_name": "lan", "is_reserved": ["x"], "expire": 10**40},
     ]
 
-    result, _session = await _get_public_leases(make_client, {_DNSMASQ_LEASES: {"rows": rows}})
+    result = await _get_public_leases(make_client, {_DNSMASQ_LEASES: {"rows": rows}})
 
     assert len([lease for lease in result["leases"]["lan"] if lease["address"] == "192.0.2.1"]) == 1
     assert _leases_by_address(result) == {
@@ -3046,7 +3044,7 @@ async def test_get_dhcp_leases_isc_row_rules(
         None,
     ]
 
-    result, _session = await _get_public_leases(make_client, {path: {"rows": rows}})
+    result = await _get_public_leases(make_client, {path: {"rows": rows}})
 
     assert _leases_by_address(result) == {
         # ISC does not strip dots or filter "*", does not copy client_id or reserved_by,

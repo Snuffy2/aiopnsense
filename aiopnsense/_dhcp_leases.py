@@ -19,9 +19,10 @@ The backends differ on purpose in these ways. Keep them unless a change says oth
   passes the row's ``type`` through.
 - Identity fields: Kea and dnsmasq copy ``client_id`` and ``reserved_by``; Kea also copies
   ``duid``; ISC copies none of them.
-- Expiry: Kea and dnsmasq read epoch seconds from ``expire``, and keep a lease whose value is
-  missing, not an integer or outside the platform datetime range, reporting the raw value; ISC
-  reads ``ends`` in the Router timezone and drops a row whose ``ends`` cannot be parsed.
+- Expiry: Kea and dnsmasq read epoch seconds from ``expire`` and report the raw value when it
+  cannot be converted to a nonzero integer, or timestamp conversion returns None or raises
+  ``OverflowError`` or ``OSError``; ISC reads ``ends`` in the Router timezone and drops a row
+  whose ``ends`` cannot be parsed.
 - MAC: a value that is not a non-empty string is reported as None.
 """
 
@@ -129,22 +130,6 @@ def _copy_identity_fields(lease: dict[str, Any], row: Mapping[str, Any]) -> None
         lease["reserved_by"] = list(raw_reserved)
 
 
-def _epoch_to_datetime(expiration: int | None) -> datetime | None:
-    """Convert a DHCP expiration timestamp without propagating platform overflow.
-
-    Args:
-        expiration (int | None): Parsed DHCP expiration timestamp in epoch seconds.
-
-    Returns:
-        datetime | None: Converted expiration, or ``None`` when the timestamp is outside the
-            platform-supported range.
-    """
-    try:
-        return timestamp_to_datetime(expiration)
-    except OverflowError, OSError:
-        return None
-
-
 def _read_if_name(row: Mapping[str, Any], keys: tuple[str, ...]) -> object:
     """Return the interface identifier of a row.
 
@@ -246,14 +231,18 @@ def _read_epoch_expiry(
 
     Returns:
         tuple[bool, object]: Whether the lease is still live and the value to report as
-            ``expires``. A missing, falsy or non-integer ``expire`` is live with the raw value,
-            as is a timestamp outside the platform datetime range; a past timestamp is not live.
+            ``expires``. The raw value is retained when ``expire`` cannot be converted to a
+            nonzero integer, or timestamp conversion returns None or raises ``OverflowError``
+            or ``OSError``; a past timestamp is not live.
     """
     raw_expire = row.get("expire")
     expiration = try_to_int(raw_expire)
     if not expiration:
         return True, raw_expire
-    expiration_datetime = _epoch_to_datetime(expiration)
+    try:
+        expiration_datetime = timestamp_to_datetime(expiration)
+    except OverflowError, OSError:
+        expiration_datetime = None
     if expiration_datetime is None:
         return True, raw_expire
     return expiration_datetime >= now, expiration_datetime
