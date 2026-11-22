@@ -251,9 +251,10 @@ class FirmwareMixin(AiopnsenseClientProtocol):
     ) -> MutableMapping[str, Any]:
         """Return firmware status and trigger a refresh when cached data is stale.
 
-        One client requests at most one automatic check per hour, even when the
-        status still needs a refresh. A verified ``install_firmware`` ends the
-        cooldown so the next call can refresh the installed state.
+        One client requests at most one acknowledged automatic check per hour, even
+        when the status still needs a refresh. Dispatching a firmware update or
+        upgrade, through ``install_firmware`` or the deprecated ``upgrade_firmware``,
+        ends the cooldown so the next call can refresh the installed state.
 
         Args:
             check_for_updates (bool): Allow automatic refresh checks when idle.
@@ -328,27 +329,42 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             # Serialize our check dispatch with install activation. The server's
             # lock is also shared with checks from other clients/the web GUI.
             async with self._firmware_action_lock:
-                requested_at = self._firmware_check_requested_at
-                cooling_down = (
-                    requested_at is not None
-                    and monotonic() - requested_at < FIRMWARE_CHECK_COOLDOWN_SECONDS
-                )
-                if cooling_down:
-                    _LOGGER.debug("Skipping firmware check during cooldown")
-                elif not self._firmware_install_active:
-                    running = await self._safe_dict_get(FIRMWARE_RUNNING_ENDPOINT)
-                    if running.get("status") == "ready":
-                        _LOGGER.info("Triggering firmware check")
-                        # A check cannot install firmware. If the cache is already
-                        # empty, let a version read in progress finish filling it.
-                        if self._firmware_version is not None:
+                if not self._firmware_install_active:
+                    requested_at = self._firmware_check_requested_at
+                    if requested_at is not None and (
+                        monotonic() - requested_at < FIRMWARE_CHECK_COOLDOWN_SECONDS
+                    ):
+                        _LOGGER.debug("Skipping firmware check during cooldown")
+                        # A check would otherwise have refreshed the cached version after
+                        # an upgrade made outside this client. Only a comparable version
+                        # clears the cache, so a non-SemVer status does not clear it on
+                        # every poll.
+                        if (
+                            self._firmware_version is not None
+                            and isinstance(product_version, str)
+                            and product_version != self._firmware_version
+                            and firmware_is_at_least(trim_firmware_suffix(product_version), "0")
+                            is not None
+                        ):
                             self._record_firmware_version(None)
-                        # Start the cooldown before dispatch: a failed or cancelled
-                        # POST may still have started a check on the Router.
-                        self._firmware_check_requested_at = monotonic()
-                        # Do not queue this mutation: a cancelled queue caller
-                        # can leave a CHECK that runs after the action lock releases.
-                        await self._do_post(FIRMWARE_CHECK_ENDPOINT)
+                    else:
+                        running = await self._safe_dict_get(FIRMWARE_RUNNING_ENDPOINT)
+                        if running.get("status") == "ready":
+                            _LOGGER.info("Triggering firmware check")
+                            # A check cannot install firmware. If the cache is already
+                            # empty, let a version read in progress finish filling it.
+                            if self._firmware_version is not None:
+                                self._record_firmware_version(None)
+                            # Do not queue this mutation: a cancelled queue caller
+                            # can leave a CHECK that runs after the action lock releases.
+                            response = await self._do_post(FIRMWARE_CHECK_ENDPOINT)
+                            # Only an acknowledged check starts the cooldown. A failed,
+                            # rejected or cancelled POST leaves the next poll free to retry.
+                            if (
+                                isinstance(response, MutableMapping)
+                                and response.get("status") == "ok"
+                            ):
+                                self._firmware_check_requested_at = monotonic()
 
         return status
 
@@ -404,7 +420,8 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         The action is dispatched exactly once. Transport ambiguity never causes
         a retry. A new action log, terminal state, idle server and installed
         target version must agree before this method returns. Rebooting updates
-        additionally require an observed outage followed by reconnection.
+        additionally require an observed outage followed by reconnection. Dispatch
+        ends the automatic check cooldown, whatever the outcome.
 
         Args:
             type (str): ``update`` for a minor update or ``upgrade`` for a major one.
@@ -450,6 +467,8 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                     baseline_log = baseline.get("log", "")
                     if not isinstance(baseline_log, str):
                         raise OPNsenseError("Malformed pre-install firmware log")
+                    # Dispatch flushes the Router's availability data, so the next poll may check again.
+                    self._firmware_check_requested_at = None
                     try:
                         response = await self._firmware_request(
                             f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}", post=True
@@ -466,8 +485,6 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 await self._observe_firmware_install(
                     type, target_version, baseline_log, poll_interval
                 )
-            # The update flushed the Router's availability data, so allow a fresh check.
-            self._firmware_check_requested_at = None
         except TimeoutError as err:
             raise OPNsenseError("Firmware installation deadline exceeded") from err
         finally:
@@ -623,6 +640,8 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 if self._firmware_install_active:
                     raise OPNsenseError("A firmware installation is already active on this client")
                 self._record_firmware_version(None)
+                # Dispatch flushes the Router's availability data, so the next poll may check again.
+                self._firmware_check_requested_at = None
                 response = await self._do_post(
                     f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}", caller="upgrade_firmware"
                 )
