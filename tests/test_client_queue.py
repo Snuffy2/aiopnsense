@@ -1517,11 +1517,7 @@ async def test_cancelled_firewall_rule_toggle_skips_queued_post(
 
     blocked_response = FakeResponse()
     blocked_response.json = AsyncMock(side_effect=blocked_json)
-    session.get.side_effect = [
-        FakeResponse(),  # Endpoint availability probe.
-        blocked_response,
-        FakeResponse(json_payload={"status": "done"}),
-    ]
+    session.get.return_value = blocked_response
     save_response = FakeResponse()
     save_response.json = AsyncMock(side_effect=blocked_save_json)
     session.post.return_value = save_response
@@ -1553,6 +1549,7 @@ async def test_cancelled_firewall_rule_toggle_skips_queued_post(
         release_save.set()
         release_get.set()
         assert await asyncio.wait_for(read, timeout=3) == {"status": "running"}
+        session.get.return_value = FakeResponse(json_payload={"status": "done"})
         assert await asyncio.wait_for(client.upgrade_status(), timeout=3) == {"status": "done"}
         if cancellation_phase == "queued-save":
             session.post.assert_not_called()
