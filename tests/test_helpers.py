@@ -141,6 +141,58 @@ def test_trim_firmware_suffix_handles_empty_and_suffixed_versions(
 
 
 @pytest.mark.parametrize(
+    ("firmware_version", "minimum_version", "expected"),
+    [
+        pytest.param("25.1", "25.1", True, id="identical"),
+        pytest.param("25.1.0", "25.1", True, id="trailing-zero-on-firmware"),
+        pytest.param("25.1", "25.1.0", True, id="trailing-zero-on-minimum"),
+        pytest.param("25.1.0", "25.1.0.0", True, id="different-trailing-zero-counts"),
+        pytest.param("25.1.1", "25.1", True, id="newer-patch"),
+        pytest.param("25.1", "25.1.1", False, id="older-than-patch-minimum"),
+        pytest.param("25.1.0", "25.1.1", False, id="zero-padded-older-than-patch-minimum"),
+        pytest.param("25.0", "25.1", False, id="older-minor"),
+        pytest.param("25.0.0", "25.1", False, id="zero-padded-older-minor"),
+        pytest.param("26.1.1_3", "26.1.1", True, id="build-suffix-trimmed"),
+        pytest.param("25.1.0_2", "25.1", True, id="build-suffix-with-trailing-zero"),
+        pytest.param("26.1.1_3", "26.1.2", False, id="build-suffix-older-patch"),
+    ],
+)
+def test_firmware_is_at_least_ignores_trailing_zero_components(
+    firmware_version: str, minimum_version: str, expected: bool
+) -> None:
+    """Treat versions differing only by trailing zero components as equal.
+
+    Args:
+        firmware_version (str): Firmware version reported by the Router.
+        minimum_version (str): Minimum firmware version to satisfy.
+        expected (bool): Whether the firmware satisfies the minimum.
+    """
+    assert aiopnsense_helpers.firmware_is_at_least(firmware_version, minimum_version) is expected
+
+
+@pytest.mark.parametrize(
+    ("firmware_version", "minimum_version"),
+    [
+        pytest.param(None, "25.1", id="none-firmware"),
+        pytest.param("", "25.1", id="empty-firmware"),
+        pytest.param("   ", "25.1", id="blank-firmware"),
+        pytest.param("not-a-version", "25.1", id="unparsable-firmware"),
+        pytest.param("25.1", "not-a-version", id="unparsable-minimum"),
+    ],
+)
+def test_firmware_is_at_least_returns_none_for_uncomparable_versions(
+    firmware_version: str | None, minimum_version: str
+) -> None:
+    """Return ``None`` when the firmware or minimum cannot be compared.
+
+    Args:
+        firmware_version (str | None): Firmware version reported by the Router.
+        minimum_version (str): Minimum firmware version to satisfy.
+    """
+    assert aiopnsense_helpers.firmware_is_at_least(firmware_version, minimum_version) is None
+
+
+@pytest.mark.parametrize(
     ("firmware_version", "comparison_version", "expected"),
     [
         ("26.7.6", "26.7.6_3", False),
