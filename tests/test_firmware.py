@@ -207,6 +207,61 @@ async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("delayed_stage", ["probe", "payload"])
+async def test_validation_reads_firmware_across_an_update_check(
+    scripted_router: tuple[aiopnsense.OPNsenseClient, ScriptedRouter],
+    monkeypatch: pytest.MonkeyPatch,
+    delayed_stage: str,
+) -> None:
+    """Keep validation working when a routine check clears the firmware cache.
+
+    Args:
+        scripted_router (tuple[aiopnsense.OPNsenseClient, ScriptedRouter]): Client and Router.
+        monkeypatch (pytest.MonkeyPatch): Replaces the selected firmware transport stage.
+        delayed_stage (str): Whether to pause the availability probe or the version read.
+    """
+    client, router = scripted_router
+    router.firmware = "26.7.8"
+    router.endpoints[firmware_module.FIRMWARE_RUNNING_ENDPOINT] = {"status": "ready"}
+    lookup_started = asyncio.Event()
+    release_lookup = asyncio.Event()
+    method_name = "_is_get_endpoint_available" if delayed_stage == "probe" else "_get"
+    request = getattr(client, method_name)
+
+    async def delay_first_status_request(path: str, **kwargs: Any) -> Any:
+        """Hold the first status request at the selected stage.
+
+        Args:
+            path (str): Requested endpoint.
+            kwargs (Any): Options passed to the transport.
+
+        Returns:
+            Any: The scripted transport result.
+        """
+        response = await request(path, **kwargs)
+        if path == firmware_module.FIRMWARE_STATUS_ENDPOINT and not lookup_started.is_set():
+            lookup_started.set()
+            await release_lookup.wait()
+        return response
+
+    monkeypatch.setattr(client, method_name, delay_first_status_request)
+    validation = asyncio.get_running_loop().create_task(client.validate(require_device_id=False))
+    try:
+        async with asyncio.timeout(1):
+            await lookup_started.wait()
+            await client.get_firmware_update_info()
+            assert router.post_paths == [firmware_module.FIRMWARE_CHECK_ENDPOINT]
+            release_lookup.set()
+            await validation
+    finally:
+        if not validation.done():
+            validation.cancel()
+        await asyncio.gather(validation, return_exceptions=True)
+
+    assert await client.get_host_firmware_version() == "26.7.8"
+
+
+@pytest.mark.asyncio
 async def test_delayed_firmware_read_cannot_overwrite_verified_install(
     install_client: Callable[..., Any],
 ) -> None:

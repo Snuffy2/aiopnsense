@@ -196,11 +196,22 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("Firmware status endpoint unavailable")
             return self._record_firmware_version(None, observation_id=probe_id)
 
-        if probe_id < self._firmware_invalidation_id:
+        if probe_id < self._firmware_invalidation_id and self._firmware_version is not None:
             return self._firmware_version
-        self._firmware_observation_id += 1
-        payload_id = self._firmware_observation_id
-        firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
+
+        # If a check clears the cache during the read, discard that payload and
+        # try once more. A verified version can satisfy the lookup immediately.
+        for _ in range(2):
+            self._firmware_observation_id += 1
+            payload_id = self._firmware_observation_id
+            firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
+            if payload_id > self._firmware_invalidation_id:
+                break
+            if self._firmware_version is not None:
+                return self._firmware_version
+        else:
+            return None
+
         raw_firmware = dict_get(firmware_info, "product.product_version")
         firmware: str | None = raw_firmware if isinstance(raw_firmware, str) else None
         comparable_firmware = trim_firmware_suffix(firmware)
