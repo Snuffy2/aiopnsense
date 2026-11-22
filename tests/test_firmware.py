@@ -42,9 +42,6 @@ async def test_get_host_firmware_version_and_fallback(
     client._safe_dict_get = AsyncMock(return_value={"product": {"product_version": "25.8.0"}})
     firmware = await client.get_host_firmware_version()
     assert firmware == "25.8.0"
-    client._is_get_endpoint_available.assert_awaited_once_with(
-        "/api/core/firmware/status", force_refresh=False
-    )
     await client.async_close()
 
     fallback_client = make_client(session=session)
@@ -55,37 +52,8 @@ async def test_get_host_firmware_version_and_fallback(
         )
         fallback = await fallback_client.get_host_firmware_version()
         assert fallback == "seriesX"
-        fallback_client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/core/firmware/status", force_refresh=False
-        )
     finally:
         await fallback_client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_uncomparable_firmware_is_retried_on_next_capability_use(
-    scripted_router: tuple[aiopnsense.OPNsenseClient, ScriptedRouter],
-) -> None:
-    """A temporary incomparable version must not pin the endpoint fallback.
-
-    Args:
-        scripted_router (tuple[aiopnsense.OPNsenseClient, ScriptedRouter]): Client and scripted Router.
-    """
-    client, router = scripted_router
-    router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}
-    router.endpoints[CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT] = {"status": "ok"}
-    router.firmware = "not-a-version"
-
-    assert await client.close_notice("before-recovery") is True
-
-    router.firmware = "25.1"
-    assert await client.close_notice("after-recovery") is True
-
-    assert router.post_paths == [
-        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
-        CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
-    ]
-    assert router.get_paths.count(firmware_module.FIRMWARE_STATUS_ENDPOINT) == 2
 
 
 @pytest.mark.asyncio

@@ -1079,16 +1079,22 @@ async def test_public_call_uses_endpoint_style_for_known_firmware(
     assert router.post_paths == [expected_path]
 
 
+@pytest.mark.parametrize(
+    "firmware",
+    [pytest.param(None, id="missing"), pytest.param("not-a-version", id="uncomparable")],
+)
 async def test_unknown_firmware_does_not_pin_endpoint_style(
     dismiss_router: tuple[Any, ScriptedRouter],
+    firmware: str | None,
 ) -> None:
     """Verify a first call with unknown firmware does not fix the endpoint style.
 
     Args:
         dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+        firmware (str | None): Initial firmware version reported by the Router.
     """
     client, router = dismiss_router
-    router.firmware = None
+    router.firmware = firmware
 
     assert await client.close_notice("first") is True
     router.firmware = "25.1"
