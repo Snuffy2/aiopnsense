@@ -847,19 +847,23 @@ async def test_get_openvpn_routes_request_failure(
         client._is_get_endpoint_available = AsyncMock(return_value=True)
 
         async def fake_get(path: str) -> dict[str, Any]:
-            """Fail the routes request and return empty payloads otherwise.
+            """Fail routes and return a connected server's inventory otherwise.
 
             Args:
                 path (str): API endpoint requested by the getter.
 
             Returns:
-                dict[str, Any]: Empty row payload for non-failing endpoints.
+                dict[str, Any]: Session or instance rows for other endpoints.
 
             Raises:
                 OPNsenseConnectionError: For the routes endpoint.
             """
             if path == aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT:
                 raise OPNsenseConnectionError("routes unavailable")
+            if path == aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT:
+                return {"rows": [{"type": "server", "id": "server", "status": "connected"}]}
+            if path == aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT:
+                return {"rows": [{"role": "server", "uuid": "server", "enabled": "1"}]}
             return {"rows": []}
 
         client._safe_dict_get = AsyncMock(side_effect=fake_get)
@@ -869,7 +873,12 @@ async def test_get_openvpn_routes_request_failure(
             with pytest.raises(OPNsenseConnectionError):
                 await client.get_openvpn()
         else:
-            assert await client.get_openvpn() == {"servers": {}, "clients": {}}
+            result = await client.get_openvpn()
+            assert result is not None
+            server = result["servers"]["server"]
+            assert server["status"] == "up"
+            assert "clients" not in server
+            assert "connected_clients" not in server
     finally:
         await client.async_close()
 

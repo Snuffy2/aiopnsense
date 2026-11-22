@@ -165,18 +165,27 @@ def test_log_errors_preserves_wrapped_metadata() -> None:
 @pytest.mark.parametrize(
     "timeout_error",
     [
-        pytest.param(TimeoutError("boom"), id="timeout-error"),
-        pytest.param(aiohttp.ServerTimeoutError("srv"), id="server-timeout-error"),
+        pytest.param(
+            TimeoutError("request timed out at https://alice:secret@example.invalid"),
+            id="timeout-error",
+        ),
+        pytest.param(
+            aiohttp.ServerTimeoutError("request timed out at https://alice:secret@example.invalid"),
+            id="server-timeout-error",
+        ),
     ],
 )
 async def test_log_errors_timeout_re_raise_and_suppress(
-    make_client: ClientType, timeout_error: TimeoutError
+    make_client: ClientType,
+    timeout_error: TimeoutError,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Verify ``_log_errors`` maps or suppresses timeout-family errors by configuration.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         timeout_error (TimeoutError): Timeout-family error raised by the wrapped coroutine.
+        caplog (pytest.LogCaptureFixture): Fixture for inspecting timeout log records.
 
     Returns:
         None: This test validates timeout error propagation behavior.
@@ -202,15 +211,31 @@ async def test_log_errors_timeout_re_raise_and_suppress(
         # wrap the coroutine with the decorator
         decorated = aiopnsense_error_policy._log_errors(raising_timeout)
 
-        # When error throwing is enabled we expect a public timeout error.
+        # When error throwing is enabled we expect a public timeout error and a
+        # warning whose rendered exception details redact URL credentials.
         client._throw_errors = True
-        with pytest.raises(OPNsenseTimeoutError, match=str(timeout_error)):
+        with (
+            caplog.at_level(logging.WARNING, logger="aiopnsense"),
+            pytest.raises(OPNsenseTimeoutError, match=str(timeout_error)),
+        ):
             await decorated(client)
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelno == logging.WARNING
+        assert "https://<redacted>:<redacted>@example.invalid" in caplog.text
+        assert "alice" not in caplog.text
+        assert "secret" not in caplog.text
 
-        # When error throwing is disabled the decorator suppresses ``TimeoutError``.
+        # Suppressed timeout failures use the same safe warning path.
+        caplog.clear()
         client._throw_errors = False
-        res = await decorated(client)
+        with caplog.at_level(logging.WARNING, logger="aiopnsense"):
+            res = await decorated(client)
         assert res is None
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelno == logging.WARNING
+        assert "https://<redacted>:<redacted>@example.invalid" in caplog.text
+        assert "alice" not in caplog.text
+        assert "secret" not in caplog.text
     finally:
         await client.async_close()
 

@@ -65,7 +65,9 @@ def _handle_error(
         if log_level is not None:
             _LOGGER.log(log_level, "Error in %s. %s", name, _ExceptionLogDetails(error))
         elif isinstance(error, (TimeoutError, aiohttp.ServerTimeoutError, OPNsenseTimeoutError)):
-            _LOGGER.warning("Timeout Error in %s. Will retry. %s", name, error)
+            _LOGGER.warning(
+                "Timeout Error in %s. Will retry. %s", name, _ExceptionLogDetails(error)
+            )
         else:
             _LOGGER.error("Error in %s. %s", name, _ExceptionLogDetails(error))
     if not client._throw_errors:
