@@ -30,6 +30,26 @@ _PERMISSION_GUIDANCE = (
 )
 
 
+def _stream_auth_status(phase: str, error: OPNsenseError) -> int | None:
+    """Distinguish stream authentication and privilege failures from other failures.
+
+    Args:
+        phase (str): Request phase used for outage suppression.
+        error (OPNsenseError): Classified request failure.
+
+    Returns:
+        int | None: The authentication or privilege status for a stream failure,
+            or ``None`` for the standard outage classification.
+    """
+    if (
+        phase == STREAM_PHASE
+        and isinstance(error, OPNsenseConnectionError)
+        and error.status in (401, 403)
+    ):
+        return error.status
+    return None
+
+
 def _report_http_failure(
     client: _RequestLoggingClient,
     *,
@@ -78,6 +98,7 @@ def _report_http_failure(
             *origin_args,
             url,
             error=logged_error,
+            failure_status=_stream_auth_status(phase, error),
         )
     elif phase == PROBE_PHASE:
         _log_request_failure(
@@ -106,6 +127,7 @@ def _report_http_failure(
             status,
             reason,
             error=logged_error,
+            failure_status=_stream_auth_status(phase, error),
         )
     return error
 
@@ -170,5 +192,6 @@ def _report_transport_failure(
             type(exc).__name__,
             _redacted_exception_message(exc),
             error=logged_error,
+            failure_status=_stream_auth_status(phase, error),
         )
     return error

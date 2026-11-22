@@ -21,7 +21,7 @@ _REQUEST_ERROR_LOGGED_ATTRIBUTE = "_aiopnsense_request_error_logged"
 class _RequestLoggingClient(Protocol):
     """Client state required by request outage logging helpers."""
 
-    _request_outages: set[tuple[str, str, str]]
+    _request_outages: dict[tuple[str, str, str], int | None]
 
 
 class _ExceptionLogDetails:
@@ -79,8 +79,9 @@ def _log_request_failure(
     message: str,
     *args: Any,
     error: BaseException | None = None,
+    failure_status: int | None = None,
 ) -> None:
-    """Log one request failure per client, method, path, and request phase.
+    """Log a request failure unless it repeats the active outage classification.
 
     Args:
         client (_RequestLoggingClient): Client holding request outage state.
@@ -92,12 +93,14 @@ def _log_request_failure(
         message (str): Failure message format.
         args (Any): Values for the failure message format.
         error (BaseException | None): Public exception that will be raised, if any.
+        failure_status (int | None): Status that distinguishes a failure from
+            other failures during the same outage.
     """
     key = (method.upper(), path, phase)
-    if key in client._request_outages:
+    if key in client._request_outages and client._request_outages[key] == failure_status:
         _LOGGER.debug(message, *args)
     else:
-        client._request_outages.add(key)
+        client._request_outages[key] = failure_status
         _LOGGER.log(level, message, *args)
     if error is not None:
         _mark_request_error_logged(error)
@@ -120,7 +123,7 @@ def _log_request_recovery(
     """
     key = (method.upper(), path, phase)
     if key in client._request_outages:
-        client._request_outages.remove(key)
+        del client._request_outages[key]
         _LOGGER.info("%s %s recovered for %s", method.upper(), phase, path)
 
 

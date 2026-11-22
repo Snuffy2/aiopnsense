@@ -1413,6 +1413,46 @@ async def test_stream_outage_does_not_suppress_data_call_failure_on_same_path(
         await client.async_close()
 
 
+@pytest.mark.parametrize("path_name", ["stream_once", "stream_events"])
+@pytest.mark.parametrize(("initial_failure", "auth_status"), [(500, 401), (TimeoutError(), 403)])
+@pytest.mark.asyncio
+async def test_stream_outage_reports_new_auth_failure_once(
+    path_name: str,
+    initial_failure: int | TimeoutError,
+    auth_status: int,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Report an authentication or privilege failure during a stream outage.
+
+    Args:
+        path_name (str): Streaming request path to exercise.
+        initial_failure (int | TimeoutError): Transient HTTP or transport failure.
+        auth_status (int): Authentication or authorization response status.
+        make_client (MakeClientFactory): Fixture factory returning clients.
+        caplog (pytest.LogCaptureFixture): Fixture capturing client logs.
+    """
+    first_response = (
+        FakeResponse(status=initial_failure, ok=False)
+        if isinstance(initial_failure, int)
+        else initial_failure
+    )
+    auth_failure = FakeResponse(status=auth_status, ok=False)
+    session = MagicMock()
+    session.get.side_effect = [first_response, auth_failure, auth_failure]
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.ERROR, logger="aiopnsense"):
+            for expected_count in (1, 1, 0):
+                caplog.clear()
+                await _call_ladder_path(client, path_name)
+                assert [record.levelno for record in caplog.records] == [
+                    logging.ERROR
+                ] * expected_count
+    finally:
+        await client.async_close()
+
+
 class _StalledChunks:
     """Async chunk iterator whose first read times out."""
 

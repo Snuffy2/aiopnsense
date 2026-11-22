@@ -22,7 +22,7 @@ class ClientEndpointMixin:
         _endpoint_cache_ttl_seconds: int
         _endpoint_checked_at: dict[str, datetime]
         _endpoint_permission_denied: set[str]
-        _request_outages: set[tuple[str, str, str]]
+        _request_outages: dict[tuple[str, str, str], int | None]
         _unsafe_post_endpoint_probe_paths: frozenset[str] | set[str]
         _unsafe_post_endpoint_probe_prefixes: tuple[str, ...]
         _unsafe_post_endpoint_probe_segments: frozenset[str] | set[str]

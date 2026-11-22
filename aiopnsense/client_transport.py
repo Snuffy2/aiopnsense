@@ -26,7 +26,7 @@ class ClientTransportMixin:
 
     if TYPE_CHECKING:
         _password: str
-        _request_outages: set[tuple[str, str, str]]
+        _request_outages: dict[tuple[str, str, str], int | None]
         _rest_api_query_count: int
         _session: aiohttp.ClientSession
         _throw_errors: bool
