@@ -207,18 +207,23 @@ async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("delayed_stage", ["probe", "payload"])
-async def test_validation_reads_firmware_across_an_update_check(
+@pytest.mark.parametrize(
+    ("delayed_stage", "interruption"),
+    [("probe", "check"), ("payload", "check"), ("payload", "empty-status")],
+)
+async def test_validation_reads_firmware_across_an_empty_cache_observation(
     scripted_router: tuple[aiopnsense.OPNsenseClient, ScriptedRouter],
     monkeypatch: pytest.MonkeyPatch,
     delayed_stage: str,
+    interruption: str,
 ) -> None:
-    """Keep validation working when a routine check clears the firmware cache.
+    """Keep validation working when a concurrent lookup leaves the cache empty.
 
     Args:
         scripted_router (tuple[aiopnsense.OPNsenseClient, ScriptedRouter]): Client and Router.
         monkeypatch (pytest.MonkeyPatch): Replaces the selected firmware transport stage.
         delayed_stage (str): Whether to pause the availability probe or the version read.
+        interruption (str): Whether a check or an empty status response wins the race.
     """
     client, router = scripted_router
     router.firmware = "26.7.8"
@@ -249,8 +254,13 @@ async def test_validation_reads_firmware_across_an_update_check(
     try:
         async with asyncio.timeout(1):
             await lookup_started.wait()
-            await client.get_firmware_update_info()
-            assert router.post_paths == [firmware_module.FIRMWARE_CHECK_ENDPOINT]
+            if interruption == "check":
+                await client.get_firmware_update_info()
+                assert router.post_paths == [firmware_module.FIRMWARE_CHECK_ENDPOINT]
+            else:
+                router.firmware = None
+                assert await client.get_host_firmware_version() is None
+                router.firmware = "26.7.8"
             release_lookup.set()
             await validation
     finally:

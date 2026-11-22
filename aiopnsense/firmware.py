@@ -199,13 +199,13 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         if probe_id < self._firmware_invalidation_id and self._firmware_version is not None:
             return self._firmware_version
 
-        # If a check clears the cache during the read, discard that payload and
-        # try once more. A verified version can satisfy the lookup immediately.
+        # A superseded read can use a newer cached version. If the newer
+        # observation left the cache empty, make one fresh read instead.
         for _ in range(2):
             self._firmware_observation_id += 1
             payload_id = self._firmware_observation_id
             firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
-            if payload_id > self._firmware_invalidation_id:
+            if payload_id > self._firmware_version_observation_id:
                 break
             if self._firmware_version is not None:
                 return self._firmware_version
