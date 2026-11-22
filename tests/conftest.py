@@ -468,7 +468,8 @@ class RouterRequest:
 class ScriptedRouter:
     """Router stand-in that replaces a client's ``_post`` and ``_get`` transport.
 
-    Replies are scripted per ``(method, path)``. An unscripted request is recorded and
+    The cancellation-aware queued POST that VPN Toggles use is answered from the same
+    script. Replies are scripted per ``(method, path)``. An unscripted request is recorded and
     answered with ``None``, which is what the transport returns for a failed request
     when ``throw_errors`` is off. A scripted exception is raised from the transport, as
     a failed request does when ``throw_errors`` is on.
@@ -509,6 +510,7 @@ class ScriptedRouter:
         client._post = self._post
         client._get = self._get
         client._is_get_endpoint_available = self._is_get_endpoint_available
+        client._queue_post_with_cancellation = self._post_with_cancellation
         return client
 
     async def _is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
@@ -566,6 +568,21 @@ class ScriptedRouter:
             MutableMapping[str, Any] | list | None: Scripted JSON body, or ``None``.
         """
         return await self._answer(RouterRequest("POST", path, payload))
+
+    async def _post_with_cancellation(
+        self, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> tuple[MutableMapping[str, Any] | list | None, None]:
+        """Answer a cancellation-aware POST (used by VPN Toggles) from the script.
+
+        Args:
+            path (str): API path.
+            payload (MutableMapping[str, Any] | None): Request body.
+
+        Returns:
+            tuple[MutableMapping[str, Any] | list | None, None]: Scripted JSON body, or
+                ``None``, and no caller cancellation.
+        """
+        return await self._post(path, payload), None
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
         """Answer a GET from the script.

@@ -1298,6 +1298,98 @@ async def test_wireguard_cancelled_dispatched_toggle_retains_ack_and_lock(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("vpn_type", "collection", "toggle", "apply", "apply_ok"),
+    [
+        pytest.param(
+            "openvpn",
+            "instances",
+            "/api/openvpn/instances/toggle/uuid/1",
+            "/api/openvpn/service/reconfigure",
+            {"result": "ok"},
+            id="openvpn",
+        ),
+        pytest.param(
+            "ipsec",
+            "connections",
+            "/api/ipsec/connections/toggle_connection/uuid/1",
+            "/api/ipsec/service/reconfigure",
+            {"status": "ok"},
+            id="ipsec",
+        ),
+    ],
+)
+async def test_cancelled_dispatched_vpn_save_is_applied_by_next_matching_toggle(
+    make_client: MakeClientFactory,
+    vpn_queue_tasks: VpnQueueTasks,
+    vpn_type: str,
+    collection: str,
+    toggle: str,
+    apply: str,
+    apply_ok: dict[str, object],
+) -> None:
+    """A caller cancelled after its save was dispatched waits, then re-raises.
+
+    The acknowledged save is tracked, so a later request for the same target, which
+    the Router reports as already matching, still applies the service.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
+        vpn_type (str): VPN service under test.
+        collection (str): Collection containing the instance.
+        toggle (str): Save endpoint for target ``on``.
+        apply (str): Service apply endpoint.
+        apply_ok (dict[str, object]): Confirmed apply reply.
+    """
+    client = make_client()
+    client._use_snake_case = True
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def post(path: str, *_request_args: object) -> dict[str, object]:
+        """Hold the first save until its caller has cancelled.
+
+        Args:
+            path (str): Requested endpoint.
+            *_request_args (object): Unused POST payload and caller.
+
+        Returns:
+            dict[str, object]: Router reply.
+        """
+        if path == apply:
+            return apply_ok
+        if not started.is_set():
+            started.set()
+            await release.wait()
+            return {"changed": True, "result": "Enabled"}
+        return {"changed": False, "result": "Enabled"}
+
+    client._do_post = AsyncMock(side_effect=post)
+    try:
+        cancelled = vpn_queue_tasks.start(
+            client.toggle_vpn_instance(vpn_type, collection, "uuid", "on")
+        )
+        await asyncio.wait_for(started.wait(), timeout=3)
+        cancelled.cancel()
+        await asyncio.sleep(0)
+        assert not cancelled.done()
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(cancelled, timeout=3)
+        assert [call.args[0] for call in client._do_post.await_args_list] == [toggle]
+
+        assert await client.toggle_vpn_instance(vpn_type, collection, "uuid", "on") is True
+        assert [call.args[0] for call in client._do_post.await_args_list] == [
+            toggle,
+            toggle,
+            apply,
+        ]
+    finally:
+        release.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("first_result", "retry_applies"),
     [
         pytest.param("ok", False, id="acknowledged"),

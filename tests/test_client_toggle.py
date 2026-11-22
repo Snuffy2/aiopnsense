@@ -12,6 +12,13 @@ from typing import Any
 import pytest
 
 from aiopnsense import OPNsenseClient
+from aiopnsense.client_toggle import (
+    TOGGLE_ITEM_RESULTS,
+    ToggleSpec,
+    ToggleStep,
+    ToggleTarget,
+    VpnInstance,
+)
 from aiopnsense.exceptions import OPNsenseError, OPNsenseInvalidArgument
 from tests.conftest import RouterReply, ScriptedRouter
 
@@ -70,6 +77,44 @@ TOGGLE_CASES: list[ToggleCase] = [
         },
         apply_path="/api/firewall/filter/apply",
         apply_ok={"status": "OK\n"},
+        apply_failed={"status": "failed"},
+    ),
+    ToggleCase(
+        name="vpn_openvpn",
+        toggle=lambda client, target: client.toggle_vpn_instance(
+            "openvpn", "instances", "uuid1", target
+        ),
+        save_paths={
+            "on": "/api/openvpn/instances/toggle/uuid1/1",
+            "off": "/api/openvpn/instances/toggle/uuid1/0",
+            None: "/api/openvpn/instances/toggle/uuid1",
+        },
+        save_ok={
+            "on": {"result": "Enabled", "changed": True},
+            "off": {"result": "Disabled", "changed": True},
+            None: {"result": "Disabled", "changed": True},
+        },
+        apply_path="/api/openvpn/service/reconfigure",
+        apply_ok={"result": "ok"},
+        apply_failed={"result": "failed"},
+    ),
+    ToggleCase(
+        name="vpn_ipsec",
+        toggle=lambda client, target: client.toggle_vpn_instance(
+            "ipsec", "connections", "uuid1", target
+        ),
+        save_paths={
+            "on": "/api/ipsec/connections/toggle_connection/uuid1/1",
+            "off": "/api/ipsec/connections/toggle_connection/uuid1/0",
+            None: "/api/ipsec/connections/toggle_connection/uuid1",
+        },
+        save_ok={
+            "on": {"result": "Enabled", "changed": True},
+            "off": {"result": "Disabled", "changed": True},
+            None: {"result": "Disabled", "changed": True},
+        },
+        apply_path="/api/ipsec/service/reconfigure",
+        apply_ok={"status": "ok"},
         apply_failed={"status": "failed"},
     ),
     ToggleCase(
@@ -290,6 +335,88 @@ async def test_toggle_apply_rule(
     client = scripted_router.client()
 
     assert await case.toggle(client, "on") is expected
+
+
+_VPN_CASE_PARAMS = [
+    pytest.param(case, id=case.name) for case in TOGGLE_CASES if case.name.startswith("vpn_")
+]
+
+
+@pytest.mark.parametrize("case", _VPN_CASE_PARAMS)
+async def test_vpn_toggle_save_in_wrong_state_returns_false_without_apply(
+    case: ToggleCase, scripted_router: ScriptedRouter
+) -> None:
+    """A VPN save that leaves the item in the other state fails and is not applied.
+
+    Args:
+        case (ToggleCase): VPN Toggle under test.
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    case.script(scripted_router, "on")
+    scripted_router.reply(case.save_paths["on"], {"result": "Disabled", "changed": True})
+    client = scripted_router.client()
+
+    assert await case.toggle(client, "on") is False
+    assert not scripted_router.requested(case.apply_path)
+
+
+@pytest.mark.parametrize(
+    ("vpn_type", "collection"),
+    [("pptp", "servers"), ("ipsec", "servers"), ("ipsec", "clients")],
+)
+async def test_vpn_toggle_unknown_type_or_collection_returns_false(
+    vpn_type: str, collection: str, scripted_router: ScriptedRouter
+) -> None:
+    """An unknown VPN type or collection returns ``False`` and sends nothing.
+
+    Args:
+        vpn_type (str): VPN type passed to the public method.
+        collection (str): Collection passed to the public method.
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    client = scripted_router.client()
+
+    assert await client.toggle_vpn_instance(vpn_type, collection, "uuid1", "on") is False
+    assert scripted_router.requests == []
+
+
+async def test_vpn_toggle_for_service_without_lock_returns_false(
+    scripted_router: ScriptedRouter,
+) -> None:
+    """The Toggle module refuses a VPN Toggle for a service it holds no lock for.
+
+    Args:
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    client = scripted_router.client()
+    spec = ToggleSpec(
+        "toggle_vpn_instance",
+        ToggleTarget.ON,
+        (ToggleStep.save("/api/pptp/toggle/uuid1/1", TOGGLE_ITEM_RESULTS),),
+        (ToggleStep.apply("/api/pptp/service/reconfigure"),),
+        vpn=VpnInstance("pptp", ("servers", "uuid1")),
+    )
+
+    assert await client._run_toggle(spec) is False
+    assert scripted_router.requests == []
+
+
+@pytest.mark.parametrize("case", _CASE_PARAMS)
+async def test_toggle_apply_rule_reads_the_endpoint_key(
+    case: ToggleCase, scripted_router: ScriptedRouter
+) -> None:
+    """Every Toggle applies the shared rule to its own apply endpoint's response key.
+
+    Args:
+        case (ToggleCase): Toggle under test.
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    (apply_key,) = case.apply_ok
+    case.script(scripted_router, "on")
+    scripted_router.reply(case.apply_path, {apply_key: " OK applied\n"})
+    client = scripted_router.client()
+
+    assert await case.toggle(client, "on") is True
 
 
 _ALIAS_SEARCH = "/api/firewall/alias/search_item"

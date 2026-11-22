@@ -2082,7 +2082,7 @@ def use_fake_vpn_api(client: OPNsenseClient, api: FakeVpnToggleApi) -> None:
     [
         pytest.param("0", "on", "1", 1, id="on"),
         pytest.param("1", "off", "0", 1, id="off"),
-        pytest.param("1", "maybe", "0", 1, id="unrecognized-flips"),
+        pytest.param("1", "toggle", "0", 1, id="toggle-flips"),
         pytest.param("1", "on", "1", 0, id="already-on"),
     ],
 )
