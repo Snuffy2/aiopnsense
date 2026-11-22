@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Callable, MutableMapping
 from dataclasses import FrozenInstanceError
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from functools import partial
 from types import MappingProxyType
 from typing import Any, Literal
@@ -446,41 +446,6 @@ async def test_keep_latest_leases_handles_list_values(make_client: ClientType) -
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("raw_reserved", "expected"),
-    [
-        ("1", True),
-        ("0", False),
-        (["hwaddr"], True),
-        ([], False),
-        (1, True),
-        (0, False),
-        (None, False),
-    ],
-)
-async def test_is_reserved_lease_handles_legacy_and_list_flags(
-    make_client: ClientType,
-    raw_reserved: object,
-    expected: bool,
-) -> None:
-    """Verify reserved lease detection supports legacy and new value shapes.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        raw_reserved (object): Raw ``is_reserved`` value from API payload.
-        expected (bool): Expected reserved/static detection result.
-
-    Returns:
-        None: This test validates reserved lease coercion behavior.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        assert client._is_reserved_lease(raw_reserved) is expected
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_normalize_lease_key_value_handles_nested_structures(make_client: ClientType) -> None:
     """Verify lease key normalization converts nested structures into hashable tuples.
 
@@ -505,31 +470,6 @@ async def test_normalize_lease_key_value_handles_nested_structures(make_client: 
         a_dict = dict(as_dict["a"])
         assert a_dict["list"] == (3, 4)
         assert a_dict["set"] == ("x", "y")
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_copy_lease_identity_fields_sets_reserved_by_only_for_non_empty_list(
-    make_client: ClientType,
-) -> None:
-    """Verify ``reserved_by`` is copied only for non-empty reservation lists.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates lease identity metadata normalization.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        lease: dict[str, object] = {}
-
-        client._copy_lease_identity_fields(lease, {"is_reserved": []})
-        assert "reserved_by" not in lease
-
-        client._copy_lease_identity_fields(lease, {"is_reserved": ["host1"]})
-        assert lease["reserved_by"] == ["host1"]
     finally:
         await client.async_close()
 
@@ -2765,3 +2705,353 @@ async def test_raw_neighbor_getters_warn_and_preserve_results(
     with pytest.warns(DeprecationWarning, match=f"Use get_{family}_entries"):
         result = await getattr(client, f"get_{family}_table")()
     assert result == rows
+
+
+_LEASE_ROUTER_TZ = timezone(timedelta(hours=-5))
+_KEA_LEASES4 = "/api/kea/leases4/search"
+_KEA_LEASES6 = "/api/kea/leases6/search"
+_KEA_RESERVATIONS = "/api/kea/dhcpv4/search_reservation"
+_DNSMASQ_LEASES = "/api/dnsmasq/leases/search"
+_ISC_LEASES4 = "/api/dhcpv4/leases/search_lease"
+_ISC_LEASES6 = "/api/dhcpv6/leases/search_lease"
+
+
+async def _get_public_leases(make_client: ClientType, routes: dict[str, object]) -> dict[str, Any]:
+    """Return ``get_dhcp_leases`` output for a router that serves only the given routes.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        routes (dict[str, object]): JSON payload served for each API path. Every other
+            path answers 404, so the matching DHCP backend looks not installed.
+
+    Returns:
+        dict[str, Any]: The ``get_dhcp_leases`` result.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._get = AsyncMock(side_effect=client._do_get)
+    client._use_snake_case = True
+
+    def respond(url: str, **_kwargs: object) -> FakeResponse:
+        """Serve the payload registered for the requested path, or a 404.
+
+        Args:
+            url (str): Full request URL.
+            **_kwargs (object): Ignored request options.
+
+        Returns:
+            FakeResponse: Fake HTTP response for the path.
+        """
+        path = url.removeprefix("http://localhost")
+        if path in routes:
+            return FakeResponse(json_payload=routes[path])
+        return FakeResponse(status=404, ok=False)
+
+    session.get.side_effect = respond
+    try:
+        return await client.get_dhcp_leases(opnsense_tz=_LEASE_ROUTER_TZ)
+    finally:
+        await client.async_close()
+
+
+def _leases_by_address(result: dict[str, Any], if_name: str = "lan") -> dict[str, dict[str, Any]]:
+    """Return the leases of one interface keyed by address.
+
+    Args:
+        result (dict[str, Any]): ``get_dhcp_leases`` result.
+        if_name (str): Interface identifier to read.
+
+    Returns:
+        dict[str, dict[str, Any]]: Leases keyed by address.
+    """
+    return {lease["address"]: lease for lease in result["leases"].get(if_name, [])}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reservation_rows", [None, [{"hw_address": "aa:00:00:00:00:0a", "ip_address": "192.0.2.10"}]]
+)
+async def test_get_dhcp_leases_kea_row_rules(
+    make_client: ClientType, reservation_rows: list[dict[str, str]] | None
+) -> None:
+    """Kea rows keep their hostname, type, identity and expiry rules.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        reservation_rows (list[dict[str, str]] | None): Reservation rows served by Kea, or
+            ``None`` when the reservation endpoint is not available.
+    """
+    future = int(datetime.now(tz=UTC).timestamp()) + 3600
+    past = future - 7200
+    overflow = 10**40
+    base = {"if_name": "lan", "if_descr": "LAN", "state": "0"}
+    rows = [
+        {
+            **base,
+            "address": "192.0.2.1",
+            "hostname": ".",
+            "hwaddr": "aa:00:00:00:00:01",
+            "is_reserved": "0",
+        },
+        {
+            **base,
+            "address": "192.0.2.2",
+            "hostname": "host.example.",
+            "hwaddr": "aa:00:00:00:00:02",
+            "state": 0,
+            "is_reserved": ["res-1"],
+            "client_id": "01:aa",
+            "expire": future,
+        },
+        {**base, "address": "192.0.2.3", "hostname": "no-mac", "hwaddr": "", "is_reserved": "0"},
+        {
+            **base,
+            "address": "192.0.2.4",
+            "hwaddr": "aa:00:00:00:00:04",
+            "is_reserved": "0",
+            "state": "1",
+        },
+        {
+            **base,
+            "address": "192.0.2.5",
+            "hwaddr": "aa:00:00:00:00:05",
+            "is_reserved": "0",
+            "expire": past,
+        },
+        {
+            **base,
+            "address": "192.0.2.6",
+            "hwaddr": "aa:00:00:00:00:06",
+            "is_reserved": "0",
+            "expire": overflow,
+        },
+        {
+            **base,
+            "address": "192.0.2.7",
+            "hwaddr": "aa:00:00:00:00:07",
+            "is_reserved": "1",
+            "expire": "never",
+        },
+        {**base, "address": "192.0.2.10", "hwaddr": "aa:00:00:00:00:0a"},
+        {**base, "address": "192.0.2.11", "hwaddr": "aa:00:00:00:00:0b"},
+        None,
+    ]
+    routes: dict[str, object] = {_KEA_LEASES4: {"rows": rows}}
+    if reservation_rows is not None:
+        routes[_KEA_RESERVATIONS] = {"rows": reservation_rows}
+
+    result = await _get_public_leases(make_client, routes)
+    leases = _leases_by_address(result)
+
+    def expected(address: str, mac: str, **fields: object) -> dict[str, Any]:
+        """Build the expected lease with the shared Kea defaults.
+
+        Args:
+            address (str): Lease address.
+            mac (str): Lease MAC address.
+            **fields (object): Fields overriding the defaults.
+
+        Returns:
+            dict[str, Any]: Expected normalized lease.
+        """
+        return {
+            "address": address,
+            "hostname": None,
+            "type": "dynamic",
+            "mac": mac,
+            "expires": None,
+        } | fields
+
+    assert set(leases) == {
+        "192.0.2.1",
+        "192.0.2.2",
+        "192.0.2.6",
+        "192.0.2.7",
+        "192.0.2.10",
+        "192.0.2.11",
+    }
+    assert leases["192.0.2.1"] == expected("192.0.2.1", "aa:00:00:00:00:01")
+    assert leases["192.0.2.2"] == expected(
+        "192.0.2.2",
+        "aa:00:00:00:00:02",
+        hostname="host.example",
+        type="static",
+        expires=datetime.fromtimestamp(future, tz=UTC),
+        client_id="01:aa",
+        reserved_by=["res-1"],
+    )
+    assert leases["192.0.2.6"]["expires"] == overflow
+    assert leases["192.0.2.7"] == expected(
+        "192.0.2.7", "aa:00:00:00:00:07", type="static", expires="never"
+    )
+    if reservation_rows is None:
+        assert leases["192.0.2.10"]["type"] == "unknown"
+        assert leases["192.0.2.11"]["type"] == "unknown"
+    else:
+        assert leases["192.0.2.10"]["type"] == "static"
+        assert leases["192.0.2.11"]["type"] == "dynamic"
+    assert result["lease_interfaces"] == {"lan": "LAN"}
+
+
+@pytest.mark.asyncio
+async def test_get_dhcp_leases_kea_dhcpv6_rows_without_mac(make_client: ClientType) -> None:
+    """Kea DHCPv6 keeps rows without a MAC and passes the DUID through.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+    """
+    rows = [
+        {
+            "if_name": "lan",
+            "if_descr": "LAN",
+            "state": "0",
+            "address": "2001:db8::1",
+            "hostname": "v6.",
+            "duid": "00:01:02",
+            "is_reserved": "0",
+        },
+        {"if_name": "lan", "state": "1", "address": "2001:db8::2", "is_reserved": "0"},
+    ]
+
+    result = await _get_public_leases(make_client, {_KEA_LEASES6: {"rows": rows}})
+
+    assert _leases_by_address(result) == {
+        "2001:db8::1": {
+            "address": "2001:db8::1",
+            "hostname": "v6",
+            "type": "dynamic",
+            "mac": None,
+            "duid": "00:01:02",
+            "expires": None,
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_dhcp_leases_dnsmasq_row_rules(make_client: ClientType) -> None:
+    """Dnsmasq rows keep their hostname, interface, type, identity and expiry rules.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+    """
+    now = int(datetime.now(tz=UTC).timestamp())
+    base = {"if_descr": "LAN", "hwaddr": "bb:00:00:00:00:01", "is_reserved": "0"}
+    rows = [
+        {**base, "address": "192.0.2.1", "hostname": "*", "if": "lan", "expire": now + 200},
+        {**base, "address": "192.0.2.1", "hostname": "*", "if": "lan", "expire": now + 100},
+        {
+            **base,
+            "address": "192.0.2.2",
+            "hostname": "host.",
+            "if_name": "lan",
+            "if": "ignored",
+            "is_reserved": "1",
+            "client_id": "01:bb",
+            "hwaddr": "",
+        },
+        {**base, "address": "192.0.2.3", "hostname": "", "if_name": "lan", "expire": now - 3600},
+        {
+            **base,
+            "address": "192.0.2.4",
+            "hostname": "...",
+            "if_name": "lan",
+            "is_reserved": ["x"],
+            "expire": 10**40,
+        },
+    ]
+
+    result = await _get_public_leases(make_client, {_DNSMASQ_LEASES: {"rows": rows}})
+
+    assert len([lease for lease in result["leases"]["lan"] if lease["address"] == "192.0.2.1"]) == 1
+    assert _leases_by_address(result) == {
+        # Duplicates keep the latest expiry, and a "*" hostname becomes None.
+        "192.0.2.1": {
+            "address": "192.0.2.1",
+            "hostname": None,
+            "type": "dynamic",
+            "mac": "bb:00:00:00:00:01",
+            "expires": datetime.fromtimestamp(now + 200, tz=UTC),
+        },
+        # Dnsmasq does not strip dots, and an empty MAC becomes None.
+        "192.0.2.2": {
+            "address": "192.0.2.2",
+            "hostname": "host.",
+            "type": "static",
+            "mac": None,
+            "client_id": "01:bb",
+            "expires": None,
+        },
+        "192.0.2.4": {
+            "address": "192.0.2.4",
+            "hostname": None,
+            "type": "static",
+            "mac": "bb:00:00:00:00:01",
+            "reserved_by": ["x"],
+            "expires": 10**40,
+        },
+    }
+    assert result["lease_interfaces"] == {"lan": "LAN"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "address"),
+    [(_ISC_LEASES4, "192.0.2.1"), (_ISC_LEASES6, "2001:db8::1")],
+    ids=["dhcpv4", "dhcpv6"],
+)
+async def test_get_dhcp_leases_isc_row_rules(
+    make_client: ClientType, path: str, address: str
+) -> None:
+    """ISC rows keep their filtering, hostname, type and expiry rules for both families.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+        path (str): ISC lease search endpoint for the address family.
+        address (str): Address used for the lease that stays active.
+    """
+    ends_at = (datetime.now(tz=_LEASE_ROUTER_TZ) + timedelta(hours=1)).replace(microsecond=0)
+    past = (datetime.now(tz=_LEASE_ROUTER_TZ) - timedelta(hours=1)).strftime("%Y/%m/%d %H:%M:%S")
+    base = {"state": "active", "if": "lan", "if_descr": "LAN", "type": "static"}
+    rows = [
+        {
+            **base,
+            "address": address,
+            "mac": "cc:00:00:00:00:01",
+            "hostname": "*.",
+            "ends": ends_at.strftime("%Y/%m/%d %H:%M:%S"),
+            "client_id": "01:cc",
+            "is_reserved": ["x"],
+        },
+        {
+            **base,
+            "address": "no-ends",
+            "mac": "cc:00:00:00:00:02",
+            "hostname": ".",
+            "type": "dynamic",
+        },
+        {**base, "address": "inactive", "mac": "cc:00:00:00:00:03", "state": "expired"},
+        {**base, "address": "no-mac", "mac": ""},
+        {**base, "address": "bad-ends", "mac": "cc:00:00:00:00:04", "ends": "never"},
+        {**base, "address": "past", "mac": "cc:00:00:00:00:05", "ends": past},
+        None,
+    ]
+
+    result = await _get_public_leases(make_client, {path: {"rows": rows}})
+
+    assert _leases_by_address(result) == {
+        # ISC preserves "*." and localizes ``ends`` in the Router timezone.
+        address: {
+            "address": address,
+            "hostname": "*.",
+            "type": "static",
+            "mac": "cc:00:00:00:00:01",
+            "expires": ends_at,
+        },
+        "no-ends": {
+            "address": "no-ends",
+            "hostname": None,
+            "type": "dynamic",
+            "mac": "cc:00:00:00:00:02",
+            "expires": None,
+        },
+    }
+    assert result["lease_interfaces"] == {"lan": "LAN"}
