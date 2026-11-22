@@ -2954,8 +2954,8 @@ async def test_get_dhcp_leases_dnsmasq_row_rules(make_client: ClientType) -> Non
     now = int(datetime.now(tz=UTC).timestamp())
     base = {"if_descr": "LAN", "hwaddr": "bb:00:00:00:00:01", "is_reserved": "0"}
     rows = [
-        {**base, "address": "192.0.2.1", "hostname": "*", "if": "lan", "expire": now + 100},
         {**base, "address": "192.0.2.1", "hostname": "*", "if": "lan", "expire": now + 200},
+        {**base, "address": "192.0.2.1", "hostname": "*", "if": "lan", "expire": now + 100},
         {
             **base,
             "address": "192.0.2.2",
@@ -2972,6 +2972,7 @@ async def test_get_dhcp_leases_dnsmasq_row_rules(make_client: ClientType) -> Non
 
     result, _session = await _get_public_leases(make_client, {_DNSMASQ_LEASES: {"rows": rows}})
 
+    assert len([lease for lease in result["leases"]["lan"] if lease["address"] == "192.0.2.1"]) == 1
     assert _leases_by_address(result) == {
         # Duplicates keep the latest expiry, and a "*" hostname becomes None.
         "192.0.2.1": {
