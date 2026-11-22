@@ -85,6 +85,8 @@ class ClientBaseMixin(
         self._firmware_version: str | None = None
         self._firmware_unknown_logged: set[tuple[str, str | None]] = set()
         self._last_known_firmware_version: str | None = None
+        self._firmware_observation_id: int = 0
+        self._firmware_version_observation_id: int = 0
         self._firmware_install_active: bool = False
         self._firmware_action_lock = asyncio.Lock()
         self._active_close_count = 0

@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -42,7 +42,9 @@ async def test_get_host_firmware_version_and_fallback(
     client._safe_dict_get = AsyncMock(return_value={"product": {"product_version": "25.8.0"}})
     firmware = await client.get_host_firmware_version()
     assert firmware == "25.8.0"
-    client._is_get_endpoint_available.assert_awaited_once_with("/api/core/firmware/status")
+    client._is_get_endpoint_available.assert_awaited_once_with(
+        "/api/core/firmware/status", force_refresh=False
+    )
     await client.async_close()
 
     fallback_client = make_client(session=session)
@@ -54,7 +56,7 @@ async def test_get_host_firmware_version_and_fallback(
         fallback = await fallback_client.get_host_firmware_version()
         assert fallback == "seriesX"
         fallback_client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/core/firmware/status"
+            "/api/core/firmware/status", force_refresh=False
         )
     finally:
         await fallback_client.async_close()
@@ -84,6 +86,139 @@ async def test_uncomparable_firmware_is_retried_on_next_capability_use(
         CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
     ]
     assert router.get_paths.count(firmware_module.FIRMWARE_STATUS_ENDPOINT) == 2
+
+
+@pytest.mark.asyncio
+async def test_delayed_firmware_read_cannot_overwrite_a_newer_observation(
+    scripted_router: tuple[aiopnsense.OPNsenseClient, ScriptedRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A delayed old response must not choose the endpoint style after a newer read.
+
+    Args:
+        scripted_router (tuple[aiopnsense.OPNsenseClient, ScriptedRouter]): Client and Router.
+        monkeypatch (pytest.MonkeyPatch): Enables the fixture's real queue worker.
+    """
+    client, router = scripted_router
+    monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
+    router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}
+    router.endpoints[CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT] = {"status": "ok"}
+    first_read_started = asyncio.Event()
+    release_first_read = asyncio.Event()
+    firmware_read_count = 0
+
+    async def read_firmware_status(path: str) -> dict[str, Any]:
+        nonlocal firmware_read_count
+        if path != firmware_module.FIRMWARE_STATUS_ENDPOINT:
+            return {}
+        firmware_read_count += 1
+        if firmware_read_count == 1:
+            first_read_started.set()
+            await release_first_read.wait()
+            return {"product": {"product_version": "25.1"}}
+        return {"product": {"product_version": "25.7"}}
+
+    client._safe_dict_get = read_firmware_status
+    old_read_call = asyncio.create_task(client.close_notice("old-read"))
+    try:
+        async with asyncio.timeout(1):
+            await first_read_started.wait()
+        assert await client.close_notice("new-read") is True
+        release_first_read.set()
+        async with asyncio.timeout(1):
+            assert await old_read_call is True
+    finally:
+        release_first_read.set()
+        if not old_read_call.done():
+            old_read_call.cancel()
+        await asyncio.gather(old_read_call, return_exceptions=True)
+
+    assert await client.get_host_firmware_version() == "25.7"
+    assert router.post_paths == [
+        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
+        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delayed_firmware_read_cannot_overwrite_verified_install(
+    install_client: Callable[..., Any],
+) -> None:
+    """A pre-install status response cannot undo the verified installed version.
+
+    Args:
+        install_client (Callable[..., Any]): Lifecycle transport factory.
+    """
+    target_version = "26.7.8"
+    client, _session = install_client(
+        [(_install_progress("done", "***DONE***"), "ready", target_version)]
+    )
+    old_read_started = asyncio.Event()
+    release_old_read = asyncio.Event()
+
+    async def read_old_firmware(_path: str) -> dict[str, dict[str, str]]:
+        old_read_started.set()
+        await release_old_read.wait()
+        return {"product": {"product_version": "26.1.1"}}
+
+    client._is_get_endpoint_available = AsyncMock(return_value=True)
+    client._safe_dict_get = read_old_firmware
+    old_read = asyncio.create_task(client.get_host_firmware_version())
+    try:
+        async with asyncio.timeout(1):
+            await old_read_started.wait()
+        await client.install_firmware(target_version=target_version, poll_interval=0.001)
+        release_old_read.set()
+        async with asyncio.timeout(1):
+            assert await old_read == target_version
+    finally:
+        release_old_read.set()
+        if not old_read.done():
+            old_read.cancel()
+        await asyncio.gather(old_read, return_exceptions=True)
+
+    assert await client.get_host_firmware_version() == target_version
+
+
+@pytest.mark.asyncio
+async def test_firmware_status_probe_retries_cached_forbidden_endpoint(
+    scripted_router: tuple[aiopnsense.OPNsenseClient, ScriptedRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A firmware probe denied once must be retried on the next capability lookup.
+
+    Args:
+        scripted_router (tuple[aiopnsense.OPNsenseClient, ScriptedRouter]): Client and Router.
+        monkeypatch (pytest.MonkeyPatch): Enables the fixture's real queue worker.
+    """
+    client, router = scripted_router
+    monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
+    router.firmware = "25.1"
+    router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}
+    router.endpoints[CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT] = {"status": "ok"}
+    session = cast(MagicMock, client._session)
+    session_get = session.get
+    router_probe = session_get.side_effect
+    firmware_probe_count = 0
+
+    def deny_first_firmware_probe(url: str, **kwargs: Any) -> FakeResponse:
+        nonlocal firmware_probe_count
+        if url.endswith(firmware_module.FIRMWARE_STATUS_ENDPOINT):
+            firmware_probe_count += 1
+            if firmware_probe_count == 1:
+                return FakeResponse(status=403, reason="Forbidden", ok=False)
+        return router_probe(url, **kwargs)
+
+    session_get.side_effect = deny_first_firmware_probe
+
+    assert await client.close_notice("before-recovery") is True
+    assert await client.close_notice("after-recovery") is True
+
+    assert firmware_probe_count == 2
+    assert router.post_paths == [
+        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
+        CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
+    ]
 
 
 @pytest.mark.asyncio

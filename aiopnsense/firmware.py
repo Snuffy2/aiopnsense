@@ -64,6 +64,8 @@ class FirmwareMixin(AiopnsenseClientProtocol):
     _firmware_version: str | None
     _firmware_unknown_logged: set[tuple[str, str | None]]
     _last_known_firmware_version: str | None
+    _firmware_observation_id: int
+    _firmware_version_observation_id: int
     _firmware_install_active: bool
 
     @staticmethod
@@ -81,19 +83,36 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             minimum=OPNSENSE_MIN_FIRMWARE, recommended=OPNSENSE_RECOMMENDED_FIRMWARE
         )
 
-    def _record_firmware_version(self, version: str | None) -> None:
+    def _record_firmware_version(
+        self, version: str | None, *, observation_id: int | None = None
+    ) -> str | None:
         """Set or clear the cached firmware version.
 
         Every write of the cached version goes through this method so that the
         firmware module is the only owner of the value. When a known version differs
         from the last known one, everything derived from the old version is discarded.
         Clearing the cached version, a lookup that returns nothing, or a version that
-        cannot be compared is not a change.
+        cannot be compared is not a change. Lookups pass the observation ID allocated
+        before their first await, so a late response cannot overwrite a newer result
+        or an explicit invalidation.
 
         Args:
             version (str | None): Version to cache, or ``None`` to force the next
                 lookup to read it from the Router.
+            observation_id (int | None): Lookup generation allocated before its first
+                await, or ``None`` for an explicit state change at the current point.
+
+        Returns:
+            str | None: The observation's value when current, or the established
+                cached version when this observation was superseded.
         """
+        if observation_id is None:
+            self._firmware_observation_id += 1
+            observation_id = self._firmware_observation_id
+        if observation_id <= self._firmware_version_observation_id:
+            return self._firmware_version
+        self._firmware_version_observation_id = observation_id
+
         if version is not None and firmware_is_at_least(version, "0") is not None:
             last_known = self._last_known_firmware_version
             if last_known is not None and version != last_known:
@@ -105,8 +124,9 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 self._reset_endpoint_state()
             self._last_known_firmware_version = version
             self._firmware_version = version
-            return
-        self._firmware_version = None
+        else:
+            self._firmware_version = None
+        return version
 
     async def _firmware_capability(self, capability: FirmwareCapability) -> bool | None:
         """Return whether the Router firmware supports a Firmware Capability.
@@ -164,10 +184,15 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         Returns:
             str | None: Firmware version or product series from this response.
         """
-        if not await self._is_get_endpoint_available(FIRMWARE_STATUS_ENDPOINT):
+        self._firmware_observation_id += 1
+        observation_id = self._firmware_observation_id
+        force_refresh = self._endpoint_availability.get(FIRMWARE_STATUS_ENDPOINT) is False
+        endpoint_available = await self._is_get_endpoint_available(
+            FIRMWARE_STATUS_ENDPOINT, force_refresh=force_refresh
+        )
+        if not endpoint_available:
             _LOGGER.debug("Firmware status endpoint unavailable")
-            self._record_firmware_version(None)
-            return None
+            return self._record_firmware_version(None, observation_id=observation_id)
 
         firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
         raw_firmware = dict_get(firmware_info, "product.product_version")
@@ -185,8 +210,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 )
         else:
             _LOGGER.debug("[get_host_firmware_version] firmware: %s", firmware)
-        self._record_firmware_version(firmware)
-        return firmware
+        return self._record_firmware_version(firmware, observation_id=observation_id)
 
     @_log_errors
     async def get_host_firmware_version(self) -> None | str:
