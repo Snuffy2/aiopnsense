@@ -306,12 +306,12 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
         await client.async_close()
 
 
-async def test_unbound_attempt_keeps_domain_caller_in_queue_diagnostics(
+async def test_unbound_toggle_identifies_failed_save_in_queue_diagnostics(
     make_client: MakeClientFactory,
     caplog: pytest.LogCaptureFixture,
     legacy_dnsbl_payload: dict[str, Any],
 ) -> None:
-    """Keep Unbound's domain method in transport failure diagnostics.
+    """Identify the public Unbound operation and endpoint when a queued save fails.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning client instances.
@@ -319,7 +319,7 @@ async def test_unbound_attempt_keeps_domain_caller_in_queue_diagnostics(
         legacy_dnsbl_payload (dict[str, Any]): Complete settings that allow the save request.
 
     Returns:
-        None: This test asserts the caller label in the actual transport report.
+        None: This test asserts the operation label and request path in the diagnostics.
     """
     client, session = make_mock_session_client(make_client)
     try:
@@ -333,7 +333,11 @@ async def test_unbound_attempt_keeps_domain_caller_in_queue_diagnostics(
             result = await client.enable_unbound_blocklist()
 
         assert result is False
-        assert "called by _set_unbound_blocklist_legacy" in caplog.text
+        assert any(
+            "[enable_unbound_blocklist] save" in record.message
+            and "/api/unbound/settings/set" in record.message
+            for record in caplog.records
+        )
     finally:
         await client.async_close()
 
@@ -1468,7 +1472,10 @@ async def test_cancelled_service_apply_stays_serialized_until_acknowledged(
     ids=["legacy", "extended"],
 )
 async def test_unbound_toggle_returns_false_on_malformed_apply_response(
-    make_client: MakeClientFactory, firmware: str, item: str | None
+    make_client: MakeClientFactory,
+    firmware: str,
+    item: str | None,
+    legacy_dnsbl_payload: dict[str, Any],
 ) -> None:
     """Return False when an HTTP 200 apply reply cannot be parsed.
 
@@ -1476,6 +1483,7 @@ async def test_unbound_toggle_returns_false_on_malformed_apply_response(
         make_client (MakeClientFactory): Client factory fixture.
         firmware (str): Firmware selecting the Unbound backend.
         item (str | None): Extended blocklist identifier, if applicable.
+        legacy_dnsbl_payload (dict[str, Any]): Complete settings for the legacy save.
     """
     client, session = make_mock_session_client(make_client)
     client.get_host_firmware_version = AsyncMock(return_value=firmware)
@@ -1487,9 +1495,7 @@ async def test_unbound_toggle_returns_false_on_malformed_apply_response(
     get_responses: dict[str, FakeResponse] = {}
     post_responses: dict[str, FakeResponse] = {}
     if item is None:
-        get_responses[f"{base_url}/settings/get"] = FakeResponse(
-            json_payload={"unbound": {"dnsbl": {"enabled": "0"}}}
-        )
+        get_responses[f"{base_url}/settings/get"] = FakeResponse(json_payload=legacy_dnsbl_payload)
         get_responses[apply_url] = malformed_apply
         post_responses[f"{base_url}/settings/set"] = FakeResponse(json_payload={"result": "saved"})
     else:

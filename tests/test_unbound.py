@@ -747,7 +747,6 @@ async def test_legacy_blocklist_completion_log_omits_configuration_and_response_
         client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
         payload = deepcopy(legacy_dnsbl_payload)
         payload["unbound"]["dnsbl"]["address"] = "CONFIG_MARKER"
-        client._safe_dict_get = AsyncMock(return_value=payload)
         client._post = AsyncMock(
             side_effect=[
                 {"result": "saved", "detail": "SAVE_RESPONSE_MARKER"},
@@ -755,7 +754,7 @@ async def test_legacy_blocklist_completion_log_omits_configuration_and_response_
             ]
         )
         client._get = AsyncMock(
-            return_value={"status": "OK applied", "detail": "APPLY_RESPONSE_MARKER"}
+            side_effect=[payload, {"status": "OK applied", "detail": "APPLY_RESPONSE_MARKER"}]
         )
 
         with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
@@ -816,13 +815,12 @@ async def test_legacy_unbound_blocklist_request_failure_follows_throw_errors(
     client._throw_errors = throw_errors
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
-        client._safe_dict_get = AsyncMock(return_value=deepcopy(legacy_dnsbl_payload))
         post_results: list[Any] = [{"result": "saved"}, {"response": "OK"}]
-        get_results: list[Any] = [{"status": "OK"}]
+        get_results: list[Any] = [deepcopy(legacy_dnsbl_payload), {"status": "OK"}]
         if failing_step == "save":
             post_results[0] = make_error()
         elif failing_step == "apply":
-            get_results[0] = make_error()
+            get_results[1] = make_error()
         else:
             post_results[1] = make_error()
         client._post = AsyncMock(side_effect=post_results)
@@ -837,7 +835,7 @@ async def test_legacy_unbound_blocklist_request_failure_follows_throw_errors(
 
         expected_posts = {"save": 1, "apply": 1, "restart": 2}[failing_step]
         assert client._post.await_count == expected_posts
-        assert client._get.await_count == (0 if failing_step == "save" else 1)
+        assert client._get.await_count == (1 if failing_step == "save" else 2)
         failure_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
         assert len(failure_records) == 1
         assert "password" not in caplog.text
