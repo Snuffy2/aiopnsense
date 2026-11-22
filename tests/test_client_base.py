@@ -1,6 +1,7 @@
 """Tests for client validation and base object behavior."""
 
 import asyncio
+from collections.abc import Coroutine
 import contextlib
 import logging
 from typing import Any
@@ -498,12 +499,18 @@ async def test_cancelled_outcome_reads_release_queue_workers(
         if url.endswith("/api/nut/diagnostics/upsstatus"):
             return BlockingResponse()
         service_read_started.set()
-        return FakeResponse(json_payload={"rows": []})
+        return FakeResponse(json_payload={"rows": [{"name": "service", "running": "1"}]})
 
     session.get = session_get
     try:
         cancelled_calls = [asyncio.create_task(client.get_nut_ups_status()) for _ in range(2)]
         await asyncio.wait_for(two_reads_started.wait(), timeout=2)
+        services_call = asyncio.create_task(client.get_services())
+        for _attempt in range(10):
+            if client._request_queue.qsize() == 1:
+                break
+            await asyncio.sleep(0)
+        assert client._request_queue.qsize() == 1
 
         for call in cancelled_calls:
             call.cancel()
@@ -511,7 +518,9 @@ async def test_cancelled_outcome_reads_release_queue_workers(
         await asyncio.wait_for(two_reads_cancelled.wait(), timeout=2)
 
         assert cancelled_reads == 2
-        assert await asyncio.wait_for(client.get_services(), timeout=2) == []
+        assert await asyncio.wait_for(services_call, timeout=2) == [
+            {"name": "service", "running": "1", "status": True}
+        ]
         assert service_read_started.is_set()
         assert not release_reads.is_set()
     finally:
@@ -594,15 +603,47 @@ async def test_cancelled_transport_child_does_not_stop_queue_worker(
 
 @pytest.mark.asyncio
 async def test_outcome_post_cancelled_before_transport_dispatch_sends_no_request(
-    make_client: MakeClientFactory,
+    make_client: MakeClientFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Skip an outcome POST cancelled after dequeue but before transport starts.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        monkeypatch (pytest.MonkeyPatch): Fixture for gating the dispatch child task.
     """
     client, session = make_mock_session_client(make_client)
     requests: list[tuple[str, str]] = []
+    transport_child_started = asyncio.Event()
+    release_transport_child = asyncio.Event()
+    create_task = asyncio.create_task
+
+    async def wait_before_dispatch(coroutine: Coroutine[Any, Any, Any]) -> Any:
+        """Pause the dispatch child before its cancellation guard runs.
+
+        Args:
+            coroutine (Coroutine[Any, Any, Any]): Dispatch child coroutine created by the
+                queue worker.
+
+        Returns:
+            Any: Result from the dispatch child after release.
+        """
+        transport_child_started.set()
+        await release_transport_child.wait()
+        return await coroutine
+
+    def gate_dispatch_child(coroutine: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+        """Gate only the queue's outcome-dispatch child before its first step.
+
+        Args:
+            coroutine (Coroutine[Any, Any, Any]): Coroutine passed to
+                ``asyncio.create_task``.
+
+        Returns:
+            asyncio.Task[Any]: Task created from the original or gated coroutine.
+        """
+        if getattr(coroutine, "__qualname__", "").endswith(".dispatch_if_waiting"):
+            return create_task(wait_before_dispatch(coroutine))
+        return create_task(coroutine)
 
     def session_get(url: str, **_kwargs: Any) -> FakeResponse:
         """Return an empty service listing after the cancelled POST.
@@ -632,16 +673,19 @@ async def test_outcome_post_cancelled_before_transport_dispatch_sends_no_request
 
     session.get = session_get
     session.post = session_post
+    monkeypatch.setattr(asyncio, "create_task", gate_dispatch_child)
     caller = asyncio.create_task(client.get_smart_info("nvme0"))
     try:
-        await asyncio.sleep(0)
-        asyncio.get_running_loop().call_soon(caller.cancel)
+        await asyncio.wait_for(transport_child_started.wait(), timeout=2)
+        caller.cancel()
+        release_transport_child.set()
         with pytest.raises(asyncio.CancelledError):
             await caller
 
         assert await asyncio.wait_for(client.get_services(), timeout=2) == []
         assert requests == [("GET", "http://localhost/api/core/service/search")]
     finally:
+        release_transport_child.set()
         await client.async_close()
 
 

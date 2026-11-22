@@ -51,6 +51,41 @@ def test_get_ip_key() -> None:
     assert aiopnsense_helpers.get_ip_key({}) == (3, "")
 
 
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        pytest.param(
+            "https://alice:pre@secret@router.invalid/api",
+            "https://<redacted>:<redacted>@router.invalid/api",
+            id="literal-at-in-password",
+        ),
+        pytest.param(
+            "https://alice@router.invalid/api",
+            "https://<redacted>@router.invalid/api",
+            id="username-only",
+        ),
+        pytest.param(
+            "https://alice:secret@router.invalid/path?next=https://bob:pw@other.invalid#fragment",
+            "https://<redacted>:<redacted>@router.invalid/path?next=https://<redacted>:<redacted>@other.invalid#fragment",
+            id="multiple-urls-and-delimiters",
+        ),
+        pytest.param(
+            "https://router.invalid/path@name?next=alice@host#part@name",
+            "https://router.invalid/path@name?next=alice@host#part@name",
+            id="at-outside-authority",
+        ),
+    ],
+)
+def test_redact_url_credentials(message: str, expected: str) -> None:
+    """Redact URL userinfo through its final authority separator only.
+
+    Args:
+        message (str): Diagnostic text that may contain credentialed URLs.
+        expected (str): The diagnostic text with authority userinfo removed.
+    """
+    assert aiopnsense_helpers._redact_url_credentials(message) == expected
+
+
 def test_dict_get() -> None:
     """Retrieve nested values from dicts and lists using dotted paths."""
     data = {"a": {"b": {"c": 1}}, "x": [0, 1, 2]}

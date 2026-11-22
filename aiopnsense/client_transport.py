@@ -4,6 +4,7 @@ import asyncio
 import codecs
 from collections.abc import AsyncGenerator, Awaitable, Callable, MutableMapping
 import json
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
@@ -121,7 +122,12 @@ def _classify_outcome_response_error(
                 outcome.error.__cause__ = error
             return outcome
 
-    if response_entered or responses or not _response_error_matches_request(error, method, url):
+    if (
+        response_entered
+        or responses
+        or _raised_by_aiohttp_trace(error.__traceback__)
+        or not _response_error_matches_request(error, method, url)
+    ):
         return None
 
     outcome = _EndpointOutcome.from_http_status(error.status, error.message)
@@ -130,30 +136,57 @@ def _classify_outcome_response_error(
     return outcome
 
 
+def _raised_by_aiohttp_trace(traceback: TracebackType | None) -> bool:
+    """Identify status errors raised by an aiohttp trace callback.
+
+    Trace callbacks can run before dispatch or after a response. A status error
+    raised by a trace callback does not establish that an HTTP response was
+    delivered or that its status is cacheable.
+
+    Args:
+        traceback (TracebackType | None): Traceback attached to the HTTP error.
+
+    Returns:
+        bool: Whether an aiohttp trace dispatch frame raised the error.
+    """
+    while traceback is not None:
+        frame = traceback.tb_frame
+        if frame.f_globals.get("__name__") == "aiohttp.tracing" and frame.f_code.co_name.startswith(
+            "send_"
+        ):
+            return True
+        traceback = traceback.tb_next
+    return False
+
+
 def _classify_outcome_payload_error(
     error: (
         aiohttp.ClientPayloadError
         | aiohttp.ContentTypeError
         | UnicodeDecodeError
         | json.JSONDecodeError
+        | TimeoutError
     ),
     validator_errors: _ValidatorErrors,
 ) -> _EndpointOutcome | None:
-    """Treat a validator body-read error as absence only for its actual 404 response.
+    """Classify validator failures using the response delivered to that validator.
 
     Args:
-        error (aiohttp.ClientPayloadError | aiohttp.ContentTypeError | UnicodeDecodeError | json.JSONDecodeError):
-            Raised response body or decoding error.
+        error (aiohttp.ClientPayloadError | aiohttp.ContentTypeError | UnicodeDecodeError | json.JSONDecodeError | TimeoutError):
+            Raised response-body, decoding or timeout error.
         validator_errors (_ValidatorErrors): Errors raised while validating a response.
 
     Returns:
-        _EndpointOutcome | None: Absent for a body-read error on a delivered 404,
-            or ``None`` for unrelated and transient errors.
+        _EndpointOutcome | None: The HTTP status outcome for a delivered error
+            response, or None when the failure is unrelated or the response was successful.
     """
     for validator_error, response in validator_errors:
         if validator_error is error:
-            if response.status == 404:
-                return _EndpointOutcome.absent()
+            if 400 <= response.status <= 599:
+                outcome = _EndpointOutcome.from_http_status(response.status, response.reason)
+                if outcome.error is not None:
+                    outcome.error.__cause__ = error
+                return outcome
             return None
     return None
 
@@ -608,10 +641,10 @@ class ClientTransportMixin:
                 other HTTP status, timeout or client error.
 
         Raises:
-            UnicodeDecodeError: For invalid text encoding outside an attributable validator
-                failure on a delivered 404.
-            json.JSONDecodeError: For undecodable JSON outside an attributable validator
-                failure on a delivered 404.
+            UnicodeDecodeError: For invalid text encoding outside a validator failure
+                attributable to a delivered HTTP error response.
+            json.JSONDecodeError: For undecodable JSON outside a validator failure
+                attributable to a delivered HTTP error response.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -658,7 +691,9 @@ class ClientTransportMixin:
                 )
                 if outcome is not None:
                     return outcome
-            elif isinstance(e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError):
+            elif isinstance(
+                e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError | TimeoutError
+            ):
                 outcome = _classify_outcome_payload_error(e, validator_errors)
                 if outcome is not None:
                     return outcome
@@ -803,10 +838,10 @@ class ClientTransportMixin:
                 HTTP status, timeout or client error.
 
         Raises:
-            UnicodeDecodeError: For invalid text encoding outside an attributable validator
-                failure on a delivered 404.
-            json.JSONDecodeError: For undecodable JSON outside an attributable validator
-                failure on a delivered 404.
+            UnicodeDecodeError: For invalid text encoding outside a validator failure
+                attributable to a delivered HTTP error response.
+            json.JSONDecodeError: For undecodable JSON outside a validator failure
+                attributable to a delivered HTTP error response.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -850,7 +885,9 @@ class ClientTransportMixin:
                 )
                 if outcome is not None:
                     return outcome
-            elif isinstance(e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError):
+            elif isinstance(
+                e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError | TimeoutError
+            ):
                 outcome = _classify_outcome_payload_error(e, validator_errors)
                 if outcome is not None:
                     return outcome

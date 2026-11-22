@@ -136,12 +136,13 @@ async def test_get_unbound_blocklist_raises_in_throw_mode(
         expected_error (type[Exception]): Public exception type expected from the call.
     """
     client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", DNSBL_PATH): route_value})
+    router = install_fake_router(client, session, routes={("GET", DNSBL_PATH): route_value})
     client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
     client._throw_errors = True
     try:
         with pytest.raises(expected_error):
             await client.get_unbound_blocklist()
+        assert router.count("GET", DNSBL_PATH) == 1
     finally:
         await client.async_close()
 
@@ -156,11 +157,12 @@ async def test_get_unbound_blocklist_missing_endpoint_does_not_raise_in_throw_mo
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", DNSBL_PATH): 404})
+    router = install_fake_router(client, session, routes={("GET", DNSBL_PATH): 404})
     client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
     client._throw_errors = True
     try:
         assert await client.get_unbound_blocklist() == {}
+        assert router.count("GET", DNSBL_PATH) == 1
     finally:
         await client.async_close()
 

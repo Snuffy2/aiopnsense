@@ -130,10 +130,13 @@ async def test_telemetry_read_costs_one_request_when_endpoint_present(
         empty (Any): Value the read returns when the endpoint is unavailable.
     """
     client, router = _client_with_router(make_client, {("GET", path): PRESENT_PAYLOADS[read]})
-    client._get_from_stream = AsyncMock(return_value={})
+    stream_read = AsyncMock(return_value={})
+    client._get_from_stream = stream_read
     try:
         assert await getattr(client, read)() != empty
         assert router.count("GET", path) == 1
+        if read == "_get_telemetry_cpu":
+            stream_read.assert_awaited_once_with(CPU_STREAM_PATH)
     finally:
         await client.async_close()
 
@@ -160,10 +163,11 @@ async def test_telemetry_read_raises_for_forbidden_or_transient_failure_in_throw
         empty (Any): Value the read returns in default mode.
         failure (Any): HTTP status or exception the fake Router answers with.
     """
-    client, _router = _client_with_router(make_client, {("GET", path): failure}, throw_errors=True)
+    client, router = _client_with_router(make_client, {("GET", path): failure}, throw_errors=True)
     try:
         with pytest.raises(OPNsenseError):
             await getattr(client, read)()
+        assert router.count("GET", path) == 1
     finally:
         await client.async_close()
 
@@ -181,9 +185,10 @@ async def test_telemetry_read_returns_empty_without_raising_for_absent_endpoint_
         path (str): Endpoint path the read requests.
         empty (Any): Value the read returns for an absent endpoint.
     """
-    client, _router = _client_with_router(make_client, {("GET", path): 404}, throw_errors=True)
+    client, router = _client_with_router(make_client, {("GET", path): 404}, throw_errors=True)
     try:
         assert await getattr(client, read)() == empty
+        assert router.count("GET", path) == 1
     finally:
         await client.async_close()
 

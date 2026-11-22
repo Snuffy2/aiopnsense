@@ -169,10 +169,28 @@ async def test_outcome_requests_honor_boolean_raise_for_status(
     request_options: dict[str, dict[str, Any]] = {}
 
     def fake_get(_url: str, **kwargs: Any) -> FakeResponse:
+        """Capture GET validation options and return a missing response.
+
+        Args:
+            _url (str): Endpoint URL requested by the client.
+            **kwargs (Any): Options supplied to the session GET method.
+
+        Returns:
+            FakeResponse: Synthetic 404 response.
+        """
         request_options["get"] = kwargs
         return FakeResponse(status=404, reason="Not Found", ok=False)
 
     def fake_post(_url: str, **kwargs: Any) -> FakeResponse:
+        """Capture POST validation options and return a missing response.
+
+        Args:
+            _url (str): Endpoint URL requested by the client.
+            **kwargs (Any): Options supplied to the session POST method.
+
+        Returns:
+            FakeResponse: Synthetic 404 response.
+        """
         request_options["post"] = kwargs
         return FakeResponse(status=404, reason="Not Found", ok=False)
 
@@ -196,6 +214,200 @@ async def test_outcome_requests_honor_boolean_raise_for_status(
             response.raise_for_status.assert_called_once_with()
     finally:
         await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_request_start_trace_404_is_transient(
+    make_client: MakeClientFactory,
+) -> None:
+    """Do not classify trace-hook failures as delivered HTTP responses.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test verifies trace failures remain transient across requests.
+    """
+    trace_calls = 0
+    middleware_calls = 0
+    trace = aiohttp.TraceConfig()
+
+    async def fail_request_start(
+        _session: aiohttp.ClientSession,
+        _context: Any,
+        params: aiohttp.TraceRequestStartParams,
+    ) -> None:
+        """Raise a matching 404 before aiohttp dispatches the request.
+
+        Args:
+            _session (aiohttp.ClientSession): Session initiating the request.
+            _context (Any): Trace context for the request.
+            params (aiohttp.TraceRequestStartParams): Request start details.
+
+        Raises:
+            aiohttp.ClientResponseError: The trace hook aborts with a matching 404.
+        """
+        nonlocal trace_calls
+        trace_calls += 1
+        raise aiohttp.ClientResponseError(
+            aiohttp.RequestInfo(
+                params.url,
+                params.method,
+                {},
+                params.url,
+            ),
+            (),
+            status=404,
+            message="Not Found",
+        )
+
+    async def count_dispatch(
+        request: aiohttp.ClientRequest, handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Count middleware dispatches before forwarding the request.
+
+        Args:
+            request (aiohttp.ClientRequest): Request entering the middleware.
+            handler (aiohttp.ClientHandlerType): Next middleware or transport handler.
+
+        Returns:
+            aiohttp.ClientResponse: Response returned by the next handler.
+        """
+        nonlocal middleware_calls
+        middleware_calls += 1
+        return await handler(request)
+
+    trace.on_request_start.append(fail_request_start)
+    async with aiohttp.ClientSession(
+        trace_configs=[trace], middlewares=[count_dispatch]
+    ) as session:
+        client = make_client(session=session)
+        try:
+            first = await client._do_get_outcome("/api/missing")
+            second = await client._do_get_outcome("/api/missing")
+            assert first.is_transient and second.is_transient
+            assert trace_calls == 2
+            assert middleware_calls == 0
+        finally:
+            await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "status", "validator_error", "expected_error"),
+    [
+        ("get", 403, aiohttp.ClientPayloadError("broken body"), OPNsensePrivilegeMissing),
+        ("post", 403, aiohttp.ClientPayloadError("broken body"), OPNsensePrivilegeMissing),
+        ("get", 404, TimeoutError("validator timeout"), None),
+        ("post", 404, TimeoutError("validator timeout"), None),
+    ],
+)
+async def test_delivered_response_validator_failures_keep_http_outcome(
+    method: str,
+    status: int,
+    validator_error: BaseException,
+    expected_error: type[OPNsenseConnectionError] | None,
+    make_client: MakeClientFactory,
+) -> None:
+    """Map validator failures using the exact response delivered by aiohttp.
+
+    Args:
+        method (str): HTTP method exercised by the request.
+        status (int): Status of the response delivered to the validator.
+        validator_error (BaseException): Exception raised by the custom validator.
+        expected_error (type[OPNsenseConnectionError] | None): Mapped outcome error.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test checks status mapping and exception provenance.
+    """
+
+    async def respond(
+        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Return a response with request metadata for the real session validator.
+
+        Args:
+            request (aiohttp.ClientRequest): Request associated with the response.
+            _handler (aiohttp.ClientHandlerType): Unused next request handler.
+
+        Returns:
+            aiohttp.ClientResponse: Synthetic response delivered to the validator.
+        """
+        response = MagicMock(spec=aiohttp.ClientResponse)
+        response.status = status
+        response.reason = "Forbidden" if status == 403 else "Not Found"
+        response.request_info = request.request_info
+        response.connection = None
+        response._raw_cookie_headers = ()
+        response.__aenter__.return_value = response
+        return response
+
+    raise_validation_error = AsyncMock(side_effect=validator_error)
+
+    async with aiohttp.ClientSession(
+        raise_for_status=raise_validation_error, middlewares=[respond]
+    ) as session:
+        client = make_client(session=session)
+        try:
+            if method == "get":
+                outcome = await client._do_get_outcome("/api/outcome")
+            else:
+                outcome = await client._do_post_outcome("/api/outcome", {})
+            assert outcome.is_absent
+            assert outcome.http_status == status
+            if expected_error is None:
+                assert outcome.error is None
+            else:
+                assert isinstance(outcome.error, expected_error)
+                assert outcome.error.__cause__ is validator_error
+        finally:
+            await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["get", "post"])
+async def test_unpaired_validator_timeout_stays_transient(
+    method: str,
+    make_client: MakeClientFactory,
+) -> None:
+    """Keep pre-response timeouts transient for both request methods.
+
+    Args:
+        method (str): HTTP method exercised by the request.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test verifies that an unpaired timeout is not treated as absence.
+    """
+
+    async def fail_before_response(
+        _request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Raise before delivering any response to the validator.
+
+        Args:
+            _request (aiohttp.ClientRequest): Request entering the middleware.
+            _handler (aiohttp.ClientHandlerType): Next request handler, not called.
+
+        Returns:
+            aiohttp.ClientResponse: Never returns because the timeout is raised.
+
+        Raises:
+            TimeoutError: The request times out before a response is delivered.
+        """
+        raise TimeoutError("before response")
+
+    async with aiohttp.ClientSession(middlewares=[fail_before_response]) as session:
+        client = make_client(session=session)
+        try:
+            if method == "get":
+                outcome = await client._do_get_outcome("/api/outcome")
+            else:
+                outcome = await client._do_post_outcome("/api/outcome", {})
+            assert outcome.is_transient
+        finally:
+            await client.async_close()
 
 
 @pytest.mark.asyncio

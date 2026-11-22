@@ -75,11 +75,21 @@ def _redact_url_credentials(message: str) -> str:
     Returns:
         str: Text with URL credentials redacted.
     """
-    return re.sub(
-        r"(://)([^:/@\s]+):([^@\s]+)@",
-        r"\1<redacted>:<redacted>@",
-        message,
-    )
+
+    def redact_authority(match: re.Match[str]) -> str:
+        """Replace URL userinfo while preserving its established placeholder shape.
+
+        Args:
+            match (re.Match[str]): Scheme, URL userinfo and host from the expression.
+
+        Returns:
+            str: URL authority with its userinfo redacted.
+        """
+        userinfo = match.group(2)[:-1]
+        replacement = "<redacted>:<redacted>" if ":" in userinfo else "<redacted>"
+        return f"{match.group(1)}{replacement}@{match.group(3)}"
+
+    return re.sub(r"(://)([^/?#\s]*@)([^@/?#\s]*)", redact_authority, message)
 
 
 def _log_request_failure(

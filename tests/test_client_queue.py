@@ -1396,18 +1396,44 @@ async def test_public_outcome_reads_preserve_malformed_json_policy(
     """
     client, session = make_mock_session_client(make_client)
     client.toggle_throwing_errors(throw_errors)
-    response = _MalformedJSONResponse()
+    endpoint = (
+        "/api/nut/diagnostics/upsstatus"
+        if method_name == "get_nut_ups_status"
+        else "/api/smart/service/list/1"
+    )
+    requests: list[str] = []
+
+    def fake_response(url: str, **_kwargs: Any) -> _MalformedJSONResponse:
+        """Return malformed JSON only from the endpoint under test.
+
+        Args:
+            url (str): Requested URL.
+            _kwargs (Any): HTTP options supplied by aiohttp callers.
+
+        Returns:
+            _MalformedJSONResponse: Response whose JSON body cannot be decoded.
+
+        Raises:
+            AssertionError: If a request targets an endpoint other than the one under test.
+        """
+        requests.append(url)
+        if not url.endswith(endpoint):
+            raise AssertionError(f"Unexpected {request_method.upper()} request: {url}")
+        return _MalformedJSONResponse()
+
     if request_method == "get":
-        session.get = lambda *_args, **_kwargs: response
+        session.get = fake_response
     else:
-        session.post = lambda *_args, **_kwargs: response
+        session.post = fake_response
     try:
         read = getattr(client, method_name)
         if throw_errors:
-            with pytest.raises(OPNsenseError):
+            with pytest.raises(OPNsenseError) as error:
                 await read()
+            assert isinstance(error.value.__cause__, json.JSONDecodeError)
         else:
             assert await read() is None
+        assert requests == [f"http://localhost{endpoint}"]
     finally:
         await client.async_close()
 
@@ -1832,6 +1858,7 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
     client, session = make_mock_session_client(make_client)
     client._use_snake_case = True
     recovered = False
+    endpoint_requests = 0
     config = {"uuid": "disabled", "role": "server", "enabled": "0", "name": "disabled"}
     populated = {
         aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT: {"rows": [config]},
@@ -1863,7 +1890,9 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
         Raises:
             TimeoutError: Simulated configuration timeout.
         """
+        nonlocal endpoint_requests
         if url.endswith(endpoint):
+            endpoint_requests += 1
             if recovered:
                 return FakeResponse(json_payload=populated[endpoint])
             if reply == "forbidden":
@@ -1913,6 +1942,7 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
             # A cached 403 is answered without a request until its cache window expires.
             assert result is not None
             assert "disabled" not in result[collection]
+            assert endpoint_requests == 1
             return
         assert result is not None
         assert "disabled" in result[collection]

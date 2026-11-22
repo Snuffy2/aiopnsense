@@ -385,6 +385,9 @@ def install_fake_router(
 
         Returns:
             Any: Result the queue worker would set.
+
+        Raises:
+            ValueError: If the requested operation is not supported by the fake router.
         """
         caller = "fake router"
         if method == "get":
@@ -397,7 +400,9 @@ def install_fake_router(
             return await client._do_post(path, payload, caller)
         if method == "post_outcome":
             return await client._do_post_outcome(path, payload, caller)
-        return await client._do_get_from_stream(path, caller)
+        if method == "get_from_stream":
+            return await client._do_get_from_stream(path, caller)
+        raise ValueError(f"Unknown fake-router queue method: {method}")
 
     session.get = get
     session.post = post
