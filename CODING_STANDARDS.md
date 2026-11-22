@@ -40,6 +40,7 @@ Standards for code in `aiopnsense/` and `tests/`. Rules that `ruff`, `mypy` or `
 ## Public API and return shapes
 
 - Names without a leading underscore are public. Deprecate with `warnings.deprecated`, naming the replacement, and keep the old behavior working, as `get_arp_table` does.
+- The pytest suite enforces a leading underscore on module-scope classes, functions, type aliases, plain `=` assignments and annotated assignments in private modules, including declarations inside control flow. It skips declarations local to classes and functions. `AiopnsenseClientProtocol` in `_typing.py` is the internal mixin contract and keeps its established name.
 - Return new structured data as frozen, slotted dataclasses rather than loose dictionaries.
 
 ## Firmware compatibility
