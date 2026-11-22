@@ -84,10 +84,11 @@ class TelemetryMixin(AiopnsenseClientProtocol):
                 metadata, MAC address, enabled flag, and VLAN tag when
                 available.
         """
-        if not await self._is_get_endpoint_available(INTERFACE_OVERVIEW_EXPORT_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(INTERFACE_OVERVIEW_EXPORT_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Interface overview endpoint unavailable")
             return {}
-        interface_info = await self._safe_list_get(INTERFACE_OVERVIEW_EXPORT_ENDPOINT)
+        interface_info = outcome.sequence()
         if not len(interface_info) > 0:
             return {}
         interfaces: dict[str, Any] = {}
@@ -139,10 +140,11 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any]: Mapping containing current and total mbuf
                 counts plus ``used_percent``.
         """
-        if not await self._is_get_endpoint_available(SYSTEM_MBUF_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(SYSTEM_MBUF_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Telemetry mbuf endpoint unavailable")
             return {}
-        mbuf_info = await self._safe_dict_get(SYSTEM_MBUF_ENDPOINT)
+        mbuf_info = outcome.mapping()
         mbuf: dict[str, Any] = {}
         mbuf["used"] = try_to_int(dict_get(mbuf_info, "mbuf-statistics.mbuf-current"))
         mbuf["total"] = try_to_int(dict_get(mbuf_info, "mbuf-statistics.mbuf-total"))
@@ -157,10 +159,11 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any]: Mapping containing current and maximum PF
                 state counts plus ``used_percent``.
         """
-        if not await self._is_get_endpoint_available(FIREWALL_PF_STATES_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(FIREWALL_PF_STATES_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Telemetry pfstate endpoint unavailable")
             return {}
-        pfstate_info = await self._safe_dict_get(FIREWALL_PF_STATES_ENDPOINT)
+        pfstate_info = outcome.mapping()
         pfstate: dict[str, Any] = {}
         pfstate["used"] = try_to_int(pfstate_info.get("current", None))
         pfstate["total"] = try_to_int(pfstate_info.get("limit", None))
@@ -180,23 +183,25 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             snake_case_path=SYSTEM_RESOURCES_SNAKE_ENDPOINT,
             camel_case_path=SYSTEM_RESOURCES_CAMELCASE_ENDPOINT,
         )
-        if not await self._is_get_endpoint_available(memory_endpoint):
+        memory_outcome = await self._fetch_endpoint_outcome(memory_endpoint)
+        if not memory_outcome.is_data:
             _LOGGER.debug("Telemetry memory endpoint unavailable")
             return {
                 "physmem": None,
                 "used": None,
                 "used_percent": None,
             }
-        memory_info = await self._safe_dict_get(memory_endpoint)
+        memory_info = memory_outcome.mapping()
         memory: dict[str, Any] = {}
         memory["physmem"] = try_to_int(dict_get(memory_info, "memory.total"))
         memory["used"] = try_to_int(dict_get(memory_info, "memory.used"))
         memory["used_percent"] = self._usage_percent(memory["used"], memory["physmem"])
-        if not await self._is_get_endpoint_available(SYSTEM_SWAP_ENDPOINT):
+        swap_outcome = await self._fetch_endpoint_outcome(SYSTEM_SWAP_ENDPOINT)
+        if not swap_outcome.is_data:
             _LOGGER.debug("Telemetry swap endpoint unavailable")
             return memory
 
-        swap_info = await self._safe_dict_get(SYSTEM_SWAP_ENDPOINT)
+        swap_info = swap_outcome.mapping()
         swap_rows = swap_info.get("swap")
         if not isinstance(swap_rows, list) or not swap_rows:
             return memory
@@ -222,10 +227,11 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             snake_case_path=SYSTEM_TIME_SNAKE_ENDPOINT,
             camel_case_path=SYSTEM_TIME_CAMELCASE_ENDPOINT,
         )
-        if not await self._is_get_endpoint_available(time_endpoint):
+        time_outcome = await self._fetch_endpoint_outcome(time_endpoint)
+        if not time_outcome.is_data:
             _LOGGER.debug("Telemetry system time endpoint unavailable")
             return {}
-        time_info = await self._safe_dict_get(time_endpoint)
+        time_info = time_outcome.mapping()
         system: dict[str, Any] = {}
         opnsense_tz = await self._get_opnsense_timezone(time_info.get("datetime"))
 
@@ -309,10 +315,11 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             snake_case_path=CPU_TYPE_SNAKE_ENDPOINT,
             camel_case_path=CPU_TYPE_CAMELCASE_ENDPOINT,
         )
-        if not await self._is_get_endpoint_available(cpu_type_endpoint):
+        cpu_type_outcome = await self._fetch_endpoint_outcome(cpu_type_endpoint)
+        if not cpu_type_outcome.is_data:
             _LOGGER.debug("Telemetry CPU type endpoint unavailable")
             return {}
-        cputype_info = await self._safe_list_get(cpu_type_endpoint)
+        cputype_info = cpu_type_outcome.sequence()
         if not len(cputype_info) > 0:
             return {}
         cpu: dict[str, Any] = {}
@@ -345,10 +352,11 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             snake_case_path=SYSTEM_DISK_SNAKE_ENDPOINT,
             camel_case_path=SYSTEM_DISK_CAMELCASE_ENDPOINT,
         )
-        if not await self._is_get_endpoint_available(filesystems_endpoint):
+        filesystems_outcome = await self._fetch_endpoint_outcome(filesystems_endpoint)
+        if not filesystems_outcome.is_data:
             _LOGGER.debug("Telemetry filesystem endpoint unavailable")
             return []
-        filesystems_info = await self._safe_dict_get(filesystems_endpoint)
+        filesystems_info = filesystems_outcome.mapping()
         filesystems: list = filesystems_info.get("devices", [])
         return filesystems
 
@@ -361,10 +369,11 @@ class TelemetryMixin(AiopnsenseClientProtocol):
                 gateway row preserved from OPNsense and ``status`` normalized
                 from the translated status when available.
         """
-        if not await self._is_get_endpoint_available(GATEWAY_STATUS_ENDPOINT):
+        gateways_outcome = await self._fetch_endpoint_outcome(GATEWAY_STATUS_ENDPOINT)
+        if not gateways_outcome.is_data:
             _LOGGER.debug("Gateway status endpoint unavailable")
             return {}
-        gateways_info = await self._safe_dict_get(GATEWAY_STATUS_ENDPOINT)
+        gateways_info = gateways_outcome.mapping()
         gateways: dict[str, Any] = {}
         for gw_info in gateways_info.get("items", []):
             if isinstance(gw_info, MutableMapping) and "name" in gw_info:
@@ -386,10 +395,11 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             snake_case_path=SYSTEM_TEMPERATURE_SNAKE_ENDPOINT,
             camel_case_path=SYSTEM_TEMPERATURE_CAMELCASE_ENDPOINT,
         )
-        if not await self._is_get_endpoint_available(temperature_endpoint):
+        temps_outcome = await self._fetch_endpoint_outcome(temperature_endpoint)
+        if not temps_outcome.is_data:
             _LOGGER.debug("Telemetry temperature endpoint unavailable")
             return {}
-        temps_info = await self._safe_list_get(temperature_endpoint)
+        temps_info = temps_outcome.sequence()
         if not len(temps_info) > 0:
             return {}
         temps: dict[str, Any] = {}

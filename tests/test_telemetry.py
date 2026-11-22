@@ -1,98 +1,244 @@
 """Tests for `aiopnsense.telemetry`."""
 
 from collections.abc import Callable, MutableMapping
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
-from aiopnsense import OPNsensePrivilegeMissing
-from tests.conftest import install_fake_router, make_mock_session_client
+from aiopnsense import OPNsenseClient, OPNsenseError, OPNsensePrivilegeMissing
+from tests.conftest import FakeRouter, install_fake_router, make_mock_session_client
+
+ClientType = Callable[..., OPNsenseClient]
+
+INTERFACE_PATH = "/api/interfaces/overview/export"
+MBUF_PATH = "/api/diagnostics/system/system_mbuf"
+PF_STATES_PATH = "/api/diagnostics/firewall/pf_states"
+RESOURCES_PATH = "/api/diagnostics/system/system_resources"
+SWAP_PATH = "/api/diagnostics/system/system_swap"
+TIME_PATH = "/api/diagnostics/system/system_time"
+CPU_TYPE_PATH = "/api/diagnostics/cpu_usage/get_c_p_u_type"
+CPU_STREAM_PATH = "/api/diagnostics/cpu_usage/stream"
+DISK_PATH = "/api/diagnostics/system/system_disk"
+GATEWAY_PATH = "/api/routes/gateway/status"
+TEMPERATURE_PATH = "/api/diagnostics/system/system_temperature"
+
+MEMORY_EMPTY: dict[str, Any] = {"physmem": None, "used": None, "used_percent": None}
+CPU_TYPE_PAYLOAD = ["Intel(R) Xeon (4 cores, 8 threads)"]
+MEMORY_PAYLOAD: dict[str, Any] = {"memory": {"total": "100", "used": "50"}}
+TIME_PAYLOAD: dict[str, Any] = {
+    "datetime": "2026-03-07 12:00:00",
+    "boottime": "2026-03-06 12:00:00",
+    "uptime": "1 days, 00:00:00",
+    "loadavg": "1.00, 0.50, 0.25",
+}
+
+# Each telemetry read with the endpoint it requests and the value it returns when that endpoint is unavailable.
+EMPTY_READS = [
+    pytest.param("get_interfaces", INTERFACE_PATH, {}, id="interfaces"),
+    pytest.param("_get_telemetry_mbuf", MBUF_PATH, {}, id="mbuf"),
+    pytest.param("_get_telemetry_pfstate", PF_STATES_PATH, {}, id="pfstate"),
+    pytest.param("_get_telemetry_memory", RESOURCES_PATH, MEMORY_EMPTY, id="memory"),
+    pytest.param("_get_telemetry_system", TIME_PATH, {}, id="system"),
+    pytest.param("_get_telemetry_cpu", CPU_TYPE_PATH, {}, id="cpu"),
+    pytest.param("_get_telemetry_filesystems", DISK_PATH, [], id="filesystems"),
+    pytest.param("get_gateways", GATEWAY_PATH, {}, id="gateways"),
+    pytest.param("_get_telemetry_temps", TEMPERATURE_PATH, {}, id="temps"),
+]
+
+# A 200 payload for each telemetry read's endpoint.
+PRESENT_PAYLOADS: dict[str, Any] = {
+    "get_interfaces": [{"identifier": "em0", "description": "lan", "status": "up"}],
+    "_get_telemetry_mbuf": {"mbuf-statistics": {"mbuf-current": "10", "mbuf-total": "20"}},
+    "_get_telemetry_pfstate": {"current": "5", "limit": "10"},
+    "_get_telemetry_memory": MEMORY_PAYLOAD,
+    "_get_telemetry_system": TIME_PAYLOAD,
+    "_get_telemetry_cpu": CPU_TYPE_PAYLOAD,
+    "_get_telemetry_filesystems": {"devices": [{"dev": "/dev/da0"}]},
+    "get_gateways": {"items": [{"name": "WAN_DHCP", "status_translated": "Online"}]},
+    "_get_telemetry_temps": [{"temperature": "45.5", "type_translated": "CPU", "device_seq": 0}],
+}
+
+
+def _client_with_router(
+    make_client: ClientType,
+    routes: dict[tuple[str, str], Any],
+    *,
+    throw_errors: bool = False,
+) -> tuple[OPNsenseClient, FakeRouter]:
+    """Return a snake_case client backed by a fake Router answering ``routes``.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        routes (dict[tuple[str, str], Any]): Values keyed by ``(method, path)``.
+        throw_errors (bool): Whether the client should raise public errors.
+
+    Returns:
+        tuple[OPNsenseClient, FakeRouter]: Client and the fake Router recording its requests.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes=routes)
+    client._use_snake_case = True
+    if throw_errors:
+        client.toggle_throwing_errors(True)
+    return client, router
 
 
 @pytest.mark.asyncio
-async def test_telemetry_system_parsing_and_filesystems(
-    make_client: Callable[..., Any],
+@pytest.mark.parametrize("read, path, empty", EMPTY_READS)
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(404, id="absent-404"),
+        pytest.param(403, id="forbidden-403"),
+        pytest.param(500, id="transient-500"),
+        pytest.param(TimeoutError(), id="transient-timeout"),
+    ],
+)
+async def test_telemetry_read_returns_empty_value_when_endpoint_fails(
+    make_client: ClientType, read: str, path: str, empty: Any, failure: Any
 ) -> None:
-    """Validate telemetry system parsing and filesystem branch behavior.
+    """Each telemetry read returns its empty value for 404, 403 and transient failures.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates parsing fallbacks and filesystem response handling.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        read (str): Name of the telemetry read method.
+        path (str): Endpoint path the read requests.
+        empty (Any): Value the read returns when the endpoint is unavailable.
+        failure (Any): HTTP status or exception the fake Router answers with.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, router = _client_with_router(make_client, {("GET", path): failure})
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        # time_info with bad datetime and uptime matching regex
-        time_info = {
-            "datetime": "not-a-date",
-            "uptime": "1 days, 01:02:03",
-            "boottime": "also-bad",
-            "loadavg": "bad",
-        }
-
-        async def fake_safe_get(path: str) -> dict[str, Any]:
-            """Return fixture payloads for telemetry endpoint paths.
-
-            Args:
-                path (str): API endpoint path to request.
-
-            Returns:
-                dict[str, Any]: System time, disk device, or empty fixture
-                    payload selected by the requested path.
-            """
-            if "system_time" in path:
-                return time_info
-            if "system_disk" in path:
-                return {"devices": [{"dev": "/dev/da0"}]}
-            return {}
-
-        client._safe_dict_get = AsyncMock(side_effect=fake_safe_get)
-        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-
-        sys = await client._get_telemetry_system()
-        assert isinstance(sys, MutableMapping)
-        # At least one of the expected fields is normalized/present
-        assert any(k in sys for k in ("uptime", "boottime", "loadavg"))
-        client._get_opnsense_timezone.assert_awaited_once_with("not-a-date")
-
-        files = await client._get_telemetry_filesystems()
-        assert isinstance(files, list)
-        assert all(isinstance(filesystem, MutableMapping) for filesystem in files)
-        assert all(isinstance(filesystem.get("dev"), str) for filesystem in files)
+        assert await getattr(client, read)() == empty
+        assert router.count("GET", path) == 1
     finally:
         await client.async_close()
 
 
-CPU_STREAM_PATH = "/api/diagnostics/cpu_usage/stream"
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read, path, empty", EMPTY_READS)
+async def test_telemetry_read_costs_one_request_when_endpoint_present(
+    make_client: ClientType, read: str, path: str, empty: Any
+) -> None:
+    """A present telemetry endpoint is requested once per read, with no separate probe.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        read (str): Name of the telemetry read method.
+        path (str): Endpoint path the read requests.
+        empty (Any): Value the read returns when the endpoint is unavailable.
+    """
+    client, router = _client_with_router(make_client, {("GET", path): PRESENT_PAYLOADS[read]})
+    client._get_from_stream = AsyncMock(return_value={})
+    try:
+        assert await getattr(client, read)() != empty
+        assert router.count("GET", path) == 1
+    finally:
+        await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_telemetry_cpu_variants(make_client: Callable[..., Any]) -> None:
+@pytest.mark.parametrize("read, path, empty", EMPTY_READS)
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(403, id="forbidden-403"),
+        pytest.param(500, id="transient-500"),
+        pytest.param(TimeoutError(), id="transient-timeout"),
+    ],
+)
+async def test_telemetry_read_raises_for_forbidden_or_transient_failure_in_throw_mode(
+    make_client: ClientType, read: str, path: str, empty: Any, failure: Any
+) -> None:
+    """In throw mode a 403 or transient failure raises an ``OPNsenseError`` instead of the empty value.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        read (str): Name of the telemetry read method.
+        path (str): Endpoint path the read requests.
+        empty (Any): Value the read returns in default mode.
+        failure (Any): HTTP status or exception the fake Router answers with.
+    """
+    client, _router = _client_with_router(make_client, {("GET", path): failure}, throw_errors=True)
+    try:
+        with pytest.raises(OPNsenseError):
+            await getattr(client, read)()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read, path, empty", EMPTY_READS)
+async def test_telemetry_read_returns_empty_without_raising_for_absent_endpoint_in_throw_mode(
+    make_client: ClientType, read: str, path: str, empty: Any
+) -> None:
+    """In throw mode a 404 is still the absent endpoint and returns the empty value.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        read (str): Name of the telemetry read method.
+        path (str): Endpoint path the read requests.
+        empty (Any): Value the read returns for an absent endpoint.
+    """
+    client, _router = _client_with_router(make_client, {("GET", path): 404}, throw_errors=True)
+    try:
+        assert await getattr(client, read)() == empty
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_system_parsing_and_filesystems(make_client: ClientType) -> None:
+    """Validate telemetry system parsing and filesystem branch behavior.
+
+    Args:
+        make_client (ClientType): Fixture factory used to create client instances.
+    """
+    client, _router = _client_with_router(
+        make_client,
+        {
+            ("GET", TIME_PATH): {
+                "datetime": "not-a-date",
+                "uptime": "1 days, 01:02:03",
+                "boottime": "also-bad",
+                "loadavg": "bad",
+            },
+            ("GET", DISK_PATH): {"devices": [{"dev": "/dev/da0"}]},
+        },
+    )
+    try:
+        system = await client._get_telemetry_system()
+        assert isinstance(system, MutableMapping)
+        assert system["uptime"] == 90123
+        assert "boottime" in system
+        assert system["load_average"] == {
+            "one_minute": None,
+            "five_minute": None,
+            "fifteen_minute": None,
+        }
+
+        files = await client._get_telemetry_filesystems()
+        assert files == [{"dev": "/dev/da0"}]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_cpu_variants(make_client: ClientType) -> None:
     """Validate CPU telemetry behavior for empty and valid stream branches.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates CPU count and usage normalization across branches.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", CPU_STREAM_PATH): 200})
+    client, router = _client_with_router(
+        make_client,
+        {("GET", CPU_TYPE_PATH): [], ("GET", CPU_STREAM_PATH): 200},
+    )
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        # empty cpu type -> returns {}
-        client._safe_list_get = AsyncMock(return_value=[])
-        cpu_empty = await client._get_telemetry_cpu()
-        assert cpu_empty == {}
+        assert await client._get_telemetry_cpu() == {}
 
-        # valid cpu type and stream
-        client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
+        router.routes[("GET", CPU_TYPE_PATH)] = CPU_TYPE_PAYLOAD
         client._get_from_stream = AsyncMock(
             return_value={
                 "total": "29",
@@ -104,8 +250,9 @@ async def test_telemetry_cpu_variants(make_client: Callable[..., Any]) -> None:
             }
         )
         cpu = await client._get_telemetry_cpu()
-        assert isinstance(cpu.get("count"), int)
-        assert cpu.get("usage_total") == 29
+        assert cpu["count"] == 4
+        assert cpu["usage_total"] == 29
+        assert cpu["usage_idle"] == 70
     finally:
         await client.async_close()
 
@@ -120,20 +267,22 @@ async def test_telemetry_cpu_variants(make_client: Callable[..., Any]) -> None:
 )
 @pytest.mark.asyncio
 async def test_telemetry_cpu_omits_usage_when_stream_unavailable(
-    make_client: Callable[..., Any], stream_answer: int
+    make_client: ClientType, stream_answer: int
 ) -> None:
     """A CPU stream the Router does not serve leaves only the core count, without reading the stream.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+        make_client (ClientType): Fixture factory used to create client instances.
         stream_answer (int): HTTP status the Router returns for the CPU stream endpoint.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", CPU_STREAM_PATH): stream_answer})
+    client, router = _client_with_router(
+        make_client,
+        {
+            ("GET", CPU_TYPE_PATH): ["Intel (2 cores)"],
+            ("GET", CPU_STREAM_PATH): stream_answer,
+        },
+    )
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
         client._get_from_stream = AsyncMock()
 
         assert await client._get_telemetry_cpu() == {"count": 2}
@@ -145,21 +294,19 @@ async def test_telemetry_cpu_omits_usage_when_stream_unavailable(
 
 @pytest.mark.asyncio
 async def test_telemetry_cpu_raises_permission_error_for_forbidden_stream_in_throw_mode(
-    make_client: Callable[..., Any],
+    make_client: ClientType,
 ) -> None:
     """A 403 on the CPU stream raises in throw mode instead of omitting the usage fields.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", CPU_STREAM_PATH): 403})
-    client.toggle_throwing_errors(True)
+    client, _router = _client_with_router(
+        make_client,
+        {("GET", CPU_TYPE_PATH): ["Intel (2 cores)"], ("GET", CPU_STREAM_PATH): 403},
+        throw_errors=True,
+    )
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
-
         with pytest.raises(OPNsensePrivilegeMissing):
             await client._get_telemetry_cpu()
     finally:
@@ -167,35 +314,28 @@ async def test_telemetry_cpu_raises_permission_error_for_forbidden_stream_in_thr
 
 
 @pytest.mark.asyncio
-async def test_telemetry_mbuf_pfstate_and_temps(make_client: Callable[..., Any]) -> None:
+async def test_telemetry_mbuf_pfstate_and_temps(make_client: ClientType) -> None:
     """Validate telemetry parsing for mbuf, pfstate, and temperature sensors.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates numeric parsing and temperature mapping behavior.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, _router = _client_with_router(
+        make_client,
+        {
+            ("GET", MBUF_PATH): {"mbuf-statistics": {"mbuf-current": "10", "mbuf-total": "20"}},
+            ("GET", PF_STATES_PATH): {"current": "5", "limit": "10"},
+            ("GET", TEMPERATURE_PATH): [
+                {"temperature": "45.5", "type_translated": "CPU", "device_seq": 0}
+            ],
+        },
+    )
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        # mbuf and pfstate basic numeric parsing
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
-                {"mbuf-statistics": {"mbuf-current": "10", "mbuf-total": "20"}},
-                {"current": "5", "limit": "10"},
-            ]
-        )
         mbuf = await client._get_telemetry_mbuf()
         pf = await client._get_telemetry_pfstate()
-        assert mbuf.get("used") == 10 and mbuf.get("total") == 20
-        assert pf.get("used") == 5 and pf.get("total") == 10
+        assert mbuf == {"used": 10, "total": 20, "used_percent": 50}
+        assert pf == {"used": 5, "total": 10, "used_percent": 50}
 
-        # temps: return list with one entry
-        client._safe_list_get = AsyncMock(
-            return_value=[{"temperature": "45.5", "type_translated": "CPU", "device_seq": 0}]
-        )
         temps = await client._get_telemetry_temps()
         assert isinstance(temps, MutableMapping) and len(temps) == 1
     finally:
@@ -203,42 +343,38 @@ async def test_telemetry_mbuf_pfstate_and_temps(make_client: Callable[..., Any])
 
 
 @pytest.mark.asyncio
-async def test_get_interfaces_status_variants(make_client: Callable[..., Any]) -> None:
+async def test_get_interfaces_status_variants(make_client: ClientType) -> None:
     """Validate interface parsing for status normalization and MAC filtering.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates associated-status mapping and zero-MAC filtering.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, _router = _client_with_router(
+        make_client,
+        {
+            ("GET", INTERFACE_PATH): [
+                {
+                    "identifier": "em0",
+                    "description": "eth0",
+                    "status": "down",
+                    "macaddr": "aa:bb:cc:dd:ee:ff",
+                },
+                {
+                    "identifier": "em1",
+                    "description": "eth1",
+                    "status": "associated",
+                    "macaddr": "00:00:00:00:00:00",
+                },
+                {
+                    "identifier": "em2",
+                    "description": "eth2",
+                    "status": "up",
+                    "macaddr": "11:22:33:44:55:66",
+                },
+            ]
+        },
+    )
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        # prepare list with various status and mac strings
-        iface_list = [
-            {
-                "identifier": "em0",
-                "description": "eth0",
-                "status": "down",
-                "macaddr": "aa:bb:cc:dd:ee:ff",
-            },
-            {
-                "identifier": "em1",
-                "description": "eth1",
-                "status": "associated",
-                "macaddr": "00:00:00:00:00:00",
-            },
-            {
-                "identifier": "em2",
-                "description": "eth2",
-                "status": "up",
-                "macaddr": "11:22:33:44:55:66",
-            },
-        ]
-
-        client._safe_list_get = AsyncMock(return_value=iface_list)
         interfaces = await client.get_interfaces()
         assert "em0" in interfaces and interfaces["em0"]["status"] == "down"
         assert "em1" in interfaces and interfaces["em1"]["status"] == "up"
@@ -249,59 +385,43 @@ async def test_get_interfaces_status_variants(make_client: Callable[..., Any]) -
 
 
 @pytest.mark.asyncio
-async def test_telemetry_memory_swap_branches(make_client: Callable[..., Any]) -> None:
+async def test_telemetry_memory_swap_branches(make_client: ClientType) -> None:
     """Validate memory telemetry parsing when swap details are available.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates base memory parsing and swap enrichment behavior.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, router = _client_with_router(
+        make_client,
+        {
+            ("GET", RESOURCES_PATH): {"memory": {"total": "8000", "used": "2000"}},
+            ("GET", SWAP_PATH): {"swap": [{"total": "1000", "used": "200"}]},
+        },
+    )
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        # prepare memory info with swap list present
-        mem = {"memory": {"total": "8000", "used": "2000"}}
-        swap = {"swap": [{"total": "1000", "used": "200"}]}
-
-        async def fake_get(path: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
-            """Return fixture payloads for memory and swap endpoint paths.
-
-            Args:
-                path (str): API endpoint path to request.
-                _args (Any): Positional arguments accepted by `fake_get`.
-                _kwargs (Any): Keyword arguments accepted by `fake_get`.
-
-            Returns:
-                dict[str, Any]: Memory, swap, or empty fixture payload selected
-                    by the requested path.
-            """
-            if "system_resources" in path:
-                return mem
-            if "system_swap" in path:
-                return swap
-            return {}
-
-        client._safe_dict_get = AsyncMock(side_effect=fake_get)
-        res = await client._get_telemetry_memory()
-        assert isinstance(res.get("physmem"), int) or res.get("physmem") is None
+        memory = await client._get_telemetry_memory()
+        assert memory == {
+            "physmem": 8000,
+            "used": 2000,
+            "used_percent": 25,
+            "swap_total": 1000,
+            "swap_reserved": 200,
+            "swap_used_percent": 20,
+        }
+        assert router.count("GET", RESOURCES_PATH) == 1
+        assert router.count("GET", SWAP_PATH) == 1
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_get_telemetry_aggregates_sections(make_client: Callable[..., Any]) -> None:
+async def test_get_telemetry_aggregates_sections(make_client: ClientType) -> None:
     """Validate that telemetry aggregation combines all section helper outputs.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates section aggregation into the telemetry payload.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, _router = _client_with_router(make_client, {})
     try:
         client._get_telemetry_mbuf = AsyncMock(return_value={"used": 1})
         client._get_telemetry_pfstate = AsyncMock(return_value={"used": 2})
@@ -324,35 +444,27 @@ async def test_get_telemetry_aggregates_sections(make_client: Callable[..., Any]
 
 
 @pytest.mark.asyncio
-async def test_get_interfaces_empty_and_invalid_rows(make_client: Callable[..., Any]) -> None:
+async def test_get_interfaces_empty_and_invalid_rows(make_client: ClientType) -> None:
     """Validate interface helper behavior for empty and malformed row payloads.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates empty-return and invalid-row filtering behavior.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, router = _client_with_router(make_client, {("GET", INTERFACE_PATH): []})
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_list_get = AsyncMock(return_value=[])
         assert await client.get_interfaces() == {}
 
-        client._safe_list_get = AsyncMock(
-            return_value=[
-                None,
-                {"identifier": ""},
-                {
-                    "identifier": "em0",
-                    "description": "lan",
-                    "status": "unknown-status",
-                    "statistics": {},
-                    "macaddr": "aa:bb:cc:dd:ee:ff",
-                },
-            ]
-        )
+        router.routes[("GET", INTERFACE_PATH)] = [
+            None,
+            {"identifier": ""},
+            {
+                "identifier": "em0",
+                "description": "lan",
+                "status": "unknown-status",
+                "statistics": {},
+                "macaddr": "aa:bb:cc:dd:ee:ff",
+            },
+        ]
         interfaces = await client.get_interfaces()
         assert list(interfaces) == ["em0"]
         assert interfaces["em0"]["status"] == ""
@@ -361,27 +473,20 @@ async def test_get_interfaces_empty_and_invalid_rows(make_client: Callable[..., 
 
 
 @pytest.mark.asyncio
-async def test_telemetry_memory_returns_without_swap_details(
-    make_client: Callable[..., Any],
-) -> None:
+async def test_telemetry_memory_returns_without_swap_details(make_client: ClientType) -> None:
     """Validate memory telemetry when swap payload shape is malformed.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates that memory fields are returned without swap enrichment.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, _router = _client_with_router(
+        make_client,
+        {
+            ("GET", RESOURCES_PATH): {"memory": {"total": "4000", "used": "1000"}},
+            ("GET", SWAP_PATH): {"swap": "bad-shape"},
+        },
+    )
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
-                {"memory": {"total": "4000", "used": "1000"}},
-                {"swap": "bad-shape"},
-            ]
-        )
         memory = await client._get_telemetry_memory()
         assert memory["physmem"] == 4000
         assert memory["used"] == 1000
@@ -391,44 +496,51 @@ async def test_telemetry_memory_returns_without_swap_details(
 
 
 @pytest.mark.asyncio
+async def test_telemetry_memory_returns_base_payload_when_swap_endpoint_missing(
+    make_client: ClientType,
+) -> None:
+    """Telemetry memory should keep base memory fields when swap endpoint is absent.
+
+    Args:
+        make_client (ClientType): Fixture factory used to create client instances.
+    """
+    client, router = _client_with_router(
+        make_client,
+        {
+            ("GET", RESOURCES_PATH): MEMORY_PAYLOAD,
+            ("GET", SWAP_PATH): 404,
+        },
+    )
+    try:
+        memory = await client._get_telemetry_memory()
+
+        assert memory == {
+            "physmem": 100,
+            "used": 50,
+            "used_percent": 50,
+        }
+        assert router.count("GET", RESOURCES_PATH) == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_telemetry_system_branches_with_boottime_and_uptime_variants(
-    make_client: Callable[..., Any],
+    make_client: ClientType,
 ) -> None:
     """Validate system telemetry boottime parsing and uptime fallback branches.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates matched and unmatched uptime parsing behavior.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, router = _client_with_router(make_client, {("GET", TIME_PATH): TIME_PAYLOAD})
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "datetime": "2026-03-07 12:00:00",
-                "boottime": "2026-03-06 12:00:00",
-                "uptime": "1 days, 00:00:00",
-                "loadavg": "1.00, 0.50, 0.25",
-            }
-        )
         matched = await client._get_telemetry_system()
         assert isinstance(matched.get("boottime"), float)
         assert matched.get("uptime") == 86400
         assert matched.get("load_average", {}).get("one_minute") == 1.0
 
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "datetime": "2026-03-07 12:00:00",
-                "boottime": "2026-03-06 12:00:00",
-                "uptime": "bad-format",
-                "loadavg": "1.00, 0.50, 0.25",
-            }
-        )
+        router.routes[("GET", TIME_PATH)] = {**TIME_PAYLOAD, "uptime": "bad-format"}
         unmatched = await client._get_telemetry_system()
         assert isinstance(unmatched.get("boottime"), float)
         assert isinstance(unmatched.get("uptime"), int)
@@ -437,29 +549,23 @@ async def test_telemetry_system_branches_with_boottime_and_uptime_variants(
 
 
 @pytest.mark.asyncio
-async def test_telemetry_system_invalid_uptime_without_boottime(
-    make_client: Callable[..., Any],
-) -> None:
+async def test_telemetry_system_invalid_uptime_without_boottime(make_client: ClientType) -> None:
     """Validate system telemetry when uptime and boottime are missing or malformed.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates load-average parsing without boottime fallback data.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-        client._safe_dict_get = AsyncMock(
-            return_value={
+    client, _router = _client_with_router(
+        make_client,
+        {
+            ("GET", TIME_PATH): {
                 "datetime": "2026-03-07 12:00:00",
                 "uptime": "bad-format",
                 "loadavg": "2.00, 1.00, 0.50",
             }
-        )
+        },
+    )
+    try:
         system = await client._get_telemetry_system()
         assert "boottime" not in system
         assert system["load_average"]["one_minute"] == 2.0
@@ -468,27 +574,25 @@ async def test_telemetry_system_invalid_uptime_without_boottime(
 
 
 @pytest.mark.asyncio
-async def test_get_gateways_skips_rows_without_name(make_client: Callable[..., Any]) -> None:
+async def test_get_gateways_skips_rows_without_name(make_client: ClientType) -> None:
     """Validate gateway parsing skips malformed entries without a name field.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates malformed-row filtering for gateway payloads.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
+    client, _router = _client_with_router(
+        make_client,
+        {
+            ("GET", GATEWAY_PATH): {
                 "items": [
                     {"status_translated": "Online"},
                     {"name": "gw1", "status_translated": "Online"},
                     "bad-row",
                 ]
             }
-        )
+        },
+    )
+    try:
         gateways = await client.get_gateways()
         assert list(gateways) == ["gw1"]
     finally:
@@ -496,239 +600,119 @@ async def test_get_gateways_skips_rows_without_name(make_client: Callable[..., A
 
 
 @pytest.mark.asyncio
-async def test_telemetry_temps_empty_returns_empty_mapping(
-    make_client: Callable[..., Any],
-) -> None:
+async def test_telemetry_temps_empty_returns_empty_mapping(make_client: ClientType) -> None:
     """Validate temperature telemetry returns an empty mapping for empty payloads.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates fail-closed behavior for empty temperature rows.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, _router = _client_with_router(make_client, {("GET", TEMPERATURE_PATH): []})
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_list_get = AsyncMock(return_value=[])
         assert await client._get_telemetry_temps() == {}
     finally:
         await client.async_close()
 
 
-@pytest.mark.asyncio
-async def test_version_switched_telemetry_endpoints_return_empty_data(
-    make_client: Callable[..., Any],
-) -> None:
-    """Switched telemetry endpoints should return empty structures when unavailable.
-
-    Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates behavior via assertions only.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
-        client._safe_list_get = AsyncMock()
-
-        assert await client._get_telemetry_memory() == {
-            "physmem": None,
-            "used": None,
-            "used_percent": None,
-        }
-        assert await client._get_telemetry_system() == {}
-        assert await client._get_telemetry_cpu() == {}
-        assert await client._get_telemetry_filesystems() == []
-        assert await client._get_telemetry_temps() == {}
-        client._safe_dict_get.assert_not_awaited()
-        client._safe_list_get.assert_not_awaited()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_telemetry_memory_returns_base_payload_when_swap_endpoint_missing(
-    make_client: Callable[..., Any],
-) -> None:
-    """Telemetry memory should keep base memory fields when swap endpoint is unavailable.
-
-    Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates behavior via assertions only.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "memory": {
-                    "total": "100",
-                    "used": "50",
-                }
-            }
-        )
-
-        memory = await client._get_telemetry_memory()
-
-        assert memory == {
-            "physmem": 100,
-            "used": 50,
-            "used_percent": 50,
-        }
-        client._safe_dict_get.assert_awaited_once_with("/api/diagnostics/system/system_resources")
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    (
-        "use_snake_case",
-        "expected_memory",
-        "expected_system",
-        "expected_cpu",
-        "expected_disk",
-        "expected_temp",
-    ),
+    ("use_snake_case", "endpoints"),
     [
-        (
+        pytest.param(
             True,
+            (
+                "/api/diagnostics/system/system_resources",
+                "/api/diagnostics/system/system_time",
+                "/api/diagnostics/cpu_usage/get_c_p_u_type",
+                "/api/diagnostics/system/system_disk",
+                "/api/diagnostics/system/system_temperature",
+            ),
+            id="snake-case",
+        ),
+        pytest.param(
+            False,
+            (
+                "/api/diagnostics/system/systemResources",
+                "/api/diagnostics/system/systemTime",
+                "/api/diagnostics/cpu_usage/getCPUType",
+                "/api/diagnostics/system/systemDisk",
+                "/api/diagnostics/system/systemTemperature",
+            ),
+            id="camel-case",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_telemetry_switched_endpoints_follow_selected_case(
+    make_client: ClientType, use_snake_case: bool, endpoints: tuple[str, ...]
+) -> None:
+    """Verify telemetry reads request only the endpoint style selected by the firmware.
+
+    Args:
+        make_client (ClientType): Fixture factory used to create client instances.
+        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
+        endpoints (tuple[str, ...]): Memory, time, CPU type, disk and temperature paths
+            for the selected endpoint style.
+    """
+    payloads: tuple[Any, ...] = (
+        MEMORY_PAYLOAD,
+        TIME_PAYLOAD,
+        CPU_TYPE_PAYLOAD,
+        {"devices": []},
+        [],
+    )
+    client, router = _client_with_router(
+        make_client,
+        {("GET", path): payload for path, payload in zip(endpoints, payloads, strict=True)},
+    )
+    try:
+        client._use_snake_case = use_snake_case
+        client._get_from_stream = AsyncMock(return_value={})
+
+        await client._get_telemetry_memory()
+        await client._get_telemetry_system()
+        await client._get_telemetry_cpu()
+        await client._get_telemetry_filesystems()
+        await client._get_telemetry_temps()
+
+        requested = {url.removeprefix(client._url) for _method, url, _body in router.requests}
+        other_style = {
             "/api/diagnostics/system/system_resources",
             "/api/diagnostics/system/system_time",
             "/api/diagnostics/cpu_usage/get_c_p_u_type",
             "/api/diagnostics/system/system_disk",
             "/api/diagnostics/system/system_temperature",
-        ),
-        (
-            False,
             "/api/diagnostics/system/systemResources",
             "/api/diagnostics/system/systemTime",
             "/api/diagnostics/cpu_usage/getCPUType",
             "/api/diagnostics/system/systemDisk",
             "/api/diagnostics/system/systemTemperature",
-        ),
-    ],
-)
-async def test_telemetry_switched_endpoints_follow_selected_case(
-    make_client: Callable[..., Any],
-    use_snake_case: bool,
-    expected_memory: str,
-    expected_system: str,
-    expected_cpu: str,
-    expected_disk: str,
-    expected_temp: str,
-) -> None:
-    """Verify switched telemetry helpers follow the selected endpoint style.
-
-    Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
-        expected_memory (str): Expected memory endpoint path.
-        expected_system (str): Expected system-time endpoint path.
-        expected_cpu (str): Expected CPU-type endpoint path.
-        expected_disk (str): Expected filesystem endpoint path.
-        expected_temp (str): Expected temperature endpoint path.
-
-    Returns:
-        None: This test validates telemetry endpoint selection behavior.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session)
-    try:
-        client._use_snake_case = use_snake_case
-        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=[True, False, True, True, True, True]
-        )
-        client._get_from_stream = AsyncMock(return_value={})
-
-        client._safe_dict_get = AsyncMock(return_value={"memory": {"total": "100", "used": "50"}})
-        await client._get_telemetry_memory()
-        client._safe_dict_get.assert_awaited_once_with(expected_memory)
-
-        client._safe_dict_get = AsyncMock(
-            return_value={"datetime": "2026-03-07 12:00:00", "loadavg": "bad"}
-        )
-        await client._get_telemetry_system()
-        client._safe_dict_get.assert_awaited_once_with(expected_system)
-
-        client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
-        await client._get_telemetry_cpu()
-        client._safe_list_get.assert_awaited_once_with(expected_cpu)
-
-        client._safe_dict_get = AsyncMock(return_value={"devices": []})
-        await client._get_telemetry_filesystems()
-        client._safe_dict_get.assert_awaited_once_with(expected_disk)
-
-        client._safe_list_get = AsyncMock(return_value=[])
-        await client._get_telemetry_temps()
-        client._safe_list_get.assert_awaited_once_with(expected_temp)
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_version_switched_telemetry_public_endpoints_fail_closed(
-    make_client: Callable[..., Any],
-) -> None:
-    """Public telemetry endpoints should return empty data when endpoints are unavailable.
-
-    Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates fail-closed behavior for switched telemetry endpoints.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
-        client._safe_list_get = AsyncMock()
-
-        assert await client.get_interfaces() == {}
-        assert await client._get_telemetry_mbuf() == {}
-        assert await client._get_telemetry_pfstate() == {}
-        assert await client.get_gateways() == {}
-        client._safe_dict_get.assert_not_awaited()
-        client._safe_list_get.assert_not_awaited()
+        } - set(endpoints)
+        assert set(endpoints) <= requested
+        assert not requested & other_style
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
 async def test_telemetry_system_aware_datetime_boottime_and_load_fallback(
-    make_client: Callable[..., Any],
+    make_client: ClientType,
 ) -> None:
     """System telemetry should preserve aware timestamps and fallback malformed load average.
 
     Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates aware timestamp parsing and malformed loadavg fallback.
+        make_client (ClientType): Fixture factory used to create client instances.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-        client._safe_dict_get = AsyncMock(
-            return_value={
+    client, _router = _client_with_router(
+        make_client,
+        {
+            ("GET", TIME_PATH): {
                 "datetime": "2026-03-07T12:00:00-05:00",
                 "boottime": "2026-03-07T11:00:00-05:00",
                 "uptime": "bad-format",
                 "loadavg": "bad-load",
             }
-        )
-
+        },
+    )
+    try:
         system = await client._get_telemetry_system()
         expected_boottime = datetime.fromisoformat("2026-03-07T11:00:00-05:00").timestamp()
 

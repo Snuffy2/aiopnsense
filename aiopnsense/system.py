@@ -517,10 +517,11 @@ class SystemMixin(AiopnsenseClientProtocol):
         """
         if datetime_str is None:
             try:
-                if not await self._is_get_endpoint_available(SYSTEM_TIME_ENDPOINT):
+                time_outcome = await self._fetch_endpoint_outcome(SYSTEM_TIME_ENDPOINT)
+                if not time_outcome.is_data:
                     _LOGGER.debug("System time endpoint unavailable for timezone resolution")
                     return None
-                datetime_payload = await self._safe_dict_get(SYSTEM_TIME_ENDPOINT)
+                datetime_payload = time_outcome.mapping()
             except (OPNsenseError, aiohttp.ClientError, TimeoutError) as err:
                 _LOGGER.debug(
                     "Failed to access OPNsense system time for timezone resolution: %s: %s",
@@ -528,11 +529,7 @@ class SystemMixin(AiopnsenseClientProtocol):
                     err,
                 )
                 return None
-            datetime_value = (
-                datetime_payload.get("datetime")
-                if isinstance(datetime_payload, MutableMapping)
-                else None
-            )
+            datetime_value = datetime_payload.get("datetime")
             datetime_str = datetime_value if isinstance(datetime_value, str) else None
 
         return self._parse_opnsense_tz(datetime_str)
@@ -566,11 +563,12 @@ class SystemMixin(AiopnsenseClientProtocol):
                 identifier. Returns ``None`` when no physical MAC addresses are
                 available and ``throw_errors`` is disabled.
         """
-        if not await self._is_get_endpoint_available(INTERFACE_OVERVIEW_EXPORT_ENDPOINT):
+        interfaces_outcome = await self._fetch_endpoint_outcome(INTERFACE_OVERVIEW_EXPORT_ENDPOINT)
+        if not interfaces_outcome.is_data:
             _LOGGER.debug("Interface overview endpoint unavailable for device id resolution")
             self._handle_missing_device_unique_id()
             return None
-        instances = await self._safe_list_get(INTERFACE_OVERVIEW_EXPORT_ENDPOINT)
+        instances = interfaces_outcome.sequence()
         mac_addresses: set[str] = set()
         for item in instances:
             if not isinstance(item, MutableMapping):
@@ -607,10 +605,11 @@ class SystemMixin(AiopnsenseClientProtocol):
             snake_case_path=SYSTEM_INFORMATION_SNAKE_ENDPOINT,
             camel_case_path=SYSTEM_INFORMATION_CAMELCASE_ENDPOINT,
         )
-        if not await self._is_get_endpoint_available(system_information_endpoint):
+        system_information_outcome = await self._fetch_endpoint_outcome(system_information_endpoint)
+        if not system_information_outcome.is_data:
             _LOGGER.debug("System information endpoint unavailable")
             return system_info
-        response = await self._safe_dict_get(system_information_endpoint)
+        response = system_information_outcome.mapping()
         system_info["name"] = response.get("name", None)
         return system_info
 
@@ -635,19 +634,18 @@ class SystemMixin(AiopnsenseClientProtocol):
             tuple[dict[str, Any], list[dict[str, Any]]]: Raw VIP status response and
             merged/normalized CARP VIP rows derived from status + settings endpoints.
         """
-        if not await self._is_get_endpoint_available(CARP_VIP_STATUS_ENDPOINT):
+        vip_status_outcome = await self._fetch_endpoint_outcome(CARP_VIP_STATUS_ENDPOINT)
+        if not vip_status_outcome.is_data:
             _LOGGER.debug("CARP VIP status endpoint unavailable")
             return {}, []
-        vip_status_raw = await self._safe_dict_get(CARP_VIP_STATUS_ENDPOINT)
+        vip_status = vip_status_outcome.mapping()
         vip_settings_raw: dict[str, Any] = {"rows": []}
-        if not await self._is_get_endpoint_available(VIP_SETTINGS_ENDPOINT):
+        vip_settings_outcome = await self._fetch_endpoint_outcome(VIP_SETTINGS_ENDPOINT)
+        if not vip_settings_outcome.is_data:
             _LOGGER.debug("CARP VIP settings endpoint unavailable; using status-only VIP data")
         else:
-            fetched_vip_settings = await self._safe_dict_get(VIP_SETTINGS_ENDPOINT)
-            if isinstance(fetched_vip_settings, MutableMapping):
-                vip_settings_raw = dict(fetched_vip_settings)
+            vip_settings_raw = vip_settings_outcome.mapping()
 
-        vip_status = dict(vip_status_raw) if isinstance(vip_status_raw, MutableMapping) else {}
         vip_status_rows = vip_status.get("rows")
         vip_settings_rows = vip_settings_raw.get("rows")
         merged_vips = self._merge_carp_vip_rows(
@@ -829,14 +827,15 @@ class SystemMixin(AiopnsenseClientProtocol):
                 subject ``id``, and parsed ``created_at`` timestamp when
                 available.
         """
-        if not await self._is_get_endpoint_available(CORE_SYSTEM_STATUS_ENDPOINT):
+        status_outcome = await self._fetch_endpoint_outcome(CORE_SYSTEM_STATUS_ENDPOINT)
+        if not status_outcome.is_data:
             _LOGGER.debug("System status endpoint unavailable for notices")
             return {
                 "pending_notices_present": False,
                 "pending_notices": [],
             }
 
-        notices_info = await self._safe_dict_get(CORE_SYSTEM_STATUS_ENDPOINT)
+        notices_info = status_outcome.mapping()
         pending_notices_present = False
         pending_notices: list = []
         for key, notice in notices_info.items():
@@ -875,10 +874,11 @@ class SystemMixin(AiopnsenseClientProtocol):
         # id = "all" to close all notices
         success = True
         if id.lower() == "all":
-            if not await self._is_get_endpoint_available(CORE_SYSTEM_STATUS_ENDPOINT):
+            status_outcome = await self._fetch_endpoint_outcome(CORE_SYSTEM_STATUS_ENDPOINT)
+            if not status_outcome.is_data:
                 _LOGGER.debug("System status endpoint unavailable for closing notices")
                 return False
-            notices = await self._safe_dict_get(CORE_SYSTEM_STATUS_ENDPOINT)
+            notices = status_outcome.mapping()
             for key, notice in notices.items():
                 if not isinstance(notice, MutableMapping):
                     continue
@@ -920,11 +920,12 @@ class SystemMixin(AiopnsenseClientProtocol):
                 certificate contains its UUID, issuer reference, RFC 3280
                 purpose, in-use flag, and validity timestamps.
         """
-        if not await self._is_get_endpoint_available(CERT_SEARCH_ENDPOINT):
+        certs_outcome = await self._fetch_endpoint_outcome(CERT_SEARCH_ENDPOINT)
+        if not certs_outcome.is_data:
             _LOGGER.debug("Certificate search endpoint unavailable")
             return {}
 
-        certs_raw = await self._safe_dict_get(CERT_SEARCH_ENDPOINT)
+        certs_raw = certs_outcome.mapping()
         cert_rows = certs_raw.get("rows")
         if not isinstance(cert_rows, list):
             return {}

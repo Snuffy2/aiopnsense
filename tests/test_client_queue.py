@@ -1841,7 +1841,6 @@ async def test_cancelled_close_releases_queued_vpn_call(
         return {"changed": True, "result": "Enabled"} if "/toggle/" in path else {"result": "ok"}
 
     client._do_post = AsyncMock(side_effect=do_post)
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
     try:
         vpn_queue_tasks.start(client._post("/occupy"))
         await asyncio.wait_for(started.wait(), timeout=3)
