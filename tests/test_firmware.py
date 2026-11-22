@@ -561,6 +561,7 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
             for shape in FIRMWARE_VERSION_SHAPES
             if shape.product_version is not None
         ),
+        pytest.param("27.1.b_21", "27.1.b", id="beta-latest-without-build"),
         pytest.param("26.7.6_3", "26.7.6", id="installed-hotfix-ahead-of-base"),
         pytest.param("26.7.6_3", "26.7.6.0", id="installed-hotfix-ahead-of-zero-component-base"),
         pytest.param("26.7.6_10", "26.7.6_9", id="installed-hotfix-ahead-of-revision"),
@@ -1230,6 +1231,63 @@ async def test_install_firmware_terminal_contract(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("packages", "expected_latest"),
+    [
+        pytest.param(
+            [
+                {"name": "curl", "current_version": "8.1", "new_version": "8.2"},
+                {
+                    "name": "opnsense-devel",
+                    "current_version": "27.1.b_21",
+                    "new_version": "27.1.b_22",
+                },
+            ],
+            "27.1.b_22",
+            id="devel-update-available",
+        ),
+        pytest.param(
+            [{"name": "curl", "current_version": "8.1", "new_version": "8.2"}],
+            "27.1.b",
+            id="other-package-update",
+        ),
+        pytest.param([], "27.1.b", id="no-updates"),
+    ],
+)
+async def test_firmware_update_info_reports_exact_devel_build(
+    make_client: Callable[..., Any],
+    packages: list[dict[str, str]],
+    expected_latest: str,
+) -> None:
+    """Report the available beta build, which OPNsense omits from ``product_latest``.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        packages (list[dict[str, str]]): Package rows in the firmware check.
+        expected_latest (str): Latest version the caller should receive.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        status = _firmware_status(
+            status="update",
+            status_msg="There are 2 updates available.",
+            product={
+                "product_version": "27.1.b_21",
+                "product_latest": "27.1.b",
+                "product_series": "27.1",
+                "product_check": {"upgrade_packages": packages},
+            },
+        )
+        _configure_firmware_polls(client, status)
+
+        result = await client.get_firmware_update_info(check_for_updates=False)
+
+        assert result["product"]["product_latest"] == expected_latest
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("installed", "error"),
     [
         pytest.param("27.1.b_22", None, id="target-build-installed"),
@@ -1288,6 +1346,7 @@ async def test_install_firmware_stale_log_times_out_and_cleans_up(
         {"type": "reboot"},
         {"target_version": ""},
         {"target_version": None},
+        {"target_version": "27.1.b"},
         {"timeout": float("nan")},
         {"timeout": float("inf")},
         {"timeout": 0},
