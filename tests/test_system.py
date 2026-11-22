@@ -1377,3 +1377,40 @@ async def test_system_branches_for_carp_candidate_and_notice_paths(make_client: 
         assert tz.utcoffset(now) == client._get_local_timezone().utcoffset(now)
     finally:
         await client.async_close()
+
+
+CARP_OLD_PATH = "/api/diagnostics/interface/_carp_status/maintenance"
+CARP_NEW_PATH = "/api/diagnostics/interface/carp_status/maintenance"
+CARP_CAMEL_PATH = "/api/diagnostics/interface/CarpStatus/maintenance"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("firmware", "expected_path"),
+    [
+        pytest.param("25.1", CARP_CAMEL_PATH, id="camelcase-firmware"),
+        pytest.param("26.1.10", CARP_OLD_PATH, id="below-threshold"),
+        pytest.param("26.1.11", CARP_NEW_PATH, id="at-threshold"),
+        pytest.param("26.1.11_4", CARP_NEW_PATH, id="at-threshold-with-revision"),
+        pytest.param("26.2", CARP_NEW_PATH, id="above-threshold"),
+        pytest.param(None, CARP_OLD_PATH, id="missing"),
+        pytest.param("not-a-version", CARP_OLD_PATH, id="not-comparable"),
+    ],
+)
+async def test_toggle_carp_maintenance_mode_uses_endpoint_for_firmware(
+    firmware_router: tuple[OPNsenseClient, Any], firmware: str | None, expected_path: str
+) -> None:
+    """CARP maintenance uses the new status endpoint only on known firmware that has it.
+
+    Args:
+        firmware_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
+        firmware (str | None): Firmware version reported by the Router.
+        expected_path (str): CARP maintenance endpoint the client is expected to post to.
+    """
+    client, router = firmware_router
+    router.firmware = firmware
+    router.endpoints[expected_path] = {"status": "ok"}
+
+    assert await client.toggle_carp_maintenance_mode() is True
+
+    assert router.post_paths == [expected_path]
