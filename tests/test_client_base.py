@@ -818,8 +818,9 @@ async def test_legacy_unbound_toggle_stops_on_unusable_settings(
         ]
 
         if throw_errors:
-            with pytest.raises(OPNsenseConnectionError, match="HTTP Status Error: 500"):
+            with pytest.raises(OPNsenseConnectionError) as error:
                 await getattr(client, method_name)()
+            assert error.value.status == status
         else:
             result = await getattr(client, method_name)()
 
