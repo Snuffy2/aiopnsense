@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import MutableMapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 import math
 from typing import Any
@@ -11,7 +12,12 @@ import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
-from .const import AMBIGUOUS_TZINFOS, DEFAULT_REQUEST_TIMEOUT_SECONDS
+from .const import (
+    AMBIGUOUS_TZINFOS,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    OPNSENSE_MIN_FIRMWARE,
+    OPNSENSE_RECOMMENDED_FIRMWARE,
+)
 from .exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
@@ -40,8 +46,37 @@ FIRMWARE_CHANGELOG_ENDPOINT_PREFIX = "/api/core/firmware/changelog/"
 class FirmwareMixin(AiopnsenseClientProtocol):
     """Firmware methods for OPNsenseClient."""
 
+    @dataclass(frozen=True, slots=True)
+    class FirmwareRequirements:
+        """OPNsense firmware releases that aiopnsense supports.
+
+        Attributes:
+            minimum (str): Minimum Firmware. Routers running an older release are
+                rejected by ``OPNsenseClient.validate``.
+            recommended (str): Recommended Firmware. Routers running an older
+                release are accepted, but some features return empty or missing data.
+        """
+
+        minimum: str
+        recommended: str
+
     _firmware_version: str | None
     _firmware_install_active: bool
+
+    @staticmethod
+    def get_firmware_requirements() -> FirmwareRequirements:
+        """Return the Minimum Firmware and Recommended Firmware that aiopnsense supports.
+
+        This reads library constants and never contacts a Router. It can be called on
+        the class, such as ``OPNsenseClient.get_firmware_requirements()``, before any
+        client exists, for example from a config flow.
+
+        Returns:
+            FirmwareRequirements: Minimum Firmware and Recommended Firmware versions.
+        """
+        return FirmwareMixin.FirmwareRequirements(
+            minimum=OPNSENSE_MIN_FIRMWARE, recommended=OPNSENSE_RECOMMENDED_FIRMWARE
+        )
 
     async def _store_host_firmware_version(self) -> None:
         """Cache the installed OPNsense firmware version or product series."""
