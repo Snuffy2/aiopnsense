@@ -11,6 +11,7 @@ For a VPN Instance given an explicit target state, a request that already matche
 
 ## Consequences
 
+- Cancelling a Toggle while a POST is still queued skips that POST and sends no subsequent steps. Earlier writes may already have succeeded. Once a non-VPN save is dispatched, it can complete after caller cancellation and leave a change awaiting apply.
 - Pending unapplied saves are tracked in memory on one client. Another client, an external writer or a restart does not know about them, so a matching request from there skips the apply.
 - Closing the client can cancel a dispatched VPN save before OPNsense answers. OPNsense may have saved the change while the client does not track it, and a later matching request can then skip the apply. Shutdown stays prompt rather than waiting for that response.
 - WireGuard Toggles read the current state first, because released firmware through 26.7.9 ignores the explicit target in its toggle path and flips instead.
