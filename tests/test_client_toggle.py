@@ -72,6 +72,63 @@ TOGGLE_CASES: list[ToggleCase] = [
         apply_ok={"status": "OK\n"},
         apply_failed={"status": "failed"},
     ),
+    ToggleCase(
+        name="nat_rule_source_nat",
+        toggle=lambda client, target: client.toggle_nat_rule("source_nat", "rule1", target),
+        save_paths={
+            "on": "/api/firewall/source_nat/toggle_rule/rule1/1",
+            "off": "/api/firewall/source_nat/toggle_rule/rule1/0",
+            None: "/api/firewall/source_nat/toggle_rule/rule1",
+        },
+        save_ok={
+            "on": {"result": "Enabled", "changed": True},
+            "off": {"result": "Disabled", "changed": True},
+            None: {"result": "Disabled", "changed": True},
+        },
+        apply_path="/api/firewall/source_nat/apply",
+        apply_ok={"status": "OK\n"},
+        apply_failed={"status": "failed"},
+    ),
+    ToggleCase(
+        name="nat_rule_d_nat_inverted",
+        toggle=lambda client, target: client.toggle_nat_rule("d_nat", "rule1", target),
+        save_paths={
+            "on": "/api/firewall/d_nat/toggle_rule/rule1/0",
+            "off": "/api/firewall/d_nat/toggle_rule/rule1/1",
+            None: "/api/firewall/d_nat/toggle_rule/rule1",
+        },
+        save_ok={
+            "on": {"result": "Enabled", "changed": True},
+            "off": {"result": "Disabled", "changed": True},
+            None: {"result": "Disabled", "changed": True},
+        },
+        apply_path="/api/firewall/d_nat/apply",
+        apply_ok={"status": "OK\n"},
+        apply_failed={"status": "failed"},
+    ),
+    ToggleCase(
+        name="alias",
+        toggle=lambda client, target: client.toggle_alias("alias1", target),
+        save_paths={
+            "on": "/api/firewall/alias/toggle_item/aid/1",
+            "off": "/api/firewall/alias/toggle_item/aid/0",
+            None: "/api/firewall/alias/toggle_item/aid",
+        },
+        save_ok={
+            "on": {"result": "Enabled", "changed": True},
+            "off": {"result": "Disabled", "changed": True},
+            None: {"result": "Disabled", "changed": True},
+        },
+        apply_path="/api/firewall/alias/reconfigure",
+        apply_ok={"status": "ok"},
+        apply_failed={"status": "failed"},
+        setup={
+            ("GET", "/api/firewall/alias/search_item"): {
+                "rows": [{"name": "alias1", "uuid": "aid"}]
+            },
+            ("POST", "/api/firewall/alias/set"): {"result": "saved"},
+        },
+    ),
 ]
 
 _CASE_PARAMS = [pytest.param(case, id=case.name) for case in TOGGLE_CASES]
@@ -233,3 +290,91 @@ async def test_toggle_apply_rule(
     client = scripted_router.client()
 
     assert await case.toggle(client, "on") is expected
+
+
+_ALIAS_SEARCH = "/api/firewall/alias/search_item"
+_ALIAS_SET = "/api/firewall/alias/set"
+_ALIAS_RECONFIGURE = "/api/firewall/alias/reconfigure"
+
+
+async def test_toggle_alias_unavailable_search_endpoint_returns_false(
+    scripted_router: ScriptedRouter,
+) -> None:
+    """An alias Toggle fails without sending anything when the alias listing is unavailable.
+
+    Args:
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    client = scripted_router.client()
+
+    assert await client.toggle_alias("alias1", "on") is False
+    assert not scripted_router.requested(_ALIAS_SEARCH, method="GET")
+    assert not scripted_router.requests
+
+
+@pytest.mark.parametrize(
+    "listing",
+    [
+        {"rows": "bad"},
+        {"rows": []},
+        {"rows": ["junk", {"name": "other", "uuid": "x"}]},
+        {"rows": [{"name": "alias1"}]},
+    ],
+    ids=["malformed", "empty", "unknown_alias", "missing_uuid"],
+)
+async def test_toggle_alias_lookup_failure_returns_false(
+    listing: MutableMapping[str, Any], scripted_router: ScriptedRouter
+) -> None:
+    """An alias Toggle fails without saving when the alias cannot be resolved.
+
+    Args:
+        listing (MutableMapping[str, Any]): Alias listing the Router returns.
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    scripted_router.reply(_ALIAS_SEARCH, listing, method="GET")
+    client = scripted_router.client()
+
+    assert await client.toggle_alias("alias1", "on") is False
+    assert not any(r.method == "POST" for r in scripted_router.requests)
+
+
+@pytest.mark.parametrize("set_reply", [None, {"result": "failed"}, {"result": "not-saved"}])
+async def test_toggle_alias_unacknowledged_commit_returns_false_without_reconfigure(
+    set_reply: MutableMapping[str, Any] | None, scripted_router: ScriptedRouter
+) -> None:
+    """An alias Toggle is not reconfigured when its commit was not acknowledged.
+
+    Args:
+        set_reply (MutableMapping[str, Any] | None): Router reply to the commit.
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    alias_case = next(case for case in TOGGLE_CASES if case.name == "alias")
+    alias_case.script(scripted_router, "on")
+    scripted_router.reply(_ALIAS_SET, set_reply)
+    client = scripted_router.client()
+
+    assert await client.toggle_alias("alias1", "on") is False
+    assert not scripted_router.requested(_ALIAS_RECONFIGURE)
+
+
+async def test_toggle_alias_uses_camel_case_endpoints_on_older_firmware(
+    scripted_router: ScriptedRouter,
+) -> None:
+    """An alias Toggle lists and toggles through camelCase paths on older firmware.
+
+    Args:
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    scripted_router.reply(
+        "/api/firewall/alias/searchItem",
+        {"rows": [{"name": "alias1", "uuid": "aid"}]},
+        method="GET",
+    )
+    scripted_router.reply("/api/firewall/alias/toggleItem/aid/1", {"result": "Enabled"})
+    scripted_router.reply(_ALIAS_SET, {"result": "saved"})
+    scripted_router.reply(_ALIAS_RECONFIGURE, {"status": "ok"})
+    client = scripted_router.client()
+    client._use_snake_case = False
+
+    assert await client.toggle_alias("alias1", "on") is True
+    assert scripted_router.requested("/api/firewall/alias/toggleItem/aid/1")
