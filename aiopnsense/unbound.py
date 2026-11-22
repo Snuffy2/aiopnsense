@@ -87,6 +87,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             enabled, a failed save, apply or restart request raises an
             ``OPNsenseError`` subclass instead of returning ``False``.
         """
+        state_label = "On" if set_state else "Off"
         payload: dict[str, Any] = {"unbound": {"dnsbl": await self._get_unbound_blocklist_legacy()}}
         if not payload["unbound"]["dnsbl"]:
             _LOGGER.error("Unable to get Unbound Blocklist Status")
@@ -98,7 +99,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             self,
             lambda: self._post(UNBOUND_SETTINGS_SET_ENDPOINT, payload=payload),
             empty=_LEGACY_REQUEST_FAILED,
-            name=f"legacy unbound blocklist save ({'On' if set_state else 'Off'})",
+            name=f"legacy unbound blocklist save ({state_label})",
         )
 
         if response is _LEGACY_REQUEST_FAILED:
@@ -107,7 +108,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
         if not isinstance(response, MutableMapping) or response.get("result", "failed") != "saved":
             _LOGGER.error(
                 "Unable to save legacy unbound blocklist state %s. Response: %s",
-                "On" if set_state else "Off",
+                state_label,
                 response,
             )
             return False
@@ -116,7 +117,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             self,
             lambda: self._get(UNBOUND_SERVICE_DNSBL_ENDPOINT),
             empty=_LEGACY_REQUEST_FAILED,
-            name=f"legacy unbound blocklist apply ({'On' if set_state else 'Off'})",
+            name=f"legacy unbound blocklist apply ({state_label})",
         )
 
         if dnsbl_resp is _LEGACY_REQUEST_FAILED:
@@ -126,14 +127,14 @@ class UnboundMixin(AiopnsenseClientProtocol):
         if not isinstance(dnsbl_resp, MutableMapping) or not isinstance(dnsbl_status, str):
             _LOGGER.error(
                 "Malformed legacy unbound dnsbl apply response for state %s. Response: %s",
-                "On" if set_state else "Off",
+                state_label,
                 dnsbl_resp,
             )
             return False
         if not dnsbl_status.startswith("OK"):
             _LOGGER.error(
                 "Legacy unbound dnsbl apply failed for state %s. Response: %s",
-                "On" if set_state else "Off",
+                state_label,
                 dnsbl_resp,
             )
             return False
@@ -142,7 +143,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             self,
             lambda: self._post(UNBOUND_SERVICE_RESTART_ENDPOINT),
             empty=_LEGACY_REQUEST_FAILED,
-            name=f"legacy unbound blocklist restart ({'On' if set_state else 'Off'})",
+            name=f"legacy unbound blocklist restart ({state_label})",
         )
 
         if restart_resp is _LEGACY_REQUEST_FAILED:
@@ -155,7 +156,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
         )
         _LOGGER.debug(
             "[_set_unbound_blocklist_legacy] set_state: %s, result: %s",
-            "On" if set_state else "Off",
+            state_label,
             "success" if restart_succeeded else "failure",
         )
         return restart_succeeded
