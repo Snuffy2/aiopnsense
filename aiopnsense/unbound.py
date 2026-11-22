@@ -44,12 +44,17 @@ class UnboundMixin(AiopnsenseClientProtocol):
         return None
 
     @_log_errors
-    async def _get_unbound_blocklist_legacy(self) -> dict[str, Any]:
+    async def _get_unbound_blocklist_legacy(
+        self, *, require_complete: bool = False
+    ) -> dict[str, Any]:
         """Return legacy Unbound DNSBL settings.
+
+        Args:
+            require_complete (bool): Require every field sent by the legacy settings write.
 
         Returns:
             dict[str, Any]: Normalized legacy DNSBL settings returned by older
-            OPNsense firmware.
+            OPNsense firmware, or an empty mapping if the required settings are missing.
         """
         response = await self._safe_dict_get(UNBOUND_SETTINGS_GET_ENDPOINT)
         unbound_settings = response.get("unbound", {})
@@ -60,10 +65,17 @@ class UnboundMixin(AiopnsenseClientProtocol):
         if not isinstance(dnsbl_settings, MutableMapping):
             return {}
 
+        scalar_fields = ("enabled", "safesearch", "nxdomain", "address")
+        selector_fields = ("type", "lists", "whitelists", "blocklists", "wildcards")
+        if require_complete and any(
+            field not in dnsbl_settings for field in (*scalar_fields, *selector_fields)
+        ):
+            return {}
+
         dnsbl: dict[str, Any] = {}
-        for attr in ("enabled", "safesearch", "nxdomain", "address"):
+        for attr in scalar_fields:
             dnsbl[attr] = dnsbl_settings.get(attr, "")
-        for attr in ("type", "lists", "whitelists", "blocklists", "wildcards"):
+        for attr in selector_fields:
             if isinstance(dnsbl_settings.get(attr), MutableMapping):
                 dnsbl[attr] = ",".join(
                     key
@@ -83,17 +95,19 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         Returns:
             bool: ``True`` when the settings save, DNSBL apply, and service
-            restart all succeed; otherwise, ``False``. When ``throw_errors`` is
-            enabled, a failed save, apply or restart request raises an
+            restart all succeed; otherwise, ``False``. Incomplete settings
+            prevent the save. When ``throw_errors`` is enabled, a failed
+            read, save, apply or restart request raises an
             ``OPNsenseError`` subclass instead of returning ``False``.
         """
         state_label = "On" if set_state else "Off"
-        payload: dict[str, Any] = {"unbound": {"dnsbl": await self._get_unbound_blocklist_legacy()}}
-        if not payload["unbound"]["dnsbl"]:
+        dnsbl = await self._get_unbound_blocklist_legacy(require_complete=True)
+        if not dnsbl:
             _LOGGER.error("Unable to get Unbound Blocklist Status")
             return False
 
-        payload["unbound"]["dnsbl"]["enabled"] = "1" if set_state else "0"
+        dnsbl["enabled"] = "1" if set_state else "0"
+        payload = {"unbound": {"dnsbl": dnsbl}}
 
         response = await _attempt(
             self,

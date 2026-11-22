@@ -307,13 +307,16 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
 
 
 async def test_unbound_attempt_keeps_domain_caller_in_queue_diagnostics(
-    make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+    legacy_dnsbl_payload: dict[str, Any],
 ) -> None:
     """Keep Unbound's domain method in transport failure diagnostics.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning client instances.
         caplog (pytest.LogCaptureFixture): Captured transport diagnostics.
+        legacy_dnsbl_payload (dict[str, Any]): Complete settings that allow the save request.
 
     Returns:
         None: This test asserts the caller label in the actual transport report.
@@ -321,7 +324,7 @@ async def test_unbound_attempt_keeps_domain_caller_in_queue_diagnostics(
     client, session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
-        client._safe_dict_get = AsyncMock(return_value={"unbound": {"dnsbl": {}}})
+        client._safe_dict_get = AsyncMock(return_value=legacy_dnsbl_payload)
         session.post.return_value = FakeResponse(
             status=500, reason="Internal Server Error", ok=False
         )

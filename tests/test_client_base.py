@@ -780,3 +780,55 @@ async def test_reset_and_get_query_counts(make_client: MakeClientFactory) -> Non
         assert count == 0
     finally:
         await client.async_close()
+
+
+@pytest.mark.parametrize("method_name", ["enable_unbound_blocklist", "disable_unbound_blocklist"])
+@pytest.mark.parametrize(
+    ("status", "throw_errors"),
+    [(200, False), (500, False), (500, True)],
+)
+async def test_legacy_unbound_toggle_stops_on_unusable_settings(
+    make_client: MakeClientFactory,
+    legacy_dnsbl_payload: dict[str, Any],
+    method_name: str,
+    status: int,
+    throw_errors: bool,
+) -> None:
+    """Verify legacy DNSBL toggles stop at an incomplete or failed settings read.
+
+    Args:
+        make_client (MakeClientFactory): Client fixture factory.
+        legacy_dnsbl_payload (dict[str, Any]): Complete legacy settings before removing a field.
+        method_name (str): Public client method to call.
+        status (int): HTTP status for the settings read.
+        throw_errors (bool): Whether the client propagates the read error.
+    """
+    client, session = make_mock_session_client(make_client)
+    try:
+        client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
+        client.toggle_throwing_errors(throw_errors)
+        del legacy_dnsbl_payload["unbound"]["dnsbl"]["lists"]
+        session.get.side_effect = [
+            FakeResponse(status=status, ok=status == 200, json_payload=legacy_dnsbl_payload),
+            FakeResponse(json_payload={"status": "OK"}),
+        ]
+        session.post.side_effect = [
+            FakeResponse(json_payload={"result": "saved"}),
+            FakeResponse(json_payload={"response": "OK"}),
+        ]
+
+        if throw_errors:
+            with pytest.raises(OPNsenseConnectionError) as error:
+                await getattr(client, method_name)()
+            assert error.value.status == status
+        else:
+            result = await getattr(client, method_name)()
+
+        session.post.assert_not_called()
+        assert [request.args[0] for request in session.get.call_args_list] == [
+            "http://localhost/api/unbound/settings/get"
+        ]
+        if not throw_errors:
+            assert result is False
+    finally:
+        await client.async_close()
