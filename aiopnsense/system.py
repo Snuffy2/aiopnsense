@@ -11,6 +11,7 @@ from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._error_policy import _log_errors, _raise_if_throwing
 from ._typing import AiopnsenseClientProtocol
+from .client_toggle import ToggleSpec, ToggleStep, ToggleTarget
 from .const import (
     AMBIGUOUS_TZINFOS,
     OPNSENSE_26_1_11_COMPAT_FIRMWARE,
@@ -128,22 +129,19 @@ class SystemMixin(AiopnsenseClientProtocol):
         Args:
             if_name (str): Logical interface identifier such as ``wan``, ``lan``, or ``opt8``.
             toggle_on_off (str | None, optional): Target state. Use ``on`` to
-                enable, ``off`` to disable, or ``None`` to invert the current state.
+                enable, ``off`` to disable, or ``None`` or ``toggle`` to invert
+                the current state.
 
         Returns:
-            bool | None: True when already matching or saved and applied;
-                False when refused or unsuccessful. Suppressed validation errors
-                return None; ``throw_errors`` enables exception propagation.
-
-        Raises:
-            OPNsenseInvalidArgument: The identifier or explicit target is invalid
-                and ``throw_errors`` is enabled.
+            bool | None: True when already matching, or when the Router
+                acknowledged the save (``saved``) and confirmed the apply;
+                False when refused, the save was not acknowledged (no apply is
+                sent) or the apply was not confirmed. Suppressed validation errors
+                return None, or raise ``OPNsenseInvalidArgument`` when
+                ``throw_errors`` is enabled, as do transport errors.
         """
         self._validate_interface_identifier(if_name)
-        if toggle_on_off is not None and (
-            not isinstance(toggle_on_off, str) or toggle_on_off not in {"on", "off"}
-        ):
-            raise OPNsenseInvalidArgument("`toggle_on_off` must be 'on', 'off', or None.")
+        target = self._parse_toggle_target(toggle_on_off)
         if not await self._interface_assignment_is_supported():
             return False
 
@@ -164,34 +162,47 @@ class SystemMixin(AiopnsenseClientProtocol):
         ):
             _LOGGER.debug("Unable to read enabled state for interface %s", if_name)
             return False
-        if toggle_on_off == "on":
-            desired_value = "1"
-        elif toggle_on_off == "off":
-            desired_value = "0"
-        else:
-            desired_value = "0" if api_value_matches(current_enabled, "1") else "1"
+        if target is ToggleTarget.FLIP:
+            target = (
+                ToggleTarget.OFF if api_value_matches(current_enabled, "1") else ToggleTarget.ON
+            )
+        desired_value = "1" if target is ToggleTarget.ON else "0"
         if api_value_matches(current_enabled, desired_value):
             return True
 
-        response = await self._safe_dict_post(
-            f"{INTERFACE_ASSIGNMENT_SET_ITEM_ENDPOINT_PREFIX}{if_name}",
-            payload={"interface": {"enable": desired_value}},
+        saved = await self._run_toggle(
+            ToggleSpec(
+                label="toggle_interface",
+                target=target,
+                save=(
+                    ToggleStep.save(
+                        f"{INTERFACE_ASSIGNMENT_SET_ITEM_ENDPOINT_PREFIX}{if_name}",
+                        frozenset({"saved"}),
+                        payload={"interface": {"enable": desired_value}},
+                    ),
+                ),
+                apply=(),
+            )
         )
-        if str(response.get("result", "")).strip().lower() != "saved":
+        if not saved:
             return False
 
-        apply_response = await self._safe_dict_post(
-            INTERFACE_ASSIGNMENT_RECONFIGURE_ENDPOINT, payload={}
+        applied = await self._run_toggle(
+            ToggleSpec(
+                label="toggle_interface",
+                target=target,
+                save=(),
+                apply=(ToggleStep.apply(INTERFACE_ASSIGNMENT_RECONFIGURE_ENDPOINT, payload={}),),
+            )
         )
-        apply_succeeded = str(apply_response.get("status", "")).strip().lower() == "ok"
-        if not apply_succeeded:
+        if not applied:
             _LOGGER.warning(
                 "Interface %s was saved, but reconfiguration did not report success; the "
                 "apply outcome may be uncertain. Review pending configuration in the "
                 "OPNsense UI before retrying, and do not blindly repeat the global reconfigure",
                 if_name,
             )
-        return apply_succeeded
+        return applied
 
     def _handle_missing_device_unique_id(self) -> None:
         """Raise when device unique ID resolution failed in throwing mode.
