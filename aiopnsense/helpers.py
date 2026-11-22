@@ -200,6 +200,9 @@ def trim_firmware_suffix(firmware_version: str | None) -> str | None:
     return trimmed_version.split("_", 1)[0]
 
 
+_BETA_BASE_VERSION = re.compile(r"[0-9]+\.[0-9]+\.b")
+
+
 def _numeric_base_components(base_version: str) -> tuple[int, ...] | None:
     """Return numeric components with insignificant trailing zeros removed.
 
@@ -259,8 +262,10 @@ def firmware_is_newer(firmware_version: str | None, comparison_version: str | No
     """Compare firmware versions with numeric hotfix revisions.
 
     Numeric base versions that differ only by trailing zero components are
-    treated as equivalent before comparing their hotfix revisions. Other base
-    versions retain AwesomeVersion's ordering, including release suffixes.
+    treated as equivalent before comparing their hotfix revisions. Betas of the
+    same series, such as ``27.1.b_21`` and ``27.1.b_22``, compare by build number.
+    A beta cannot be compared with a release or a beta of another series. Other
+    base versions retain AwesomeVersion's ordering, including release suffixes.
 
     Args:
         firmware_version (str | None): Raw firmware version reported by OPNsense.
@@ -303,6 +308,8 @@ def firmware_is_newer(firmware_version: str | None, comparison_version: str | No
             return None
         firmware_base, firmware_revision = comparable_firmware
         comparison_base, comparison_revision = comparable_version
+        if firmware_base == comparison_base and _BETA_BASE_VERSION.fullmatch(firmware_base):
+            return firmware_revision > comparison_revision
         firmware = awesomeversion.AwesomeVersion(firmware_base)
         comparison = awesomeversion.AwesomeVersion(comparison_base)
         if not firmware.valid or not comparison.valid:

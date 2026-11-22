@@ -210,6 +210,10 @@ def test_firmware_is_at_least_returns_none_for_uncomparable_versions(
         ("26.7.6.0", "26.7.6_3", False),
         (" 26.7.6_3 ", " 26.7.6 ", True),
         ("26.7.6rc1", "26.7.6", False),
+        ("27.1.b_22", "27.1.b_21", True),
+        ("27.1.b_21", "27.1.b_22", False),
+        ("27.1.b_21", "27.1.b_21", False),
+        ("27.1.b_100", "27.1.b_21", True),
         ("26.7.6", "26.7.6rc1", True),
     ],
 )
@@ -271,6 +275,7 @@ def test_firmware_is_newer_cannot_rank_beta_against_releases(beta_version: str) 
         ("_1", "26.1.11"),
         ("invalid_3", "invalid_2"),
         ("26.1.11", "invalid_2"),
+        ("27.7.b_21", "27.1.b_21"),
     ],
 )
 def test_firmware_is_newer_returns_none_for_uncomparable_versions(

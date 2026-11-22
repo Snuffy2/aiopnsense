@@ -486,6 +486,14 @@ async def test_malformed_firmware_series_uses_unknown_capability_fallback(
             id="numeric-hotfix-ordering",
         ),
         pytest.param(
+            "27.1.b_21",
+            "27.1.b_22",
+            {"status": "ok"},
+            timedelta(0),
+            "There are no updates available on the selected mirror.",
+            id="newer-beta-build",
+        ),
+        pytest.param(
             "26.1.11_1",
             "26.1.11_bad",
             {"status": "ok"},
@@ -551,7 +559,7 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
         *(
             pytest.param(shape.product_version, shape.product_version, id=f"at-latest-{shape.id}")
             for shape in FIRMWARE_VERSION_SHAPES
-            if shape.version_is_comparable
+            if shape.product_version is not None
         ),
         pytest.param("26.7.6_3", "26.7.6", id="installed-hotfix-ahead-of-base"),
         pytest.param("26.7.6_3", "26.7.6.0", id="installed-hotfix-ahead-of-zero-component-base"),
@@ -1218,6 +1226,35 @@ async def test_install_firmware_terminal_contract(
         await client.install_firmware(target_version="26.7.8", poll_interval=0.001)
     session.post.assert_called_once()
     await _assert_install_can_start_after_cleanup(client, session, fake_response_factory, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("installed", "error"),
+    [
+        pytest.param("27.1.b_22", None, id="target-build-installed"),
+        pytest.param("27.1.b_21", "target", id="older-build-still-installed"),
+    ],
+)
+async def test_install_firmware_verifies_beta_target(
+    install_client: Callable[..., Any], installed: str, error: str | None
+) -> None:
+    """A beta target installs and succeeds only once its build is on the Router.
+
+    Args:
+        install_client (Callable[..., Any]): Lifecycle transport factory.
+        installed (str): Firmware version reported after the action.
+        error (str | None): Expected failure text, if any.
+    """
+    client, session = install_client(
+        [(_install_progress("done", "***DONE***"), "ready", installed)]
+    )
+    if error:
+        with pytest.raises(OPNsenseError, match=error):
+            await client.install_firmware(target_version="27.1.b_22", poll_interval=0.001)
+    else:
+        await client.install_firmware(target_version="27.1.b_22", poll_interval=0.001)
+    session.post.assert_called_once()
 
 
 @pytest.mark.asyncio
