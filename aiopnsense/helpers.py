@@ -76,7 +76,7 @@ def _log_request_failure(
         client (_RequestLoggingClient): Client holding request outage state.
         method (str): HTTP method used by the request.
         path (str): Requested API path.
-        phase (str): ``probe`` for availability checks or ``request`` for data calls.
+        phase (str): Request phase label; ``request`` for data calls.
         level (int): Log level for the first failure in the current outage.
         message (str): Failure message format.
         args (Any): Values for the failure message format.
@@ -104,7 +104,7 @@ def _log_request_recovery(
         client (_RequestLoggingClient): Client holding request outage state.
         method (str): HTTP method used by the request.
         path (str): Requested API path.
-        phase (str): ``probe`` for availability checks or ``request`` for data calls.
+        phase (str): Request phase label; ``request`` for data calls.
     """
     key = (method.upper(), path, phase)
     if key in client._request_outages:

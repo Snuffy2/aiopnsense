@@ -724,7 +724,6 @@ async def test_stream_interface_traffic_does_not_enqueue_request(
     """
 
     client, session = make_mock_session_client(make_client)
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
     client._queue_request = AsyncMock(side_effect=AssertionError("stream should not be queued"))
     session.get = lambda *_args, **_kwargs: fake_stream_response_factory(
         [
@@ -891,7 +890,6 @@ async def test_vpn_status_unavailable_vs_empty(
         "ipsec": aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT,
     }
     status_endpoint = endpoints[vpn]
-    client._is_get_endpoint_available = AsyncMock(return_value=reply != "unavailable")
     config = {
         "uuid": "configured",
         "role": "server",
@@ -988,7 +986,6 @@ async def test_ipsec_connection_inventory_failure_and_recovery(
     """
     client, session = make_mock_session_client(make_client)
     client._use_snake_case = True
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
     recovered = False
 
     def fake_get(url: str, **kwargs: Any) -> FakeResponse:
@@ -1063,7 +1060,6 @@ async def test_vpn_status_propagates_errors(
     client, session = make_mock_session_client(make_client)
     client._throw_errors = True
     client._use_snake_case = True
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
     response = FakeResponse(status=503, ok=False)
     if failure != "http":
         response = FakeResponse()

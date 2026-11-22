@@ -26,7 +26,6 @@ class AiopnsenseClientProtocol(Protocol):
     _verify_ssl: bool
     _rest_api_query_count: int
     _throw_errors: bool
-    _endpoint_availability: dict[str, bool]
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None: ...
 
@@ -93,12 +92,6 @@ class AiopnsenseClientProtocol(Protocol):
     ) -> EndpointOutcome: ...
 
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool: ...
-
-    async def _is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool: ...
-
-    async def _is_post_endpoint_available(
-        self, path: str, force_refresh: bool = False
-    ) -> bool | None: ...
 
     @staticmethod
     def _parse_toggle_target(toggle_on_off: object) -> ToggleTarget: ...
