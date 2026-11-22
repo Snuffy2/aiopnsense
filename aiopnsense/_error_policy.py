@@ -74,7 +74,34 @@ def _handle_error(
     raise public_error from error
 
 
-def _raise_if_throwing(client: _ThrowErrorsClient, error: OPNsenseError) -> None:
+def _throws_errors(client: _ThrowErrorsClient) -> bool:
+    """Return whether the client raises public errors instead of returning empty values.
+
+    Args:
+        client (_ThrowErrorsClient): Client holding the ``_throw_errors`` setting.
+
+    Returns:
+        bool: ``True`` when failures are raised as ``OPNsenseError`` subclasses.
+    """
+    return client._throw_errors
+
+
+def _error_if_throwing(client: _ThrowErrorsClient, error: OPNsenseError) -> OPNsenseError | None:
+    """Return the error a request will raise, for marking it as already logged.
+
+    Args:
+        client (_ThrowErrorsClient): Client holding the ``_throw_errors`` setting.
+        error (OPNsenseError): Public error the request raises when throwing.
+
+    Returns:
+        OPNsenseError | None: ``error`` when the client throws errors, otherwise ``None``.
+    """
+    return error if client._throw_errors else None
+
+
+def _raise_if_throwing(
+    client: _ThrowErrorsClient, error: OPNsenseError, cause: BaseException | None = None
+) -> None:
     """Raise an already-public error when the client throws errors.
 
     For a failure the caller detected without catching an exception, such as an
@@ -87,12 +114,16 @@ def _raise_if_throwing(client: _ThrowErrorsClient, error: OPNsenseError) -> None
         client (_ThrowErrorsClient): Client whose ``_throw_errors`` setting selects
             between raising and returning to the caller.
         error (OPNsenseError): Public error to raise.
+        cause (BaseException | None): Original failure that ``error`` was mapped
+            from, chained as the cause.
 
     Raises:
         error: ``error`` itself when ``_throw_errors`` is true.
     """
     if client._throw_errors:
-        raise error
+        if cause is None:
+            raise error
+        raise error from cause
 
 
 def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:

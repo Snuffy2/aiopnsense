@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
 
+from ._error_policy import _error_if_throwing, _raise_if_throwing
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception, _opnsense_http_error
 from .helpers import _LOGGER, _log_request_failure, _log_request_recovery
@@ -77,14 +78,10 @@ class ClientTransportMixin:
             caller (str): Caller name used for diagnostics and logging.
 
         Returns:
-            dict[str, Any]: Decoded payload extracted from the streaming API response.
-
-        Raises:
-            _opnsense_http_error: Raised as the mapped public OPNsense error for a
-                non-successful HTTP response when ``self._throw_errors`` is ``True``.
-            _map_opnsense_exception: Raised as the mapped public OPNsense error for
-                an aiohttp client error or timeout when ``self._throw_errors`` is
-                ``True``.
+            dict[str, Any]: Decoded payload extracted from the streaming API response,
+                or an empty mapping after a logged failure. When ``throw_errors`` is
+                enabled, an HTTP, client or timeout failure is raised as the mapped
+                public ``OPNsenseError`` instead.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -137,12 +134,10 @@ class ClientTransportMixin:
                             response.status,
                             response.reason,
                         )
-                    if self._throw_errors:
-                        raise _opnsense_http_error(response.status, response.reason)
+                    _raise_if_throwing(self, _opnsense_http_error(response.status, response.reason))
         except (aiohttp.ClientError, TimeoutError) as e:
             _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
-            if self._throw_errors:
-                raise _map_opnsense_exception(e) from e
+            _raise_if_throwing(self, _map_opnsense_exception(e), e)
 
         return {}
 
@@ -163,14 +158,10 @@ class ClientTransportMixin:
                 for streamed responses.
 
         Yields:
-            dict[str, Any]: Decoded JSON object from each valid ``data:`` event.
-
-        Raises:
-            _opnsense_http_error: Raised as the mapped public OPNsense error for a
-                non-successful HTTP response when ``self._throw_errors`` is ``True``.
-            _map_opnsense_exception: Raised as the mapped public OPNsense error for
-                an aiohttp client error or timeout when ``self._throw_errors`` is
-                ``True``.
+            dict[str, Any]: Decoded JSON object from each valid ``data:`` event. The
+                stream ends after a logged failure. When ``throw_errors`` is enabled,
+                an HTTP, client or timeout failure is raised as the mapped public
+                ``OPNsenseError`` instead.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -199,8 +190,7 @@ class ClientTransportMixin:
                             response.status,
                             response.reason,
                         )
-                    if self._throw_errors:
-                        raise _opnsense_http_error(response.status, response.reason)
+                    _raise_if_throwing(self, _opnsense_http_error(response.status, response.reason))
                     return
 
                 decoder = codecs.getincrementaldecoder("utf-8")()
@@ -305,8 +295,7 @@ class ClientTransportMixin:
                     yield event
         except (aiohttp.ClientError, TimeoutError) as err:
             _LOGGER.error("Client error in stream_json_events. %s: %s", type(err).__name__, err)
-            if self._throw_errors:
-                raise _map_opnsense_exception(err) from err
+            _raise_if_throwing(self, _map_opnsense_exception(err), err)
 
     async def _do_get(
         self,
@@ -326,11 +315,9 @@ class ClientTransportMixin:
 
         Returns:
             MutableMapping[str, Any] | list | str | None: Decoded response payload
-                returned by the GET request.
-
-        Raises:
-            error: OPNsenseError raised for an HTTP or transport failure when
-                ``self._throw_errors`` is ``True``.
+                returned by the GET request, or ``None`` after a logged failure.
+                When ``throw_errors`` is enabled, an HTTP or transport failure is
+                raised as the mapped public ``OPNsenseError`` instead.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -362,7 +349,7 @@ class ClientTransportMixin:
                         "Permission Error in do_get (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                         caller,
                         url,
-                        error=error if self._throw_errors else None,
+                        error=_error_if_throwing(self, error),
                     )
                 else:
                     _log_request_failure(
@@ -376,10 +363,9 @@ class ClientTransportMixin:
                         url,
                         response.status,
                         response.reason,
-                        error=error if self._throw_errors else None,
+                        error=_error_if_throwing(self, error),
                     )
-                if self._throw_errors:
-                    raise error
+                _raise_if_throwing(self, error)
         except (aiohttp.ClientError, TimeoutError) as e:
             error = _map_opnsense_exception(e)
             _log_request_failure(
@@ -391,10 +377,9 @@ class ClientTransportMixin:
                 "Client error. %s: %s",
                 type(e).__name__,
                 e,
-                error=error if self._throw_errors else None,
+                error=_error_if_throwing(self, error),
             )
-            if self._throw_errors:
-                raise error from e
+            _raise_if_throwing(self, error, e)
 
         return None
 
@@ -471,11 +456,10 @@ class ClientTransportMixin:
             caller (str): Caller name used for diagnostics and logging.
 
         Returns:
-            MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request.
-
-        Raises:
-            error: OPNsenseError raised for an HTTP or transport failure when
-                ``self._throw_errors`` is ``True``.
+            MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request,
+                or ``None`` after a logged failure. When ``throw_errors`` is enabled,
+                an HTTP or transport failure is raised as the mapped public
+                ``OPNsenseError`` instead.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -504,7 +488,7 @@ class ClientTransportMixin:
                         "Permission Error in do_post (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
                         caller,
                         url,
-                        error=error if self._throw_errors else None,
+                        error=_error_if_throwing(self, error),
                     )
                 else:
                     _log_request_failure(
@@ -518,10 +502,9 @@ class ClientTransportMixin:
                         url,
                         response.status,
                         response.reason,
-                        error=error if self._throw_errors else None,
+                        error=_error_if_throwing(self, error),
                     )
-                if self._throw_errors:
-                    raise error
+                _raise_if_throwing(self, error)
         except (aiohttp.ClientError, TimeoutError) as e:
             error = _map_opnsense_exception(e)
             _log_request_failure(
@@ -533,10 +516,9 @@ class ClientTransportMixin:
                 "Client error. %s: %s",
                 type(e).__name__,
                 e,
-                error=error if self._throw_errors else None,
+                error=_error_if_throwing(self, error),
             )
-            if self._throw_errors:
-                raise error from e
+            _raise_if_throwing(self, error, e)
 
         return None
 
