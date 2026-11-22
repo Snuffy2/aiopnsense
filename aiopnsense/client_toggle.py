@@ -144,6 +144,23 @@ class ToggleStep:
             endpoint, response_key, None, method, payload, failure_log_level=failure_log_level
         )
 
+    @classmethod
+    def read(
+        cls, endpoint: str, response_key: str, *, camel_case_endpoint: str | None = None
+    ) -> ToggleStep:
+        """Describe a GET that reads an item before it is toggled.
+
+        Args:
+            endpoint (str): API path to GET (the snake_case path when
+                ``camel_case_endpoint`` is given).
+            response_key (str): Key of the response that holds the item.
+            camel_case_endpoint (str | None): API path on older camelCase firmware.
+
+        Returns:
+            ToggleStep: The read step.
+        """
+        return cls(endpoint, response_key, None, "GET", None, camel_case_endpoint)
+
     def succeeded(self, response: MutableMapping[str, Any]) -> bool:
         """Return whether the Router's response confirms this step.
 
@@ -191,10 +208,19 @@ class VpnInstance:
         service: VPN service (one of ``VPN_TOGGLE_SERVICES``) whose lock and
             pending-apply set the Toggle uses.
         item: Collection and instance UUID; the key of a pending unapplied save.
+        state_read: GET of the item, whose ``enabled`` field (``"0"`` or ``"1"``)
+            is read before an explicit-target save, for firmware whose toggle
+            ignores the target and flips (WireGuard through 26.7.9). The save and
+            the apply are skipped when it already matches, and the Toggle fails
+            when it cannot be read. ``None`` saves without reading.
+        corrects_wrong_direction: Whether a save that flipped the item away from
+            an explicit target is flipped back once before the apply.
     """
 
     service: str
     item: tuple[str, str]
+    state_read: ToggleStep | None = None
+    corrects_wrong_direction: bool = False
 
 
 def _new_vpn_locks() -> dict[str, asyncio.Lock]:
@@ -415,9 +441,34 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
         (apply_step,) = spec.apply
         pending = self._vpn_toggle_state.pending_apply[vpn.service]
         endpoint = await self._resolve_toggle_endpoint(save_step)
+        if vpn.state_read is not None and spec.target is not ToggleTarget.FLIP:
+            matches = await self._vpn_item_matches_target(
+                spec.label, vpn.state_read, spec.target, shutdown_generation
+            )
+            if matches is None:
+                return False
+            if matches:
+                if vpn.item in pending:
+                    return await self._apply_vpn_toggle(spec.label, apply_step, vpn)
+                return True
         response = await self._post_vpn_toggle_save(
             save_step, endpoint, spec.target, vpn, shutdown_generation
         )
+        if vpn.corrects_wrong_direction and self._vpn_toggle_moved_away(
+            save_step, response, spec.target
+        ):
+            # The Router saved a flip away from the target; track it before correcting.
+            pending.add(vpn.item)
+            _LOGGER.debug(
+                "[%s] %s toggle moved away from target %s, correcting: %s",
+                spec.label,
+                vpn.service,
+                spec.target,
+                endpoint,
+            )
+            response = await self._post_vpn_toggle_save(
+                save_step, endpoint, spec.target, vpn, shutdown_generation
+            )
         _LOGGER.debug(
             "[%s] %s toggle response for %s: %s", spec.label, vpn.service, vpn.item, response
         )
@@ -428,6 +479,31 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
             return outcome
         pending.add(vpn.item)
         return await self._apply_vpn_toggle(spec.label, apply_step, vpn)
+
+    async def _vpn_item_matches_target(
+        self, label: str, step: ToggleStep, target: ToggleTarget, shutdown_generation: int
+    ) -> bool | None:
+        """Read a VPN item's saved state and compare it with an explicit target.
+
+        Args:
+            label (str): Public method name, for log messages.
+            step (ToggleStep): Read step; its response key holds the item.
+            target (ToggleTarget): Explicit target (``ON`` or ``OFF``).
+            shutdown_generation (int): Generation captured when the Toggle began.
+
+        Returns:
+            bool | None: Whether the item is in the target state, or ``None`` when
+                the item is missing or its state cannot be read.
+        """
+        self._ensure_vpn_toggle_current(shutdown_generation)
+        response = await self._send_toggle_step(step)
+        self._ensure_vpn_toggle_current(shutdown_generation)
+        item = response.get(step.response_key)
+        enabled = item.get("enabled") if isinstance(item, MutableMapping) else None
+        if enabled not in ("0", "1"):
+            _LOGGER.debug("[%s] item state unavailable: %s", label, step.endpoint)
+            return None
+        return enabled == ("1" if target is ToggleTarget.ON else "0")
 
     async def _post_vpn_toggle_save(
         self,
@@ -486,6 +562,27 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
         if step.response_key not in response:
             return target is ToggleTarget.FLIP
         return step.succeeded(response)
+
+    @staticmethod
+    def _vpn_toggle_moved_away(
+        step: ToggleStep, response: MutableMapping[str, Any], target: ToggleTarget
+    ) -> bool:
+        """Return whether a save changed the item into the opposite of an explicit target.
+
+        Args:
+            step (ToggleStep): Save step.
+            response (MutableMapping[str, Any]): Save response.
+            target (ToggleTarget): Requested target.
+
+        Returns:
+            bool: ``True`` when the Router reports a changed item in the wrong state.
+        """
+        return (
+            target is not ToggleTarget.FLIP
+            and response.get("changed") is True
+            and step.succeeded(response)
+            and response[step.response_key] != _VPN_TARGET_RESULTS[target]
+        )
 
     @staticmethod
     def _vpn_toggle_save_outcome(

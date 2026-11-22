@@ -7,6 +7,7 @@ below runs against every row. To cover a new Toggle, add a row.
 
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 import pytest
@@ -37,6 +38,8 @@ class ToggleCase:
         apply_failed: Reply of the final apply step when it is not confirmed.
         setup: Other replies a healthy Router sends, as ``(method, path) -> reply``,
             such as pre-reads or intermediate steps.
+        target_setup: Replies that depend on the target, keyed like ``save_paths``,
+            such as a state pre-read that must not already match the target.
     """
 
     name: str
@@ -47,6 +50,9 @@ class ToggleCase:
     apply_ok: MutableMapping[str, Any]
     apply_failed: MutableMapping[str, Any]
     setup: Mapping[tuple[str, str], RouterReply] = field(default_factory=dict)
+    target_setup: Mapping[str | None, Mapping[tuple[str, str], RouterReply]] = field(
+        default_factory=dict
+    )
 
     def script(self, router: ScriptedRouter, target: str | None) -> None:
         """Script a healthy Router for one request.
@@ -55,10 +61,29 @@ class ToggleCase:
             router (ScriptedRouter): Router to script.
             target (str | None): Normalised target: ``on``, ``off`` or ``None``.
         """
-        for (method, path), reply in self.setup.items():
+        for (method, path), reply in {**self.setup, **self.target_setup.get(target, {})}.items():
             router.reply(path, reply, method=method)
         router.reply(self.save_paths[target], self.save_ok[target])
         router.reply(self.apply_path, self.apply_ok)
+
+
+_WIREGUARD_RECONFIGURE = "/api/wireguard/service/reconfigure"
+
+
+async def _toggle_wireguard(
+    collection: str, client: OPNsenseClient, target: str | None
+) -> bool | None:
+    """Toggle WireGuard instance ``uuid1`` in a collection.
+
+    Args:
+        collection (str): ``clients`` or ``servers``.
+        client (OPNsenseClient): Client under test.
+        target (str | None): ``toggle_on_off`` value.
+
+    Returns:
+        bool | None: Result of ``toggle_vpn_instance``.
+    """
+    return await client.toggle_vpn_instance("wireguard", collection, "uuid1", target)
 
 
 TOGGLE_CASES: list[ToggleCase] = [
@@ -116,6 +141,34 @@ TOGGLE_CASES: list[ToggleCase] = [
         apply_path="/api/ipsec/service/reconfigure",
         apply_ok={"status": "ok"},
         apply_failed={"status": "failed"},
+    ),
+    *(
+        ToggleCase(
+            name=f"vpn_wireguard_{collection}",
+            toggle=partial(_toggle_wireguard, collection),
+            save_paths={
+                "on": f"/api/wireguard/{item}/toggle_{item}/uuid1/1",
+                "off": f"/api/wireguard/{item}/toggle_{item}/uuid1/0",
+                None: f"/api/wireguard/{item}/toggle_{item}/uuid1",
+            },
+            save_ok={
+                "on": {"result": "Enabled", "changed": True},
+                "off": {"result": "Disabled", "changed": True},
+                None: {"result": "Disabled", "changed": True},
+            },
+            apply_path=_WIREGUARD_RECONFIGURE,
+            apply_ok={"result": "ok"},
+            apply_failed={"result": "failed"},
+            target_setup={
+                "on": {
+                    ("GET", f"/api/wireguard/{item}/get_{item}/uuid1"): {item: {"enabled": "0"}}
+                },
+                "off": {
+                    ("GET", f"/api/wireguard/{item}/get_{item}/uuid1"): {item: {"enabled": "1"}}
+                },
+            },
+        )
+        for collection, item in (("clients", "client"), ("servers", "server"))
     ),
     ToggleCase(
         name="nat_rule_source_nat",
@@ -398,6 +451,129 @@ async def test_vpn_toggle_for_service_without_lock_returns_false(
     )
 
     assert await client._run_toggle(spec) is False
+    assert scripted_router.requests == []
+
+
+_WG_GET = "/api/wireguard/client/get_client/uuid1"
+_WG_TOGGLE_ON = "/api/wireguard/client/toggle_client/uuid1/1"
+
+
+def _wireguard_posts(router: ScriptedRouter) -> list[str]:
+    """Return the paths of the WireGuard POSTs the client sent, in order.
+
+    Args:
+        router (ScriptedRouter): Scripted Router fixture.
+
+    Returns:
+        list[str]: POST paths.
+    """
+    return [r.path for r in router.requests if r.method == "POST"]
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["nothing_pending", "pending_apply"])
+async def test_wireguard_toggle_matching_target_skips_save_and_applies_only_pending(
+    pending: bool, scripted_router: ScriptedRouter
+) -> None:
+    """A WireGuard target that already matches sends no toggle; only a pending save is applied.
+
+    Args:
+        pending (bool): Whether this client tracks an earlier unapplied save.
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    scripted_router.reply(_WG_GET, {"client": {"enabled": "0"}}, method="GET")
+    scripted_router.reply(_WG_TOGGLE_ON, {"result": "Enabled", "changed": True})
+    scripted_router.reply(_WIREGUARD_RECONFIGURE, {"result": "ok"})
+    client = scripted_router.client()
+    if pending:
+        scripted_router.reply(_WIREGUARD_RECONFIGURE, {"result": "failed"})
+        assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "on") is False
+        scripted_router.reply(_WIREGUARD_RECONFIGURE, {"result": "ok"})
+    scripted_router.reply(_WG_GET, {"client": {"enabled": "1"}}, method="GET")
+    scripted_router.requests.clear()
+
+    assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "on") is True
+    assert _wireguard_posts(scripted_router) == ([_WIREGUARD_RECONFIGURE] if pending else [])
+    # A confirmed apply clears the pending save, so the next matching request is a no-op.
+    scripted_router.requests.clear()
+    assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "on") is True
+    assert _wireguard_posts(scripted_router) == []
+
+
+async def test_wireguard_toggle_wrong_direction_is_corrected_once_and_kept_pending(
+    scripted_router: ScriptedRouter,
+) -> None:
+    """A WireGuard flip away from the target gets exactly one corrective flip.
+
+    The Router here keeps answering with the wrong state, so the Toggle fails without
+    applying. The item was marked pending before the correction, so a later request
+    that matches the saved state applies it. (The corrected-to-target case is covered
+    in ``tests/test_vpn.py``.)
+
+    Args:
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    scripted_router.reply(_WG_GET, {"client": {"enabled": "0"}}, method="GET")
+    scripted_router.reply(_WG_TOGGLE_ON, {"result": "Disabled", "changed": True})
+    scripted_router.reply(_WIREGUARD_RECONFIGURE, {"result": "ok"})
+    client = scripted_router.client()
+
+    assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "on") is False
+    assert _wireguard_posts(scripted_router) == [_WG_TOGGLE_ON, _WG_TOGGLE_ON]
+
+    scripted_router.requests.clear()
+    assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "off") is True
+    assert _wireguard_posts(scripted_router) == [_WIREGUARD_RECONFIGURE]
+
+
+@pytest.mark.parametrize(
+    "read",
+    [None, {}, {"client": "x"}, {"client": {"enabled": 1}}, {"client": {"enabled": "yes"}}],
+    ids=["transport_failure", "missing", "malformed_item", "non_string", "unknown_value"],
+)
+async def test_wireguard_toggle_unreadable_item_returns_false_without_posting(
+    read: MutableMapping[str, Any] | None, scripted_router: ScriptedRouter
+) -> None:
+    """A WireGuard item whose state cannot be read is neither toggled nor applied.
+
+    Args:
+        read (MutableMapping[str, Any] | None): Router reply to the state read.
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    scripted_router.reply(_WG_GET, read, method="GET")
+    client = scripted_router.client()
+
+    assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "on") is False
+    assert _wireguard_posts(scripted_router) == []
+
+
+async def test_wireguard_flip_does_not_read_state(scripted_router: ScriptedRouter) -> None:
+    """A WireGuard flip request toggles without reading the item first.
+
+    Args:
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    case = next(case for case in TOGGLE_CASES if case.name == "vpn_wireguard_clients")
+    case.script(scripted_router, None)
+    client = scripted_router.client()
+
+    assert await case.toggle(client, None) is True
+    assert not scripted_router.requested(_WG_GET, method="GET")
+
+
+@pytest.mark.parametrize("collection", ["clients", "servers", "peers"])
+async def test_wireguard_toggle_empty_uuid_or_unknown_collection_sends_nothing(
+    collection: str, scripted_router: ScriptedRouter
+) -> None:
+    """An empty UUID or an unknown collection fails before any request.
+
+    Args:
+        collection (str): WireGuard collection passed to the public method.
+        scripted_router (ScriptedRouter): Scripted Router fixture.
+    """
+    client = scripted_router.client()
+    uuid = "uuid1" if collection == "peers" else ""
+
+    assert await client.toggle_vpn_instance("wireguard", collection, uuid, "on") is False
     assert scripted_router.requests == []
 
 
