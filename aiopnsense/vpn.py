@@ -97,8 +97,8 @@ class VPNMixin(AiopnsenseClientProtocol):
                 Route-derived ``clients`` and ``connected_clients`` are omitted
                 when routes cannot be fetched or have missing or malformed rows,
                 rather than reporting zero clients.
-                When ``self._throw_errors`` is ``True``, a failed request or
-                endpoint probe raises ``OPNsenseError`` instead, including a
+                When ``self._throw_errors`` is ``True``, a failed request
+                raises ``OPNsenseError`` instead, including a
                 forbidden (403) instance or provider configuration endpoint. A
                 known missing (404) instance or provider endpoint still allows
                 partial results. Structurally malformed required payloads return
@@ -114,11 +114,11 @@ class VPNMixin(AiopnsenseClientProtocol):
             snake_case_path=OPENVPN_SESSIONS_SNAKE_ENDPOINT,
             camel_case_path=OPENVPN_SESSIONS_CAMELCASE_ENDPOINT,
         )
-        if await self._is_get_endpoint_available(sessions_endpoint):
-            sessions_info = await self._safe_dict_get(sessions_endpoint)
-        else:
+        sessions_outcome = await self._fetch_endpoint_outcome(sessions_endpoint)
+        if not sessions_outcome.is_data:
             _LOGGER.debug("OpenVPN sessions endpoint unavailable")
             return None
+        sessions_info = sessions_outcome.mapping()
         if not isinstance(sessions_info.get("rows"), list):
             _LOGGER.debug("[get_openvpn] sessions unavailable (malformed rows)")
             return None
@@ -127,36 +127,34 @@ class VPNMixin(AiopnsenseClientProtocol):
             snake_case_path=OPENVPN_ROUTES_SNAKE_ENDPOINT,
             camel_case_path=OPENVPN_ROUTES_CAMELCASE_ENDPOINT,
         )
-        routes_info: dict[str, Any]
-        if await self._is_get_endpoint_available(routes_endpoint):
-            # An optional sub-request: its failure degrades to empty routes so the
-            # sessions data still returns.
-            routes_info = await _attempt(
-                self,
-                lambda: self._safe_dict_get(routes_endpoint),
-                empty={},
-                name="get_openvpn routes",
-                errors=(OPNsenseError,),
-                log_level=logging.DEBUG,
-            )
-        else:
+        routes_outcome = await _attempt(
+            self,
+            lambda: self._fetch_endpoint_outcome(routes_endpoint),
+            empty=None,
+            name="get_openvpn routes",
+            errors=(OPNsenseError,),
+            log_level=logging.DEBUG,
+        )
+        if routes_outcome is None or not routes_outcome.is_data:
             _LOGGER.debug("OpenVPN routes endpoint unavailable")
             routes_info = {}
-
-        providers_endpoint = OPENVPN_PROVIDERS_ENDPOINT
-        if await self._is_get_endpoint_available(providers_endpoint):
-            # Preserve the distinction between a valid empty mapping and a failed request.
-            providers_info = await self._get(providers_endpoint)
-            if providers_info == []:
-                providers_info = {}
-            if not isinstance(providers_info, MutableMapping):
-                _LOGGER.debug("[get_openvpn] providers inventory unavailable")
-                return None
         else:
+            routes_info = routes_outcome.mapping()
+
+        providers_outcome = await self._fetch_endpoint_outcome(OPENVPN_PROVIDERS_ENDPOINT)
+        if providers_outcome.is_transient:
+            _LOGGER.debug("[get_openvpn] providers inventory unavailable")
+            return None
+        # Preserve the distinction between a valid empty mapping and a failed request.
+        providers_info = providers_outcome.payload
+        if providers_outcome.is_absent:
             _LOGGER.debug("OpenVPN providers endpoint unavailable")
-            if self._endpoint_availability.get(providers_endpoint) is not False:
-                return None
             providers_info = {}
+        elif providers_info == []:
+            providers_info = {}
+        if not isinstance(providers_info, MutableMapping):
+            _LOGGER.debug("[get_openvpn] providers inventory unavailable")
+            return None
         if any(
             not isinstance(uuid, str) or not uuid or not isinstance(vpn_info, MutableMapping)
             for uuid, vpn_info in providers_info.items()
@@ -164,9 +162,14 @@ class VPNMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("[get_openvpn] providers inventory unavailable (malformed entry)")
             return None
 
-        instances_endpoint = OPENVPN_INSTANCES_SEARCH_ENDPOINT
-        if await self._is_get_endpoint_available(instances_endpoint):
-            instances_info = await self._safe_dict_get(instances_endpoint)
+        instances_outcome = await self._fetch_endpoint_outcome(OPENVPN_INSTANCES_SEARCH_ENDPOINT)
+        if instances_outcome.is_transient:
+            _LOGGER.debug("[get_openvpn] instances inventory unavailable")
+            return None
+        instances_info = instances_outcome.mapping()
+        if instances_outcome.is_absent:
+            _LOGGER.debug("OpenVPN instances endpoint unavailable")
+        else:
             instance_rows = instances_info.get("rows")
             if not isinstance(instance_rows, list):
                 _LOGGER.debug("[get_openvpn] instances inventory unavailable (malformed rows)")
@@ -186,11 +189,6 @@ class VPNMixin(AiopnsenseClientProtocol):
                             "[get_openvpn] instances inventory unavailable (malformed identity)"
                         )
                         return None
-        else:
-            _LOGGER.debug("OpenVPN instances endpoint unavailable")
-            if self._endpoint_availability.get(instances_endpoint) is not False:
-                return None
-            instances_info = {}
 
         self._process_openvpn_instances(instances_info, openvpn)
         self._process_openvpn_providers(providers_info, openvpn)
@@ -365,12 +363,10 @@ class VPNMixin(AiopnsenseClientProtocol):
             server.setdefault("total_bytes_recv", 0)
             server["connected_clients"] = len(server.get("clients", []))
             details_endpoint = f"{OPENVPN_INSTANCE_DETAILS_ENDPOINT_PREFIX}{uuid}"
-            if await self._is_get_endpoint_available(details_endpoint):
-                details_info = await self._safe_dict_get(details_endpoint)
-            else:
+            details_outcome = await self._fetch_endpoint_outcome(details_endpoint)
+            if not details_outcome.is_data:
                 _LOGGER.debug("OpenVPN instance details endpoint unavailable for uuid: %s", uuid)
-                details_info = {}
-            details = self._mapping_value(details_info, "instance")
+            details = self._mapping_value(details_outcome.mapping(), "instance")
             if details.get("server"):
                 server["tunnel_addresses"] = [details["server"]]
             server["dns_servers"] = [
@@ -396,10 +392,10 @@ class VPNMixin(AiopnsenseClientProtocol):
                 reliably. A known missing (404) or forbidden (403) configuration
                 endpoint is treated as empty in this mode. A valid empty summary
                 still reports configured peers as disconnected with zero counters.
-                When ``self._throw_errors`` is ``True``, request or endpoint-probe
-                failures can raise ``OPNsenseError``, including a forbidden (403)
-                configuration endpoint. A known missing (404) endpoint is treated
-                as empty for the clients and servers configuration inventories.
+                When ``self._throw_errors`` is ``True``, request failures can raise
+                ``OPNsenseError``, including a forbidden (403) configuration endpoint.
+                A known missing (404) endpoint is treated as empty for the clients
+                and servers configuration inventories.
                 Structurally malformed required payloads return ``None`` regardless
                 of error mode.
         """
@@ -410,19 +406,20 @@ class VPNMixin(AiopnsenseClientProtocol):
         }
         data: dict[str, dict[str, Any]] = {}
         for key, path in data_sources.items():
-            if await self._is_get_endpoint_available(path):
-                data[key] = await self._safe_dict_get(path)
+            outcome = await self._fetch_endpoint_outcome(path)
+            if outcome.is_data:
+                data[key] = outcome.mapping()
+                continue
+            _LOGGER.debug("WireGuard endpoint unavailable: %s", path)
+            if outcome.is_transient:
+                return None
+            # Only known missing or forbidden configuration may be treated as empty.
+            if key == "clients_raw":
+                data[key] = {"client": {"clients": {"client": {}}}}
+            elif key == "servers_raw":
+                data[key] = {"server": {"servers": {"server": {}}}}
             else:
-                _LOGGER.debug("WireGuard endpoint unavailable: %s", path)
-                if self._endpoint_availability.get(path) is not False:
-                    return None
-                # Only known missing or forbidden configuration may be treated as empty.
-                if key == "clients_raw":
-                    data[key] = {"client": {"clients": {"client": {}}}}
-                elif key == "servers_raw":
-                    data[key] = {"server": {"servers": {"server": {}}}}
-                else:
-                    return None
+                return None
 
         summary = data["summary_raw"].get("rows")
         client_summ = dict_get(data["clients_raw"], "client.clients.client")
@@ -1000,18 +997,34 @@ class VPNMixin(AiopnsenseClientProtocol):
             snake_case_path=snake_case_path,
             camel_case_path=camel_case_path,
         )
-        if not await self._is_get_endpoint_available(endpoint):
-            if self._endpoint_availability.get(endpoint) is False:
-                _LOGGER.debug("IPsec configuration endpoint missing or not permitted: %s", endpoint)
-                return {}
+        outcome = await self._fetch_endpoint_outcome(endpoint)
+        if outcome.is_absent:
+            _LOGGER.debug("IPsec configuration endpoint missing or not permitted: %s", endpoint)
+            return {}
+        if outcome.is_transient:
             _LOGGER.debug("IPsec configuration endpoint temporarily unavailable: %s", endpoint)
             return None
-        payload = await self._safe_dict_get(endpoint)
-        rows = payload.get("rows")
+        rows = self._validated_uuid_rows(outcome.mapping().get("rows"), endpoint)
+        if rows is None:
+            return None
+        return {row["uuid"]: row for row in rows}
+
+    @staticmethod
+    def _validated_uuid_rows(rows: object, endpoint: str) -> list[MutableMapping[str, Any]] | None:
+        """Validate an inventory field as a list of rows that each carry a UUID.
+
+        Args:
+            rows (object): Raw ``rows`` field from a configuration payload.
+            endpoint (str): Endpoint the rows came from, used in debug logs.
+
+        Returns:
+            list[MutableMapping[str, Any]] | None: The rows when the field is a list
+                and every row is a mapping with a non-empty string ``uuid``; otherwise
+                ``None``.
+        """
         if not isinstance(rows, list):
             _LOGGER.debug("[get_ipsec] configuration unavailable (malformed rows): %s", endpoint)
             return None
-        configured: dict[str, MutableMapping[str, Any]] = {}
         for row in rows:
             if not isinstance(row, MutableMapping):
                 _LOGGER.debug("[get_ipsec] configuration unavailable (malformed row): %s", endpoint)
@@ -1022,8 +1035,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                     "[get_ipsec] configuration unavailable (malformed identity): %s", endpoint
                 )
                 return None
-            configured[uuid] = row
-        return configured
+        return rows
 
     @staticmethod
     def _new_ipsec_child(
@@ -1198,9 +1210,9 @@ class VPNMixin(AiopnsenseClientProtocol):
                 or its rows are missing or malformed. A valid empty session list
                 still reports configured connections and children as disconnected
                 with zero counters.
-                When ``self._throw_errors`` is ``True``, request or endpoint-probe
-                failures can raise ``OPNsenseError``, including a forbidden (403)
-                connections configuration endpoint. A known missing (404)
+                When ``self._throw_errors`` is ``True``, request failures can raise
+                ``OPNsenseError``, including a forbidden (403) connections
+                configuration endpoint. A known missing (404)
                 connections configuration endpoint still allows session-only
                 results. Structurally malformed phase 1 or connections
                 configuration payloads return ``None`` regardless of error mode.
@@ -1211,12 +1223,12 @@ class VPNMixin(AiopnsenseClientProtocol):
             snake_case_path=IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT,
             camel_case_path=IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT,
         )
-        if not await self._is_get_endpoint_available(sessions_endpoint):
+        sessions_outcome = await self._fetch_endpoint_outcome(sessions_endpoint)
+        if not sessions_outcome.is_data:
             _LOGGER.debug("IPsec phase 1 sessions endpoint unavailable")
             return None
 
-        sessions_info = await self._safe_dict_get(sessions_endpoint)
-        rows = sessions_info.get("rows")
+        rows = sessions_outcome.mapping().get("rows")
         if not isinstance(rows, list):
             _LOGGER.debug("[get_ipsec] phase 1 sessions unavailable (malformed rows)")
             return None

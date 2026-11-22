@@ -786,10 +786,9 @@ async def test_get_ipsec_malformed_phase2_json_through_queue(
         client._use_snake_case = True
         client._throw_errors = throw_errors
         client._request_queue = asyncio.Queue()
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": True}]}
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: sessions if "search_phase1" in path else {"rows": []}
+        session.get = lambda url, **kwargs: FakeResponse(
+            json_payload=sessions if url.endswith("search_phase1") else {"rows": []}
         )
         session.post = lambda *a, **k: _MalformedJSONResponse()
         task = asyncio.get_running_loop().create_task(client._process_queue())
@@ -846,20 +845,13 @@ async def test_get_openvpn_malformed_routes_json_through_queue(
             return FakeResponse(
                 json_payload={"rows": [{"id": "vpn-1_1", "type": "server", "status": "connected"}]}
             )
+        if url.endswith(aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT):
+            return FakeResponse(json_payload={"rows": []})
         return FakeResponse(json_payload={})
 
     try:
         client._use_snake_case = True
         client._throw_errors = throw_errors
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=lambda path: path in {sessions_endpoint, routes_endpoint}
-        )
-        client._endpoint_availability.update(
-            {
-                aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT: False,
-                aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT: False,
-            }
-        )
         session.get = fake_get
         if throw_errors:
             with pytest.raises(OPNsenseError):
@@ -1113,7 +1105,6 @@ async def test_vpn_status_propagates_errors(
             (True, "timeout"),
             (True, "decode"),
             (True, "missing"),
-            (True, "probe"),
             (True, "forbidden"),
         )
     ]
@@ -1154,13 +1145,6 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
     client, session = make_mock_session_client(make_client)
     client._use_snake_case = True
     recovered = False
-    if reply == "forbidden":
-        client._endpoint_availability[endpoint] = False
-    client._is_get_endpoint_available = AsyncMock(
-        side_effect=lambda path: (
-            recovered or path != endpoint or reply not in {"probe", "forbidden"}
-        )
-    )
     config = {"uuid": "disabled", "role": "server", "enabled": "0", "name": "disabled"}
     populated = {
         aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT: {"rows": [config]},
@@ -1195,6 +1179,8 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
         if url.endswith(endpoint):
             if recovered:
                 return FakeResponse(json_payload=populated[endpoint])
+            if reply == "forbidden":
+                return FakeResponse(status=403, reason="Forbidden", ok=False)
             if reply == "timeout":
                 raise TimeoutError("configuration unavailable")
             payload: Any = empty[endpoint] if reply == "empty" else None
@@ -1236,6 +1222,11 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
             assert result is None
         recovered = True
         result = await getattr(client, f"get_{vpn}")()
+        if reply == "forbidden":
+            # A cached 403 is answered without a request until its cache window expires.
+            assert result is not None
+            assert "disabled" not in result[collection]
+            return
         assert result is not None
         assert "disabled" in result[collection]
         if endpoint != aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT:
