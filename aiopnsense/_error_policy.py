@@ -74,6 +74,27 @@ def _handle_error(
     raise public_error from error
 
 
+def _raise_if_throwing(client: _ThrowErrorsClient, error: OPNsenseError) -> None:
+    """Raise an already-public error when the client throws errors.
+
+    For a failure the caller detected without catching an exception, such as an
+    unusable result, and for a transport error that was already logged. The error
+    is raised as given and its logged marker is left as it is, so a wrapper
+    further up logs a freshly detected failure once and does not repeat one that
+    was already logged.
+
+    Args:
+        client (_ThrowErrorsClient): Client whose ``_throw_errors`` setting selects
+            between raising and returning to the caller.
+        error (OPNsenseError): Public error to raise.
+
+    Raises:
+        error: ``error`` itself when ``_throw_errors`` is true.
+    """
+    if client._throw_errors:
+        raise error
+
+
 def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap coroutine methods with shared timeout/error logging behavior.
 

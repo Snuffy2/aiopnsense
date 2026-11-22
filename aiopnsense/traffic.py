@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
+import logging
 from typing import Any
 
+from ._error_policy import _attempt
 from ._typing import AiopnsenseClientProtocol
 from .client_transport import _STREAM_JSON_EVENT_RESET_KEY
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
-from .exceptions import OPNsenseError, _map_opnsense_exception
+from .exceptions import OPNsenseError
 from .helpers import _LOGGER, try_to_float, try_to_int
 
 DIAGNOSTICS_TRAFFIC_ENDPOINT = "/api/diagnostics/traffic/interface"
@@ -158,6 +160,17 @@ def normalize_traffic_payload(
     return normalized
 
 
+# Failures the traffic probe and sample steps handle; anything else propagates.
+_TRAFFIC_HANDLED_ERRORS: tuple[type[Exception], ...] = (
+    TimeoutError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    AttributeError,
+    OPNsenseError,
+)
+
+
 class TrafficMixin(AiopnsenseClientProtocol):
     """Diagnostics traffic methods for OPNsenseClient."""
 
@@ -167,50 +180,32 @@ class TrafficMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, Any]: Normalized diagnostics traffic sample. Returns an
                 empty traffic sample when endpoint probing or response parsing
-                fails.
-
-        Raises:
-            AttributeError: Caught from endpoint probing or payload normalization
-                and mapped when error propagation is enabled.
-            OPNsenseError: Re-raised from an OPNsense client operation when error
-                propagation is enabled.
-            RuntimeError: Caught from endpoint probing or payload normalization
-                and mapped when error propagation is enabled.
-            TimeoutError: Caught from endpoint probing or payload normalization
-                and mapped when error propagation is enabled.
-            TypeError: Caught from endpoint probing or payload normalization and
-                mapped when error propagation is enabled.
-            ValueError: Caught from endpoint probing or payload normalization and
-                mapped when error propagation is enabled.
-            _map_opnsense_exception: Maps caught non-OPNsense errors to a public
-                OPNsense exception when error propagation is enabled.
+                fails. With ``throw_errors`` enabled, a failure is raised as an
+                ``OPNsenseError`` subclass instead.
         """
         empty_sample: dict[str, Any] = {"time": None, "interfaces": {}}
 
-        try:
+        async def fetch_sample() -> dict[str, Any]:
+            """Probe the endpoint and return its normalized traffic sample.
+
+            Returns:
+                dict[str, Any]: Normalized sample, or the empty sample when the
+                    endpoint is unavailable.
+            """
             if not await self._is_get_endpoint_available(DIAGNOSTICS_TRAFFIC_ENDPOINT):
                 _LOGGER.debug("Diagnostics traffic endpoint unavailable")
                 return empty_sample
             payload = await self._safe_dict_get(DIAGNOSTICS_TRAFFIC_ENDPOINT)
             return normalize_traffic_payload(payload, interval=1.0, include_per_second_rates=False)
-        except (
-            TimeoutError,
-            RuntimeError,
-            TypeError,
-            ValueError,
-            AttributeError,
-            OPNsenseError,
-        ) as exc:
-            if self._throw_errors:
-                if isinstance(exc, OPNsenseError):
-                    raise
-                raise _map_opnsense_exception(exc) from exc
-            _LOGGER.debug(
-                "Falling back to empty interface traffic sample due to %s: %s",
-                type(exc).__name__,
-                exc,
-            )
-            return empty_sample
+
+        return await _attempt(
+            self,
+            fetch_sample,
+            empty=empty_sample,
+            name="get_interface_traffic",
+            errors=_TRAFFIC_HANDLED_ERRORS,
+            log_level=logging.DEBUG,
+        )
 
     async def stream_interface_traffic(
         self,
@@ -227,47 +222,32 @@ class TrafficMixin(AiopnsenseClientProtocol):
                 event is discarded because it cannot represent an interval delta.
                 Later samples use elapsed time between strictly increasing server
                 timestamps; after a timing reset, the next valid sample uses the
-                selected stream interval.
-
-        Raises:
-            AttributeError: Caught while probing the stream endpoint and mapped
-                when error propagation is enabled.
-            OPNsenseError: Re-raised from an OPNsense client operation when error
-                propagation is enabled.
-            RuntimeError: Caught while probing the stream endpoint and mapped
-                when error propagation is enabled.
-            TimeoutError: Caught while probing the stream endpoint and mapped
-                when error propagation is enabled.
-            TypeError: Caught while probing the stream endpoint and mapped when
-                error propagation is enabled.
-            ValueError: Caught while probing the stream endpoint and mapped when
-                error propagation is enabled.
-            _map_opnsense_exception: Maps caught non-OPNsense errors to a public
-                OPNsense exception when error propagation is enabled.
+                selected stream interval. The stream ends empty when probing the
+                stream endpoint fails; with ``throw_errors`` enabled, that failure
+                is raised as an ``OPNsenseError`` subclass instead.
         """
         interval = max(poll_interval, 1)
         endpoint = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/{interval}"
-        try:
+
+        async def probe_stream_endpoint() -> bool:
+            """Probe the stream endpoint.
+
+            Returns:
+                bool: ``True`` when the stream endpoint is available.
+            """
             if not await self._is_get_endpoint_available(endpoint):
                 _LOGGER.debug("Diagnostics traffic stream endpoint unavailable")
-                return
-        except (
-            TimeoutError,
-            RuntimeError,
-            TypeError,
-            ValueError,
-            AttributeError,
-            OPNsenseError,
-        ) as exc:
-            if self._throw_errors:
-                if isinstance(exc, OPNsenseError):
-                    raise
-                raise _map_opnsense_exception(exc) from exc
-            _LOGGER.debug(
-                "Falling back to empty interface traffic stream due to %s: %s",
-                type(exc).__name__,
-                exc,
-            )
+                return False
+            return True
+
+        if not await _attempt(
+            self,
+            probe_stream_endpoint,
+            empty=False,
+            name="stream_interface_traffic",
+            errors=_TRAFFIC_HANDLED_ERRORS,
+            log_level=logging.DEBUG,
+        ):
             return
 
         event_count = 0
