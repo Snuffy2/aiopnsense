@@ -802,10 +802,12 @@ async def test_legacy_unbound_apply_http_failure_through_queue(
         http_failures = [
             record.getMessage()
             for record in caplog.records
-            if record.levelno >= logging.WARNING and apply_url in record.getMessage()
+            if record.levelno >= logging.WARNING
+            and "503" in record.getMessage()
+            and "Service Unavailable" in record.getMessage()
         ]
         assert len(http_failures) == 1
-        assert "503" in http_failures[0]
+        assert apply_url in http_failures[0]
         assert username not in caplog.text
         assert password not in caplog.text
     finally:
