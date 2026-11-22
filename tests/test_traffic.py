@@ -810,26 +810,20 @@ async def test_stream_interface_traffic_raises_when_probe_timeout_and_throw_erro
         await client.async_close()
 
 
-def _traffic_failure_factories() -> list[Any]:
-    """Return parametrization cases that build a fresh handled error per run.
-
-    A raised public error is marked as logged, so each run needs its own instance.
-
-    Returns:
-        list[Any]: ``pytest.param`` cases of ``(factory, expected_public_error)``.
-    """
-    return [
-        pytest.param(lambda: TimeoutError("timeout"), OPNsenseTimeoutError, id="timeout"),
-        pytest.param(lambda: RuntimeError("runtime"), OPNsenseError, id="runtime"),
-        pytest.param(lambda: TypeError("type"), OPNsenseError, id="type"),
-        pytest.param(lambda: ValueError("value"), OPNsenseError, id="value"),
-        pytest.param(lambda: AttributeError("attribute"), OPNsenseError, id="attribute"),
-        pytest.param(lambda: OPNsenseError("opnsense"), OPNsenseError, id="opnsense"),
-    ]
+# Keep factories in the shared immutable cases: pytest reuses parameter values, while
+# raised public errors carry logged state and therefore need a fresh instance per test.
+_TRAFFIC_FAILURE_CASES: tuple[Any, ...] = (
+    pytest.param(lambda: TimeoutError("timeout"), OPNsenseTimeoutError, id="timeout"),
+    pytest.param(lambda: RuntimeError("runtime"), OPNsenseError, id="runtime"),
+    pytest.param(lambda: TypeError("type"), OPNsenseError, id="type"),
+    pytest.param(lambda: ValueError("value"), OPNsenseError, id="value"),
+    pytest.param(lambda: AttributeError("attribute"), OPNsenseError, id="attribute"),
+    pytest.param(lambda: OPNsenseError("opnsense"), OPNsenseError, id="opnsense"),
+)
 
 
 @pytest.mark.parametrize("throw_errors", [False, True])
-@pytest.mark.parametrize(("make_error", "expected_error"), _traffic_failure_factories())
+@pytest.mark.parametrize(("make_error", "expected_error"), _TRAFFIC_FAILURE_CASES)
 @pytest.mark.parametrize("failing_step", ["probe", "fetch"])
 @pytest.mark.asyncio
 async def test_get_interface_traffic_failure_follows_throw_errors_contract(
@@ -872,7 +866,7 @@ async def test_get_interface_traffic_failure_follows_throw_errors_contract(
 
 
 @pytest.mark.parametrize("throw_errors", [False, True])
-@pytest.mark.parametrize(("make_error", "expected_error"), _traffic_failure_factories())
+@pytest.mark.parametrize(("make_error", "expected_error"), _TRAFFIC_FAILURE_CASES)
 @pytest.mark.asyncio
 async def test_stream_interface_traffic_probe_failure_follows_throw_errors_contract(
     make_client: MakeClientFactory,
