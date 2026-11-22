@@ -582,6 +582,10 @@ class ClientTransportMixin:
                 ``read_body`` is ``False``) for a successful response,
                 ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any
                 other HTTP status, timeout or client error.
+
+        Raises:
+            json.JSONDecodeError: For undecodable JSON outside an attributable validator
+                failure on a delivered 404.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -605,7 +609,12 @@ class ClientTransportMixin:
                 if response_format == "text":
                     return EndpointOutcome.data(await response.text())
                 return EndpointOutcome.data(await response.json(content_type=None))
-        except (aiohttp.ClientError, TimeoutError, json.JSONDecodeError) as e:
+        except json.JSONDecodeError as e:
+            outcome = _classify_outcome_payload_error(e, validator_errors)
+            if outcome is not None:
+                return outcome
+            raise
+        except (aiohttp.ClientError, TimeoutError) as e:
             if isinstance(e, aiohttp.ClientResponseError) and not isinstance(
                 e, aiohttp.ContentTypeError
             ):
@@ -619,9 +628,7 @@ class ClientTransportMixin:
                 )
                 if outcome is not None:
                     return outcome
-            elif isinstance(
-                e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError | json.JSONDecodeError
-            ):
+            elif isinstance(e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError):
                 outcome = _classify_outcome_payload_error(e, validator_errors)
                 if outcome is not None:
                     return outcome
@@ -778,6 +785,10 @@ class ClientTransportMixin:
             EndpointOutcome: ``DATA`` with the decoded payload for a successful response,
                 ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any other
                 HTTP status, timeout or client error.
+
+        Raises:
+            json.JSONDecodeError: For undecodable JSON outside an attributable validator
+                failure on a delivered 404.
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
@@ -798,7 +809,12 @@ class ClientTransportMixin:
                 if not response.ok:
                     return EndpointOutcome.from_http_status(response.status, response.reason)
                 return EndpointOutcome.data(await response.json(content_type=None))
-        except (aiohttp.ClientError, TimeoutError, json.JSONDecodeError) as e:
+        except json.JSONDecodeError as e:
+            outcome = _classify_outcome_payload_error(e, validator_errors)
+            if outcome is not None:
+                return outcome
+            raise
+        except (aiohttp.ClientError, TimeoutError) as e:
             if isinstance(e, aiohttp.ClientResponseError) and not isinstance(
                 e, aiohttp.ContentTypeError
             ):
@@ -812,9 +828,7 @@ class ClientTransportMixin:
                 )
                 if outcome is not None:
                     return outcome
-            elif isinstance(
-                e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError | json.JSONDecodeError
-            ):
+            elif isinstance(e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError):
                 outcome = _classify_outcome_payload_error(e, validator_errors)
                 if outcome is not None:
                     return outcome

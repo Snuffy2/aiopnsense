@@ -1187,6 +1187,44 @@ class _MalformedJSONResponse(FakeResponse):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "request_method"),
+    [("get_nut_ups_status", "get"), ("get_smart", "post")],
+)
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_public_outcome_reads_preserve_malformed_json_policy(
+    method_name: str,
+    request_method: str,
+    throw_errors: bool,
+    make_client: MakeClientFactory,
+) -> None:
+    """Malformed JSON follows the public queue error policy for GET and POST reads.
+
+    Args:
+        method_name (str): Public GET or POST endpoint reader.
+        request_method (str): Session request method used by the reader.
+        throw_errors (bool): Whether the client raises mapped errors.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.toggle_throwing_errors(throw_errors)
+    response = _MalformedJSONResponse()
+    if request_method == "get":
+        session.get = lambda *_args, **_kwargs: response
+    else:
+        session.post = lambda *_args, **_kwargs: response
+    try:
+        read = getattr(client, method_name)
+        if throw_errors:
+            with pytest.raises(OPNsenseError):
+                await read()
+        else:
+            assert await read() is None
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("throw_errors", [False, True])
 async def test_get_ipsec_malformed_phase2_json_through_queue(
     make_client: MakeClientFactory, throw_errors: bool
