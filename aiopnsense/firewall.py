@@ -5,7 +5,7 @@ import csv
 from io import StringIO
 from typing import Any
 
-from ._error_policy import _log_errors
+from ._error_policy import _log_boolean_errors, _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import TOGGLE_ITEM_RESULTS, ToggleSpec, ToggleStep
 from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE, UNIFIED_NAT_TEMPLATE_FIRMWARE
@@ -344,7 +344,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             debug_label="get_nat_npt_rules",
         )
 
-    @_log_errors
+    @_log_boolean_errors
     async def toggle_firewall_rule(self, uuid: str, toggle_on_off: str | None = None) -> bool:
         """Toggle a Firewall Rule on or off and apply the filter.
 
@@ -356,11 +356,11 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         Returns:
             bool: True when the Router acknowledged the save and confirmed
-                the apply; False when the save was not acknowledged (no apply is
-                sent) or the apply was not confirmed. An invalid ``toggle_on_off``
-                raises ``OPNsenseInvalidArgument`` when ``throw_errors`` is
-                enabled, as do transport errors; otherwise the error is logged
-                and the call returns None.
+                the apply. False when the save was not acknowledged (no apply is
+                sent), the apply was not confirmed, or an error was suppressed.
+                With ``throw_errors`` enabled, an invalid ``toggle_on_off`` raises
+                ``OPNsenseInvalidArgument`` and transport errors raise
+                ``OPNsenseError``.
         """
         target = self._parse_toggle_target(toggle_on_off)
         url = f"{FIREWALL_FILTER_TOGGLE_RULE_ENDPOINT_PREFIX}{uuid}{target.endpoint_suffix()}"
@@ -374,7 +374,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             )
         )
 
-    @_log_errors
+    @_log_boolean_errors
     async def toggle_nat_rule(
         self, nat_rule_type: str, uuid: str, toggle_on_off: str | None = None
     ) -> bool:
@@ -390,11 +390,11 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         Returns:
             bool: True when the Router acknowledged the save and confirmed
-                the apply; False when the save was not acknowledged (no apply is
-                sent) or the apply was not confirmed. An invalid ``toggle_on_off``
-                raises ``OPNsenseInvalidArgument`` when ``throw_errors`` is
-                enabled, as do transport errors; otherwise the error is logged
-                and the call returns None.
+                the apply. False when the save was not acknowledged (no apply is
+                sent), the apply was not confirmed, or an error was suppressed.
+                With ``throw_errors`` enabled, an invalid ``toggle_on_off`` raises
+                ``OPNsenseInvalidArgument`` and transport errors raise
+                ``OPNsenseError``.
         """
         target = self._parse_toggle_target(toggle_on_off)
         # d_nat stores a *disabled* flag, so on/off map to the opposite URL suffix.
@@ -438,7 +438,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
             "dropped_states": response.get("dropped_states", 0),
         }
 
-    @_log_errors
+    @_log_boolean_errors
     async def toggle_alias(self, alias: str, toggle_on_off: str | None = None) -> bool:
         """Toggle an alias on or off, commit it and reconfigure the aliases.
 
@@ -450,12 +450,12 @@ class FirewallMixin(AiopnsenseClientProtocol):
 
         Returns:
             bool: True when the Router acknowledged the toggle and the
-                commit and confirmed the reconfigure; False when the alias cannot
+                commit and confirmed the reconfigure. False when the alias cannot
                 be found, a save step was not acknowledged (nothing further is
-                sent) or the reconfigure was not confirmed. An invalid
-                ``toggle_on_off`` raises ``OPNsenseInvalidArgument`` when
-                ``throw_errors`` is enabled, as do transport errors; otherwise
-                the error is logged and the call returns None.
+                sent), the reconfigure was not confirmed, or an error was suppressed.
+                With ``throw_errors`` enabled, an invalid ``toggle_on_off`` raises
+                ``OPNsenseInvalidArgument`` and transport errors raise
+                ``OPNsenseError``.
         """
         target = self._parse_toggle_target(toggle_on_off)
         alias_search_endpoint = await self._get_endpoint_path(

@@ -11,7 +11,7 @@ outer report. Outer handlers report newly detected failures.
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from functools import wraps
+from functools import partial, wraps
 from typing import Any, Protocol
 
 import aiohttp
@@ -134,16 +134,17 @@ def _raise_if_throwing(
         raise error from cause
 
 
-def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
+def _log_errors(func: Callable[..., Any], *, fallback: bool | None = None) -> Callable[..., Any]:
     """Wrap coroutine methods with shared timeout/error logging behavior.
 
     Args:
         func (Callable[..., Any]): Coroutine function to decorate and execute
             with shared behavior.
+        fallback (bool | None): Result when an error is suppressed.
 
     Returns:
         Callable[..., Any]: Decorator wrapper that applies shared exception
-            logging and returns the wrapped coroutine result, or ``None`` when an
+            logging and returns the wrapped coroutine result, or the fallback when an
             error is suppressed.
     """
 
@@ -159,7 +160,7 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
             kwargs (Any): Keyword arguments forwarded to the wrapped coroutine.
 
         Returns:
-            Any: Wrapped coroutine result, or ``None`` when an error is
+            Any: Wrapped coroutine result, or the fallback when an error is
                 suppressed. When ``_throw_errors`` is true, caught errors are
                 raised as ``OPNsenseError`` subclasses instead.
 
@@ -174,9 +175,13 @@ def _log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
         except Exception as e:  # noqa: BLE001
             # Last line of defense for public methods: any failure follows the policy.
             _handle_error(self, e, func.__name__.strip("_"))
-        return None
+        return fallback
 
     return inner
+
+
+_log_boolean_errors = partial(_log_errors, fallback=False)
+"""Log suppressed errors and return False for methods with boolean results."""
 
 
 async def _attempt[T, E](

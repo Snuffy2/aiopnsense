@@ -6,7 +6,7 @@ from functools import partial
 import logging
 from typing import Any
 
-from ._error_policy import _attempt, _log_errors
+from ._error_policy import _attempt, _log_boolean_errors, _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import TOGGLE_ITEM_RESULTS, ToggleSpec, ToggleStep, ToggleTarget, VpnInstance
 from .exceptions import OPNsenseError
@@ -715,7 +715,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             ):
                 server_or_client["latest_handshake"] = handshake_time
 
-    @_log_errors
+    @_log_boolean_errors
     async def toggle_vpn_instance(
         self,
         vpn_type: str,
@@ -752,12 +752,12 @@ class VPNMixin(AiopnsenseClientProtocol):
                 explicit target returns ``True`` without a service reconfigure
                 unless this client tracks an earlier unapplied save. False when the
                 save was not acknowledged or the apply was not confirmed, for an
-                unknown VPN type or collection, or for an empty WireGuard UUID. An
-                unrecognised ``toggle_on_off`` raises ``OPNsenseInvalidArgument``
-                when ``throw_errors`` is enabled, as do transport errors;
-                otherwise the error is logged and the call returns None.
+                unknown VPN type or collection, for an empty WireGuard UUID,
+                or when an error was suppressed. With ``throw_errors`` enabled,
+                an invalid ``toggle_on_off`` raises ``OPNsenseInvalidArgument``
+                and transport errors raise ``OPNsenseError``.
                 Closing the client raises ``asyncio.CancelledError`` from a call in
-                progress or a new call; a completed service apply can still report
+                progress or a new call. A completed service apply can still report
                 success during shutdown.
         """
         target = self._parse_toggle_target(toggle_on_off)

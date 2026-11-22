@@ -4,7 +4,7 @@ from collections.abc import MutableMapping
 import logging
 from typing import Any
 
-from ._error_policy import _log_errors
+from ._error_policy import _log_boolean_errors, _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import ToggleSpec, ToggleStep, ToggleTarget
 from .const import LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
@@ -206,7 +206,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 for legacy firmware where regular DNSBL has no per-entry UUID.
 
         Returns:
-            bool: True when the operation succeeds; otherwise, False. Transport
+            bool: True when the operation succeeds. Otherwise, False. Transport
                 errors during the save or apply raise when ``throw_errors`` is
                 enabled.
         """
@@ -241,7 +241,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
             return await self._toggle_unbound_blocklist(set_state=set_state, uuid=uuid)
         return await self._set_unbound_blocklist_legacy(set_state=set_state)
 
-    @_log_errors
+    @_log_boolean_errors
     async def enable_unbound_blocklist(self, uuid: str | None = None) -> bool:
         """Enable Unbound DNS blocklist filtering.
 
@@ -250,11 +250,12 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 when enabling the legacy regular DNSBL setting.
 
         Returns:
-            bool: True when the operation succeeds; otherwise, False.
+            bool: True when the operation succeeds. Otherwise, False. Transport
+                errors raise ``OPNsenseError`` when ``throw_errors`` is enabled.
         """
         return await self._set_unbound_blocklist(set_state=True, uuid=uuid)
 
-    @_log_errors
+    @_log_boolean_errors
     async def disable_unbound_blocklist(self, uuid: str | None = None) -> bool:
         """Disable Unbound DNS blocklist filtering.
 
@@ -263,6 +264,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 when disabling the legacy regular DNSBL setting.
 
         Returns:
-            bool: True when the operation succeeds; otherwise, False.
+            bool: True when the operation succeeds; otherwise, False. Transport
+                errors raise ``OPNsenseError`` when ``throw_errors`` is enabled.
         """
         return await self._set_unbound_blocklist(set_state=False, uuid=uuid)

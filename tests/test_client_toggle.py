@@ -43,7 +43,7 @@ class ToggleCase:
     """
 
     name: str
-    toggle: Callable[[OPNsenseClient, str | None], Awaitable[bool | None]]
+    toggle: Callable[[OPNsenseClient, str | None], Awaitable[bool]]
     save_paths: Mapping[str | None, str]
     save_ok: Mapping[str | None, MutableMapping[str, Any]]
     apply_path: str
@@ -70,9 +70,7 @@ class ToggleCase:
 _WIREGUARD_RECONFIGURE = "/api/wireguard/service/reconfigure"
 
 
-async def _toggle_wireguard(
-    collection: str, client: OPNsenseClient, target: str | None
-) -> bool | None:
+async def _toggle_wireguard(collection: str, client: OPNsenseClient, target: str | None) -> bool:
     """Toggle WireGuard instance ``uuid1`` in a collection.
 
     Args:
@@ -81,7 +79,7 @@ async def _toggle_wireguard(
         target (str | None): ``toggle_on_off`` value.
 
     Returns:
-        bool | None: Result of ``toggle_vpn_instance``.
+        bool: Result of ``toggle_vpn_instance``.
     """
     return await client.toggle_vpn_instance("wireguard", collection, "uuid1", target)
 
@@ -328,16 +326,14 @@ async def test_toggle_rejects_unrecognised_target(
         bad_target (Any): Unrecognised ``toggle_on_off`` value.
         scripted_router (ScriptedRouter): Scripted Router fixture.
     """
-    case.script(scripted_router, None)
     client = scripted_router.client(throw_errors=throw_errors)
 
     if throw_errors:
         with pytest.raises(OPNsenseInvalidArgument):
             await case.toggle(client, bad_target)
     else:
-        assert await case.toggle(client, bad_target) is None
-    assert not scripted_router.requested(case.save_paths[None])
-    assert not scripted_router.requested(case.apply_path)
+        assert await case.toggle(client, bad_target) is False
+    assert not scripted_router.requests
 
 
 @pytest.mark.parametrize("case", _CASE_PARAMS)

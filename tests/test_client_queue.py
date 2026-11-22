@@ -1462,6 +1462,50 @@ async def test_cancelled_service_apply_stays_serialized_until_acknowledged(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("firmware", "item"),
+    [("25.7.7", None), ("25.7.8", "blocklist-id")],
+    ids=["legacy", "extended"],
+)
+async def test_unbound_toggle_returns_false_on_malformed_apply_response(
+    make_client: MakeClientFactory, firmware: str, item: str | None
+) -> None:
+    """Return False when an HTTP 200 apply reply cannot be parsed.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        firmware (str): Firmware selecting the Unbound backend.
+        item (str | None): Extended blocklist identifier, if applicable.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.get_host_firmware_version = AsyncMock(return_value=firmware)
+    malformed_apply = FakeResponse()
+    malformed_apply.json = AsyncMock(side_effect=json.JSONDecodeError("invalid", "<html>", 0))
+
+    base_url = "http://localhost/api/unbound"
+    apply_url = f"{base_url}/service/dnsbl"
+    get_responses: dict[str, FakeResponse] = {}
+    post_responses: dict[str, FakeResponse] = {}
+    if item is None:
+        get_responses[f"{base_url}/settings/get"] = FakeResponse(
+            json_payload={"unbound": {"dnsbl": {"enabled": "0"}}}
+        )
+        get_responses[apply_url] = malformed_apply
+        post_responses[f"{base_url}/settings/set"] = FakeResponse(json_payload={"result": "saved"})
+    else:
+        post_responses[f"{base_url}/settings/toggle_dnsbl/{item}/1"] = FakeResponse(
+            json_payload={"result": "Enabled"}
+        )
+        post_responses[apply_url] = malformed_apply
+    session.get.side_effect = lambda url, **_: get_responses[url]
+    session.post.side_effect = lambda url, **_: post_responses[url]
+
+    assert await client.enable_unbound_blocklist(item) is False
+    malformed_apply.json.assert_awaited_once()
+    assert all(args[0] != f"{base_url}/service/restart" for args, _ in session.post.call_args_list)
+
+
+@pytest.mark.asyncio
 async def test_cancelled_queued_public_toggle_is_not_dispatched(
     make_client: MakeClientFactory, vpn_queue_tasks: VpnQueueTasks
 ) -> None:
