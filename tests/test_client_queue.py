@@ -1370,6 +1370,58 @@ async def test_cancelled_service_apply_stays_serialized_until_acknowledged(
 
 
 @pytest.mark.asyncio
+async def test_cancelled_queued_firewall_rule_toggle_sends_no_post(
+    make_client: MakeClientFactory, vpn_queue_tasks: VpnQueueTasks
+) -> None:
+    """Skip both writes when a Firewall Rule Toggle is cancelled before dispatch.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._max_workers = 1
+    blocker_started = asyncio.Event()
+    release_blocker = asyncio.Event()
+
+    async def blocked_json(*, content_type: str | None = None) -> dict[str, str]:
+        """Hold the only worker while it reads the first response.
+
+        Args:
+            content_type (str | None): Unused response decoding option.
+
+        Returns:
+            dict[str, str]: Firmware upgrade status.
+        """
+        blocker_started.set()
+        await release_blocker.wait()
+        return {"status": "running"}
+
+    blocked_response = FakeResponse()
+    blocked_response.json = AsyncMock(side_effect=blocked_json)
+    session.get.side_effect = [
+        FakeResponse(),  # Endpoint availability probe.
+        blocked_response,
+        FakeResponse(json_payload={"status": "done"}),
+    ]
+    session.post.return_value = FakeResponse(json_payload={"result": "ok", "status": "OK"})
+
+    blocker = vpn_queue_tasks.start(client.upgrade_status())
+    await asyncio.wait_for(blocker_started.wait(), timeout=3)
+    # The Toggle's first suspension is waiting for its queued save.
+    toggle = vpn_queue_tasks.start(client.toggle_firewall_rule("uuid", "on"), eager_start=True)
+    toggle.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(toggle, timeout=3)
+
+    release_blocker.set()
+    assert await asyncio.wait_for(blocker, timeout=3) == {"status": "running"}
+    # This request can succeed only after the worker has passed the cancelled save.
+    assert await asyncio.wait_for(client.upgrade_status(), timeout=3) == {"status": "done"}
+    session.post.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_cancelled_queued_public_toggle_is_not_dispatched(
     make_client: MakeClientFactory, vpn_queue_tasks: VpnQueueTasks
 ) -> None:

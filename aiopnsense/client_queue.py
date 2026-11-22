@@ -142,6 +142,8 @@ class ClientQueueMixin:
     ) -> Any:
         """Queue one API request and return its future result.
 
+        Cancelling the caller before dispatch causes the worker to skip a queued POST.
+
         Args:
             method (str): Internal request method handled by ``_process_queue``.
             path (str): API endpoint path to request.
@@ -279,6 +281,8 @@ class ClientQueueMixin:
                     method, path, payload, future, caller, cancellation_state = entry
                 else:
                     method, path, payload, future, caller = entry
+                    if method == "post" and future is not None and future.cancelled():
+                        continue
                 if cancellation_state is not None:
                     waiter = cancellation_state.waiter
                     if future is not None and (future.cancelled() or waiter.cancelled()):
