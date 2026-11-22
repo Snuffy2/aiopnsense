@@ -136,9 +136,10 @@ class SystemMixin(AiopnsenseClientProtocol):
             bool | None: True when already matching, or when the Router
                 acknowledged the save (``saved``) and confirmed the apply;
                 False when refused, the save was not acknowledged (no apply is
-                sent) or the apply was not confirmed. Suppressed validation errors
-                return None, or raise ``OPNsenseInvalidArgument`` when
-                ``throw_errors`` is enabled, as do transport errors.
+                sent) or the apply was not confirmed. A suppressed exception
+                returns None. With ``throw_errors`` enabled, invalid arguments
+                raise ``OPNsenseInvalidArgument`` and transport failures raise
+                ``OPNsenseError`` subclasses.
         """
         self._validate_interface_identifier(if_name)
         target = self._parse_toggle_target(toggle_on_off)
