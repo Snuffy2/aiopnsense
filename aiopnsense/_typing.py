@@ -13,6 +13,10 @@ class AiopnsenseClientProtocol(Protocol):
 
     _firmware_install_active: bool
     _firmware_action_lock: asyncio.Lock
+    _vpn_service_locks: dict[str, asyncio.Lock]
+    _vpn_pending_apply: dict[str, set[tuple[str, str]]]
+    _vpn_shutdown_generation: int
+    _active_close_count: int
     _session: aiohttp.ClientSession
     _url: str
     _username: str
@@ -55,6 +59,10 @@ class AiopnsenseClientProtocol(Protocol):
     async def _safe_dict_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
     ) -> dict[str, Any]: ...
+
+    async def _safe_dict_post_with_cancellation(
+        self, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> tuple[dict[str, Any], asyncio.CancelledError | None]: ...
 
     async def _safe_list_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None

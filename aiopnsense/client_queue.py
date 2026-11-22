@@ -2,12 +2,21 @@
 
 import asyncio
 from collections.abc import MutableMapping
+from dataclasses import dataclass
 import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
 from .helpers import _LOGGER, _is_request_error_logged, _mark_request_error_logged
+
+
+@dataclass(slots=True)
+class _CancellablePostState:
+    """Track whether an opted-in queued POST has started dispatching."""
+
+    waiter: asyncio.Future[Any]
+    started: bool = False
 
 
 class ClientQueueMixin:
@@ -18,6 +27,8 @@ class ClientQueueMixin:
         _max_workers: int
         _request_queue: asyncio.Queue[Any]
         _workers: list[asyncio.Task[Any]]
+        _vpn_shutdown_generation: int
+        _active_close_count: int
 
         async def _do_get(
             self,
@@ -77,7 +88,13 @@ class ClientQueueMixin:
             ...
 
     async def _ensure_workers_started(self) -> None:
-        """Ensure queue workers are running on the active event loop."""
+        """Ensure queue workers are running on the active event loop.
+
+        Raises:
+            asyncio.CancelledError: If the client is closing.
+        """
+        if self._active_close_count > 0:
+            raise asyncio.CancelledError("OPNsenseClient is closing")
         self._loop = asyncio.get_running_loop()
 
         self._workers = [worker for worker in self._workers if not worker.done()]
@@ -134,6 +151,57 @@ class ClientQueueMixin:
         future = loop.create_future()
         await self._request_queue.put((method, path, payload, future, self._get_caller_name()))
         return await future
+
+    async def _queue_post_with_cancellation(
+        self, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> tuple[MutableMapping[str, Any] | list | None, asyncio.CancelledError | None]:
+        """Queue a POST while retaining its result if cancellation follows dispatch.
+
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None): Optional request body.
+
+        Returns:
+            tuple[MutableMapping[str, Any] | list | None, asyncio.CancelledError | None]:
+                The response and any original caller cancellation received after
+                dispatch began. Callers process the response before propagating
+                the returned cancellation.
+
+        Raises:
+            asyncio.CancelledError: Raised when cancellation occurs before the
+                queued POST begins dispatching.
+            cancelled: The original ``asyncio.CancelledError`` from caller
+                cancellation, re-raised if the dispatched POST fails or its
+                future is cancelled before a response is available.
+        """
+        loop = await self._get_active_loop()
+        future = loop.create_future()
+        waiter = asyncio.shield(future)
+        cancellation_state = _CancellablePostState(waiter)
+        await self._request_queue.put(
+            (
+                "post",
+                path,
+                payload,
+                future,
+                self._get_caller_name(),
+                cancellation_state,
+            )
+        )
+        try:
+            return await waiter, None
+        except asyncio.CancelledError as cancelled:
+            if not cancellation_state.started:
+                future.cancel()
+                raise
+            while True:
+                try:
+                    return await asyncio.shield(future), cancelled
+                except asyncio.CancelledError:
+                    if future.cancelled():
+                        raise cancelled
+                except OPNsenseError:
+                    raise cancelled from None
 
     async def _get_from_stream(self, path: str) -> dict[str, Any]:
         """Queue a streaming GET request and return the parsed payload.
@@ -199,9 +267,21 @@ class ClientQueueMixin:
             path: str | None = None
             payload: dict[str, Any] | None = None
             future: asyncio.Future[Any] | None = None
+            cancellation_state: _CancellablePostState | None = None
             caller = "Unknown"
             try:
-                method, path, payload, future, caller = await self._request_queue.get()
+                entry = await self._request_queue.get()
+                if len(entry) == 6:
+                    method, path, payload, future, caller, cancellation_state = entry
+                else:
+                    method, path, payload, future, caller = entry
+                if cancellation_state is not None:
+                    waiter = cancellation_state.waiter
+                    if future is not None and (future.cancelled() or waiter.cancelled()):
+                        if not future.done():
+                            future.cancel()
+                        continue
+                    cancellation_state.started = True
                 if method == "get_from_stream":
                     result: Any = await self._do_get_from_stream(path, caller)
                     if future is not None and not future.done():
@@ -247,33 +327,46 @@ class ClientQueueMixin:
             await asyncio.sleep(QUEUE_REQUEST_INTERVAL_SECONDS)
 
     async def async_close(self) -> None:
-        """Cancel all running background tasks and clear the request queue."""
+        """Cancel background work, invalidate VPN waiters, and clear the queue.
+
+        Queue calls are cancelled while the client is closing. Closing also
+        invalidates in-progress VPN calls so they cannot send follow-up writes.
+        """
         _LOGGER.debug("Closing OPNsenseClient and cancelling background tasks")
+        self._vpn_shutdown_generation += 1
+        self._active_close_count += 1
+        try:
+            tasks_to_cancel = []
 
-        tasks_to_cancel = []
+            if self._workers:
+                for worker in self._workers:
+                    if not worker.done():
+                        worker.cancel()
+                    tasks_to_cancel.append(worker)
 
-        if self._workers:
-            for worker in self._workers:
-                if not worker.done():
-                    worker.cancel()
-                tasks_to_cancel.append(worker)
+            if tasks_to_cancel:
+                try:
+                    await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+                    _LOGGER.debug("All background tasks cancelled successfully")
+                except Exception as e:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Error during background task cancellation. %s: %s", type(e).__name__, e
+                    )
 
-        if tasks_to_cancel:
+        finally:
             try:
-                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-                _LOGGER.debug("All background tasks cancelled successfully")
-            except Exception as e:  # noqa: BLE001
-                _LOGGER.warning(
-                    "Error during background task cancellation. %s: %s", type(e).__name__, e
-                )
-
-        while not self._request_queue.empty():
-            try:
-                _method, _path, _payload, future, _caller = self._request_queue.get_nowait()
-                if future is not None and not future.done():
-                    future.set_exception(asyncio.CancelledError("OPNsenseClient is closing"))
-            except asyncio.QueueEmpty:
-                break
-        self._workers = []
-        self._loop = None
-        _LOGGER.debug("Request queue cleared")
+                while not self._request_queue.empty():
+                    try:
+                        entry = self._request_queue.get_nowait()
+                        future = entry[3]
+                        if future is not None and not future.done():
+                            future.set_exception(
+                                asyncio.CancelledError("OPNsenseClient is closing")
+                            )
+                    except asyncio.QueueEmpty:
+                        break
+                self._workers = []
+                self._loop = None
+                _LOGGER.debug("Request queue cleared")
+            finally:
+                self._active_close_count -= 1
