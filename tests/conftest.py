@@ -11,6 +11,7 @@ from collections.abc import (
 )
 import contextlib
 from dataclasses import dataclass
+from functools import partial
 from types import TracebackType
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -366,29 +367,8 @@ def install_fake_router(
         client, get_payloads=get_payloads, post_payloads=post_payloads, routes=routes
     )
 
-    def get(url: str, **kwargs: Any) -> FakeResponse:
-        """Answer a GET request.
-
-        Args:
-            url (str): Requested URL.
-            kwargs (Any): Request parameters passed by the HTTP transport.
-
-        Returns:
-            FakeResponse: Configured response.
-        """
-        return router.request("GET", url, **kwargs)
-
-    def post(url: str, **kwargs: Any) -> FakeResponse:
-        """Answer a POST request.
-
-        Args:
-            url (str): Requested URL.
-            kwargs (Any): Request parameters passed by the HTTP transport.
-
-        Returns:
-            FakeResponse: Configured response.
-        """
-        return router.request("POST", url, **kwargs)
+    get = partial(router.request, "GET")
+    post = partial(router.request, "POST")
 
     async def queue_immediately(
         method: str, path: str, payload: MutableMapping[str, Any] | None = None

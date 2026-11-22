@@ -172,19 +172,7 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
     task: asyncio.Task | None = None
     try:
         # patch the do_* methods
-        async def fake_do_get(path: Any, caller: str = "x") -> Any:
-            """Fake ``_do_get``.
-
-            Args:
-                path (Any): API endpoint path.
-                caller (str): Caller name used for diagnostics.
-
-            Returns:
-                Any: JSON mapping.
-            """
-            return {"g": 1}
-
-        client._do_get = AsyncMock(side_effect=fake_do_get)
+        client._do_get = AsyncMock(return_value={"g": 1})
         client._do_get_outcome = AsyncMock(return_value=EndpointOutcome.data("text"))
         client._do_post = AsyncMock(return_value={"p": 2})
         client._do_get_from_stream = AsyncMock(return_value={"s": 3})
