@@ -100,6 +100,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
             name=f"legacy unbound blocklist save ({'On' if set_state else 'Off'})",
         )
 
+        if response is None:
+            # The failed request was already logged.
+            return False
         if not isinstance(response, MutableMapping) or response.get("result", "failed") != "saved":
             _LOGGER.error(
                 "Unable to save legacy unbound blocklist state %s. Response: %s",
@@ -115,6 +118,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
             name=f"legacy unbound blocklist apply ({'On' if set_state else 'Off'})",
         )
 
+        if dnsbl_resp is None:
+            # The failed request was already logged.
+            return False
         dnsbl_status = dnsbl_resp.get("status") if isinstance(dnsbl_resp, MutableMapping) else None
         if not isinstance(dnsbl_resp, MutableMapping) or not isinstance(dnsbl_status, str):
             _LOGGER.error(

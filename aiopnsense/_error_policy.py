@@ -56,7 +56,8 @@ def _handle_error(
     Raises:
         public_error: The failure itself when it is already an ``OPNsenseError``,
             otherwise its mapped ``OPNsenseError``, when ``_throw_errors`` is true.
-            It is marked as logged so wrappers further up do not log it again.
+            Unless ``log_level`` is given, it is marked as logged so wrappers
+            further up do not log it again.
     """
     if not _is_request_error_logged(error):
         if log_level is not None:
@@ -68,7 +69,10 @@ def _handle_error(
     if not client._throw_errors:
         return
     public_error = _map_opnsense_exception(error)
-    _mark_request_error_logged(public_error)
+    if log_level is None:
+        # A best-effort step logs below the normal level, so wrappers further up
+        # still report the failure at the normal level.
+        _mark_request_error_logged(public_error)
     if public_error is error:
         raise public_error
     raise public_error from error

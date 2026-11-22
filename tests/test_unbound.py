@@ -678,9 +678,8 @@ async def test_legacy_unbound_blocklist_request_failure_follows_throw_errors(
         expected_posts = {"save": 1, "apply": 1, "restart": 2}[failing_step]
         assert client._post.await_count == expected_posts
         assert client._get.await_count == (0 if failing_step == "save" else 1)
-        if throw_errors:
-            failure_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
-            assert len(failure_records) == 1
+        failure_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(failure_records) == 1
         assert "password" not in caplog.text
     finally:
         await client.async_close()
