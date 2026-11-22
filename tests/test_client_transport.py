@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, MutableMapping
 import json
+import logging
 from types import TracebackType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -15,6 +16,7 @@ from aiopnsense.const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
+    OPNsenseInvalidAuth,
     OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
@@ -154,10 +156,10 @@ async def test_normalize_timeout_seconds(
 
 
 @pytest.mark.asyncio
-async def test_outcome_requests_override_session_raise_for_status(
+async def test_outcome_requests_honor_boolean_raise_for_status(
     make_client: MakeClientFactory,
 ) -> None:
-    """Outcome requests inspect HTTP statuses even when the session raises by default.
+    """Outcome callbacks invoke aiohttp's built-in boolean status policy.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -184,13 +186,116 @@ async def test_outcome_requests_override_session_raise_for_status(
         for method in ("get", "post"):
             response = MagicMock(spec=aiohttp.ClientResponse)
             response.status = 404
-            response.raise_for_status = MagicMock(
-                side_effect=AssertionError("boolean session policy must stay suppressed")
+            validation_error = aiohttp.ClientResponseError(
+                MagicMock(), (), status=404, message="Not Found"
             )
-            await request_options[method]["raise_for_status"](response)
-            response.raise_for_status.assert_not_called()
+            response.raise_for_status = MagicMock(side_effect=validation_error)
+            with pytest.raises(aiohttp.ClientResponseError) as error:
+                await request_options[method]["raise_for_status"](response)
+            assert error.value is validation_error
+            response.raise_for_status.assert_called_once_with()
     finally:
         await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_boolean_raise_for_status_preserves_trace_and_public_404_absence(
+    make_client: MakeClientFactory,
+) -> None:
+    """Native bool status validation fires trace exceptions and preserves endpoint outcomes.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    statuses = [403, 500, 404]
+    trace_events: list[str] = []
+
+    async def respond(
+        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Return responses that enforce aiohttp's normal ``raise_for_status=True`` policy.
+
+        Args:
+            request (aiohttp.ClientRequest): Request prepared by the real session.
+            _handler (aiohttp.ClientHandlerType): Network handler replaced by middleware.
+
+        Returns:
+            aiohttp.ClientResponse: Simulated response with native-style status validation.
+        """
+        status = statuses.pop(0)
+        response = MagicMock(spec=aiohttp.ClientResponse)
+        response.status = status
+        response.ok = status == 200
+        response.reason = "OK" if status == 200 else "Failure"
+        response.request_info = request.request_info
+        response.connection = None
+        response._raw_cookie_headers = ()
+        response.__aenter__.return_value = response
+        response.json.return_value = {"status": {"ups.status": "OL"}}
+
+        def raise_for_status() -> None:
+            """Apply aiohttp's default HTTP status policy.
+
+            Raises:
+                aiohttp.ClientResponseError: The response has an HTTP error status.
+            """
+            if status >= 400:
+                raise aiohttp.ClientResponseError(
+                    request.request_info,
+                    (),
+                    status=status,
+                    message=response.reason,
+                )
+
+        response.raise_for_status.side_effect = raise_for_status
+        return response
+
+    trace = aiohttp.TraceConfig()
+
+    async def request_ended(
+        _session: aiohttp.ClientSession,
+        _context: Any,
+        _params: aiohttp.TraceRequestEndParams,
+    ) -> None:
+        """Record completion hooks; failures must not reach this hook.
+
+        Args:
+            _session (aiohttp.ClientSession): Session completing the request.
+            _context (Any): Trace context for the request.
+            _params (aiohttp.TraceRequestEndParams): Completed request details.
+        """
+        trace_events.append("end")
+
+    async def request_failed(
+        _session: aiohttp.ClientSession,
+        _context: Any,
+        _params: aiohttp.TraceRequestExceptionParams,
+    ) -> None:
+        """Record aiohttp's exception trace for native status validation failures.
+
+        Args:
+            _session (aiohttp.ClientSession): Session handling the request.
+            _context (Any): Trace context for the request.
+            _params (aiohttp.TraceRequestExceptionParams): Failed request details.
+        """
+        trace_events.append("exception")
+
+    trace.on_request_end.append(request_ended)
+    trace.on_request_exception.append(request_failed)
+    async with aiohttp.ClientSession(
+        raise_for_status=True, middlewares=[respond], trace_configs=[trace]
+    ) as session:
+        client = make_client(session=session, throw_errors=True)
+        forbidden = await client._do_get_outcome("/api/forbidden")
+        assert forbidden.is_absent
+        assert forbidden.http_status == 403
+
+        failed = await client._do_get_outcome("/api/failure")
+        assert failed.is_transient
+        assert failed.http_status == 500
+
+        assert await client.is_endpoint_available("/api/missing") is False  # type: ignore[deprecated]
+        assert trace_events == ["exception", "exception", "exception"]
 
 
 @pytest.mark.asyncio
@@ -1236,3 +1341,470 @@ async def test_stream_json_events_raises_when_throw_errors_enabled(
                 pass
     finally:
         await client.async_close()
+
+
+_LADDER_PATHS: dict[str, tuple[str, Any]] = {
+    "get_json": ("get", None),
+    "get_text": ("get", None),
+    "post": ("post", None),
+    "stream_once": ("get", {}),
+    "stream_events": ("get", []),
+    "probe": ("get", False),
+}
+"""Request path name mapped to its session method and non-throwing empty value."""
+
+
+async def _call_ladder_path(client: Any, path_name: str) -> Any:
+    """Invoke one low-level request path against a fixed API path.
+
+    Args:
+        client (Any): Client whose transport method is invoked.
+        path_name (str): Key of ``_LADDER_PATHS`` selecting the request path.
+
+    Returns:
+        Any: Value returned by the selected request path.
+    """
+    if path_name == "get_json":
+        return await client._do_get("/api/x", caller="t")
+    if path_name == "get_text":
+
+        async def get_text_outcome(
+            _method: str, path: str, _payload: MutableMapping[str, Any] | None = None
+        ) -> Any:
+            """Run the text outcome transport as the endpoint queue would.
+
+            Args:
+                _method (str): Queue method selected by the endpoint layer.
+                path (str): Requested endpoint path.
+                _payload (MutableMapping[str, Any] | None): Unused GET payload.
+
+            Returns:
+                Any: Outcome returned by the text transport.
+            """
+            return await client._do_get_outcome(path, response_format="text")
+
+        client._queue_request = get_text_outcome
+        outcome = await client._fetch_endpoint_outcome("/api/x", response_format="text")
+        return outcome.text() if outcome.is_data else None
+    if path_name == "post":
+        return await client._do_post("/api/x", {}, caller="t")
+    if path_name == "stream_once":
+        return await client._do_get_from_stream("/api/x", caller="t")
+    if path_name == "stream_events":
+        return [event async for event in client._stream_json_events("/api/x")]
+    return (await client._check_endpoint_status("/api/x", force_refresh=True)).is_data
+
+
+@pytest.mark.parametrize("path_name", list(_LADDER_PATHS))
+@pytest.mark.parametrize(
+    ("failure", "expected_exception", "probe_level"),
+    [
+        (401, OPNsenseInvalidAuth, logging.WARNING),
+        (403, OPNsensePrivilegeMissing, logging.ERROR),
+        (500, OPNsenseConnectionError, logging.WARNING),
+        (aiohttp.ClientConnectionError("down"), OPNsenseConnectionError, logging.WARNING),
+        (TimeoutError("slow"), OPNsenseTimeoutError, logging.WARNING),
+    ],
+    ids=["401", "403", "500", "connection-error", "timeout"],
+)
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["empty", "throw"])
+@pytest.mark.asyncio
+async def test_request_failure_ladder_is_identical_across_request_paths(
+    path_name: str,
+    failure: int | Exception,
+    expected_exception: type[OPNsenseError],
+    probe_level: int,
+    throw_errors: bool,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every request path classifies a failure the same way and logs it once at first sight.
+
+    Args:
+        path_name (str): Key of ``_LADDER_PATHS`` selecting the request path.
+        failure (int | Exception): HTTP status served by the session, or the transport
+            error the session raises.
+        expected_exception (type[OPNsenseError]): Public exception expected in throw mode.
+        probe_level (int): Level of the first failure record for the availability probe,
+            which logs transient failures below ERROR.
+        throw_errors (bool): Whether the client raises public errors instead of returning
+            the documented empty value.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    session_method, empty_value = _LADDER_PATHS[path_name]
+    session = MagicMock()
+    session.raise_for_status = False
+    if isinstance(failure, Exception):
+        setattr(session, session_method, MagicMock(side_effect=failure))
+    else:
+        setattr(
+            session,
+            session_method,
+            lambda *_a, **_k: FakeResponse(
+                status=failure,
+                reason="Failure",
+                ok=False,
+                stream_chunks=[b""],
+                include_request_info=True,
+            ),
+        )
+    client = make_client(session=session, throw_errors=throw_errors)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            if throw_errors:
+                with pytest.raises(expected_exception) as exc_info:
+                    await _call_ladder_path(client, path_name)
+                if isinstance(failure, Exception):
+                    assert exc_info.value.__cause__ is failure
+            else:
+                assert await _call_ladder_path(client, path_name) == empty_value
+
+        failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
+        expected_level = probe_level if path_name in {"probe", "get_text"} else logging.ERROR
+        assert len(failures) == 1
+        assert failures[0].levelno == expected_level
+    finally:
+        await client.async_close()
+
+
+_SUCCESS_RESPONSES: dict[str, Callable[[], FakeResponse]] = {
+    "get_json": lambda: FakeResponse(json_payload={"ok": True}),
+    "get_text": lambda: FakeResponse(text_payload="ok"),
+    "post": lambda: FakeResponse(json_payload={"ok": True}),
+    "stream_once": lambda: FakeResponse(stream_chunks=[b'data: {"a": 1}\n\ndata: {"a": 2}\n\n']),
+    "stream_events": lambda: FakeResponse(stream_chunks=[b'data: {"a": 1}\n\n']),
+    "probe": lambda: FakeResponse(),
+}
+"""Request path name mapped to a factory for a successful response."""
+
+
+@pytest.mark.parametrize("path_name", list(_LADDER_PATHS))
+@pytest.mark.asyncio
+async def test_repeated_request_failures_log_once_per_outage_until_recovery(
+    path_name: str,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A repeated failure stays quiet, and a recovered path reports the next outage again.
+
+    Args:
+        path_name (str): Key of ``_LADDER_PATHS`` selecting the request path.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    session_method, _empty_value = _LADDER_PATHS[path_name]
+    failed_response = FakeResponse(status=500, reason="Failure", ok=False, stream_chunks=[b""])
+
+    session = MagicMock()
+    setattr(
+        session,
+        session_method,
+        MagicMock(
+            side_effect=[
+                failed_response,
+                failed_response,
+                failed_response,
+                _SUCCESS_RESPONSES[path_name](),
+                failed_response,
+            ]
+        ),
+    )
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            for _attempt in range(3):
+                await _call_ladder_path(client, path_name)
+            assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
+
+            caplog.clear()
+            await _call_ladder_path(client, path_name)
+            recovered = [r for r in caplog.records if r.levelno == logging.INFO]
+            assert len(recovered) == 1
+            assert "/api/x" in recovered[0].getMessage()
+
+            caplog.clear()
+            await _call_ladder_path(client, path_name)
+            assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_outage_does_not_suppress_data_call_failure_on_same_path(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stream outage and a data call outage on one path are reported independently.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    session = MagicMock()
+    session.get = lambda *_a, **_k: FakeResponse(status=500, reason="Failure", ok=False)
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            await _call_ladder_path(client, "stream_once")
+            await _call_ladder_path(client, "get_json")
+            await _call_ladder_path(client, "get_json")
+
+        errors = [record for record in caplog.records if record.levelno >= logging.WARNING]
+        assert [record.levelno for record in errors] == [logging.ERROR, logging.ERROR]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize("path_name", ["stream_once", "stream_events"])
+@pytest.mark.parametrize(("initial_failure", "auth_status"), [(500, 401), (TimeoutError(), 403)])
+@pytest.mark.asyncio
+async def test_stream_outage_reports_new_auth_failure_once(
+    path_name: str,
+    initial_failure: int | TimeoutError,
+    auth_status: int,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Report an authentication or privilege failure during a stream outage.
+
+    Args:
+        path_name (str): Streaming request path to exercise.
+        initial_failure (int | TimeoutError): Transient HTTP or transport failure.
+        auth_status (int): Authentication or authorization response status.
+        make_client (MakeClientFactory): Fixture factory returning clients.
+        caplog (pytest.LogCaptureFixture): Fixture capturing client logs.
+    """
+    first_response = (
+        FakeResponse(status=initial_failure, ok=False)
+        if isinstance(initial_failure, int)
+        else initial_failure
+    )
+    auth_failure = FakeResponse(status=auth_status, ok=False)
+    session = MagicMock()
+    session.get.side_effect = [first_response, auth_failure, auth_failure]
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.ERROR, logger="aiopnsense"):
+            for expected_count in (1, 1, 0):
+                caplog.clear()
+                await _call_ladder_path(client, path_name)
+                assert [record.levelno for record in caplog.records] == [
+                    logging.ERROR
+                ] * expected_count
+    finally:
+        await client.async_close()
+
+
+class _StalledChunks:
+    """Async chunk iterator whose first read times out."""
+
+    __anext__ = AsyncMock(side_effect=TimeoutError("stalled"))
+
+    def __aiter__(self) -> _StalledChunks:
+        """Return the iterator itself.
+
+        Returns:
+            _StalledChunks: This iterator.
+        """
+        return self
+
+
+@pytest.mark.parametrize("path_name", ["stream_once", "stream_events"])
+@pytest.mark.asyncio
+async def test_stream_that_connects_then_stalls_logs_one_error_per_outage(
+    path_name: str,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stream answering OK but failing before any message never reports a recovery.
+
+    Args:
+        path_name (str): Key of ``_LADDER_PATHS`` selecting the streaming path.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    stalled = _StalledChunks()
+    stalled_response = MagicMock(
+        status=200,
+        reason="OK",
+        ok=True,
+        content=MagicMock(iter_chunked=MagicMock(return_value=stalled)),
+    )
+    stalled_response.__aenter__.return_value = stalled_response
+    session = MagicMock()
+    session.get = lambda *_a, **_k: stalled_response
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            for _attempt in range(3):
+                await _call_ladder_path(client, path_name)
+
+        assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
+        assert not any(r.levelno == logging.INFO for r in caplog.records)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stream_reset_event_does_not_clear_outage(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Malformed events are emitted without reporting stream recovery.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    stalled = _StalledChunks()
+    stalled_response = MagicMock(
+        status=200,
+        reason="OK",
+        ok=True,
+        content=MagicMock(iter_chunked=MagicMock(return_value=stalled)),
+    )
+    stalled_response.__aenter__.return_value = stalled_response
+    session = MagicMock()
+    session.get = MagicMock(
+        side_effect=[
+            stalled_response,
+            FakeResponse(stream_chunks=[b"data: not-json\n\n"]),
+            stalled_response,
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            await _call_ladder_path(client, "stream_events")
+            events = [
+                event
+                async for event in client._stream_json_events("/api/x", yield_reset_events=True)
+            ]
+            await _call_ladder_path(client, "stream_events")
+
+        assert len(events) == 1
+        assert events[0].get(_STREAM_JSON_EVENT_RESET_KEY) is True
+        assert len([record for record in caplog.records if record.levelno >= logging.WARNING]) == 1
+        assert not any(record.levelno == logging.INFO for record in caplog.records)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_one_shot_non_mapping_stream_payload_does_not_report_recovery(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A non-mapping one-shot payload returns empty without clearing an outage.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    session = MagicMock()
+    session.get = MagicMock(
+        side_effect=[
+            FakeResponse(status=500, reason="Failure", ok=False),
+            FakeResponse(stream_chunks=[b"data: ignored\n\ndata: []\n\n"]),
+            FakeResponse(status=500, reason="Failure", ok=False),
+        ]
+    )
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            await _call_ladder_path(client, "stream_once")
+            assert await client._do_get_from_stream("/api/x", caller="t") == {}
+            await _call_ladder_path(client, "stream_once")
+
+        assert len([record for record in caplog.records if record.levelno >= logging.WARNING]) == 1
+        assert not any(record.levelno == logging.INFO for record in caplog.records)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("path_name", "level", "status"),
+    [
+        ("get_json", logging.ERROR, None),
+        ("probe", logging.WARNING, None),
+        ("get_json", logging.ERROR, 403),
+        ("get_json", logging.ERROR, 503),
+    ],
+    ids=["get-timeout", "probe-timeout", "forbidden", "unavailable"],
+)
+@pytest.mark.asyncio
+async def test_transport_failure_log_omits_url_credentials(
+    path_name: str,
+    level: int,
+    status: int | None,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Keep the endpoint in failure logs while redacting credentials from URLs.
+
+    Args:
+        path_name (str): Request path to exercise.
+        level (int): Expected failure log level.
+        status (int | None): HTTP failure status, or ``None`` for a timeout.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    session = MagicMock()
+    if status is None:
+        session.get.side_effect = TimeoutError(
+            "Timed out reading https://error-user:error-password@opnsense.invalid"
+        )
+    else:
+        session.get.return_value = FakeResponse(status=status, ok=False)
+    client = make_client(
+        session=session,
+        url="https://synthetic-user:synthetic-password@opnsense.invalid",
+    )
+    try:
+        with caplog.at_level(logging.WARNING, logger="aiopnsense"):
+            await _call_ladder_path(client, path_name)
+
+        assert [record.levelno for record in caplog.records] == [level]
+        message = caplog.records[0].getMessage()
+        assert "/api/x" in message
+        assert "opnsense.invalid" in message
+        assert "synthetic-user" not in message
+        assert "synthetic-password" not in message
+        assert "error-user" not in message
+        assert "error-password" not in message
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_invalid_url_transport_logs_omit_credentials(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Keep URL credentials out of probe and request logs at every level.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    async with aiohttp.ClientSession() as session:
+        client = make_client(
+            session=session,
+            url="https://synthetic-user:synthetic-secret@opnsense.invalid:bad",
+        )
+        try:
+            with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+                assert not (
+                    await client._check_endpoint_status("/api/x", force_refresh=True)
+                ).is_data
+                assert await client._do_get("/api/x", caller="test") is None
+
+            failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
+            assert [record.levelno for record in failures] == [logging.WARNING, logging.ERROR]
+            assert all("/api/x" in record.getMessage() for record in failures)
+            messages = "\n".join(record.getMessage() for record in caplog.records)
+            assert "synthetic-user" not in messages
+            assert "synthetic-secret" not in messages
+        finally:
+            await client.async_close()

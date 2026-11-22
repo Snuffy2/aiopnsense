@@ -164,7 +164,7 @@ class ClientQueueMixin:
         request: Callable[[], Coroutine[Any, Any, _EndpointOutcome]],
         future: asyncio.Future[Any] | None,
     ) -> _EndpointOutcome | None:
-        """Run an outcome request without retaining a worker after caller cancellation.
+        """Run an outcome request without retaining a worker after request cancellation.
 
         Args:
             request (Callable[[], Coroutine[Any, Any, _EndpointOutcome]]): Transport
@@ -174,7 +174,8 @@ class ClientQueueMixin:
 
         Returns:
             _EndpointOutcome | None: Request result, or ``None`` when the caller
-                cancelled the request while it was in flight.
+                cancels while it is in flight or the transport child is independently
+                cancelled.
 
         Raises:
             asyncio.CancelledError: If the queue worker is cancelled while closing.

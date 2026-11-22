@@ -10,6 +10,7 @@ import aiohttp
 
 from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _error_if_throwing, _throws_errors
+from ._request_failure import _PROBE_PHASE, _request_log_url
 from ._typing import AiopnsenseClientProtocol
 from .const import LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
 from .exceptions import OPNsenseUnknownFirmware
@@ -24,7 +25,7 @@ class ClientEndpointMixin:
         _endpoint_cache_ttl_seconds: int
         _endpoint_checked_at: dict[str, datetime]
         _endpoint_permission_denied: set[str]
-        _request_outages: set[tuple[str, str]]
+        _request_outages: dict[tuple[str, str, str], int | None]
         _password: str
         _rest_api_query_count: int
         _session: aiohttp.ClientSession
@@ -309,7 +310,7 @@ class ClientEndpointMixin:
         checked_at = datetime.now().astimezone()
 
         if outcome.is_data:
-            _log_request_recovery(self, method, path)
+            _log_request_recovery(self, method, path, _PROBE_PHASE)
             self._endpoint_permission_denied.discard(cache_key)
             self._endpoint_availability[cache_key] = True
             self._endpoint_checked_at[cache_key] = checked_at
@@ -328,9 +329,10 @@ class ClientEndpointMixin:
                 self,
                 method,
                 path,
+                _PROBE_PHASE,
                 logging.ERROR,
                 "Permission Error in fetch_endpoint_outcome. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
-                f"{self._url}{path}",
+                _request_log_url(f"{self._url}{path}"),
                 error=error,
             )
             if error is not None:
@@ -346,6 +348,7 @@ class ClientEndpointMixin:
             self,
             method,
             path,
+            _PROBE_PHASE,
             logging.WARNING,
             "Transient %s failure for %s. %s. Not caching result.",
             method.upper(),

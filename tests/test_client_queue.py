@@ -726,6 +726,38 @@ async def test_process_queue_does_not_relog_transport_request_failure(
 
 
 @pytest.mark.asyncio
+async def test_failed_stream_read_logs_once_through_queue_and_public_wrapper(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Report a failed stream read once with ``throw_errors`` enabled.
+
+    The failure passes through the real request queue and the ``_log_errors`` wrapper of
+    the public telemetry reader, and neither of them may repeat the transport's log.
+
+    Args:
+        make_client (MakeClientFactory): Factory for clients using a mocked HTTP session.
+        caplog (pytest.LogCaptureFixture): Captured records used to inspect log count.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.toggle_throwing_errors(True)
+    client._use_snake_case = True
+    session.get.side_effect = [
+        FakeResponse(json_payload=["Intel (2 cores)"]),
+        FakeResponse(),
+        FakeResponse(status=500, reason="Server Error", ok=False),
+    ]
+    try:
+        with caplog.at_level("ERROR"), pytest.raises(OPNsenseConnectionError):
+            await client._get_telemetry_cpu()
+
+        assert [record.levelname for record in caplog.records] == ["ERROR"]
+        assert caplog.records[0].getMessage().startswith("Error in do_get_from_stream")
+    finally:
+        await asyncio.wait_for(client.async_close(), timeout=2)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("returned", [{"ok": 1}, [1, 2, 3], None])
 async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClientFactory) -> None:
     """Verify ``_get`` enqueues requests and returns queue-processed results.
