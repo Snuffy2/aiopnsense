@@ -41,7 +41,6 @@ class ClientEndpointMixin:
         _rest_api_query_count: int
         _session: aiohttp.ClientSession
         _throw_errors: bool
-        _endpoint_observation_id: int
         _endpoint_observations: dict[str, _EndpointObservation]
         _url: str
         _use_snake_case: bool | None
@@ -333,8 +332,6 @@ class ClientEndpointMixin:
 
         cache_generation = self._endpoint_cache_generation
         phase = _PROBE_PHASE if status_only else _REQUEST_PHASE
-        self._endpoint_observation_id += 1
-        observation_id = self._endpoint_observation_id
         observation = self._endpoint_observations.get(cache_key)
         if observation is None or observation.generation != cache_generation:
             observation = _EndpointObservation(generation=cache_generation)
@@ -354,16 +351,18 @@ class ClientEndpointMixin:
                     else f"{method}_outcome"
                 )
                 outcome = await self._queue_request(queue_method, path, payload)
+            # A direct probe can reach transport before an earlier queued call.
+            dispatch_id = outcome.dispatch_id
             checked_at = datetime.now().astimezone()
             cache_can_publish = (
                 self._endpoint_cache_generation == cache_generation
                 and self._endpoint_observations.get(cache_key) is observation
-                and observation.cache_publication_id < observation_id
+                and observation.cache_publication_id < dispatch_id
             )
             phase_can_publish = (
                 self._endpoint_cache_generation == cache_generation
                 and self._endpoint_observations.get(cache_key) is observation
-                and observation.phase_publication_ids.get(phase, 0) < observation_id
+                and observation.phase_publication_ids.get(phase, 0) < dispatch_id
             )
             if not cache_can_publish and not phase_can_publish:
                 error = (
@@ -373,9 +372,9 @@ class ClientEndpointMixin:
                     raise error
                 return outcome
             if cache_can_publish:
-                observation.cache_publication_id = observation_id
+                observation.cache_publication_id = dispatch_id
             if phase_can_publish:
-                observation.phase_publication_ids[phase] = observation_id
+                observation.phase_publication_ids[phase] = dispatch_id
             if outcome.is_data:
                 if phase_can_publish:
                     _log_request_recovery(self, method, path, phase)

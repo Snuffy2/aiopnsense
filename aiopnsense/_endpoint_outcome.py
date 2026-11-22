@@ -30,6 +30,8 @@ class _EndpointOutcome:
         error (OPNsenseError | None): Public exception describing a 403 or a
             transient failure, raised by the caller in throw mode.
         detail (str): Short failure description for log messages.
+        dispatch_id (int): Client-local transport ordering number, or zero for
+            an outcome that did not come from transport.
     """
 
     status: _EndpointStatus
@@ -37,6 +39,7 @@ class _EndpointOutcome:
     http_status: int | None = None
     error: OPNsenseError | None = None
     detail: str = ""
+    dispatch_id: int = 0
 
     @classmethod
     def data(cls, payload: MutableMapping[str, Any] | list | str | None) -> _EndpointOutcome:

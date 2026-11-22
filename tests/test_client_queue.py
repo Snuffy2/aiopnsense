@@ -23,6 +23,7 @@ from aiopnsense.exceptions import (
     OPNsenseInvalidURL,
     OPNsensePrivilegeMissing,
 )
+from aiopnsense.speedtest import SPEEDTEST_SHOW_LOG_ENDPOINT, SPEEDTEST_SHOW_STAT_ENDPOINT
 from tests.conftest import (
     FakeResponse,
     FakeStreamResponseFactory,
@@ -40,6 +41,81 @@ def no_queue_request_interval(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
     monkeypatch.setattr(aiopnsense_client_queue, "QUEUE_REQUEST_INTERVAL_SECONDS", 0)
+
+
+async def test_speedtest_read_recovers_from_probe_that_overtakes_queue(
+    make_client: MakeClientFactory,
+) -> None:
+    """A queued read dispatched after a 404 probe can clear cached absence.
+
+    Args:
+        make_client (MakeClientFactory): Factory returning OPNsense clients.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._max_workers = 1
+    occupied = asyncio.Event()
+    release = asyncio.Event()
+    history_queued = asyncio.Event()
+
+    class BlockingResponse(FakeResponse):
+        """Hold the worker until after the status probe finishes."""
+
+        async def __aenter__(self) -> Self:
+            """Signal that the worker is occupied and pause its response.
+
+            Returns:
+                Self: Response for the request occupying the worker.
+            """
+            occupied.set()
+            await release.wait()
+            return self
+
+    original_put = client._request_queue.put
+
+    async def signal_enqueue(item: Any) -> None:
+        """Signal when the history read is waiting in the queue.
+
+        Args:
+            item (Any): Request tuple being queued.
+        """
+        await original_put(item)
+        if item[1] == SPEEDTEST_SHOW_LOG_ENDPOINT:
+            history_queued.set()
+
+    client._request_queue.put = signal_enqueue
+    client._get_resolved_opnsense_timezone = AsyncMock(return_value=None)
+    session.get.side_effect = [
+        BlockingResponse(json_payload={}),
+        FakeResponse(status=404, ok=False),
+        FakeResponse(json_payload=[]),
+        FakeResponse(json_payload={}),
+        FakeResponse(json_payload=[]),
+        FakeResponse(json_payload={}),
+    ]
+    occupying = asyncio.create_task(client._get("/occupy"))
+    history = None
+    try:
+        async with asyncio.timeout(3):
+            await occupied.wait()
+            history = asyncio.create_task(client.get_speedtest())
+            await history_queued.wait()
+            assert await client.run_speedtest() == {}
+            release.set()
+            assert (await history)["available"] is True
+            assert (await client.get_speedtest())["available"] is True
+        assert [call.args[0].removeprefix(client._url) for call in session.get.call_args_list] == [
+            "/occupy",
+            SPEEDTEST_SHOW_LOG_ENDPOINT,
+            SPEEDTEST_SHOW_LOG_ENDPOINT,
+            SPEEDTEST_SHOW_STAT_ENDPOINT,
+            SPEEDTEST_SHOW_LOG_ENDPOINT,
+            SPEEDTEST_SHOW_STAT_ENDPOINT,
+        ]
+    finally:
+        release.set()
+        await client.async_close()
+        tasks = [occupying] if history is None else [occupying, history]
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.mark.parametrize(

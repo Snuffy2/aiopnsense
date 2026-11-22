@@ -3,6 +3,7 @@
 import asyncio
 import codecs
 from collections.abc import AsyncGenerator, Awaitable, Callable, MutableMapping
+from dataclasses import replace
 import json
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
@@ -256,6 +257,7 @@ class ClientTransportMixin:
     """Immediate request execution and safe response methods for OPNsenseClient."""
 
     if TYPE_CHECKING:
+        _endpoint_dispatch_id: int
         _password: str
         _request_outages: dict[tuple[str, str, str], int | None]
         _rest_api_query_count: int
@@ -646,11 +648,14 @@ class ClientTransportMixin:
             json.JSONDecodeError: For undecodable JSON outside a validator failure
                 attributable to a delivered HTTP error response.
         """
+        self._endpoint_dispatch_id += 1
+        dispatch_id = self._endpoint_dispatch_id
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[get_outcome] path: %s (called by %s)", path, caller)
         raise_for_status, responses, validator_errors = _outcome_raise_for_status(self._session)
         response_entered = False
+        outcome: _EndpointOutcome | None
         try:
             async with self._session.get(
                 url,
@@ -666,18 +671,19 @@ class ClientTransportMixin:
                     _redact_url_credentials(str(response.reason)),
                 )
                 if not response.ok:
-                    return _EndpointOutcome.from_http_status(response.status, response.reason)
-                if not read_body:
-                    return _EndpointOutcome.data(None)
-                if response_format == "text":
-                    return _EndpointOutcome.data(await response.text())
-                return _EndpointOutcome.data(await response.json(content_type=None))
+                    outcome = _EndpointOutcome.from_http_status(response.status, response.reason)
+                elif not read_body:
+                    outcome = _EndpointOutcome.data(None)
+                elif response_format == "text":
+                    outcome = _EndpointOutcome.data(await response.text())
+                else:
+                    outcome = _EndpointOutcome.data(await response.json(content_type=None))
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             outcome = _classify_outcome_payload_error(e, validator_errors)
-            if outcome is not None:
-                return outcome
-            raise
+            if outcome is None:
+                raise
         except (aiohttp.ClientError, TimeoutError) as e:
+            outcome = None
             if isinstance(e, aiohttp.ClientResponseError) and not isinstance(
                 e, aiohttp.ContentTypeError
             ):
@@ -689,19 +695,17 @@ class ClientTransportMixin:
                     url=url,
                     validator_errors=validator_errors,
                 )
-                if outcome is not None:
-                    return outcome
             elif isinstance(
                 e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError | TimeoutError
             ):
                 outcome = _classify_outcome_payload_error(e, validator_errors)
-                if outcome is not None:
-                    return outcome
-            error = _map_opnsense_exception(e)
-            error.__cause__ = e
-            return _EndpointOutcome.transient(
-                error, f"{type(e).__name__}: {_redacted_exception_message(e)}"
-            )
+            if outcome is None:
+                error = _map_opnsense_exception(e)
+                error.__cause__ = e
+                outcome = _EndpointOutcome.transient(
+                    error, f"{type(e).__name__}: {_redacted_exception_message(e)}"
+                )
+        return replace(outcome, dispatch_id=dispatch_id)
 
     def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
         """Normalize per-call timeout values to a positive float in seconds.
@@ -843,11 +847,14 @@ class ClientTransportMixin:
             json.JSONDecodeError: For undecodable JSON outside a validator failure
                 attributable to a delivered HTTP error response.
         """
+        self._endpoint_dispatch_id += 1
+        dispatch_id = self._endpoint_dispatch_id
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[post_outcome] path: %s (called by %s)", path, caller)
         raise_for_status, responses, validator_errors = _outcome_raise_for_status(self._session)
         response_entered = False
+        outcome: _EndpointOutcome | None
         try:
             async with self._session.post(
                 url,
@@ -864,14 +871,15 @@ class ClientTransportMixin:
                     _redact_url_credentials(str(response.reason)),
                 )
                 if not response.ok:
-                    return _EndpointOutcome.from_http_status(response.status, response.reason)
-                return _EndpointOutcome.data(await response.json(content_type=None))
+                    outcome = _EndpointOutcome.from_http_status(response.status, response.reason)
+                else:
+                    outcome = _EndpointOutcome.data(await response.json(content_type=None))
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             outcome = _classify_outcome_payload_error(e, validator_errors)
-            if outcome is not None:
-                return outcome
-            raise
+            if outcome is None:
+                raise
         except (aiohttp.ClientError, TimeoutError) as e:
+            outcome = None
             if isinstance(e, aiohttp.ClientResponseError) and not isinstance(
                 e, aiohttp.ContentTypeError
             ):
@@ -883,19 +891,17 @@ class ClientTransportMixin:
                     url=url,
                     validator_errors=validator_errors,
                 )
-                if outcome is not None:
-                    return outcome
             elif isinstance(
                 e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError | TimeoutError
             ):
                 outcome = _classify_outcome_payload_error(e, validator_errors)
-                if outcome is not None:
-                    return outcome
-            error = _map_opnsense_exception(e)
-            error.__cause__ = e
-            return _EndpointOutcome.transient(
-                error, f"{type(e).__name__}: {_redacted_exception_message(e)}"
-            )
+            if outcome is None:
+                error = _map_opnsense_exception(e)
+                error.__cause__ = e
+                outcome = _EndpointOutcome.transient(
+                    error, f"{type(e).__name__}: {_redacted_exception_message(e)}"
+                )
+        return replace(outcome, dispatch_id=dispatch_id)
 
     async def _safe_dict_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
