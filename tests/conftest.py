@@ -409,15 +409,6 @@ class FirmwareVersionShape:
     cached: bool
 
     @property
-    def product(self) -> dict[str, str | None]:
-        """Return the version fields of a firmware status ``product`` payload.
-
-        Returns:
-            dict[str, str | None]: Product version and product series.
-        """
-        return {"product_version": self.product_version, "product_series": self.product_series}
-
-    @property
     def version_is_comparable(self) -> bool:
         """Return whether the reported product version itself can be compared.
 

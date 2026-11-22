@@ -1418,7 +1418,10 @@ def _firmware_status_for_shape(shape: FirmwareVersionShape) -> dict[str, Any]:
             "status_msg": "Firmware status check was aborted internally. Please try again.",
             "status": "error",
         }
-    return _firmware_status(status="error", product=shape.product)
+    return _firmware_status(
+        status="error",
+        product={"product_version": shape.product_version, "product_series": shape.product_series},
+    )
 
 
 def _configure_firmware_polls(
