@@ -343,51 +343,70 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             and not self._firmware_install_active
             and (error_status or last_check_expired or missing_data or update_needs_info)
         ):
-            # Serialize our check dispatch with install activation. The server's
-            # lock is also shared with checks from other clients/the web GUI.
-            async with self._firmware_action_lock:
-                if not self._firmware_install_active:
-                    requested_at = self._firmware_check_requested_at
-                    if requested_at is not None and (
-                        monotonic() - requested_at < FIRMWARE_CHECK_COOLDOWN_SECONDS
-                    ):
-                        _LOGGER.debug("Skipping firmware check during cooldown")
-                        # A check would otherwise have refreshed the cached version after
-                        # an upgrade made outside this client. Only a comparable version
-                        # that the normal lookup would use clears the cache, so a status
-                        # with no comparable version or series does not clear it on
-                        # every poll.
-                        if self._firmware_version is not None:
-                            status_version = self._status_firmware_version(status)
-                            if (
-                                status_version != self._firmware_version
-                                and firmware_is_at_least(status_version, "0") is not None
-                            ):
-                                self._record_firmware_version(None)
-                    else:
-                        running = await self._safe_dict_get(FIRMWARE_RUNNING_ENDPOINT)
-                        if running.get("status") == "ready":
-                            _LOGGER.info("Triggering firmware check")
-                            # A check cannot install firmware. If the cache is already
-                            # empty, let a version read in progress finish filling it.
-                            if self._firmware_version is not None:
-                                self._record_firmware_version(None)
-                            # Do not queue this mutation: a cancelled queue caller
-                            # can leave a CHECK that runs after the action lock releases.
-                            response = await self._do_post(FIRMWARE_CHECK_ENDPOINT)
-                            # Only an acknowledged check starts the cooldown. OPNsense
-                            # returns status ok even when configd fails, leaving msg_uuid
-                            # empty, so an acknowledgement needs a non-empty msg_uuid. A
-                            # failed, rejected or cancelled POST leaves the next poll free to retry.
-                            if (
-                                isinstance(response, MutableMapping)
-                                and response.get("status") == "ok"
-                                and isinstance(response.get("msg_uuid"), str)
-                                and response["msg_uuid"].strip()
-                            ):
-                                self._firmware_check_requested_at = monotonic()
+            await self._request_firmware_check(status)
 
         return status
+
+    async def _request_firmware_check(self, status: MutableMapping[str, Any]) -> None:
+        """Dispatch an automatic firmware check when the cooldown and install state allow it.
+
+        The running read, the cache clear and the POST all run under the firmware action
+        lock. The cooldown starts only after OPNsense acknowledges the check.
+
+        Args:
+            status (MutableMapping[str, Any]): Firmware status payload from the current
+                read. During cooldown, a comparable version that differs from the cached
+                version clears the cache.
+        """
+        # Serialize our check dispatch with install activation. The server's
+        # lock is also shared with checks from other clients/the web GUI.
+        async with self._firmware_action_lock:
+            if self._firmware_install_active:
+                return
+
+            requested_at = self._firmware_check_requested_at
+            if requested_at is not None and (
+                monotonic() - requested_at < FIRMWARE_CHECK_COOLDOWN_SECONDS
+            ):
+                _LOGGER.debug("Skipping firmware check during cooldown")
+                # A check would otherwise have refreshed the cached version after
+                # an upgrade made outside this client. Only a comparable version
+                # that the normal lookup would use clears the cache, so a status
+                # with no comparable version or series does not clear it on
+                # every poll.
+                if self._firmware_version is None:
+                    return
+                status_version = self._status_firmware_version(status)
+                if (
+                    status_version != self._firmware_version
+                    and firmware_is_at_least(status_version, "0") is not None
+                ):
+                    self._record_firmware_version(None)
+                return
+
+            running = await self._safe_dict_get(FIRMWARE_RUNNING_ENDPOINT)
+            if running.get("status") != "ready":
+                return
+
+            _LOGGER.info("Triggering firmware check")
+            # A check cannot install firmware. If the cache is already
+            # empty, let a version read in progress finish filling it.
+            if self._firmware_version is not None:
+                self._record_firmware_version(None)
+            # Do not queue this mutation: a cancelled queue caller
+            # can leave a CHECK that runs after the action lock releases.
+            response = await self._do_post(FIRMWARE_CHECK_ENDPOINT)
+            # Only an acknowledged check starts the cooldown. OPNsense
+            # returns status ok even when configd fails, leaving msg_uuid
+            # empty, so an acknowledgement needs a non-empty msg_uuid. A
+            # failed, rejected or cancelled POST leaves the next poll free to retry.
+            if (
+                isinstance(response, MutableMapping)
+                and response.get("status") == "ok"
+                and isinstance(response.get("msg_uuid"), str)
+                and response["msg_uuid"].strip()
+            ):
+                self._firmware_check_requested_at = monotonic()
 
     async def _firmware_request(self, path: str, *, post: bool = False) -> MutableMapping[str, Any]:
         """Read firmware state or dispatch once without cached endpoint probes.
