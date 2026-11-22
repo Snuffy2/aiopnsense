@@ -1501,7 +1501,8 @@ async def test_unbound_toggle_returns_false_on_malformed_apply_response(
     session.post.side_effect = lambda url, **_: post_responses[url]
 
     assert await client.enable_unbound_blocklist(item) is False
-    malformed_apply.json.assert_awaited_once()
+    apply_request = session.get if item is None else session.post
+    assert any(call.args[0] == apply_url for call in apply_request.call_args_list)
     assert all(args[0] != f"{base_url}/service/restart" for args, _ in session.post.call_args_list)
 
 

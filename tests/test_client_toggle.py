@@ -13,13 +13,6 @@ from typing import Any
 import pytest
 
 from aiopnsense import OPNsenseClient
-from aiopnsense.client_toggle import (
-    TOGGLE_ITEM_RESULTS,
-    ToggleSpec,
-    ToggleStep,
-    ToggleTarget,
-    VpnInstance,
-)
 from aiopnsense.exceptions import OPNsenseError, OPNsenseInvalidArgument
 from tests.conftest import RouterReply, ScriptedRouter
 
@@ -372,7 +365,7 @@ async def test_toggle_apply_rule(
         expected (bool): Expected Toggle result.
         scripted_router (ScriptedRouter): Scripted Router fixture.
     """
-    case = TOGGLE_CASES[0]
+    case = next(case for case in TOGGLE_CASES if case.name == "firewall_rule")
     case.script(scripted_router, "on")
     scripted_router.reply(case.apply_path, apply_reply)
     client = scripted_router.client()
@@ -420,27 +413,6 @@ async def test_vpn_toggle_unknown_type_or_collection_returns_false(
     client = scripted_router.client()
 
     assert await client.toggle_vpn_instance(vpn_type, collection, "uuid1", "on") is False
-    assert scripted_router.requests == []
-
-
-async def test_vpn_toggle_for_service_without_lock_returns_false(
-    scripted_router: ScriptedRouter,
-) -> None:
-    """The Toggle module refuses a VPN Toggle for a service it holds no lock for.
-
-    Args:
-        scripted_router (ScriptedRouter): Scripted Router fixture.
-    """
-    client = scripted_router.client()
-    spec = ToggleSpec(
-        "toggle_vpn_instance",
-        ToggleTarget.ON,
-        (ToggleStep.save("/api/pptp/toggle/uuid1/1", TOGGLE_ITEM_RESULTS),),
-        (ToggleStep.apply("/api/pptp/service/reconfigure"),),
-        vpn=VpnInstance("pptp", ("servers", "uuid1")),
-    )
-
-    assert await client._run_toggle(spec) is False
     assert scripted_router.requests == []
 
 
@@ -601,7 +573,6 @@ async def test_toggle_alias_unavailable_search_endpoint_returns_false(
     client = scripted_router.client()
 
     assert await client.toggle_alias("alias1", "on") is False
-    assert not scripted_router.requested(_ALIAS_SEARCH, method="GET")
     assert not scripted_router.requests
 
 

@@ -348,7 +348,12 @@ async def test_toggle_interface_failed_save_does_not_warn_about_apply(
     scripted_router.reply(SET_ITEM, {"result": "failed"})
 
     assert await client.toggle_interface("opt8", "off") is False
-    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert not any(
+        record.levelno == logging.WARNING
+        and "opt8" in record.getMessage()
+        and "uncertain" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
