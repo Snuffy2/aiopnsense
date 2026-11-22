@@ -2869,8 +2869,7 @@ async def test_get_dhcp_leases_kea_row_rules(
         "192.0.2.10",
         "192.0.2.11",
     }
-    # A dot-only hostname becomes an empty string, not None.
-    assert leases["192.0.2.1"] == expected("192.0.2.1", "aa:00:00:00:00:01", hostname="")
+    assert leases["192.0.2.1"] == expected("192.0.2.1", "aa:00:00:00:00:01")
     assert leases["192.0.2.2"] == expected(
         "192.0.2.2",
         "aa:00:00:00:00:02",
@@ -2950,7 +2949,14 @@ async def test_get_dhcp_leases_dnsmasq_row_rules(make_client: ClientType) -> Non
             "hwaddr": "",
         },
         {**base, "address": "192.0.2.3", "hostname": "", "if_name": "lan", "expire": now - 3600},
-        {**base, "address": "192.0.2.4", "if_name": "lan", "is_reserved": ["x"], "expire": 10**40},
+        {
+            **base,
+            "address": "192.0.2.4",
+            "hostname": "...",
+            "if_name": "lan",
+            "is_reserved": ["x"],
+            "expire": 10**40,
+        },
     ]
 
     result = await _get_public_leases(make_client, {_DNSMASQ_LEASES: {"rows": rows}})
@@ -3019,7 +3025,7 @@ async def test_get_dhcp_leases_isc_row_rules(
             **base,
             "address": "no-ends",
             "mac": "cc:00:00:00:00:02",
-            "hostname": "",
+            "hostname": ".",
             "type": "dynamic",
         },
         {**base, "address": "inactive", "mac": "cc:00:00:00:00:03", "state": "expired"},
@@ -3032,8 +3038,7 @@ async def test_get_dhcp_leases_isc_row_rules(
     result = await _get_public_leases(make_client, {path: {"rows": rows}})
 
     assert _leases_by_address(result) == {
-        # ISC does not strip dots or filter "*", does not copy client_id or reserved_by,
-        # and localizes ``ends`` in the router timezone.
+        # ISC preserves "*." and localizes ``ends`` in the Router timezone.
         address: {
             "address": address,
             "hostname": "*.",

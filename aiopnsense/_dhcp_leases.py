@@ -12,8 +12,8 @@ The backends differ on purpose in these ways. Keep them unless a change says oth
   every mapping row; ISC needs ``state`` exactly ``active`` and a ``mac``.
 - Interface name: Kea uses ``if_name``; dnsmasq uses ``if_name`` and falls back to ``if``; ISC
   uses ``if``.
-- Hostname: Kea strips leading and trailing dots, so a hostname of ``.`` is reported as an
-  empty string, not None; dnsmasq reports ``*`` as None and keeps dots; ISC changes nothing.
+- Hostname: All backends report empty or dots-only hostnames as None. Kea strips leading and
+  trailing dots from other hostnames. Dnsmasq also reports ``*`` as None.
 - Type: Kea uses authoritative ``is_reserved`` metadata, then the reservation map, then
   ``unknown`` when there is no reservation data; dnsmasq derives it from ``is_reserved``; ISC
   passes the row's ``type`` through.
@@ -56,7 +56,6 @@ class _LeaseBackend:
         copy_identity_fields (bool): Whether to copy ``client_id`` and ``reserved_by``.
         copy_duid (bool): Whether to copy the DHCPv6 ``duid`` when the row has one.
         strip_hostname_dots (bool): Whether to strip leading and trailing dots from hostnames.
-            A hostname made only of dots therefore becomes an empty string, not None.
         placeholder_hostnames (frozenset[str]): Hostnames the backend uses as a placeholder for
             "no hostname", reported as None.
     """
@@ -80,12 +79,15 @@ def _clean_hostname(value: object, backend: _LeaseBackend) -> str | None:
         backend (_LeaseBackend): Backend whose hostname rules apply.
 
     Returns:
-        str | None: The hostname when it is a non-empty string other than a placeholder, with
-            dots stripped if the backend requires it; otherwise None.
+        str | None: The hostname with surrounding dots stripped if the backend requires it.
+            Missing, empty, dots-only, and backend-specific placeholder values return None.
     """
-    if not isinstance(value, str) or not value or value in backend.placeholder_hostnames:
+    if not isinstance(value, str) or value in backend.placeholder_hostnames:
         return None
-    return value.strip(".") if backend.strip_hostname_dots else value
+    stripped = value.strip(".")
+    if not stripped:
+        return None
+    return stripped if backend.strip_hostname_dots else value
 
 
 def _is_reserved_lease(raw_reserved: object) -> bool:

@@ -271,8 +271,8 @@ def _kea_row(**overrides: object) -> dict[str, Any]:
             _kea_row(hostname="."),
             True,
             None,
-            _expected_lease(hostname=""),
-            id="dot-only-hostname-becomes-empty-string",
+            _expected_lease(),
+            id="dot-only-hostname-becomes-none",
         ),
         pytest.param(
             _kea_row(hostname="host.example."),

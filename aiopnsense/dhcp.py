@@ -499,7 +499,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 interface name and ``leases`` keyed by interface name. Lease
                 entries are normalized across Kea, ISC, and dnsmasq and
                 include address, hostname, interface, type, MAC,
-                and expiration when available.
+                and expiration when available. Hostnames made only of dots
+                are reported as None, like empty or missing hostnames.
         """
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
