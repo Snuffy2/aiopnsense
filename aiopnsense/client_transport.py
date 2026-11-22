@@ -2,7 +2,7 @@
 
 import asyncio
 import codecs
-from collections.abc import AsyncGenerator, MutableMapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, MutableMapping
 import json
 import logging
 from typing import TYPE_CHECKING, Any, Literal
@@ -16,6 +16,83 @@ from .exceptions import OPNsenseError, _map_opnsense_exception, _opnsense_http_e
 from .helpers import _LOGGER, _log_request_failure, _log_request_recovery
 
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
+
+type _ResponseStatusValidator = Callable[[aiohttp.ClientResponse], Awaitable[None]]
+
+
+def _outcome_raise_for_status(
+    session: aiohttp.ClientSession,
+) -> tuple[bool | _ResponseStatusValidator, list[tuple[aiohttp.ClientResponseError, int]]]:
+    """Wrap a custom session validator for endpoint outcome requests.
+
+    Args:
+        session (aiohttp.ClientSession): Session whose validator applies to requests.
+
+    Returns:
+        tuple[bool | _ResponseStatusValidator, list[tuple[aiohttp.ClientResponseError, int]]]:
+            Request validator override and errors raised by the session validator.
+            The override skips 404 so endpoint code can classify it as absent.
+    """
+    validator = session.raise_for_status
+    validator_errors: list[tuple[aiohttp.ClientResponseError, int]] = []
+    if not callable(validator):
+        return False, validator_errors
+
+    async def validate_response(response: aiohttp.ClientResponse) -> None:
+        """Run the session validator for every status except endpoint absence.
+
+        Args:
+            response (aiohttp.ClientResponse): HTTP response returned by aiohttp.
+
+        Raises:
+            aiohttp.ClientResponseError: Propagated from the caller's session validator.
+        """
+        if response.status == 404:
+            return
+        try:
+            await validator(response)
+        except aiohttp.ClientResponseError as error:
+            validator_errors.append((error, response.status))
+            raise
+
+    return validate_response, validator_errors
+
+
+def _classify_outcome_response_error(
+    error: aiohttp.ClientResponseError,
+    *,
+    response_entered: bool,
+    validator_errors: list[tuple[aiohttp.ClientResponseError, int]],
+) -> EndpointOutcome | None:
+    """Classify middleware or validator errors that carry an HTTP status.
+
+    Args:
+        error (aiohttp.ClientResponseError): Raised HTTP response error.
+        response_entered (bool): Whether transport received the response context.
+        validator_errors (list[tuple[aiohttp.ClientResponseError, int]]): Errors
+            raised by the session callback and the status it was validating.
+
+    Returns:
+        EndpointOutcome | None: Classified status outcome, or ``None`` when the
+            error came from response processing or does not match its response.
+    """
+    if (
+        response_entered
+        or isinstance(error, aiohttp.ClientHttpProxyError)
+        or not 400 <= error.status <= 599
+    ):
+        return None
+
+    for validator_error, response_status in validator_errors:
+        if validator_error is error:
+            if error.status != response_status:
+                return None
+            break
+
+    outcome = EndpointOutcome.from_http_status(error.status, error.message)
+    if outcome.error is not None:
+        outcome.error.__cause__ = error
+    return outcome
 
 
 class ClientTransportMixin:
@@ -388,8 +465,9 @@ class ClientTransportMixin:
         Unlike ``_do_get``, an HTTP or transport failure is returned as an
         outcome instead of being logged and raised, so the endpoint module can
         tell a missing endpoint from a transient failure and apply the
-        ``throw_errors`` policy itself. Successful responses still run a custom
-        session response validator before the body is decoded.
+        ``throw_errors`` policy itself. A callable session validator runs through
+        aiohttp before request completion for each response except a 404, which
+        remains available for endpoint absence classification.
 
         Args:
             path (str): API endpoint path to request.
@@ -409,41 +487,37 @@ class ClientTransportMixin:
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[get_outcome] url: %s (called by %s)", url, caller)
+        raise_for_status, validator_errors = _outcome_raise_for_status(self._session)
+        response_entered = False
         try:
             async with self._session.get(
                 url,
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
                 ssl=self._verify_ssl,
-                raise_for_status=False,
+                raise_for_status=raise_for_status,
             ) as response:
+                response_entered = True
                 _LOGGER.debug("[get_outcome] Response %s: %s", response.status, response.reason)
                 if not response.ok:
                     return EndpointOutcome.from_http_status(response.status, response.reason)
-                await self._validate_outcome_response(response)
                 if not read_body:
                     return EndpointOutcome.data(None)
                 if response_format == "text":
                     return EndpointOutcome.data(await response.text())
                 return EndpointOutcome.data(await response.json(content_type=None))
         except (aiohttp.ClientError, TimeoutError) as e:
+            if isinstance(e, aiohttp.ClientResponseError):
+                outcome = _classify_outcome_response_error(
+                    e,
+                    response_entered=response_entered,
+                    validator_errors=validator_errors,
+                )
+                if outcome is not None:
+                    return outcome
             error = _map_opnsense_exception(e)
             error.__cause__ = e
             return EndpointOutcome.transient(error, f"{type(e).__name__}: {e}")
-
-    async def _validate_outcome_response(self, response: aiohttp.ClientResponse) -> None:
-        """Run the caller's validator after HTTP status classification succeeds.
-
-        Outcome requests handle HTTP failure statuses directly. The per-request
-        override also disables custom session validators, so run the callable
-        explicitly before accepting a successful response.
-
-        Args:
-            response (aiohttp.ClientResponse): Successful response to validate.
-        """
-        validator = self._session.raise_for_status
-        if callable(validator):
-            await validator(response)
 
     def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
         """Normalize per-call timeout values to a positive float in seconds.
@@ -580,9 +654,10 @@ class ClientTransportMixin:
         Unlike ``_do_post``, an HTTP or transport failure is returned as an
         outcome instead of being logged and raised, so the endpoint module can
         tell a missing endpoint from a transient failure and apply the
-        ``throw_errors`` policy itself. Successful responses still run a custom
-        session response validator before the body is decoded. The request
-        always carries the caller's payload; no payload-less probe is sent.
+        ``throw_errors`` policy itself. A callable session validator runs through
+        aiohttp before request completion for each response except a 404, which
+        remains available for endpoint absence classification. The request always
+        carries the caller's payload; no payload-less probe is sent.
 
         Args:
             path (str): API endpoint path to request.
@@ -597,6 +672,8 @@ class ClientTransportMixin:
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[post_outcome] url: %s (called by %s)", url, caller)
+        raise_for_status, validator_errors = _outcome_raise_for_status(self._session)
+        response_entered = False
         try:
             async with self._session.post(
                 url,
@@ -604,14 +681,22 @@ class ClientTransportMixin:
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
                 ssl=self._verify_ssl,
-                raise_for_status=False,
+                raise_for_status=raise_for_status,
             ) as response:
+                response_entered = True
                 _LOGGER.debug("[post_outcome] Response %s: %s", response.status, response.reason)
                 if not response.ok:
                     return EndpointOutcome.from_http_status(response.status, response.reason)
-                await self._validate_outcome_response(response)
                 return EndpointOutcome.data(await response.json(content_type=None))
         except (aiohttp.ClientError, TimeoutError) as e:
+            if isinstance(e, aiohttp.ClientResponseError):
+                outcome = _classify_outcome_response_error(
+                    e,
+                    response_entered=response_entered,
+                    validator_errors=validator_errors,
+                )
+                if outcome is not None:
+                    return outcome
             error = _map_opnsense_exception(e)
             error.__cause__ = e
             return EndpointOutcome.transient(error, f"{type(e).__name__}: {e}")

@@ -12,7 +12,11 @@ import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseError, client_queue as aiopnsense_client_queue, vpn as aiopnsense_vpn
-from aiopnsense.exceptions import OPNsenseConnectionError
+from aiopnsense.exceptions import (
+    OPNsenseConnectionError,
+    OPNsenseInvalidAuth,
+    OPNsensePrivilegeMissing,
+)
 from tests.conftest import (
     FakeResponse,
     FakeStreamResponseFactory,
@@ -51,9 +55,35 @@ async def test_outcome_reads_respect_custom_response_validator(
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
     status = 200
+    validator_http_status: int | None = None
     requests: list[str] = []
-    rejected = aiohttp.ClientPayloadError("response rejected by caller")
-    validate_response = AsyncMock(side_effect=rejected)
+    validated_statuses: list[int] = []
+    trace_events: list[str] = []
+
+    async def validate_response(response: aiohttp.ClientResponse) -> None:
+        """Reject the successful response and observe later HTTP statuses.
+
+        Args:
+            response (aiohttp.ClientResponse): Response passed by aiohttp.
+
+        Raises:
+            aiohttp.ClientPayloadError: When the successful response is rejected.
+            aiohttp.ClientResponseError: When the caller rejects an HTTP status.
+        """
+        validated_statuses.append(response.status)
+        if response.status == 200:
+            if validator_http_status is not None:
+                raise aiohttp.ClientResponseError(
+                    response.request_info,
+                    (),
+                    status=validator_http_status,
+                    message="synthetic validator rejection",
+                )
+            raise aiohttp.ClientPayloadError("response rejected by caller")
+        if response.status == 403:
+            raise aiohttp.ClientResponseError(
+                response.request_info, (), status=403, message="Forbidden"
+            )
 
     async def respond(
         request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
@@ -66,8 +96,20 @@ async def test_outcome_reads_respect_custom_response_validator(
 
         Returns:
             aiohttp.ClientResponse: Simulated response at the middleware boundary.
+
+        Raises:
+            aiohttp.ClientHttpProxyError: When the proxy rejects its CONNECT request.
+            aiohttp.ClientResponseError: When middleware rejects an HTTP response.
         """
         requests.append(request.method)
+        if status == 404:
+            raise aiohttp.ClientResponseError(
+                request.request_info, (), status=404, message="Not Found"
+            )
+        if status == 407:
+            raise aiohttp.ClientHttpProxyError(
+                request.request_info, (), status=404, message="Proxy rejected CONNECT"
+            )
         response = MagicMock(spec=aiohttp.ClientResponse)
         response.status = status
         response.ok = status == 200
@@ -78,21 +120,93 @@ async def test_outcome_reads_respect_custom_response_validator(
         response.json.return_value = {"status": {"ups.status": "OL"}, "rows": [], "total": 0}
         return response
 
+    trace = aiohttp.TraceConfig()
+
+    async def request_ended(
+        _session: aiohttp.ClientSession,
+        _context: Any,
+        _params: aiohttp.TraceRequestEndParams,
+    ) -> None:
+        """Record successful aiohttp request completion.
+
+        Args:
+            _session (aiohttp.ClientSession): Session that completed the request.
+            _context (Any): Trace context for the request.
+            _params (aiohttp.TraceRequestEndParams): Completed request details.
+        """
+        trace_events.append("end")
+
+    async def request_failed(
+        _session: aiohttp.ClientSession,
+        _context: Any,
+        _params: aiohttp.TraceRequestExceptionParams,
+    ) -> None:
+        """Record aiohttp request failure.
+
+        Args:
+            _session (aiohttp.ClientSession): Session handling the request.
+            _context (Any): Trace context for the request.
+            _params (aiohttp.TraceRequestExceptionParams): Exception details.
+        """
+        trace_events.append("exception")
+
+    trace.on_request_end.append(request_ended)
+    trace.on_request_exception.append(request_failed)
+
     async with aiohttp.ClientSession(
-        middlewares=[respond], raise_for_status=validate_response
+        middlewares=[respond], raise_for_status=validate_response, trace_configs=[trace]
     ) as session:
         client = make_client(session=session, throw_errors=True)
         read = getattr(client, method_name)
         with pytest.raises(OPNsenseConnectionError) as exc_info:
             await read()
-        assert exc_info.value.__cause__ is rejected
-        validate_response.assert_awaited_once()
+        assert isinstance(exc_info.value.__cause__, aiohttp.ClientPayloadError)
+        assert str(exc_info.value.__cause__) == "response rejected by caller"
+        assert validated_statuses == [200]
+        assert trace_events == ["exception"]
+
+        status = 401
+        with pytest.raises(OPNsenseInvalidAuth):
+            await read()
+        assert validated_statuses == [200, 401]
+
+        status = 403
+        with pytest.raises(OPNsensePrivilegeMissing) as exc_info:
+            await read()
+        assert isinstance(exc_info.value.__cause__, aiohttp.ClientResponseError)
+        assert exc_info.value.__cause__.status == 403
+        assert validated_statuses == [200, 401, 403]
+
+        status = 200
+        validator_http_status = 404
+        for _attempt in range(2):
+            with pytest.raises(OPNsenseConnectionError) as synthetic_error:
+                await read()
+            assert synthetic_error.value.status == 404
+            assert isinstance(synthetic_error.value.__cause__, aiohttp.ClientResponseError)
+        assert requests == [request_method] * 5
+        assert validated_statuses == [200, 401, 403, 200, 200]
+        assert trace_events[-2:] == ["exception", "exception"]
+
+        status = 407
+        with pytest.raises(OPNsenseConnectionError) as proxy_error:
+            await read()
+        assert isinstance(proxy_error.value.__cause__, aiohttp.ClientHttpProxyError)
 
         status = 404
         assert await read() == absent
         assert await read() == absent
-        assert requests == [request_method, request_method]
-        validate_response.assert_awaited_once()
+        assert requests == [request_method] * 7
+        assert validated_statuses == [200, 401, 403, 200, 200]
+        assert trace_events == [
+            "exception",
+            "end",
+            "exception",
+            "exception",
+            "exception",
+            "exception",
+            "exception",
+        ]
 
 
 @pytest.mark.asyncio
