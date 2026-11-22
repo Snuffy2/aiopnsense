@@ -443,6 +443,23 @@ async def test_get_telemetry_aggregates_sections(make_client: ClientType) -> Non
 
 
 @pytest.mark.asyncio
+async def test_get_telemetry_aggregates_endpoint_outcome(make_client: ClientType) -> None:
+    """A real aggregate read preserves an unavailable section and requests it once.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, router = _client_with_router(make_client, {("GET", MBUF_PATH): 404})
+    client._get_from_stream = AsyncMock(return_value={})
+    try:
+        telemetry = await client.get_telemetry()
+        assert telemetry["mbuf"] == {}
+        assert router.count("GET", MBUF_PATH) == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_interfaces_empty_and_invalid_rows(make_client: ClientType) -> None:
     """Validate interface helper behavior for empty and malformed row payloads.
 

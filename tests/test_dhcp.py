@@ -458,6 +458,58 @@ async def test_dhcp_reads_follow_throw_mode_contract(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("route", "throw_errors", "expected_error"),
+    [
+        pytest.param(404, False, None, id="absent-default"),
+        pytest.param(403, False, None, id="forbidden-default"),
+        pytest.param(500, False, None, id="server-error-default"),
+        pytest.param(
+            TimeoutError("DHCP lease request timed out"), False, None, id="timeout-default"
+        ),
+        pytest.param(404, True, None, id="absent-throw"),
+        pytest.param(403, True, OPNsensePrivilegeMissing, id="forbidden-throw"),
+        pytest.param(500, True, OPNsenseConnectionError, id="server-error-throw"),
+        pytest.param(
+            TimeoutError("DHCP lease request timed out"),
+            True,
+            OPNsenseTimeoutError,
+            id="timeout-throw",
+        ),
+    ],
+)
+async def test_get_dhcp_leases_propagates_endpoint_outcomes(
+    make_client: ClientType,
+    route: Any,
+    throw_errors: bool,
+    expected_error: type[OPNsenseConnectionError] | None,
+) -> None:
+    """Exercise lease endpoint failures through the public aggregate method.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        route (Any): Router answer for the first Kea lease endpoint.
+        throw_errors (bool): Whether the client should raise for endpoint failures.
+        expected_error (type[OPNsenseConnectionError] | None): Expected error, if any.
+    """
+    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
+    router = install_fake_router(client, session, routes={("GET", KEA_LEASES4_PATH): route})
+    try:
+        client._use_snake_case = True
+        if expected_error is None:
+            assert await client.get_dhcp_leases(opnsense_tz=UTC) == {
+                "lease_interfaces": {},
+                "leases": {},
+            }
+        else:
+            with pytest.raises(expected_error):
+                await client.get_dhcp_leases(opnsense_tz=UTC)
+        assert router.count("GET", KEA_LEASES4_PATH) == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("reservations", "expected_key", "expected_expire"),
     [
         ([{"a": 1, "expire": 10}, {"a": 1, "expire": 20}, {"a": 2, "expire": 5}], "a", 20),

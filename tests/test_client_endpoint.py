@@ -1,5 +1,6 @@
 """Tests for client endpoint availability and endpoint-style selection."""
 
+from datetime import UTC, datetime, timedelta
 import logging
 from typing import Any
 from unittest.mock import AsyncMock
@@ -8,6 +9,7 @@ import aiohttp
 import pytest
 
 from aiopnsense._endpoint_outcome import EndpointOutcome
+import aiopnsense.client_endpoint
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
@@ -558,6 +560,61 @@ async def test_absent_endpoint_is_cached_until_ttl_expires(
         router.routes[("GET", NUT_PATH)] = NUT_DATA
         assert await client.get_nut_ups_status() == NUT_DATA
         assert router.count("GET", NUT_PATH) == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_absent_read_ttl_starts_after_request_completion(
+    make_client: MakeClientFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A public absent-read cache entry keeps its full TTL after a delayed request.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing the endpoint clock.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._endpoint_cache_ttl_seconds = 10
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): 404})
+    current_time = [datetime(2026, 1, 1, tzinfo=UTC)]
+
+    class ControlledClock:
+        """Clock whose current time can be advanced by the fake HTTP request."""
+
+        @staticmethod
+        def now() -> datetime:
+            """Return the current controlled time.
+
+            Returns:
+                datetime: Current fake time.
+            """
+            return current_time[0]
+
+    monkeypatch.setattr(aiopnsense.client_endpoint, "datetime", ControlledClock)
+    original_get = session.get
+
+    def delayed_get(url: str, **kwargs: Any) -> Any:
+        """Advance time while dispatching the request, then return its response.
+
+        Args:
+            url (str): Requested URL.
+            kwargs (Any): Request options passed to the fake session.
+
+        Returns:
+            Any: Fake response for the request.
+        """
+        response = original_get(url, **kwargs)
+        current_time[0] += timedelta(seconds=5)
+        return response
+
+    session.get = delayed_get
+    try:
+        assert await client.get_nut_ups_status() == {}
+        router.routes[("GET", NUT_PATH)] = NUT_DATA
+        current_time[0] += timedelta(seconds=9)
+        assert await client.get_nut_ups_status() == {}
+        assert router.count("GET", NUT_PATH) == 1
     finally:
         await client.async_close()
 

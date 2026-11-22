@@ -154,6 +154,37 @@ async def test_normalize_timeout_seconds(
 
 
 @pytest.mark.asyncio
+async def test_outcome_requests_override_session_raise_for_status(
+    make_client: MakeClientFactory,
+) -> None:
+    """Outcome requests inspect HTTP statuses even when the session raises by default.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    request_options: dict[str, dict[str, Any]] = {}
+
+    def fake_get(_url: str, **kwargs: Any) -> FakeResponse:
+        request_options["get"] = kwargs
+        return FakeResponse(status=404, reason="Not Found", ok=False)
+
+    def fake_post(_url: str, **kwargs: Any) -> FakeResponse:
+        request_options["post"] = kwargs
+        return FakeResponse(status=404, reason="Not Found", ok=False)
+
+    session.get = fake_get
+    session.post = fake_post
+    try:
+        assert (await client._do_get_outcome("/api/missing")).is_absent
+        assert (await client._do_post_outcome("/api/missing", {})).is_absent
+        assert request_options["get"]["raise_for_status"] is False
+        assert request_options["post"]["raise_for_status"] is False
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method_name", "session_method", "args", "kwargs", "expected_exception"),
     [

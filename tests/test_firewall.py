@@ -1,6 +1,7 @@
 """Tests for `aiopnsense.firewall`."""
 
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -364,19 +365,33 @@ async def test_filters_automatic_source_nat_rules_handles_invalid_firmware_strin
 async def test_rule_helpers_return_empty_when_endpoint_unavailable(
     make_client: ClientType, method_name: str, route_value: Any
 ) -> None:
-    """Rule helpers return an empty mapping for absent or failing endpoints in default mode.
+    """Public aggregation returns an empty rule group for unavailable endpoints.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         method_name (str): Rule helper invoked for the unavailable endpoint.
         route_value (Any): Response the Router gives for the helper endpoint.
     """
-    result, router = await _read_rules(
-        make_client, method_name, route_value, firmware_version="26.1.4"
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(
+        client, session, routes={("GET", RULE_HELPER_PATHS[method_name]): route_value}
     )
-
-    assert result == {}
-    assert router.count("GET", RULE_HELPER_PATHS[method_name]) == 1
+    client._use_snake_case = True
+    client.get_host_firmware_version = AsyncMock(return_value="26.1.4")
+    group = {
+        "_get_firewall_rules": ("rules", None),
+        "_get_nat_destination_rules": ("nat", "d_nat"),
+        "_get_nat_one_to_one_rules": ("nat", "one_to_one"),
+        "_get_nat_source_rules": ("nat", "source_nat"),
+        "_get_nat_npt_rules": ("nat", "npt"),
+    }[method_name]
+    try:
+        result = await client.get_firewall()
+        rules = result[group[0]] if group[1] is None else result[group[0]][group[1]]
+        assert rules == {}
+        assert router.count("GET", RULE_HELPER_PATHS[method_name]) == 1
+    finally:
+        await client.async_close()
 
 
 @pytest.mark.asyncio
@@ -396,14 +411,18 @@ async def test_rule_helpers_raise_in_throw_mode(
         route_value (Any): Response the Router gives for the helper endpoint.
         expected_error (type[Exception]): Public exception type expected from the call.
     """
-    with pytest.raises(expected_error):
-        await _read_rules(
-            make_client,
-            method_name,
-            route_value,
-            firmware_version="26.1.4",
-            throw_errors=True,
-        )
+    client, session = make_mock_session_client(partial(make_client, throw_errors=True))
+    router = install_fake_router(
+        client, session, routes={("GET", RULE_HELPER_PATHS[method_name]): route_value}
+    )
+    client._use_snake_case = True
+    client.get_host_firmware_version = AsyncMock(return_value="26.1.4")
+    try:
+        with pytest.raises(expected_error):
+            await client.get_firewall()
+        assert router.count("GET", RULE_HELPER_PATHS[method_name]) == 1
+    finally:
+        await client.async_close()
 
 
 @pytest.mark.asyncio
@@ -417,11 +436,26 @@ async def test_rule_helpers_missing_endpoint_does_not_raise_in_throw_mode(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         method_name (str): Rule helper invoked for the missing endpoint.
     """
-    result, _router = await _read_rules(
-        make_client, method_name, 404, firmware_version="26.1.4", throw_errors=True
+    client, session = make_mock_session_client(partial(make_client, throw_errors=True))
+    router = install_fake_router(
+        client, session, routes={("GET", RULE_HELPER_PATHS[method_name]): 404}
     )
-
-    assert result == {}
+    client._use_snake_case = True
+    client.get_host_firmware_version = AsyncMock(return_value="26.1.4")
+    group = {
+        "_get_firewall_rules": ("rules", None),
+        "_get_nat_destination_rules": ("nat", "d_nat"),
+        "_get_nat_one_to_one_rules": ("nat", "one_to_one"),
+        "_get_nat_source_rules": ("nat", "source_nat"),
+        "_get_nat_npt_rules": ("nat", "npt"),
+    }[method_name]
+    try:
+        result = await client.get_firewall()
+        rules = result[group[0]] if group[1] is None else result[group[0]][group[1]]
+        assert rules == {}
+        assert router.count("GET", RULE_HELPER_PATHS[method_name]) == 1
+    finally:
+        await client.async_close()
 
 
 @pytest.mark.asyncio

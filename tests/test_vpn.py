@@ -433,7 +433,7 @@ async def test_openvpn_server_details_absent_or_transient_keep_defaults(
     try:
         client._use_snake_case = True
         client._throw_errors = throw_errors
-        install_fake_router(
+        router = install_fake_router(
             client,
             session,
             routes={
@@ -457,6 +457,10 @@ async def test_openvpn_server_details_absent_or_transient_keep_defaults(
             assert "tunnel_addresses" not in server
             assert server["connected_clients"] == 0
             assert server["dns_servers"] == []
+        assert (
+            router.count("GET", f"{aiopnsense_vpn.OPENVPN_INSTANCE_DETAILS_ENDPOINT_PREFIX}srv1")
+            == 1
+        )
     finally:
         await client.async_close()
 

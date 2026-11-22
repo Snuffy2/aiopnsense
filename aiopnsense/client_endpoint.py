@@ -306,19 +306,20 @@ class ClientEndpointMixin:
                 else f"{method}_outcome"
             )
             outcome = await self._queue_request(queue_method, path, payload)
+        checked_at = datetime.now().astimezone()
 
         if outcome.is_data:
             _log_request_recovery(self, method, path)
             self._endpoint_permission_denied.discard(cache_key)
             self._endpoint_availability[cache_key] = True
-            self._endpoint_checked_at[cache_key] = now
+            self._endpoint_checked_at[cache_key] = checked_at
             return outcome
 
         if outcome.is_absent and outcome.http_status != 403:
             _LOGGER.debug("Endpoint %s not found", path)
             self._endpoint_permission_denied.discard(cache_key)
             self._endpoint_availability[cache_key] = False
-            self._endpoint_checked_at[cache_key] = now
+            self._endpoint_checked_at[cache_key] = checked_at
             return outcome
 
         error = _error_if_throwing(self, outcome.error) if outcome.error is not None else None
@@ -337,7 +338,7 @@ class ClientEndpointMixin:
                 raise error
             self._endpoint_permission_denied.add(cache_key)
             self._endpoint_availability[cache_key] = False
-            self._endpoint_checked_at[cache_key] = now
+            self._endpoint_checked_at[cache_key] = checked_at
             return outcome
 
         self._clear_endpoint_cache_entry(cache_key)

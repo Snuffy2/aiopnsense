@@ -1458,17 +1458,14 @@ async def test_system_branches_for_carp_candidate_and_notice_paths(make_client: 
 
 
 @pytest.mark.asyncio
-async def test_carp_absent_status_and_non_mapping_settings_keep_expected_rows(
+async def test_carp_non_mapping_settings_preserve_status_rows(
     make_client: ClientType,
 ) -> None:
-    """An absent VIP status gives an empty snapshot, and a non-mapping settings body keeps status rows.
+    """A non-mapping settings body preserves normalized status rows in the public snapshot.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    absent_client, _absent_router = _client_with_router(
-        make_client, {("GET", CARP_VIP_STATUS_PATH): 404}
-    )
     client, router = _client_with_router(
         make_client,
         {
@@ -1479,16 +1476,23 @@ async def test_carp_absent_status_and_non_mapping_settings_keep_expected_rows(
         },
     )
     try:
-        vip_status_raw, merged = await absent_client._fetch_and_merge_carp_vips()
-        assert vip_status_raw == {}
-        assert merged == []
-
-        _vip_status_raw, merged = await client._fetch_and_merge_carp_vips()
-        assert len(merged) == 1
+        snapshot = await client.get_carp()
+        assert snapshot["interfaces"] == [
+            {
+                "interface": "wan",
+                "mode": "carp",
+                "subnet": "1.2.3.4",
+                "vhid": "1",
+                "status": "DISABLED",
+            }
+        ]
+        assert snapshot["status_summary"]["vip_count"] == 1
+        assert snapshot["status_summary"]["interfaces"] == ["wan"]
+        assert snapshot["status_summary"]["state"] == "degraded"
+        assert router.count("GET", CARP_VIP_STATUS_PATH) == 1
         assert router.count("GET", VIP_SETTINGS_PATH) == 1
     finally:
         await client.async_close()
-        await absent_client.async_close()
 
 
 @pytest.mark.asyncio

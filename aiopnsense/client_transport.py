@@ -414,6 +414,7 @@ class ClientTransportMixin:
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
                 ssl=self._verify_ssl,
+                raise_for_status=False,
             ) as response:
                 _LOGGER.debug("[get_outcome] Response %s: %s", response.status, response.reason)
                 if not response.ok:
@@ -586,6 +587,7 @@ class ClientTransportMixin:
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
                 ssl=self._verify_ssl,
+                raise_for_status=False,
             ) as response:
                 _LOGGER.debug("[post_outcome] Response %s: %s", response.status, response.reason)
                 if not response.ok:
