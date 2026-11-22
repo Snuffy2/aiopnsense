@@ -59,9 +59,20 @@
 
 ## Live OPNsense testing
 
-- If `scripts/aiopnsense.env` exists, the live scripts may be used for live tests.
+- If `scripts/aiopnsense.env` exists in the main checkout, the live scripts may be used for live tests.
+- The env file is gitignored, so a worktree does not have its own copy. Its absence from a worktree does not mean live access is unavailable. Pass the main checkout's file with `--env-file`, and never copy it into a worktree or print, log, or commit its contents.
+- From a worktree root, run a live script like this. `PYTHONPATH` makes `aiopnsense_dump.py` import the worktree's code:
+
+  ```sh
+  MAIN_CHECKOUT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+  PYTHONPATH="$PWD" "$MAIN_CHECKOUT/.venv/bin/python" scripts/opnsense_api_call.py \
+    --env-file "$MAIN_CHECKOUT/scripts/aiopnsense.env" \
+    --method get --endpoint /api/core/firmware/status
+  ```
+
+- `opnsense_api_call.py` output includes the Router URL and response headers. Report only the non-sensitive fields you need.
 - Non-mutating live script commands or API endpoints may be used without permission.
-- Mutating live script commands or API endpoints require explicit permission before use.
+- Mutating live script commands or API endpoints, including `POST /api/core/firmware/check`, require explicit permission before use.
 
 ## CI/CD
 
