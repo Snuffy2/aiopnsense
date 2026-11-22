@@ -28,7 +28,18 @@ from aiopnsense.system import (
     CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
     CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
 )
-from tests.conftest import FakeResponse, FirmwareRouter, make_mock_session_client
+from tests.conftest import (
+    FIRMWARE_VERSION_SHAPES,
+    FakeResponse,
+    FirmwareRouter,
+    FirmwareVersionShape,
+    make_mock_session_client,
+)
+
+_SHAPE_PARAMS = [pytest.param(shape, id=shape.id) for shape in FIRMWARE_VERSION_SHAPES]
+_CACHED_SHAPE_PARAMS = [
+    pytest.param(shape, id=shape.id) for shape in FIRMWARE_VERSION_SHAPES if shape.cached
+]
 
 
 @pytest.mark.asyncio
@@ -475,6 +486,14 @@ async def test_malformed_firmware_series_uses_unknown_capability_fallback(
             id="numeric-hotfix-ordering",
         ),
         pytest.param(
+            "27.1.b_21",
+            "27.1.b_22",
+            {"status": "ok"},
+            timedelta(0),
+            "There are no updates available on the selected mirror.",
+            id="newer-beta-build",
+        ),
+        pytest.param(
             "26.1.11_1",
             "26.1.11_bad",
             {"status": "ok"},
@@ -537,10 +556,14 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
 @pytest.mark.parametrize(
     ("product_version", "product_latest"),
     [
-        pytest.param("26.1.1", "26.1.1", id="equal-base-versions"),
+        *(
+            pytest.param(shape.product_version, shape.product_version, id=f"at-latest-{shape.id}")
+            for shape in FIRMWARE_VERSION_SHAPES
+            if shape.product_version is not None
+        ),
+        pytest.param("27.1.b_21", "27.1.b", id="beta-latest-without-build"),
         pytest.param("26.7.6_3", "26.7.6", id="installed-hotfix-ahead-of-base"),
         pytest.param("26.7.6_3", "26.7.6.0", id="installed-hotfix-ahead-of-zero-component-base"),
-        pytest.param("26.7.6_3", "26.7.6_3", id="equal-hotfix-versions"),
         pytest.param("26.7.6_10", "26.7.6_9", id="installed-hotfix-ahead-of-revision"),
         pytest.param("26.7.7", "26.7.6_9", id="installed-base-ahead-of-hotfix"),
     ],
@@ -1207,6 +1230,92 @@ async def test_install_firmware_terminal_contract(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("packages", "expected_latest"),
+    [
+        pytest.param(
+            [
+                {"name": "curl", "current_version": "8.1", "new_version": "8.2"},
+                {
+                    "name": "opnsense-devel",
+                    "current_version": "27.1.b_21",
+                    "new_version": "27.1.b_22",
+                },
+            ],
+            "27.1.b_22",
+            id="devel-update-available",
+        ),
+        pytest.param(
+            [{"name": "curl", "current_version": "8.1", "new_version": "8.2"}],
+            "27.1.b",
+            id="other-package-update",
+        ),
+        pytest.param([], "27.1.b", id="no-updates"),
+    ],
+)
+async def test_firmware_update_info_reports_exact_devel_build(
+    make_client: Callable[..., Any],
+    packages: list[dict[str, str]],
+    expected_latest: str,
+) -> None:
+    """Report the available beta build, which OPNsense omits from ``product_latest``.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        packages (list[dict[str, str]]): Package rows in the firmware check.
+        expected_latest (str): Latest version the caller should receive.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        status = _firmware_status(
+            status="update",
+            status_msg="There are 2 updates available.",
+            product={
+                "product_version": "27.1.b_21",
+                "product_latest": "27.1.b",
+                "product_series": "27.1",
+                "product_check": {"upgrade_packages": packages},
+            },
+        )
+        _configure_firmware_polls(client, status)
+
+        result = await client.get_firmware_update_info(check_for_updates=False)
+
+        assert result["product"]["product_latest"] == expected_latest
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("installed", "error"),
+    [
+        pytest.param("27.1.b_22", None, id="target-build-installed"),
+        pytest.param("27.1.b_21", "target", id="older-build-still-installed"),
+    ],
+)
+async def test_install_firmware_verifies_beta_target(
+    install_client: Callable[..., Any], installed: str, error: str | None
+) -> None:
+    """A beta target installs and succeeds only once its build is on the Router.
+
+    Args:
+        install_client (Callable[..., Any]): Lifecycle transport factory.
+        installed (str): Firmware version reported after the action.
+        error (str | None): Expected failure text, if any.
+    """
+    client, session = install_client(
+        [(_install_progress("done", "***DONE***"), "ready", installed)]
+    )
+    if error:
+        with pytest.raises(OPNsenseError, match=error):
+            await client.install_firmware(target_version="27.1.b_22", poll_interval=0.001)
+    else:
+        await client.install_firmware(target_version="27.1.b_22", poll_interval=0.001)
+    session.post.assert_called_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("baseline", ["old check", _install_progress("done", "***DONE***")["log"]])
 async def test_install_firmware_stale_log_times_out_and_cleans_up(
     install_client: Callable[..., Any],
@@ -1237,6 +1346,7 @@ async def test_install_firmware_stale_log_times_out_and_cleans_up(
         {"type": "reboot"},
         {"target_version": ""},
         {"target_version": None},
+        {"target_version": "27.1.b"},
         {"timeout": float("nan")},
         {"timeout": float("inf")},
         {"timeout": 0},
@@ -1385,6 +1495,29 @@ def _firmware_status(**overrides: Any) -> dict[str, Any]:
         "last_check": datetime.now(UTC).isoformat(),
         **overrides,
     }
+
+
+def _firmware_status_for_shape(shape: FirmwareVersionShape) -> dict[str, Any]:
+    """Build the firmware status a Router returns for a version shape.
+
+    A shape without a product version models the error a Router returns when firmware
+    metadata is unavailable, which has no ``product`` key at all.
+
+    Args:
+        shape (FirmwareVersionShape): Version form reported by the Router.
+
+    Returns:
+        dict[str, Any]: Error status, with the shape's product when it has a version.
+    """
+    if shape.product_version is None:
+        return {
+            "status_msg": "Firmware status check was aborted internally. Please try again.",
+            "status": "error",
+        }
+    return _firmware_status(
+        status="error",
+        product={"product_version": shape.product_version, "product_series": shape.product_series},
+    )
 
 
 def _configure_firmware_polls(
@@ -1612,50 +1745,145 @@ async def test_dispatched_firmware_action_ends_check_cooldown(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("shape", _SHAPE_PARAMS)
+async def test_firmware_lookup_handles_router_version_shapes(
+    make_client: Callable[..., Any], shape: FirmwareVersionShape
+) -> None:
+    """Return each reported form and reread the Router only when it was not cached.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        shape (FirmwareVersionShape): Version form reported by the Router.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        _configure_firmware_polls(client, _firmware_status_for_shape(shape))
+        status_reads = cast(AsyncMock, client._safe_dict_get)
+
+        assert await client.get_host_firmware_version() == shape.lookup_version
+        reads_before = status_reads.await_count
+        assert await client.get_host_firmware_version() == shape.lookup_version
+        assert status_reads.await_count - reads_before == (0 if shape.cached else 1)
+    finally:
+        await client.async_close()
+
+
+async def _lookup_after_cooldown_poll(
+    client: Any,
+    session: MagicMock,
+    fake_response_factory: Callable[..., Any],
+    initial_status: dict[str, Any],
+    changed_status: dict[str, Any],
+) -> tuple[str | None, int]:
+    """Change the firmware status during cooldown and run the next version lookup.
+
+    The status object is updated in place, because the poll mock serves that same
+    object. The returned version alone cannot show a wrongly cleared cache, because the
+    next read returns the same value either way, so the status reads are returned as well.
+
+    Args:
+        client (Any): Client under test.
+        session (MagicMock): Mock session receiving the check POST.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        initial_status (dict[str, Any]): Firmware status served before the cooldown poll.
+        changed_status (dict[str, Any]): Firmware status that replaces it during cooldown.
+
+    Returns:
+        tuple[str | None, int]: Version from the final lookup and its status reads.
+    """
+    _configure_firmware_polls(client, initial_status)
+    status_reads = cast(AsyncMock, client._safe_dict_get)
+    session.post.return_value = fake_response_factory(
+        json_payload={"status": "ok", "msg_uuid": "check"}
+    )
+
+    await client.get_firmware_update_info()
+    assert session.post.call_count == 1
+    await client.get_host_firmware_version()
+
+    initial_status.clear()
+    initial_status.update(changed_status)
+    assert await client.get_firmware_update_info() == changed_status
+
+    reads_before = status_reads.await_count
+    version = await client.get_host_firmware_version()
+    assert session.post.call_count == 1
+    return version, status_reads.await_count - reads_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", _CACHED_SHAPE_PARAMS)
+async def test_firmware_cooldown_keeps_cache_for_unchanged_version_shape(
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    shape: FirmwareVersionShape,
+) -> None:
+    """An unchanged status during cooldown does not clear a cached version.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
+        shape (FirmwareVersionShape): Version form reported by the Router.
+    """
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
+    client, session = make_mock_session_client(make_client)
+    try:
+        result = await _lookup_after_cooldown_poll(
+            client,
+            session,
+            fake_response_factory,
+            _firmware_status_for_shape(shape),
+            _firmware_status_for_shape(shape),
+        )
+        assert result == (shape.lookup_version, 0)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", _SHAPE_PARAMS)
+async def test_firmware_cooldown_refreshes_cache_for_new_version_shape(
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    shape: FirmwareVersionShape,
+) -> None:
+    """A change to a usable version refreshes the cache, and any other change keeps it.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
+        shape (FirmwareVersionShape): Version form the Router changes to.
+    """
+    previous_version = "25.7.1"
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
+    client, session = make_mock_session_client(make_client)
+    try:
+        result = await _lookup_after_cooldown_poll(
+            client,
+            session,
+            fake_response_factory,
+            _firmware_status(status="error", product={"product_version": previous_version}),
+            _firmware_status_for_shape(shape),
+        )
+        assert result == ((shape.lookup_version, 1) if shape.cached else (previous_version, 0))
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("initial_product", "changed_product", "expected_version", "expected_reads"),
     [
-        pytest.param(
-            {"product_version": "26.7.9"},
-            {"product_version": "26.7.10"},
-            "26.7.10",
-            1,
-            id="out-of-band-upgrade",
-        ),
-        pytest.param(
-            {"product_version": "26.1.11"},
-            {"product_version": "26.7.b_110", "product_series": "26.7"},
-            "26.7",
-            1,
-            id="beta-series-fallback",
-        ),
-        pytest.param(
-            {"product_version": "26.7.b_110", "product_series": "26.7"},
-            {"product_version": "26.7.b_110", "product_series": "26.7"},
-            "26.7",
-            0,
-            id="unchanged-series-fallback",
-        ),
         pytest.param(
             {"product_version": "26.7.9"},
             {"product_version": "not-a-version", "product_series": "not-a-series"},
             "26.7.9",
             0,
             id="no-comparable-version-or-series",
-        ),
-        pytest.param(
-            {"product_version": "26.7.9"},
-            {"product_version": "26.7.9"},
-            "26.7.9",
-            0,
-            id="unchanged-version",
-        ),
-        pytest.param(
-            {"product_version": "26.7.9_1"},
-            {"product_version": "26.7.9_1"},
-            "26.7.9_1",
-            0,
-            id="unchanged-hotfix",
         ),
         pytest.param(
             {"product_version": "26.7.9_1"},
@@ -1678,11 +1906,8 @@ async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
     """A comparable version change seen during cooldown refreshes the cache without a check POST.
 
     The version compared is the one the normal lookup would use: the product
-    version, or its product series when the version is not comparable. An
-    unchanged version, or a status with no comparable version or series, leaves
-    the cached version in place. The returned version alone cannot show a wrongly
-    cleared cache, because the next read returns the same value either way, so the
-    test counts the status reads made by the final lookup instead.
+    version, or its product series when the version is not comparable. A status
+    with no comparable version or series leaves the cached version in place.
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
@@ -1696,24 +1921,14 @@ async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
     client, session = make_mock_session_client(make_client)
     try:
-        status = _firmware_status(status="error", product=initial_product)
-        _configure_firmware_polls(client, status)
-        status_reads = cast(AsyncMock, client._safe_dict_get)
-        session.post.return_value = fake_response_factory(
-            json_payload={"status": "ok", "msg_uuid": "check"}
+        result = await _lookup_after_cooldown_poll(
+            client,
+            session,
+            fake_response_factory,
+            _firmware_status(status="error", product=initial_product),
+            _firmware_status(status="error", product=changed_product),
         )
-
-        await client.get_firmware_update_info()
-        assert session.post.call_count == 1
-        await client.get_host_firmware_version()
-
-        status["product"].update(changed_product)
-        await client.get_firmware_update_info()
-
-        reads_before = status_reads.await_count
-        assert await client.get_host_firmware_version() == expected_version
-        assert status_reads.await_count - reads_before == expected_reads
-        assert session.post.call_count == 1
+        assert result == (expected_version, expected_reads)
     finally:
         await client.async_close()
 
