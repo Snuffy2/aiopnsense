@@ -8,10 +8,10 @@ the per-service locks, the pending-apply set and the shutdown generation.
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from functools import cached_property, partial
+from functools import cached_property
 import logging
 from typing import Any, Literal
 
@@ -381,25 +381,24 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
         ):
             raise asyncio.CancelledError("OPNsenseClient closed during VPN operation")
 
-    async def _with_vpn_service_lock(
-        self, service: str, operation: Callable[[int], Awaitable[bool]]
-    ) -> bool:
+    async def _run_vpn_toggle(self, spec: ToggleSpec, vpn: VpnInstance) -> bool:
         """Run a VPN Toggle under its service lock unless the client is closing.
 
         Args:
-            service (str): VPN service whose lock serialises the Toggle.
-            operation (Callable[[int], Awaitable[bool]]): Toggle body; receives the
-                shutdown generation captured before the lock was awaited.
+            spec (ToggleSpec): Toggle with one save step and one apply step.
+            vpn (VpnInstance): VPN Instance the Toggle changes.
 
         Returns:
-            bool: The operation's result, or ``False`` for a service with no lock.
+            bool: Whether the change or a pending apply succeeded. An explicit target
+                that already matches with nothing pending also returns ``True``.
+                A service with no lock returns ``False``.
 
         Raises:
             asyncio.CancelledError: If the client is closing, or closes while the
                 Toggle waits for the lock.
         """
         state = self._vpn_toggle_state
-        lock = state.locks.get(service)
+        lock = state.locks.get(vpn.service)
         if lock is None:
             return False
         if self._active_close_count > 0:
@@ -407,22 +406,7 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
         shutdown_generation = state.shutdown_generation
         async with lock:
             self._ensure_vpn_toggle_current(shutdown_generation)
-            return await operation(shutdown_generation)
-
-    async def _run_vpn_toggle(self, spec: ToggleSpec, vpn: VpnInstance) -> bool:
-        """Run a VPN Toggle under its service lock.
-
-        Args:
-            spec (ToggleSpec): Toggle with one save step and one apply step.
-            vpn (VpnInstance): VPN Instance the Toggle changes.
-
-        Returns:
-            bool: Whether the change, or a pending apply it retried, was applied; or
-                ``True`` when an explicit target already matched with nothing pending.
-        """
-        return await self._with_vpn_service_lock(
-            vpn.service, partial(self._run_vpn_toggle_locked, spec, vpn)
-        )
+            return await self._run_vpn_toggle_locked(spec, vpn, shutdown_generation)
 
     async def _run_vpn_toggle_locked(
         self, spec: ToggleSpec, vpn: VpnInstance, shutdown_generation: int

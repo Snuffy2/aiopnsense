@@ -231,20 +231,32 @@ _CASE_PARAMS = [pytest.param(case, id=case.name) for case in TOGGLE_CASES]
 
 
 @pytest.mark.parametrize("case", _CASE_PARAMS)
+@pytest.mark.parametrize(
+    ("target", "save_response"),
+    [
+        pytest.param("on", None, id="missing-response"),
+        pytest.param("off", {"result": "failed"}, id="failed-response"),
+    ],
+)
 async def test_toggle_unacknowledged_save_returns_false_without_apply(
-    case: ToggleCase, scripted_router: ScriptedRouter
+    case: ToggleCase,
+    target: str,
+    save_response: RouterReply,
+    scripted_router: ScriptedRouter,
 ) -> None:
-    """A save the Router never acknowledged fails the Toggle and is not applied.
+    """A missing or failed save reply stops the Toggle before the apply.
 
     Args:
         case (ToggleCase): Toggle under test.
+        target (str): Requested state.
+        save_response (RouterReply): Missing or failed reply from the save endpoint.
         scripted_router (ScriptedRouter): Scripted Router fixture.
     """
-    case.script(scripted_router, "on")
-    scripted_router.reply(case.save_paths["on"], None)
+    case.script(scripted_router, target)
+    scripted_router.reply(case.save_paths[target], save_response)
     client = scripted_router.client()
 
-    assert await case.toggle(client, "on") is False
+    assert await case.toggle(client, target) is False
     assert not scripted_router.requested(case.apply_path)
 
 
@@ -275,24 +287,6 @@ async def test_toggle_acknowledged_save_and_confirmed_apply_returns_true(
     assert await case.toggle(client, toggle_on_off) is True
     assert scripted_router.requested(case.save_paths[target])
     assert scripted_router.requested(case.apply_path)
-
-
-@pytest.mark.parametrize("case", _CASE_PARAMS)
-async def test_toggle_failed_save_returns_false_without_apply(
-    case: ToggleCase, scripted_router: ScriptedRouter
-) -> None:
-    """A save the Router reports as ``failed`` fails the Toggle and is not applied.
-
-    Args:
-        case (ToggleCase): Toggle under test.
-        scripted_router (ScriptedRouter): Scripted Router fixture.
-    """
-    case.script(scripted_router, "off")
-    scripted_router.reply(case.save_paths["off"], {"result": "failed"})
-    client = scripted_router.client()
-
-    assert await case.toggle(client, "off") is False
-    assert not scripted_router.requested(case.apply_path)
 
 
 @pytest.mark.parametrize("case", _CASE_PARAMS)
