@@ -25,8 +25,8 @@ from aiopnsense.exceptions import (
 from tests.conftest import (
     FakeClientSession,
     FakeResponse,
+    FirmwareRouter,
     MakeClientFactory,
-    ScriptedRouter,
     make_mock_session_client,
 )
 
@@ -445,15 +445,15 @@ async def test_async_context_manager_stays_open_until_exit_when_validation_succe
 @pytest.mark.asyncio
 async def test_validate_can_skip_device_unique_id_requirement(
     monkeypatch: pytest.MonkeyPatch,
-    scripted_router: tuple[OPNsenseClient, ScriptedRouter],
+    firmware_router: tuple[OPNsenseClient, FirmwareRouter],
 ) -> None:
     """Verify validation refreshes firmware while skipping the device ID request.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
-        scripted_router (tuple[OPNsenseClient, ScriptedRouter]): Client and Router.
+        firmware_router (tuple[OPNsenseClient, FirmwareRouter]): Client and Router.
     """
-    client, router = scripted_router
+    client, router = firmware_router
     router.firmware = "0.0"
     assert await client.get_host_firmware_version() == "0.0"
     router.firmware = OPNSENSE_RECOMMENDED_FIRMWARE

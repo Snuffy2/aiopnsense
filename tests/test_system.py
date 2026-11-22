@@ -1398,16 +1398,16 @@ CARP_CAMEL_PATH = "/api/diagnostics/interface/CarpStatus/maintenance"
     ],
 )
 async def test_toggle_carp_maintenance_mode_uses_endpoint_for_firmware(
-    scripted_router: tuple[OPNsenseClient, Any], firmware: str | None, expected_path: str
+    firmware_router: tuple[OPNsenseClient, Any], firmware: str | None, expected_path: str
 ) -> None:
     """CARP maintenance uses the new status endpoint only on known firmware that has it.
 
     Args:
-        scripted_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
+        firmware_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
         firmware (str | None): Firmware version reported by the Router.
         expected_path (str): CARP maintenance endpoint the client is expected to post to.
     """
-    client, router = scripted_router
+    client, router = firmware_router
     router.firmware = firmware
     router.endpoints[expected_path] = {"status": "ok"}
 

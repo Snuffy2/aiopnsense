@@ -16,7 +16,7 @@ from aiopnsense.exceptions import (
     OPNsenseSSLError,
     OPNsenseUnknownFirmware,
 )
-from tests.conftest import FakeResponse, MakeClientFactory, ScriptedRouter, make_mock_session_client
+from tests.conftest import FakeResponse, FirmwareRouter, MakeClientFactory, make_mock_session_client
 
 DISMISS_SNAKE_PATH = "/api/core/system/dismiss_status"
 DISMISS_CAMEL_PATH = "/api/core/system/dismissStatus"
@@ -1036,17 +1036,17 @@ async def test_get_endpoint_path_lazily_initializes_snake_case_state(
 
 @pytest.fixture
 def dismiss_router(
-    scripted_router: tuple[Any, ScriptedRouter],
-) -> tuple[Any, ScriptedRouter]:
+    firmware_router: tuple[Any, FirmwareRouter],
+) -> tuple[Any, FirmwareRouter]:
     """Return a scripted Router that serves both notice-dismiss endpoint styles.
 
     Args:
-        scripted_router (tuple[Any, ScriptedRouter]): Client and the Router that scripts it.
+        firmware_router (tuple[Any, FirmwareRouter]): Client and the Router that scripts it.
 
     Returns:
-        tuple[Any, ScriptedRouter]: Client and Router that accept either dismiss path.
+        tuple[Any, FirmwareRouter]: Client and Router that accept either dismiss path.
     """
-    client, router = scripted_router
+    client, router = firmware_router
     router.endpoints[DISMISS_SNAKE_PATH] = {"status": "ok"}
     router.endpoints[DISMISS_CAMEL_PATH] = {"status": "ok"}
     return client, router
@@ -1062,12 +1062,12 @@ def dismiss_router(
     ],
 )
 async def test_public_call_uses_endpoint_style_for_known_firmware(
-    dismiss_router: tuple[Any, ScriptedRouter], firmware: str, expected_path: str
+    dismiss_router: tuple[Any, FirmwareRouter], firmware: str, expected_path: str
 ) -> None:
     """Verify a public method calls the endpoint style that the Router firmware uses.
 
     Args:
-        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
         firmware (str): Firmware version reported by the Router.
         expected_path (str): Dismiss endpoint the client is expected to call.
     """
@@ -1084,13 +1084,13 @@ async def test_public_call_uses_endpoint_style_for_known_firmware(
     [pytest.param(None, id="missing"), pytest.param("not-a-version", id="uncomparable")],
 )
 async def test_unknown_firmware_does_not_pin_endpoint_style(
-    dismiss_router: tuple[Any, ScriptedRouter],
+    dismiss_router: tuple[Any, FirmwareRouter],
     firmware: str | None,
 ) -> None:
     """Verify a first call with unknown firmware does not fix the endpoint style.
 
     Args:
-        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
         firmware (str | None): Initial firmware version reported by the Router.
     """
     client, router = dismiss_router
@@ -1104,12 +1104,12 @@ async def test_unknown_firmware_does_not_pin_endpoint_style(
 
 
 async def test_unreachable_firmware_status_does_not_pin_endpoint_style(
-    dismiss_router: tuple[Any, ScriptedRouter],
+    dismiss_router: tuple[Any, FirmwareRouter],
 ) -> None:
     """Verify a failed firmware lookup is retried instead of being remembered.
 
     Args:
-        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
     """
     client, router = dismiss_router
     router.firmware = "25.1"
@@ -1130,7 +1130,7 @@ async def test_unreachable_firmware_status_does_not_pin_endpoint_style(
     ],
 )
 async def test_unknown_firmware_is_logged_once_per_condition(
-    dismiss_router: tuple[Any, ScriptedRouter],
+    dismiss_router: tuple[Any, FirmwareRouter],
     caplog: pytest.LogCaptureFixture,
     firmware: str | None,
     expected_level: int,
@@ -1139,7 +1139,7 @@ async def test_unknown_firmware_is_logged_once_per_condition(
     """Verify unknown firmware logs its reason once however many calls hit it.
 
     Args:
-        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
         caplog (pytest.LogCaptureFixture): Log capture fixture.
         firmware (str | None): Unknown firmware value reported by the Router.
         expected_level (int): Level the unknown-firmware message must use.
@@ -1164,15 +1164,15 @@ LATE_PATH = "/api/example/feature/get"
 
 @pytest.fixture
 def upgrade_router(
-    dismiss_router: tuple[Any, ScriptedRouter],
-) -> tuple[Any, ScriptedRouter]:
+    dismiss_router: tuple[Any, FirmwareRouter],
+) -> tuple[Any, FirmwareRouter]:
     """Return a scripted Router that accepts firmware update and upgrade actions.
 
     Args:
-        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
 
     Returns:
-        tuple[Any, ScriptedRouter]: Client and Router that accept firmware actions.
+        tuple[Any, FirmwareRouter]: Client and Router that accept firmware actions.
     """
     client, router = dismiss_router
     router.endpoints[UPGRADE_PATH] = {"status": "ok"}
@@ -1181,12 +1181,12 @@ def upgrade_router(
 
 
 async def test_firmware_upgrade_across_threshold_switches_endpoint_style(
-    upgrade_router: tuple[Any, ScriptedRouter],
+    upgrade_router: tuple[Any, FirmwareRouter],
 ) -> None:
     """Verify the client switches endpoint style after the Router upgrades across 25.7.
 
     Args:
-        upgrade_router (tuple[Any, ScriptedRouter]): Client and Router accepting upgrades.
+        upgrade_router (tuple[Any, FirmwareRouter]): Client and Router accepting upgrades.
     """
     client, router = upgrade_router
     router.firmware = "25.1"
@@ -1201,12 +1201,12 @@ async def test_firmware_upgrade_across_threshold_switches_endpoint_style(
 
 
 async def test_firmware_upgrade_refreshes_endpoint_availability(
-    upgrade_router: tuple[Any, ScriptedRouter],
+    upgrade_router: tuple[Any, FirmwareRouter],
 ) -> None:
     """Verify endpoints that the new firmware adds are used without waiting for the TTL.
 
     Args:
-        upgrade_router (tuple[Any, ScriptedRouter]): Client and Router accepting upgrades.
+        upgrade_router (tuple[Any, FirmwareRouter]): Client and Router accepting upgrades.
     """
     client, router = upgrade_router
     router.firmware = "25.1"
@@ -1223,12 +1223,12 @@ async def test_firmware_upgrade_refreshes_endpoint_availability(
 
 
 async def test_unchanged_firmware_version_keeps_endpoint_cache(
-    upgrade_router: tuple[Any, ScriptedRouter],
+    upgrade_router: tuple[Any, FirmwareRouter],
 ) -> None:
     """Verify re-reading an unchanged firmware version does not discard cached endpoints.
 
     Args:
-        upgrade_router (tuple[Any, ScriptedRouter]): Client and Router accepting upgrades.
+        upgrade_router (tuple[Any, FirmwareRouter]): Client and Router accepting upgrades.
     """
     client, router = upgrade_router
     router.firmware = "25.1"
@@ -1244,12 +1244,12 @@ async def test_unchanged_firmware_version_keeps_endpoint_cache(
 
 
 async def test_first_known_firmware_version_keeps_endpoint_cache(
-    dismiss_router: tuple[Any, ScriptedRouter],
+    dismiss_router: tuple[Any, FirmwareRouter],
 ) -> None:
     """Verify the first known version has nothing to discard.
 
     Args:
-        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+        dismiss_router (tuple[Any, FirmwareRouter]): Client and Router serving both styles.
     """
     client, router = dismiss_router
     router.firmware = "25.1"
@@ -1262,12 +1262,12 @@ async def test_first_known_firmware_version_keeps_endpoint_cache(
 
 
 async def test_failed_firmware_lookup_after_known_version_resets_nothing(
-    upgrade_router: tuple[Any, ScriptedRouter],
+    upgrade_router: tuple[Any, FirmwareRouter],
 ) -> None:
     """Verify an unreachable Router during an upgrade is not treated as a version change.
 
     Args:
-        upgrade_router (tuple[Any, ScriptedRouter]): Client and Router accepting upgrades.
+        upgrade_router (tuple[Any, FirmwareRouter]): Client and Router accepting upgrades.
     """
     client, router = upgrade_router
     router.firmware = "25.1"
@@ -1285,12 +1285,12 @@ async def test_failed_firmware_lookup_after_known_version_resets_nothing(
 
 
 async def test_not_comparable_firmware_version_resets_nothing(
-    upgrade_router: tuple[Any, ScriptedRouter],
+    upgrade_router: tuple[Any, FirmwareRouter],
 ) -> None:
     """Verify a version that cannot be compared is not treated as a version change.
 
     Args:
-        upgrade_router (tuple[Any, ScriptedRouter]): Client and Router accepting upgrades.
+        upgrade_router (tuple[Any, FirmwareRouter]): Client and Router accepting upgrades.
     """
     client, router = upgrade_router
     router.firmware = "25.1"
@@ -1319,7 +1319,7 @@ async def test_old_endpoint_probe_cannot_restore_cache_after_firmware_change(
         make_client (MakeClientFactory): Fixture factory returning clients.
     """
     client, session = make_mock_session_client(make_client)
-    router = ScriptedRouter(client, session)
+    router = FirmwareRouter(client, session)
     router.firmware = "26.1.1"
     original_probe = router._probe
     probe_started = asyncio.Event()

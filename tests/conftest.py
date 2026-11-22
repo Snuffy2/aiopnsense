@@ -251,7 +251,7 @@ def make_mock_session_client(
 FIRMWARE_STATUS_PATH = "/api/core/firmware/status"
 
 
-class ScriptedRouter:
+class FirmwareRouter:
     """Router stand-in that scripts firmware status and endpoint responses for a client.
 
     Probes go to the mocked session and data requests go to the client's transport
@@ -367,19 +367,19 @@ class ScriptedRouter:
 
 
 @pytest.fixture
-def scripted_router(
+def firmware_router(
     make_client: Callable[..., aiopnsense.OPNsenseClient],
-) -> tuple[aiopnsense.OPNsenseClient, ScriptedRouter]:
+) -> tuple[aiopnsense.OPNsenseClient, FirmwareRouter]:
     """Return a client wired to a scripted Router.
 
     Args:
         make_client (Callable[..., aiopnsense.OPNsenseClient]): ``make_client`` fixture factory.
 
     Returns:
-        tuple[aiopnsense.OPNsenseClient, ScriptedRouter]: Client and the Router that scripts it.
+        tuple[aiopnsense.OPNsenseClient, FirmwareRouter]: Client and the Router that scripts it.
     """
     client, session = make_mock_session_client(make_client)
-    return client, ScriptedRouter(client, session)
+    return client, FirmwareRouter(client, session)
 
 
 @pytest.fixture(autouse=True)

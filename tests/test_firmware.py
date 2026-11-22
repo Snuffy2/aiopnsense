@@ -24,7 +24,7 @@ from aiopnsense.system import (
     CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
     CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
 )
-from tests.conftest import FakeResponse, ScriptedRouter, make_mock_session_client
+from tests.conftest import FakeResponse, FirmwareRouter, make_mock_session_client
 
 
 @pytest.mark.asyncio
@@ -58,16 +58,16 @@ async def test_get_host_firmware_version_and_fallback(
 
 @pytest.mark.asyncio
 async def test_delayed_firmware_read_cannot_overwrite_a_newer_observation(
-    scripted_router: tuple[aiopnsense.OPNsenseClient, ScriptedRouter],
+    firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A delayed old response must not choose the endpoint style after a newer read.
 
     Args:
-        scripted_router (tuple[aiopnsense.OPNsenseClient, ScriptedRouter]): Client and Router.
+        firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
         monkeypatch (pytest.MonkeyPatch): Enables the fixture's real queue worker.
     """
-    client, router = scripted_router
+    client, router = firmware_router
     monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
     router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}
     router.endpoints[CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT] = {"status": "ok"}
@@ -110,16 +110,16 @@ async def test_delayed_firmware_read_cannot_overwrite_a_newer_observation(
 
 @pytest.mark.asyncio
 async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
-    scripted_router: tuple[aiopnsense.OPNsenseClient, ScriptedRouter],
+    firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A delayed successful probe must order its later payload request correctly.
 
     Args:
-        scripted_router (tuple[aiopnsense.OPNsenseClient, ScriptedRouter]): Client and Router.
+        firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
         monkeypatch (pytest.MonkeyPatch): Enables the fixture's real queue worker.
     """
-    client, router = scripted_router
+    client, router = firmware_router
     monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
     router.firmware = "25.1"
     router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}
@@ -180,7 +180,7 @@ async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
     [("probe", "check"), ("payload", "check"), ("payload", "empty-status")],
 )
 async def test_validation_reads_firmware_across_an_empty_cache_observation(
-    scripted_router: tuple[aiopnsense.OPNsenseClient, ScriptedRouter],
+    firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
     monkeypatch: pytest.MonkeyPatch,
     delayed_stage: str,
     interruption: str,
@@ -188,12 +188,12 @@ async def test_validation_reads_firmware_across_an_empty_cache_observation(
     """Keep validation working when a concurrent lookup leaves the cache empty.
 
     Args:
-        scripted_router (tuple[aiopnsense.OPNsenseClient, ScriptedRouter]): Client and Router.
+        firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
         monkeypatch (pytest.MonkeyPatch): Replaces the selected firmware transport stage.
         delayed_stage (str): Whether to pause the availability probe or the version read.
         interruption (str): Whether a check or an empty status response wins the race.
     """
-    client, router = scripted_router
+    client, router = firmware_router
     router.firmware = "26.7.8"
     router.endpoints[firmware_module.FIRMWARE_RUNNING_ENDPOINT] = {"status": "ready"}
     lookup_started = asyncio.Event()
@@ -281,16 +281,16 @@ async def test_delayed_firmware_read_cannot_overwrite_verified_install(
 
 @pytest.mark.asyncio
 async def test_firmware_status_probe_retries_cached_forbidden_endpoint(
-    scripted_router: tuple[aiopnsense.OPNsenseClient, ScriptedRouter],
+    firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A firmware probe denied once must be retried on the next capability lookup.
 
     Args:
-        scripted_router (tuple[aiopnsense.OPNsenseClient, ScriptedRouter]): Client and Router.
+        firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
         monkeypatch (pytest.MonkeyPatch): Enables the fixture's real queue worker.
     """
-    client, router = scripted_router
+    client, router = firmware_router
     monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
     router.firmware = "25.1"
     router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}

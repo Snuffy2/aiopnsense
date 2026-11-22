@@ -17,7 +17,7 @@ from aiopnsense import (
     OPNsenseInvalidURL,
     OPNsenseTimeoutError,
 )
-from tests.conftest import RouterReply, ScriptedRouter, make_mock_session_client
+from tests.conftest import FirmwareRouter, RouterReply, ScriptedRouter, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -877,20 +877,20 @@ UNKNOWN_FIRMWARE = [
 
 @pytest.fixture
 def unbound_router(
-    scripted_router: tuple[OPNsenseClient, ScriptedRouter],
+    firmware_router: tuple[OPNsenseClient, FirmwareRouter],
     legacy_dnsbl_payload: dict[str, Any],
-) -> tuple[OPNsenseClient, ScriptedRouter]:
+) -> tuple[OPNsenseClient, FirmwareRouter]:
     """Return a scripted Router serving both the legacy and the extended Unbound blocklist.
 
     Args:
-        scripted_router (tuple[OPNsenseClient, ScriptedRouter]): Client and the Router that
+        firmware_router (tuple[OPNsenseClient, FirmwareRouter]): Client and the Router that
             scripts it.
         legacy_dnsbl_payload (dict[str, Any]): Shared legacy DNSBL payload fixture.
 
     Returns:
-        tuple[OPNsenseClient, ScriptedRouter]: Client and Router with both blocklist APIs.
+        tuple[OPNsenseClient, FirmwareRouter]: Client and Router with both blocklist APIs.
     """
-    client, router = scripted_router
+    client, router = firmware_router
     router.endpoints.update(
         {
             UNBOUND_GET_PATH: deepcopy(legacy_dnsbl_payload),
@@ -908,7 +908,10 @@ def unbound_router(
 @pytest.mark.parametrize(
     ("firmware", "expect_legacy"),
     [
-        *[pytest.param(firmware, True, id=f"legacy-{firmware}") for firmware in LEGACY_FIRMWARE_VERSIONS],
+        *[
+            pytest.param(firmware, True, id=f"legacy-{firmware}")
+            for firmware in LEGACY_FIRMWARE_VERSIONS
+        ],
         *[
             pytest.param(firmware, False, id=f"extended-{firmware}")
             for firmware in EXTENDED_FIRMWARE_VERSIONS
@@ -920,14 +923,14 @@ def unbound_router(
     ],
 )
 async def test_get_unbound_blocklist_uses_method_for_firmware(
-    unbound_router: tuple[OPNsenseClient, ScriptedRouter],
+    unbound_router: tuple[OPNsenseClient, FirmwareRouter],
     firmware: str | None,
     expect_legacy: bool,
 ) -> None:
     """Verify reads use the extended blocklist from 25.7.8 and the legacy one otherwise.
 
     Args:
-        unbound_router (tuple[OPNsenseClient, ScriptedRouter]): Client and Router with both APIs.
+        unbound_router (tuple[OPNsenseClient, FirmwareRouter]): Client and Router with both APIs.
         firmware (str | None): Firmware version reported by the Router.
         expect_legacy (bool): Whether the legacy blocklist is expected.
     """
@@ -963,7 +966,7 @@ async def test_get_unbound_blocklist_uses_method_for_firmware(
     ],
 )
 async def test_unbound_blocklist_write_uses_method_for_firmware(
-    unbound_router: tuple[OPNsenseClient, ScriptedRouter],
+    unbound_router: tuple[OPNsenseClient, FirmwareRouter],
     method_name: str,
     firmware: str | None,
     uuid: str | None,
@@ -977,7 +980,7 @@ async def test_unbound_blocklist_write_uses_method_for_firmware(
     an entry UUID is supplied, and the legacy one otherwise.
 
     Args:
-        unbound_router (tuple[OPNsenseClient, ScriptedRouter]): Client and Router with both APIs.
+        unbound_router (tuple[OPNsenseClient, FirmwareRouter]): Client and Router with both APIs.
         method_name (str): Public enable or disable method under test.
         firmware (str | None): Firmware version reported by the Router.
         uuid (str | None): Entry UUID passed to the method.
@@ -1004,7 +1007,7 @@ async def test_unbound_blocklist_write_uses_method_for_firmware(
     ],
 )
 async def test_unbound_unknown_firmware_is_logged_once_by_the_capability_rule(
-    unbound_router: tuple[OPNsenseClient, ScriptedRouter],
+    unbound_router: tuple[OPNsenseClient, FirmwareRouter],
     caplog: pytest.LogCaptureFixture,
     firmware: str | None,
     expected_level: int,
@@ -1013,7 +1016,7 @@ async def test_unbound_unknown_firmware_is_logged_once_by_the_capability_rule(
     """Verify unknown firmware is reported once, at the level the capability rule sets.
 
     Args:
-        unbound_router (tuple[OPNsenseClient, ScriptedRouter]): Client and Router with both APIs.
+        unbound_router (tuple[OPNsenseClient, FirmwareRouter]): Client and Router with both APIs.
         caplog (pytest.LogCaptureFixture): Log capture fixture.
         firmware (str | None): Unknown firmware value reported by the Router.
         expected_level (int): Level the unknown-firmware message must use.

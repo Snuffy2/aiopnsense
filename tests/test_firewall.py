@@ -479,16 +479,16 @@ DNAT_ROWS = {"rows": [{"uuid": "dnat-1", "descr": "Web", "category": "c1", "%cat
     ],
 )
 async def test_get_firewall_source_nat_filters_automatic_rows_by_firmware(
-    scripted_router: tuple[OPNsenseClient, Any], firmware: str | None, automatic_rows_hidden: bool
+    firmware_router: tuple[OPNsenseClient, Any], firmware: str | None, automatic_rows_hidden: bool
 ) -> None:
     """Source NAT hides generated rows only on known firmware that generates them.
 
     Args:
-        scripted_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
+        firmware_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
         firmware (str | None): Firmware version reported by the Router.
         automatic_rows_hidden (bool): Whether generated rows are expected to be hidden.
     """
-    client, router = scripted_router
+    client, router = firmware_router
     router.firmware = firmware
     router.endpoints[SOURCE_NAT_PATH] = SOURCE_NAT_ROWS
 
@@ -511,16 +511,16 @@ async def test_get_firewall_source_nat_filters_automatic_rows_by_firmware(
     ],
 )
 async def test_get_firewall_dnat_mirrors_categories_by_firmware(
-    scripted_router: tuple[OPNsenseClient, Any], firmware: str | None, categories_mirrored: bool
+    firmware_router: tuple[OPNsenseClient, Any], firmware: str | None, categories_mirrored: bool
 ) -> None:
     """Destination NAT mirrors category keys only on known unified-NAT firmware.
 
     Args:
-        scripted_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
+        firmware_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
         firmware (str | None): Firmware version reported by the Router.
         categories_mirrored (bool): Whether plural category keys are expected.
     """
-    client, router = scripted_router
+    client, router = firmware_router
     router.firmware = firmware
     router.endpoints[DNAT_PATH] = DNAT_ROWS
 
@@ -532,15 +532,15 @@ async def test_get_firewall_dnat_mirrors_categories_by_firmware(
 
 @pytest.mark.asyncio
 async def test_unknown_firmware_for_nat_is_logged_once_per_condition(
-    scripted_router: tuple[OPNsenseClient, Any], caplog: pytest.LogCaptureFixture
+    firmware_router: tuple[OPNsenseClient, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
     """An uncomparable firmware version is logged once at error level, not per query.
 
     Args:
-        scripted_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
+        firmware_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
         caplog (pytest.LogCaptureFixture): Log capture fixture.
     """
-    client, router = scripted_router
+    client, router = firmware_router
     router.firmware = "not-a-version"
     router.endpoints[SOURCE_NAT_PATH] = SOURCE_NAT_ROWS
     router.endpoints[DNAT_PATH] = DNAT_ROWS
