@@ -142,8 +142,8 @@ def _dnsmasq_row(**overrides: object) -> dict[str, Any]:
     } | overrides
 
 
-def _dnsmasq_lease(**overrides: object) -> dict[str, Any]:
-    """Build the lease expected for the default dnsmasq row, with overrides applied.
+def _expected_lease(**overrides: object) -> dict[str, Any]:
+    """Build the expected normalized lease defaults shared by Kea and dnsmasq, with overrides applied.
 
     Args:
         **overrides (object): Lease fields to set on top of the defaults.
@@ -171,52 +171,52 @@ OVERFLOW_EPOCH = 10**40
     ("row", "expected"),
     [
         pytest.param(
-            _dnsmasq_row(hostname="host."), _dnsmasq_lease(hostname="host."), id="dots-kept"
+            _dnsmasq_row(hostname="host."), _expected_lease(hostname="host."), id="dots-kept"
         ),
         pytest.param(
-            _dnsmasq_row(hostname="*"), _dnsmasq_lease(), id="star-hostname-is-placeholder"
+            _dnsmasq_row(hostname="*"), _expected_lease(), id="star-hostname-is-placeholder"
         ),
-        pytest.param(_dnsmasq_row(hostname=""), _dnsmasq_lease(), id="empty-hostname"),
+        pytest.param(_dnsmasq_row(hostname=""), _expected_lease(), id="empty-hostname"),
         pytest.param(
             _dnsmasq_row(if_name="", **{"if": "em0"}),
-            _dnsmasq_lease(if_name="em0"),
+            _expected_lease(if_name="em0"),
             id="empty-if-name-falls-back-to-if",
         ),
         pytest.param(
-            _dnsmasq_row(if_name="lan", **{"if": "em0"}), _dnsmasq_lease(), id="if-name-wins"
+            _dnsmasq_row(if_name="lan", **{"if": "em0"}), _expected_lease(), id="if-name-wins"
         ),
-        pytest.param(_dnsmasq_row(hwaddr=""), _dnsmasq_lease(mac=None), id="empty-mac"),
+        pytest.param(_dnsmasq_row(hwaddr=""), _expected_lease(mac=None), id="empty-mac"),
         pytest.param(
             _dnsmasq_row(is_reserved="1", client_id="01:aa"),
-            _dnsmasq_lease(type="static", client_id="01:aa"),
+            _expected_lease(type="static", client_id="01:aa"),
             id="reserved-flag-and-client-id",
         ),
         pytest.param(
             _dnsmasq_row(is_reserved=["host1"]),
-            _dnsmasq_lease(type="static", reserved_by=["host1"]),
+            _expected_lease(type="static", reserved_by=["host1"]),
             id="reserved-list",
         ),
-        pytest.param(_dnsmasq_row(is_reserved=[]), _dnsmasq_lease(), id="empty-reserved-list"),
+        pytest.param(_dnsmasq_row(is_reserved=[]), _expected_lease(), id="empty-reserved-list"),
         pytest.param(
-            _dnsmasq_row(is_reserved=1), _dnsmasq_lease(type="static"), id="reserved-integer"
+            _dnsmasq_row(is_reserved=1), _expected_lease(type="static"), id="reserved-integer"
         ),
-        pytest.param(_dnsmasq_row(is_reserved=0), _dnsmasq_lease(), id="unreserved-integer"),
-        pytest.param(_dnsmasq_row(is_reserved=None), _dnsmasq_lease(), id="missing-reserved-flag"),
+        pytest.param(_dnsmasq_row(is_reserved=0), _expected_lease(), id="unreserved-integer"),
+        pytest.param(_dnsmasq_row(is_reserved=None), _expected_lease(), id="missing-reserved-flag"),
         pytest.param(
             _dnsmasq_row(expire=int(FUTURE.timestamp())),
-            _dnsmasq_lease(expires=FUTURE),
+            _expected_lease(expires=FUTURE),
             id="future-epoch",
         ),
         pytest.param(_dnsmasq_row(expire=int(PAST.timestamp())), None, id="past-epoch"),
         pytest.param(
             _dnsmasq_row(expire=OVERFLOW_EPOCH),
-            _dnsmasq_lease(expires=OVERFLOW_EPOCH),
+            _expected_lease(expires=OVERFLOW_EPOCH),
             id="overflowing-epoch-keeps-raw-value",
         ),
         pytest.param(
-            _dnsmasq_row(expire="never"), _dnsmasq_lease(expires="never"), id="non-integer-expire"
+            _dnsmasq_row(expire="never"), _expected_lease(expires="never"), id="non-integer-expire"
         ),
-        pytest.param(_dnsmasq_row(expire=0), _dnsmasq_lease(expires=0), id="zero-expire"),
+        pytest.param(_dnsmasq_row(expire=0), _expected_lease(expires=0), id="zero-expire"),
     ],
 )
 def test_normalize_dnsmasq_leases(row: dict[str, Any], expected: dict[str, Any] | None) -> None:
@@ -256,8 +256,8 @@ def _kea_row(**overrides: object) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("row", "require_hardware_address", "reservations", "expected"),
     [
-        pytest.param(_kea_row(), True, None, _dnsmasq_lease(), id="active-string-state"),
-        pytest.param(_kea_row(state=0), True, None, _dnsmasq_lease(), id="active-integer-state"),
+        pytest.param(_kea_row(), True, None, _expected_lease(), id="active-string-state"),
+        pytest.param(_kea_row(state=0), True, None, _expected_lease(), id="active-integer-state"),
         pytest.param(_kea_row(state="1"), True, None, None, id="non-active-state"),
         pytest.param(_kea_row(state=None), True, None, None, id="missing-state"),
         pytest.param(_kea_row(hwaddr=""), True, None, None, id="v4-requires-mac"),
@@ -265,83 +265,83 @@ def _kea_row(**overrides: object) -> dict[str, Any]:
             _kea_row(hwaddr=None, duid="00:01"),
             False,
             None,
-            _dnsmasq_lease(mac=None, duid="00:01"),
+            _expected_lease(mac=None, duid="00:01"),
             id="v6-allows-missing-mac-and-copies-duid",
         ),
         pytest.param(
             _kea_row(hostname="."),
             True,
             None,
-            _dnsmasq_lease(hostname=""),
+            _expected_lease(hostname=""),
             id="dot-only-hostname-becomes-empty-string",
         ),
         pytest.param(
             _kea_row(hostname="host.example."),
             True,
             None,
-            _dnsmasq_lease(hostname="host.example"),
+            _expected_lease(hostname="host.example"),
             id="surrounding-dots-stripped",
         ),
         pytest.param(
             _kea_row(hostname="*"),
             True,
             None,
-            _dnsmasq_lease(hostname="*"),
+            _expected_lease(hostname="*"),
             id="star-hostname-kept",
         ),
         pytest.param(
             _kea_row(is_reserved="1", client_id="01:aa"),
             True,
             None,
-            _dnsmasq_lease(type="static", client_id="01:aa"),
+            _expected_lease(type="static", client_id="01:aa"),
             id="authoritative-reserved-flag",
         ),
         pytest.param(
             _kea_row(is_reserved=["res-1"]),
             True,
             None,
-            _dnsmasq_lease(type="static", reserved_by=["res-1"]),
+            _expected_lease(type="static", reserved_by=["res-1"]),
             id="authoritative-reserved-list",
         ),
         pytest.param(
-            _kea_row(is_reserved=[]), True, None, _dnsmasq_lease(), id="authoritative-empty-list"
+            _kea_row(is_reserved=[]), True, None, _expected_lease(), id="authoritative-empty-list"
         ),
         pytest.param(
             _kea_row(is_reserved=None),
             True,
             None,
-            _dnsmasq_lease(type="unknown"),
+            _expected_lease(type="unknown"),
             id="no-metadata-no-reservation-data-is-unknown",
         ),
         pytest.param(
             _kea_row(is_reserved=None),
             True,
             RESERVATIONS,
-            _dnsmasq_lease(type="static"),
+            _expected_lease(type="static"),
             id="reservation-matches-mac-and-address",
         ),
         pytest.param(
             _kea_row(is_reserved=None, address="192.0.2.9"),
             True,
             RESERVATIONS,
-            _dnsmasq_lease(address="192.0.2.9", type="dynamic"),
+            _expected_lease(address="192.0.2.9", type="dynamic"),
             id="reservation-for-another-address",
         ),
         pytest.param(
-            _kea_row(is_reserved=None), True, {}, _dnsmasq_lease(), id="empty-reservation-data"
+            _kea_row(is_reserved=None), True, {}, _expected_lease(), id="empty-reservation-data"
         ),
         pytest.param(
             _kea_row(is_reserved="bogus"),
             True,
             RESERVATIONS,
-            _dnsmasq_lease(type="static"),
+            _expected_lease(type="static"),
             id="unsupported-metadata-falls-back-to-reservations",
         ),
         pytest.param(
             _kea_row(expire=int(FUTURE.timestamp())),
             True,
             None,
-            _dnsmasq_lease(expires=FUTURE),
+            _expected_lease(expires=FUTURE),
             id="future-epoch",
         ),
         pytest.param(_kea_row(expire=int(PAST.timestamp())), True, None, None, id="past-epoch"),
@@ -349,7 +349,7 @@ def _kea_row(**overrides: object) -> dict[str, Any]:
             _kea_row(expire=OVERFLOW_EPOCH),
             True,
             None,
-            _dnsmasq_lease(expires=OVERFLOW_EPOCH),
+            _expected_lease(expires=OVERFLOW_EPOCH),
             id="overflowing-epoch-keeps-raw-value",
         ),
     ],
