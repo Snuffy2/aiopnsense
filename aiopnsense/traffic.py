@@ -186,17 +186,19 @@ class TrafficMixin(AiopnsenseClientProtocol):
         empty_sample: dict[str, Any] = {"time": None, "interfaces": {}}
 
         async def fetch_sample() -> dict[str, Any]:
-            """Probe the endpoint and return its normalized traffic sample.
+            """Fetch the endpoint and return its normalized traffic sample.
 
             Returns:
                 dict[str, Any]: Normalized sample, or the empty sample when the
                     endpoint is unavailable.
             """
-            if not await self._is_get_endpoint_available(DIAGNOSTICS_TRAFFIC_ENDPOINT):
+            outcome = await self._fetch_endpoint_outcome(DIAGNOSTICS_TRAFFIC_ENDPOINT)
+            if not outcome.is_data:
                 _LOGGER.debug("Diagnostics traffic endpoint unavailable")
                 return empty_sample
-            payload = await self._safe_dict_get(DIAGNOSTICS_TRAFFIC_ENDPOINT)
-            return normalize_traffic_payload(payload, interval=1.0, include_per_second_rates=False)
+            return normalize_traffic_payload(
+                outcome.mapping(), interval=1.0, include_per_second_rates=False
+            )
 
         return await _attempt(
             self,

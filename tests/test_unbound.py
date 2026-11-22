@@ -15,11 +15,32 @@ from aiopnsense import (
     OPNsenseConnectionError,
     OPNsenseError,
     OPNsenseInvalidURL,
+    OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
-from tests.conftest import RouterReply, ScriptedRouter, make_mock_session_client
+from tests.conftest import RouterReply, ScriptedRouter, install_fake_router, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
+DNSBL_PATH = "/api/unbound/settings/search_dnsbl"
+
+
+async def _blocklist_for(make_client: ClientType, payload: Any) -> tuple[dict[str, Any], int]:
+    """Return the Unbound blocklist and DNSBL request count for a Router answering ``payload``.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        payload (Any): Response the Router gives for the DNSBL search endpoint.
+
+    Returns:
+        tuple[dict[str, Any], int]: Public result and number of DNSBL requests the Router saw.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", DNSBL_PATH): payload})
+    client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
+    try:
+        return await client.get_unbound_blocklist(), router.count("GET", DNSBL_PATH)
+    finally:
+        await client.async_close()
 
 
 @pytest.mark.asyncio
@@ -51,33 +72,23 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client: ClientTyp
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"uuid": "dnsbl1", "enabled": "1"},
-                    {"uuid": "dnsbl2", "enabled": "0"},
-                    {"no_uuid": "skip-me"},
-                    "bad-row",
-                ]
-            }
-        )
+    result, requests = await _blocklist_for(
+        make_client,
+        {
+            "rows": [
+                {"uuid": "dnsbl1", "enabled": "1"},
+                {"uuid": "dnsbl2", "enabled": "0"},
+                {"no_uuid": "skip-me"},
+                "bad-row",
+            ]
+        },
+    )
 
-        result = await client.get_unbound_blocklist()
-
-        assert result == {
-            "dnsbl1": {"uuid": "dnsbl1", "enabled": "1"},
-            "dnsbl2": {"uuid": "dnsbl2", "enabled": "0"},
-        }
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/unbound/settings/search_dnsbl"
-        )
-        client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/search_dnsbl")
-    finally:
-        await client.async_close()
+    assert result == {
+        "dnsbl1": {"uuid": "dnsbl1", "enabled": "1"},
+        "dnsbl2": {"uuid": "dnsbl2", "enabled": "0"},
+    }
+    assert requests == 1
 
 
 @pytest.mark.asyncio
@@ -91,44 +102,81 @@ async def test_get_unbound_blocklist_handles_empty_or_invalid_responses(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         api_response (object): Opaque malformed or empty API response.
     """
-    client = make_client()
+    result, _requests = await _blocklist_for(make_client, api_response)
+
+    assert result == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route_value",
+    [
+        pytest.param(404, id="missing-endpoint"),
+        pytest.param(403, id="permission-denied"),
+        pytest.param(500, id="server-error"),
+        pytest.param(TimeoutError("timed out"), id="timeout"),
+    ],
+)
+async def test_get_unbound_blocklist_returns_empty_when_endpoint_unavailable(
+    make_client: ClientType, route_value: Any
+) -> None:
+    """Absent or failing DNSBL endpoints fail closed to an empty mapping with one request.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        route_value (Any): Response the Router gives for the DNSBL endpoint.
+    """
+    result, requests = await _blocklist_for(make_client, route_value)
+
+    assert result == {}
+    assert requests == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route_value, expected_error",
+    [
+        pytest.param(403, OPNsensePrivilegeMissing, id="permission-denied"),
+        pytest.param(500, OPNsenseConnectionError, id="server-error"),
+        pytest.param(TimeoutError("timed out"), OPNsenseConnectionError, id="timeout"),
+    ],
+)
+async def test_get_unbound_blocklist_raises_in_throw_mode(
+    make_client: ClientType, route_value: Any, expected_error: type[Exception]
+) -> None:
+    """The DNSBL read raises a public error for permission and transient failures in throw mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        route_value (Any): Response the Router gives for the DNSBL endpoint.
+        expected_error (type[Exception]): Public exception type expected from the call.
+    """
+    client, session = make_mock_session_client(make_client)
+    install_fake_router(client, session, routes={("GET", DNSBL_PATH): route_value})
+    client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
+    client._throw_errors = True
     try:
-        client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value=api_response)
-
-        result = await client.get_unbound_blocklist()
-
-        assert result == {}
+        with pytest.raises(expected_error):
+            await client.get_unbound_blocklist()
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_get_unbound_blocklist_returns_empty_when_endpoint_unavailable(
+async def test_get_unbound_blocklist_missing_endpoint_does_not_raise_in_throw_mode(
     make_client: ClientType,
 ) -> None:
-    """When DNSBL endpoint is unavailable, blocklist retrieval should fail closed.
+    """A missing DNSBL endpoint (404) is an empty result, not an error, in throw mode.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates fail-closed DNSBL lookup behavior.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, session = make_mock_session_client(make_client)
+    install_fake_router(client, session, routes={("GET", DNSBL_PATH): 404})
+    client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
+    client._throw_errors = True
     try:
-        client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
-
-        result = await client.get_unbound_blocklist()
-
-        assert result == {}
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/unbound/settings/search_dnsbl"
-        )
-        client._safe_dict_get.assert_not_awaited()
+        assert await client.get_unbound_blocklist() == {}
     finally:
         await client.async_close()
 
@@ -151,7 +199,6 @@ async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
-        client._is_get_endpoint_available = AsyncMock()
         client._safe_dict_get = AsyncMock(
             return_value={
                 "unbound": {
@@ -199,7 +246,6 @@ async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
                 "wildcards": "wild-a",
             }
         }
-        client._is_get_endpoint_available.assert_not_awaited()
         client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/get")
     finally:
         await client.async_close()
@@ -314,7 +360,6 @@ async def test_get_unbound_blocklist_falls_back_to_legacy_endpoint_on_invalid_fi
         payload = deepcopy(legacy_dnsbl_payload)
         payload["unbound"]["dnsbl"]["enabled"] = "1"
         payload["unbound"]["dnsbl"]["type"] = {"ads": {"selected": 1}}
-        client._is_get_endpoint_available = AsyncMock()
         client._safe_dict_get = AsyncMock(return_value=payload)
 
         result = await client.get_unbound_blocklist()
@@ -332,7 +377,6 @@ async def test_get_unbound_blocklist_falls_back_to_legacy_endpoint_on_invalid_fi
                 "wildcards": "",
             }
         }
-        client._is_get_endpoint_available.assert_not_awaited()
         client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/get")
     finally:
         await client.async_close()

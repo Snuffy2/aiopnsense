@@ -80,12 +80,13 @@ class FirmwareMixin(AiopnsenseClientProtocol):
 
     async def _store_host_firmware_version(self) -> None:
         """Cache the installed OPNsense firmware version or product series."""
-        if not await self._is_get_endpoint_available(FIRMWARE_STATUS_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(FIRMWARE_STATUS_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Firmware status endpoint unavailable")
             self._firmware_version = None
             return
 
-        firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
+        firmware_info = outcome.mapping()
         firmware: str | None = dict_get(firmware_info, "product.product_version")
         comparable_firmware = trim_firmware_suffix(firmware)
         if not comparable_firmware or firmware_is_at_least(comparable_firmware, "0") is None:
@@ -130,11 +131,12 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 update metadata when available. Returns an empty mapping when
                 the firmware status endpoint is unavailable.
         """
-        if not await self._is_get_endpoint_available(FIRMWARE_STATUS_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(FIRMWARE_STATUS_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Firmware status endpoint unavailable")
             return {}
 
-        status = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
+        status = outcome.mapping()
 
         # if error or too old trigger check (only if check is not already in progress)
         # {'status_msg': 'Firmware status check was aborted internally. Please try again.', 'status': 'error'}
@@ -205,7 +207,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         return status
 
     async def _firmware_request(self, path: str, *, post: bool = False) -> MutableMapping[str, Any]:
-        """Read firmware state or dispatch once without cached endpoint probes.
+        """Read firmware state or dispatch once without an endpoint availability check.
 
         Args:
             path (str): Firmware API endpoint.
@@ -487,10 +489,11 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any]: Upgrade status payload, or an empty
                 mapping when the upgrade-status endpoint is unavailable.
         """
-        if not await self._is_get_endpoint_available(FIRMWARE_UPGRADE_STATUS_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(FIRMWARE_UPGRADE_STATUS_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Firmware upgrade status endpoint unavailable")
             return {}
-        return await self._safe_dict_get(FIRMWARE_UPGRADE_STATUS_ENDPOINT)
+        return outcome.mapping()
 
     @_log_errors
     async def firmware_changelog(self, version: str) -> MutableMapping[str, Any]:

@@ -48,6 +48,7 @@ class ClientEndpointMixin:
             caller: str = "Unknown",
             *,
             read_body: bool = True,
+            response_format: Literal["json", "text"] = "json",
         ) -> EndpointOutcome:
             """Execute an immediate GET request and classify the response.
 
@@ -55,6 +56,8 @@ class ClientEndpointMixin:
                 path (str): API endpoint path to request.
                 caller (str): Calling method name used for diagnostics.
                 read_body (bool): Whether to decode a successful response body.
+                response_format (Literal["json", "text"], optional): Decoding mode for
+                    a successful response body.
 
             Returns:
                 EndpointOutcome: Classified transport response.
@@ -240,18 +243,24 @@ class ClientEndpointMixin:
         self._endpoint_availability.pop(cache_key, None)
         self._endpoint_checked_at.pop(cache_key, None)
 
-    async def _fetch_endpoint_outcome(self, path: str) -> EndpointOutcome:
+    async def _fetch_endpoint_outcome(
+        self,
+        path: str,
+        response_format: Literal["json", "text"] = "json",
+    ) -> EndpointOutcome:
         """Fetch a GET endpoint once and report whether it returned data, is absent or failed.
 
         Args:
             path (str): API endpoint path to request. A query string is sent but
                 excluded from the availability cache key.
+            response_format (Literal["json", "text"], optional): ``"text"`` returns the
+                body text in the ``DATA`` outcome; ``"json"`` returns the decoded body.
 
         Returns:
             EndpointOutcome: The outcome described by ``_fetch_gated_outcome``. A 403 or a
                 transient failure raises instead when ``self._throw_errors`` is ``True``.
         """
-        return await self._fetch_gated_outcome("get", path)
+        return await self._fetch_gated_outcome("get", path, response_format=response_format)
 
     async def _fetch_post_endpoint_outcome(
         self,
@@ -307,6 +316,7 @@ class ClientEndpointMixin:
         path: str,
         payload: MutableMapping[str, Any] | None = None,
         *,
+        response_format: Literal["json", "text"] = "json",
         status_only: bool = False,
         force_refresh: bool = False,
     ) -> EndpointOutcome:
@@ -322,13 +332,15 @@ class ClientEndpointMixin:
             path (str): API endpoint path to request. A query string is sent but
                 excluded from the availability cache key.
             payload (MutableMapping[str, Any] | None): Request body, sent with POST requests.
+            response_format (Literal["json", "text"]): ``"text"`` returns the body text of
+                a GET in the ``DATA`` outcome; ``"json"`` returns the decoded body.
             status_only (bool): Whether to check availability without reading the
                 payload (GET only). Status checks bypass the request queue, as the
                 availability probe always has; data fetches go through the queue.
             force_refresh (bool): Whether to ignore a cached absent answer for this call.
 
         Returns:
-            EndpointOutcome: ``DATA`` with the decoded payload, ``ABSENT`` when the
+            EndpointOutcome: ``DATA`` with the decoded payload or body text, ``ABSENT`` when the
                 Router reports the endpoint missing (404) or not permitted (403), or
                 ``TRANSIENT`` for any other failure. A 403 or a transient failure
                 raises the mapped ``OPNsenseError`` instead when ``self._throw_errors``
@@ -368,7 +380,12 @@ class ClientEndpointMixin:
                 read_body=False,
             )
         else:
-            outcome = await self._queue_request(f"{method}_outcome", path, payload)
+            queue_method = (
+                "get_text_outcome"
+                if method == "get" and response_format == "text"
+                else f"{method}_outcome"
+            )
+            outcome = await self._queue_request(queue_method, path, payload)
 
         if outcome.is_data:
             _log_request_recovery(self, method, path, "request")

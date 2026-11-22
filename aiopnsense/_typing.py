@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, MutableMapping
 from datetime import tzinfo
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import aiohttp
 
@@ -80,7 +80,9 @@ class AiopnsenseClientProtocol(Protocol):
 
     async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str: ...
 
-    async def _fetch_endpoint_outcome(self, path: str) -> EndpointOutcome: ...
+    async def _fetch_endpoint_outcome(
+        self, path: str, response_format: Literal["json", "text"] = "json"
+    ) -> EndpointOutcome: ...
 
     async def _fetch_post_endpoint_outcome(
         self, path: str, payload: MutableMapping[str, Any] | None = None

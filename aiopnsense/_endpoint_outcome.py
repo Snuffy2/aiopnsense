@@ -24,8 +24,8 @@ class EndpointOutcome:
         status (EndpointStatus): ``DATA`` for a successful response, ``ABSENT``
             when the Router reports the endpoint missing (404) or not permitted
             (403), and ``TRANSIENT`` for any other failure.
-        payload (MutableMapping[str, Any] | list | None): Decoded response
-            body when ``status`` is ``DATA``.
+        payload (MutableMapping[str, Any] | list | str | None): Decoded response
+            body when ``status`` is ``DATA``: JSON, or the body text for a text read.
         http_status (int | None): HTTP status of a failed response, when known.
         error (OPNsenseError | None): Public exception describing a 403 or a
             transient failure, raised by the caller in throw mode.
@@ -33,17 +33,18 @@ class EndpointOutcome:
     """
 
     status: EndpointStatus
-    payload: MutableMapping[str, Any] | list | None = None
+    payload: MutableMapping[str, Any] | list | str | None = None
     http_status: int | None = None
     error: OPNsenseError | None = None
     detail: str = ""
 
     @classmethod
-    def data(cls, payload: MutableMapping[str, Any] | list | None) -> EndpointOutcome:
+    def data(cls, payload: MutableMapping[str, Any] | list | str | None) -> EndpointOutcome:
         """Build the outcome of a successful request.
 
         Args:
-            payload (MutableMapping[str, Any] | list | None): Decoded response body.
+            payload (MutableMapping[str, Any] | list | str | None): Decoded JSON body, or
+                the body text for a text read.
 
         Returns:
             EndpointOutcome: Outcome with the ``DATA`` status.
@@ -133,3 +134,11 @@ class EndpointOutcome:
             list: The list payload, otherwise an empty list.
         """
         return self.payload if isinstance(self.payload, list) else []
+
+    def text(self) -> str:
+        """Return the payload as body text.
+
+        Returns:
+            str: The text payload of a text read, otherwise an empty string.
+        """
+        return self.payload if isinstance(self.payload, str) else ""

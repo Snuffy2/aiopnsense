@@ -61,12 +61,16 @@ class ClientQueueMixin:
             self,
             path: str,
             caller: str = "Unknown",
+            *,
+            response_format: Literal["json", "text"] = "json",
         ) -> EndpointOutcome:
             """Execute an immediate GET request and classify the response.
 
             Args:
                 path (str): API endpoint path to request.
                 caller (str): Calling method name used for diagnostics.
+                response_format (Literal["json", "text"], optional): Decoding mode for
+                    a successful response body.
 
             Returns:
                 EndpointOutcome: Classified transport response.
@@ -342,6 +346,10 @@ class ClientQueueMixin:
                         future.set_result(result)
                 elif method == "get_outcome":
                     result = await self._do_get_outcome(path, caller)
+                    if future is not None and not future.done():
+                        future.set_result(result)
+                elif method == "get_text_outcome":
+                    result = await self._do_get_outcome(path, caller, response_format="text")
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "post":

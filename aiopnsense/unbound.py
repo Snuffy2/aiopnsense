@@ -149,11 +149,12 @@ class UnboundMixin(AiopnsenseClientProtocol):
             )
             return {"legacy": await self._get_unbound_blocklist_legacy()}
 
-        if not await self._is_get_endpoint_available(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT):
+        dnsbl_outcome = await self._fetch_endpoint_outcome(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT)
+        if not dnsbl_outcome.is_data:
             _LOGGER.debug("Unbound DNSBL endpoint unavailable")
             return {}
 
-        dnsbl_raw = await self._safe_dict_get(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT)
+        dnsbl_raw = dnsbl_outcome.mapping()
         if not isinstance(dnsbl_raw, MutableMapping):
             return {}
         dnsbl_rows = dnsbl_raw.get("rows", [])

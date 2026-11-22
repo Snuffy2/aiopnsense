@@ -10,13 +10,23 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseError, OPNsensePrivilegeMissing, OPNsenseTimeoutError
+from aiopnsense import (
+    OPNsenseConnectionError,
+    OPNsenseError,
+    OPNsensePrivilegeMissing,
+    OPNsenseTimeoutError,
+)
 from aiopnsense.traffic import (
     DIAGNOSTICS_TRAFFIC_ENDPOINT,
     DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX,
     normalize_traffic_payload,
 )
-from tests.conftest import FakeStreamResponseFactory, MakeClientFactory, install_fake_router
+from tests.conftest import (
+    FakeStreamResponseFactory,
+    MakeClientFactory,
+    install_fake_router,
+    make_mock_session_client,
+)
 
 
 def test_diagnostics_traffic_stream_endpoint_prefix() -> None:
@@ -143,19 +153,20 @@ def test_normalize_traffic_payload_skips_negative_byte_packet_rates() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_interface_traffic_probes_and_normalizes(
-    make_client: Callable[..., Any],
+async def test_get_interface_traffic_normalizes_snapshot_with_one_request(
+    make_client: MakeClientFactory,
 ) -> None:
-    """`OPNsenseClient.get_interface_traffic()` should probe, fetch, and normalize.
+    """`get_interface_traffic()` normalizes the Router snapshot using a single request.
 
     Args:
-        make_client (Callable[..., Any]): Client factory configured with probe and traffic responses.
+        make_client (MakeClientFactory): Client factory used to build the client under test.
     """
-    client = make_client()
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(
+        client,
+        session,
+        routes={
+            ("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): {
                 "time": 1710000001,
                 "interfaces": {
                     "wan": {
@@ -165,16 +176,17 @@ async def test_get_interface_traffic_probes_and_normalizes(
                     }
                 },
             }
-        )
-
+        },
+    )
+    try:
         traffic = await client.get_interface_traffic()
+
         assert traffic["time"] == 1710000001.0
         assert traffic["interfaces"]["wan"]["interface"] == "wan"
         assert traffic["interfaces"]["wan"]["name"] == "WAN"
         assert traffic["interfaces"]["wan"]["rx_bytes"] == 120
         assert "tx_bits_per_second" not in traffic["interfaces"]["wan"]
-        client._is_get_endpoint_available.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
-        client._safe_dict_get.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
+        assert router.count("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT) == 1
     finally:
         await client.async_close()
 
@@ -200,95 +212,87 @@ def test_normalize_traffic_payload_without_rates_for_snapshots() -> None:
     assert "interval" not in normalized["interfaces"]["wan"]
 
 
+@pytest.mark.parametrize(
+    "route_value",
+    [
+        pytest.param(404, id="missing-endpoint"),
+        pytest.param(403, id="permission-denied"),
+        pytest.param(500, id="server-error"),
+        pytest.param(TimeoutError("timed out"), id="timeout"),
+        pytest.param(aiohttp.ClientConnectionError("down"), id="connection-error"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_get_interface_traffic_handles_unavailable_endpoint(
-    make_client: Callable[..., Any],
+async def test_get_interface_traffic_returns_empty_sample_when_endpoint_unavailable(
+    make_client: MakeClientFactory,
+    route_value: Any,
 ) -> None:
-    """Unavailable traffic endpoint should return an empty sample and avoid GET calls.
+    """Absent or failing traffic endpoints give an empty sample in default mode.
 
     Args:
-        make_client (Callable[..., Any]): Client factory reporting the traffic endpoint unavailable.
+        make_client (MakeClientFactory): Client factory used to build the client under test.
+        route_value (Any): Response the Router gives for the traffic endpoint.
     """
-    client = make_client()
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(
+        client, session, routes={("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): route_value}
+    )
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
-
         traffic = await client.get_interface_traffic()
+
         assert traffic == {"time": None, "interfaces": {}}
-        client._is_get_endpoint_available.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
-        client._safe_dict_get.assert_not_awaited()
+        assert router.count("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT) == 1
     finally:
         await client.async_close()
 
 
 @pytest.mark.parametrize(
-    "probe_error",
+    "route_value, expected_error",
     [
-        pytest.param(TimeoutError("probe timeout"), id="timeout"),
-        pytest.param(OPNsenseError("probe failed"), id="opnsense-error"),
+        pytest.param(403, OPNsensePrivilegeMissing, id="permission-denied"),
+        pytest.param(500, OPNsenseConnectionError, id="server-error"),
+        pytest.param(TimeoutError("timed out"), OPNsenseTimeoutError, id="timeout"),
     ],
 )
 @pytest.mark.asyncio
-async def test_get_interface_traffic_returns_empty_sample_on_probe_error(
+async def test_get_interface_traffic_raises_in_throw_mode(
     make_client: MakeClientFactory,
-    probe_error: Exception,
+    route_value: Any,
+    expected_error: type[OPNsenseError],
 ) -> None:
-    """Probe errors should return an empty sample when throw_errors is disabled.
+    """Permission and transient failures raise a public error when throw_errors is enabled.
 
     Args:
-        make_client (MakeClientFactory): Client factory whose endpoint probe fails.
-        probe_error (Exception): Error raised by the endpoint probe.
+        make_client (MakeClientFactory): Client factory used to build the client under test.
+        route_value (Any): Response the Router gives for the traffic endpoint.
+        expected_error (type[OPNsenseError]): Public exception type expected from the call.
     """
-    client = make_client()
+    client, session = make_mock_session_client(make_client)
+    install_fake_router(
+        client, session, routes={("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): route_value}
+    )
+    client._throw_errors = True
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=probe_error)
-        client._safe_dict_get = AsyncMock()
-
-        traffic = await client.get_interface_traffic()
-        assert traffic == {"time": None, "interfaces": {}}
-        client._is_get_endpoint_available.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
-        client._safe_dict_get.assert_not_awaited()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_interface_traffic_raises_when_throw_errors_is_enabled(
-    make_client: Callable[..., Any],
-) -> None:
-    """Probe timeout should propagate when throw_errors is enabled.
-
-    Args:
-        make_client (Callable[..., Any]): Client factory configured to re-raise the probe timeout.
-    """
-    client = make_client(throw_errors=True)
-    try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
-
-        with pytest.raises(OPNsenseTimeoutError):
+        with pytest.raises(expected_error):
             await client.get_interface_traffic()
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_get_interface_traffic_raises_same_opnsense_error_when_throw_errors_is_enabled(
+async def test_get_interface_traffic_missing_endpoint_does_not_raise_in_throw_mode(
     make_client: MakeClientFactory,
 ) -> None:
-    """Mapped OPNsense errors from endpoint probing should be re-raised when throw_errors is enabled.
+    """A missing traffic endpoint (404) is an empty sample, not an error, even in throw mode.
 
     Args:
-        make_client (MakeClientFactory): Client factory configured to re-raise ``OPNsenseError``.
+        make_client (MakeClientFactory): Client factory used to build the client under test.
     """
-    client = make_client(throw_errors=True)
+    client, session = make_mock_session_client(make_client)
+    install_fake_router(client, session, routes={("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): 404})
+    client._throw_errors = True
     try:
-        probe_error = OPNsenseError("probe failed")
-        client._is_get_endpoint_available = AsyncMock(side_effect=probe_error)
-
-        with pytest.raises(OPNsenseError) as exc:
-            await client.get_interface_traffic()
-        assert exc.value is probe_error
+        assert await client.get_interface_traffic() == {"time": None, "interfaces": {}}
     finally:
         await client.async_close()
 

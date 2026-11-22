@@ -6,13 +6,64 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from aiopnsense import OPNsenseClient
+from aiopnsense import OPNsenseClient, OPNsenseConnectionError, OPNsensePrivilegeMissing
+from tests.conftest import FakeRouter, install_fake_router, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
-AliasRowType = dict[str, str]
-AliasSearchRowsType = list[AliasRowType]
-AliasPostResponseType = dict[str, str]
-AliasPostResultType = AliasPostResponseType | list[AliasPostResponseType] | None
+
+RULES_DOWNLOAD_PATH = "/api/firewall/filter/download_rules"
+ALIAS_SEARCH_PATH = "/api/firewall/alias/search_item"
+RULE_HELPER_PATHS = {
+    "_get_firewall_rules": RULES_DOWNLOAD_PATH,
+    "_get_nat_destination_rules": "/api/firewall/d_nat/search_rule",
+    "_get_nat_one_to_one_rules": "/api/firewall/one_to_one/search_rule",
+    "_get_nat_source_rules": "/api/firewall/source_nat/search_rule",
+    "_get_nat_npt_rules": "/api/firewall/npt/search_rule",
+}
+FAILURE_CASES = [
+    pytest.param(404, id="missing"),
+    pytest.param(403, id="permission-denied"),
+    pytest.param(500, id="server-error"),
+    pytest.param(TimeoutError("timed out"), id="timeout"),
+]
+THROW_CASES = [
+    pytest.param(403, OPNsensePrivilegeMissing, id="permission-denied"),
+    pytest.param(500, OPNsenseConnectionError, id="server-error"),
+    pytest.param(TimeoutError("timed out"), OPNsenseConnectionError, id="timeout"),
+]
+
+
+async def _read_rules(
+    make_client: ClientType,
+    method_name: str,
+    body: Any,
+    *,
+    firmware_version: str | None = None,
+    throw_errors: bool = False,
+) -> tuple[Any, FakeRouter]:
+    """Call a rule helper against a Router answering its endpoint with ``body``.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        method_name (str): Rule helper invoked on the client.
+        body (Any): Response the Router gives for the helper endpoint.
+        firmware_version (str | None): Firmware version returned by the firmware lookup.
+        throw_errors (bool): Whether the client raises public errors.
+
+    Returns:
+        tuple[Any, FakeRouter]: Helper result and the fake Router that served it.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(
+        client, session, routes={("GET", RULE_HELPER_PATHS[method_name]): body}
+    )
+    client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
+    if throw_errors:
+        client.toggle_throwing_errors(True)
+    try:
+        return await getattr(client, method_name)(), router
+    finally:
+        await client.async_close()
 
 
 @pytest.mark.asyncio
@@ -59,34 +110,24 @@ async def test_get_firewall_rules_skips_invalid_rows(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client = make_client()
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._get_text = AsyncMock(
-            return_value=(
-                "@uuid;enabled;description\n"
-                'rule-ok;1;"Allow; DNS"\n'
-                'rule-extra;1;"Has; extra";extra\n'
-                ";1;Missing UUID\n"
-                "lockout-1;1;Lockout\n"
-            )
-        )
+    result, router = await _read_rules(
+        make_client,
+        "_get_firewall_rules",
+        "@uuid;enabled;description\n"
+        'rule-ok;1;"Allow; DNS"\n'
+        'rule-extra;1;"Has; extra";extra\n'
+        ";1;Missing UUID\n"
+        "lockout-1;1;Lockout\n",
+    )
 
-        result = await client._get_firewall_rules()
-
-        assert result == {
-            "rule-ok": {
-                "uuid": "rule-ok",
-                "enabled": "1",
-                "description": "Allow; DNS",
-            },
-        }
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/firewall/filter/download_rules"
-        )
-        client._get_text.assert_awaited_once_with("/api/firewall/filter/download_rules")
-    finally:
-        await client.async_close()
+    assert result == {
+        "rule-ok": {
+            "uuid": "rule-ok",
+            "enabled": "1",
+            "description": "Allow; DNS",
+        },
+    }
+    assert router.count("GET", RULES_DOWNLOAD_PATH) == 1
 
 
 @pytest.mark.parametrize(
@@ -132,16 +173,9 @@ async def test_get_firewall_rules_supports_opnsense_csv_versions(
         response (str): Firewall CSV payload for the OPNsense version case.
         expected (dict[str, str]): Parsed rule mapping expected from the payload.
     """
-    client = make_client()
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._get_text = AsyncMock(return_value=response)
+    result, _router = await _read_rules(make_client, "_get_firewall_rules", response)
 
-        result = await client._get_firewall_rules()
-
-        assert result == {expected["uuid"]: expected}
-    finally:
-        await client.async_close()
+    assert result == {expected["uuid"]: expected}
 
 
 @pytest.mark.asyncio
@@ -153,33 +187,29 @@ async def test_get_nat_source_rules_labels_empty_interface_address_target(
     Args:
         make_client (ClientType): Fixture factory used to configure the source-NAT response.
     """
-    client = make_client()
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client.get_host_firmware_version = AsyncMock(return_value="26.7")
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "uuid": "src-interface-address",
-                        "description": "Interface address target",
-                        "enabled": "1",
-                        "interface": "wan",
-                        "%interface": "WAN",
-                        "target": "",
-                    }
-                ]
-            }
-        )
+    result, _router = await _read_rules(
+        make_client,
+        "_get_nat_source_rules",
+        {
+            "rows": [
+                {
+                    "uuid": "src-interface-address",
+                    "description": "Interface address target",
+                    "enabled": "1",
+                    "interface": "wan",
+                    "%interface": "WAN",
+                    "target": "",
+                }
+            ]
+        },
+        firmware_version="26.7",
+    )
 
-        result = await client._get_nat_source_rules()
-
-        assert result["src-interface-address"]["target"] == ""
-        assert result["src-interface-address"]["%target"] == "WAN address"
-    finally:
-        await client.async_close()
+    assert result["src-interface-address"]["target"] == ""
+    assert result["src-interface-address"]["%target"] == "WAN address"
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method_name", "api_endpoint", "rows", "expected", "firmware_version"),
     [
@@ -282,20 +312,12 @@ async def test_nat_rule_helpers_parse_rows(
         expected (dict[str, dict[str, str]]): Expected UUID-keyed rule mapping.
         firmware_version (str | None): Optional mocked firmware version.
     """
-    client = make_client()
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"rows": rows})
-        if firmware_version is not None:
-            client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
+    result, router = await _read_rules(
+        make_client, method_name, {"rows": rows}, firmware_version=firmware_version
+    )
 
-        result = await getattr(client, method_name)()
-
-        assert result == expected
-        client._is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
-        client._safe_dict_get.assert_awaited_once_with(api_endpoint)
-    finally:
-        await client.async_close()
+    assert result == expected
+    assert router.count("GET", api_endpoint) == 1
 
 
 @pytest.mark.asyncio
@@ -337,47 +359,69 @@ async def test_filters_automatic_source_nat_rules_handles_invalid_firmware_strin
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method_name", "api_endpoint", "expected"),
-    [
-        ("_get_firewall_rules", "/api/firewall/filter/download_rules", {}),
-        ("_get_nat_destination_rules", "/api/firewall/d_nat/search_rule", {}),
-        ("_get_nat_one_to_one_rules", "/api/firewall/one_to_one/search_rule", {}),
-        ("_get_nat_source_rules", "/api/firewall/source_nat/search_rule", {}),
-        ("_get_nat_npt_rules", "/api/firewall/npt/search_rule", {}),
-    ],
-)
+@pytest.mark.parametrize("method_name", list(RULE_HELPER_PATHS))
+@pytest.mark.parametrize("route_value", FAILURE_CASES)
 async def test_rule_helpers_return_empty_when_endpoint_unavailable(
-    make_client: ClientType,
-    method_name: str,
-    api_endpoint: str,
-    expected: dict[str, object],
+    make_client: ClientType, method_name: str, route_value: Any
 ) -> None:
-    """Rule helpers should short-circuit when the related endpoint is unavailable.
+    """Rule helpers return an empty mapping for absent or failing endpoints in default mode.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         method_name (str): Rule helper invoked for the unavailable endpoint.
-        api_endpoint (str): Endpoint that the helper must check before fetching.
-        expected (dict[str, object]): Expected empty rule mapping.
+        route_value (Any): Response the Router gives for the helper endpoint.
     """
-    client = make_client()
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
-        firmware_version_mock = AsyncMock(return_value="26.1.4")
-        if method_name == "_get_nat_destination_rules":
-            client.get_host_firmware_version = firmware_version_mock
+    result, router = await _read_rules(
+        make_client, method_name, route_value, firmware_version="26.1.4"
+    )
 
-        result = await getattr(client, method_name)()
+    assert result == {}
+    assert router.count("GET", RULE_HELPER_PATHS[method_name]) == 1
 
-        assert result == expected
-        client._is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
-        client._safe_dict_get.assert_not_awaited()
-        if method_name == "_get_nat_destination_rules":
-            firmware_version_mock.assert_awaited_once()
-    finally:
-        await client.async_close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", list(RULE_HELPER_PATHS))
+@pytest.mark.parametrize(("route_value", "expected_error"), THROW_CASES)
+async def test_rule_helpers_raise_in_throw_mode(
+    make_client: ClientType,
+    method_name: str,
+    route_value: Any,
+    expected_error: type[Exception],
+) -> None:
+    """Rule helpers raise a public error for permission and transient failures in throw mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        method_name (str): Rule helper invoked for the failing endpoint.
+        route_value (Any): Response the Router gives for the helper endpoint.
+        expected_error (type[Exception]): Public exception type expected from the call.
+    """
+    with pytest.raises(expected_error):
+        await _read_rules(
+            make_client,
+            method_name,
+            route_value,
+            firmware_version="26.1.4",
+            throw_errors=True,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", list(RULE_HELPER_PATHS))
+async def test_rule_helpers_missing_endpoint_does_not_raise_in_throw_mode(
+    make_client: ClientType, method_name: str
+) -> None:
+    """A missing rule endpoint (404) is an empty result, not an error, even in throw mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        method_name (str): Rule helper invoked for the missing endpoint.
+    """
+    result, _router = await _read_rules(
+        make_client, method_name, 404, firmware_version="26.1.4", throw_errors=True
+    )
+
+    assert result == {}
 
 
 @pytest.mark.asyncio
@@ -448,27 +492,24 @@ async def test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11(
         firmware_version (str): OPNsense version controlling automatic-row filtering.
         expected (dict[str, Any]): Rule mapping expected after version-specific filtering.
     """
-    client = make_client()
-    try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"uuid": "manual-src", "description": "Manual", "enabled": "1"},
-                    {
-                        "uuid": "auto-src",
-                        "description": "Automatic",
-                        "enabled": "1",
-                        "is_automatic": True,
-                    },
-                ]
-            }
-        )
+    result, _router = await _read_rules(
+        make_client,
+        "_get_nat_source_rules",
+        {
+            "rows": [
+                {"uuid": "manual-src", "description": "Manual", "enabled": "1"},
+                {
+                    "uuid": "auto-src",
+                    "description": "Automatic",
+                    "enabled": "1",
+                    "is_automatic": True,
+                },
+            ]
+        },
+        firmware_version=firmware_version,
+    )
 
-        assert await client._get_nat_source_rules() == expected
-    finally:
-        await client.async_close()
+    assert result == expected
 
 
 @pytest.mark.asyncio
@@ -491,3 +532,192 @@ async def test_kill_states_returns_normalized_result(make_client: ClientType) ->
         )
     finally:
         await client.async_close()
+
+
+async def _toggle_alias(
+    make_client: ClientType,
+    search_body: Any,
+    *,
+    post_payloads: list[Any] | None = None,
+    use_snake_case: bool = True,
+    throw_errors: bool = False,
+    toggle: str | None = "on",
+    alias: str = "alias1",
+) -> tuple[bool, FakeRouter, AsyncMock]:
+    """Run ``toggle_alias`` against a Router answering the alias search with ``search_body``.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        search_body (Any): Response the Router gives for the alias search endpoint.
+        post_payloads (list[Any] | None): Ordered toggle, save and apply responses.
+        use_snake_case (bool): Whether the client prefers snake_case endpoints.
+        throw_errors (bool): Whether the client raises public errors.
+        toggle (str | None): Target state passed to ``toggle_alias``.
+        alias (str): Alias name passed to ``toggle_alias``.
+
+    Returns:
+        tuple[bool, FakeRouter, AsyncMock]: Result, fake Router and the POST mock.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._use_snake_case = use_snake_case
+    search_path = ALIAS_SEARCH_PATH if use_snake_case else "/api/firewall/alias/searchItem"
+    router = install_fake_router(client, session, routes={("GET", search_path): search_body})
+    client._safe_dict_post = AsyncMock(side_effect=post_payloads or [])
+    if throw_errors:
+        client.toggle_throwing_errors(True)
+    try:
+        return await client.toggle_alias(alias, toggle), router, client._safe_dict_post
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_value", FAILURE_CASES)
+async def test_toggle_alias_returns_false_when_alias_lookup_unavailable(
+    make_client: ClientType, route_value: Any
+) -> None:
+    """`toggle_alias` returns False without posting when the alias lookup is absent or failing.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        route_value (Any): Response the Router gives for the alias search endpoint.
+    """
+    result, router, post = await _toggle_alias(make_client, route_value)
+
+    assert result is False
+    assert router.count("GET", ALIAS_SEARCH_PATH) == 1
+    post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("route_value", "expected_error"), THROW_CASES)
+async def test_toggle_alias_raises_in_throw_mode(
+    make_client: ClientType, route_value: Any, expected_error: type[Exception]
+) -> None:
+    """`toggle_alias` raises a public error for permission and transient lookup failures.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        route_value (Any): Response the Router gives for the alias search endpoint.
+        expected_error (type[Exception]): Public exception type expected from the call.
+    """
+    with pytest.raises(expected_error):
+        await _toggle_alias(make_client, route_value, throw_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_toggle_alias_missing_lookup_does_not_raise_in_throw_mode(
+    make_client: ClientType,
+) -> None:
+    """A missing alias endpoint (404) returns False even in throw mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    result, _router, post = await _toggle_alias(make_client, 404, throw_errors=True)
+
+    assert result is False
+    post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("search_body", "post_payloads", "expected", "post_count"),
+    [
+        pytest.param({"rows": []}, [], False, 0, id="alias-not-found"),
+        pytest.param({"rows": "bad"}, [], False, 0, id="rows-not-a-list"),
+        pytest.param(
+            {"rows": [{"name": "alias1", "uuid": "aid"}]},
+            [{"result": "failed"}],
+            False,
+            1,
+            id="toggle-failed",
+        ),
+        pytest.param(
+            {"rows": [{"name": "alias1", "uuid": "aid"}]},
+            [{"result": "ok"}, {"result": "not-saved"}],
+            False,
+            2,
+            id="save-failed",
+        ),
+        pytest.param(
+            {"rows": [{"name": "alias1", "uuid": "aid"}]},
+            [{"result": "ok"}, {"result": "saved"}, {"status": "failed"}],
+            False,
+            3,
+            id="apply-failed",
+        ),
+        pytest.param(
+            {"rows": [{"name": "alias1", "uuid": "aid"}]},
+            [{"result": "ok"}, {"result": "saved"}, {"status": "ok"}],
+            True,
+            3,
+            id="success",
+        ),
+    ],
+)
+async def test_toggle_alias_flows(
+    make_client: ClientType,
+    search_body: Any,
+    post_payloads: list[Any],
+    expected: bool,
+    post_count: int,
+) -> None:
+    """`toggle_alias` follows the lookup, toggle, save and apply flow with one lookup request.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        search_body (Any): Alias search response from the Router.
+        post_payloads (list[Any]): Ordered toggle, save and apply responses.
+        expected (bool): Expected final result.
+        post_count (int): Number of POST calls expected.
+    """
+    result, router, post = await _toggle_alias(
+        make_client, search_body, post_payloads=post_payloads, toggle="off"
+    )
+
+    assert result is expected
+    assert router.count("GET", ALIAS_SEARCH_PATH) == 1
+    assert post.await_count == post_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_snake_case", "expected_search", "expected_toggle"),
+    [
+        (
+            True,
+            "/api/firewall/alias/search_item",
+            "/api/firewall/alias/toggle_item/aid/1",
+        ),
+        (
+            False,
+            "/api/firewall/alias/searchItem",
+            "/api/firewall/alias/toggleItem/aid/1",
+        ),
+    ],
+)
+async def test_firewall_switched_endpoints_follow_selected_case(
+    make_client: ClientType,
+    use_snake_case: bool,
+    expected_search: str,
+    expected_toggle: str,
+) -> None:
+    """Verify alias helpers choose snake_case or camelCase endpoints consistently.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
+        expected_search (str): Expected alias-search endpoint path.
+        expected_toggle (str): Expected alias-toggle endpoint path.
+    """
+    result, router, post = await _toggle_alias(
+        make_client,
+        {"rows": [{"name": "alias1", "uuid": "aid"}]},
+        post_payloads=[{"result": "ok"}, {"result": "saved"}, {"status": "ok"}],
+        use_snake_case=use_snake_case,
+    )
+
+    assert result is True
+    assert router.count("GET", expected_search) == 1
+    assert post.await_args_list[0].args[0] == expected_toggle

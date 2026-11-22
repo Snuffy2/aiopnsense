@@ -6,23 +6,94 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import aiopnsense as aiopnsense_module
-from aiopnsense import OPNsenseClient
-from aiopnsense.exceptions import OPNsenseConnectionError
-from tests.conftest import make_mock_session_client
+from aiopnsense import (
+    OPNsenseClient,
+    OPNsenseConnectionError,
+    OPNsensePrivilegeMissing,
+    OPNsenseVoucherServerError,
+)
+from tests.conftest import FakeRouter, install_fake_router, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
+PROVIDERS_PATH = "/api/captiveportal/voucher/list_providers"
+PROVIDERS_CAMEL_PATH = "/api/captiveportal/voucher/listProviders"
+
+
+def _make_voucher_client(
+    make_client: ClientType,
+    providers: Any,
+    *,
+    path: str = PROVIDERS_PATH,
+    use_snake_case: bool = True,
+) -> tuple[OPNsenseClient, FakeRouter]:
+    """Build a client whose Router answers the provider listing with ``providers``.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        providers (Any): Response the Router gives for the provider listing endpoint.
+        path (str): Provider listing path the Router answers.
+        use_snake_case (bool): Whether the client prefers snake_case endpoints.
+
+    Returns:
+        tuple[OPNsenseClient, FakeRouter]: Client and the fake Router backing it.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", path): providers})
+    client._use_snake_case = use_snake_case
+    return client, router
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "safe_get_ret,safe_post_ret,data,expect_exc,expect_username,expect_extras",
+    "providers,data,expect_exc",
     [
-        ([], None, {}, aiopnsense_module.OPNsenseVoucherServerError, None, None),
-        (["s1", "s2"], None, {}, aiopnsense_module.OPNsenseVoucherServerError, None, None),
-        (
-            None,
-            [
+        pytest.param([], {}, OPNsenseVoucherServerError, id="no-providers"),
+        pytest.param(["s1", "s2"], {}, OPNsenseVoucherServerError, id="multiple-providers"),
+    ],
+)
+async def test_generate_vouchers_server_selection_errors(
+    make_client: ClientType,
+    providers: list[str],
+    data: dict[str, Any],
+    expect_exc: type[Exception],
+) -> None:
+    """Provider-selection failures raise and never reach the generation POST.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        providers (list[str]): Provider list the Router returns.
+        data (dict[str, Any]): Input arguments passed to ``generate_vouchers``.
+        expect_exc (type[Exception]): Expected exception type.
+
+    Returns:
+        None: This test validates provider-selection error paths via assertions.
+    """
+    client, _router = _make_voucher_client(make_client, providers)
+    try:
+        client._safe_list_post = AsyncMock()
+        with pytest.raises(expect_exc):
+            await client.generate_vouchers(data)
+        client._safe_list_post.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_generate_vouchers_with_explicit_server_normalizes_vouchers(
+    make_client: ClientType,
+) -> None:
+    """An explicit voucher server skips the provider lookup and normalizes the result.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test validates successful voucher generation output.
+    """
+    client, router = _make_voucher_client(make_client, ["unused"])
+    try:
+        client._safe_list_post = AsyncMock(
+            return_value=[
                 {
                     "username": "u",
                     "password": "p",
@@ -31,87 +102,100 @@ ClientType = Callable[..., OPNsenseClient]
                     "expirytime": 1700000000,
                     "validity": 65,
                 }
-            ],
-            {"voucher_server": "srv"},
-            None,
-            "u",
-            ["expiry_timestamp", "validity_str"],
-        ),
-    ],
-)
-async def test_generate_vouchers_server_selection_errors_and_success(
-    make_client: ClientType,
-    safe_get_ret: list[str] | None,
-    safe_post_ret: list[dict[str, Any]] | None,
-    data: dict[str, Any],
-    expect_exc: type[Exception] | None,
-    expect_username: str | None,
-    expect_extras: list[str] | None,
-) -> None:
-    """Cover voucher-server selection errors and successful voucher generation.
+            ]
+        )
+        got = await client.generate_vouchers({"voucher_server": "srv"})
 
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        safe_get_ret (list[str] | None): Mocked provider-list response payload.
-        safe_post_ret (list[dict[str, Any]] | None): Mocked voucher-generation response payload.
-        data (dict[str, Any]): Input arguments passed to ``generate_vouchers``.
-        expect_exc (type[Exception] | None): Expected exception type for provider-selection cases.
-        expect_username (str | None): Expected username in the first voucher entry on success.
-        expect_extras (list[str] | None): Optional keys expected in successful voucher output.
-
-    Returns:
-        None: This test validates both error and success paths via assertions.
-    """
-    client, _ = make_mock_session_client(make_client)
-    try:
-        client._use_snake_case = True
-        if safe_get_ret is not None:
-            client._is_get_endpoint_available = AsyncMock(return_value=True)
-            client._safe_list_get = AsyncMock(return_value=safe_get_ret)
-            client._safe_list_post = AsyncMock()
-            assert expect_exc is not None
-            with pytest.raises(expect_exc):
-                await client.generate_vouchers(data)
-            client._safe_list_post.assert_not_awaited()
-            return
-
-        # safe_post case: expect success and optional extra fields
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_list_post = AsyncMock(return_value=safe_post_ret)
-        got = await client.generate_vouchers(data)
-        assert isinstance(got, list)
-        assert len(got) > 0
-        assert got[0].get("username") == expect_username
-        for key in expect_extras or []:
-            assert key in got[0]
+        assert got[0]["username"] == "u"
+        assert "expiry_timestamp" in got[0]
+        assert "validity_str" in got[0]
+        assert router.count("GET", PROVIDERS_PATH) == 0
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_generate_vouchers_returns_empty_when_version_switched_endpoints_unavailable(
+@pytest.mark.parametrize(
+    "route_value",
+    [
+        pytest.param(404, id="missing-endpoint"),
+        pytest.param(403, id="permission-denied"),
+        pytest.param(500, id="server-error"),
+        pytest.param(TimeoutError("timed out"), id="timeout"),
+    ],
+)
+async def test_generate_vouchers_returns_empty_when_provider_lookup_unavailable(
+    make_client: ClientType, route_value: Any
+) -> None:
+    """An absent or failing provider listing yields ``[]`` after one request and no POST.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        route_value (Any): Response the Router gives for the provider listing endpoint.
+
+    Returns:
+        None: This test asserts voucher generation returns an empty list when unavailable.
+    """
+    client, router = _make_voucher_client(make_client, route_value)
+    try:
+        client._safe_list_post = AsyncMock()
+
+        assert await client.generate_vouchers({}) == []
+        assert router.count("GET", PROVIDERS_PATH) == 1
+        client._safe_list_post.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route_value, expected_error",
+    [
+        pytest.param(403, OPNsensePrivilegeMissing, id="permission-denied"),
+        pytest.param(500, OPNsenseConnectionError, id="server-error"),
+        pytest.param(TimeoutError("timed out"), OPNsenseConnectionError, id="timeout"),
+    ],
+)
+async def test_generate_vouchers_provider_lookup_raises_in_throw_mode(
+    make_client: ClientType, route_value: Any, expected_error: type[Exception]
+) -> None:
+    """The provider lookup raises a public error for permission and transient failures.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        route_value (Any): Response the Router gives for the provider listing endpoint.
+        expected_error (type[Exception]): Public exception type expected from the call.
+
+    Returns:
+        None: This test validates throw-mode errors from the provider lookup.
+    """
+    client, _router = _make_voucher_client(make_client, route_value)
+    client._throw_errors = True
+    try:
+        client._safe_list_post = AsyncMock()
+        with pytest.raises(expected_error):
+            await client.generate_vouchers({})
+        client._safe_list_post.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_generate_vouchers_missing_provider_endpoint_does_not_raise_in_throw_mode(
     make_client: ClientType,
 ) -> None:
-    """`generate_vouchers` should return empty data when the provider listing endpoint is absent.
+    """A missing provider listing (404) returns ``[]`` rather than raising in throw mode.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test asserts voucher generation returns an empty list when unavailable.
+        None: This test validates 404 is not an error in throw mode.
     """
-    client, _ = make_mock_session_client(make_client)
+    client, _router = _make_voucher_client(make_client, 404)
+    client._throw_errors = True
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_list_get = AsyncMock()
-        client._safe_list_post = AsyncMock()
         assert await client.generate_vouchers({}) == []
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/captiveportal/voucher/list_providers"
-        )
-        client._safe_list_get.assert_not_awaited()
-        client._safe_list_post.assert_not_awaited()
     finally:
         await client.async_close()
 
@@ -126,11 +210,8 @@ async def test_generate_vouchers_auto_selects_single_provider(make_client: Clien
     Returns:
         None: This test validates automatic single-provider selection and voucher normalization.
     """
-    client, _ = make_mock_session_client(make_client)
+    client, router = _make_voucher_client(make_client, ["srv one"])
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_list_get = AsyncMock(return_value=["srv one"])
         client._safe_list_post = AsyncMock(
             return_value=[{"username": "u", "validity": 60, "expirytime": 1700000000}]
         )
@@ -141,7 +222,7 @@ async def test_generate_vouchers_auto_selects_single_provider(make_client: Clien
         assert vouchers[0]["validity_str"] == "1 minute"
         assert vouchers[0]["expiry_timestamp"] == 1700000000
         assert vouchers[0]["expirytime"].timestamp() == 1700000000
-        client._safe_list_get.assert_awaited_once_with("/api/captiveportal/voucher/list_providers")
+        assert router.count("GET", PROVIDERS_PATH) == 1
         client._safe_list_post.assert_awaited_once_with(
             "/api/captiveportal/voucher/generate_vouchers/srv%20one/",
             payload={},
@@ -151,26 +232,23 @@ async def test_generate_vouchers_auto_selects_single_provider(make_client: Clien
 
 
 @pytest.mark.asyncio
-async def test_generate_vouchers_posts_provider_qualified_url_without_post_preflight(
+async def test_generate_vouchers_posts_provider_qualified_url_without_provider_lookup(
     make_client: ClientType,
 ) -> None:
-    """`generate_vouchers` should post only after provider resolution.
+    """`generate_vouchers` posts to the given server's URL without listing providers.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test asserts voucher generation returns an empty list when unavailable.
+        None: This test validates the POST URL and the absence of a provider lookup.
     """
-    client, _ = make_mock_session_client(make_client)
+    client, router = _make_voucher_client(make_client, ["other"])
     try:
-        client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_list_get = AsyncMock(return_value=["srv one"])
         client._safe_list_post = AsyncMock(return_value=[])
 
         assert await client.generate_vouchers({"voucher_server": "srv one"}) == []
-        client._is_get_endpoint_available.assert_not_awaited()
+        assert router.count("GET") == 0
         client._safe_list_post.assert_awaited_once_with(
             "/api/captiveportal/voucher/generate_vouchers/srv%20one/",
             payload={},
@@ -191,12 +269,9 @@ async def test_generate_vouchers_returns_empty_on_404_generate_endpoint_with_thr
     Returns:
         None: This test verifies 404 errors at generation time are treated as empty results.
     """
-    client, _ = make_mock_session_client(make_client)
+    client, router = _make_voucher_client(make_client, [])
     try:
-        client._use_snake_case = True
         client._throw_errors = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_list_get = AsyncMock(return_value=[])
         client._safe_list_post = AsyncMock(
             side_effect=OPNsenseConnectionError("not found", status=404)
         )
@@ -204,7 +279,7 @@ async def test_generate_vouchers_returns_empty_on_404_generate_endpoint_with_thr
         got = await client.generate_vouchers({"voucher_server": "srv"})
 
         assert got == []
-        client._safe_list_get.assert_not_awaited()
+        assert router.count("GET") == 0
         client._safe_list_post.assert_awaited_once_with(
             "/api/captiveportal/voucher/generate_vouchers/srv/",
             payload={},
@@ -219,12 +294,12 @@ async def test_generate_vouchers_returns_empty_on_404_generate_endpoint_with_thr
     [
         (
             True,
-            "/api/captiveportal/voucher/list_providers",
+            PROVIDERS_PATH,
             "/api/captiveportal/voucher/generate_vouchers/srv/",
         ),
         (
             False,
-            "/api/captiveportal/voucher/listProviders",
+            PROVIDERS_CAMEL_PATH,
             "/api/captiveportal/voucher/generateVouchers/srv/",
         ),
     ],
@@ -246,16 +321,15 @@ async def test_voucher_switched_endpoints_follow_selected_case(
     Returns:
         None: This test validates voucher endpoint selection behavior.
     """
-    client, _ = make_mock_session_client(make_client)
+    client, router = _make_voucher_client(
+        make_client, ["srv"], path=expected_provider, use_snake_case=use_snake_case
+    )
     try:
-        client._use_snake_case = use_snake_case
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_list_get = AsyncMock(return_value=["srv"])
         client._safe_list_post = AsyncMock(return_value=[])
 
         await client.generate_vouchers({})
 
-        client._safe_list_get.assert_awaited_once_with(expected_provider)
+        assert router.count("GET", expected_provider) == 1
         client._safe_list_post.assert_awaited_once_with(expected_generate, payload={})
     finally:
         await client.async_close()

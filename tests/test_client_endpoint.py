@@ -268,52 +268,24 @@ async def test_is_get_endpoint_available_raises_transport_error_when_throw_enabl
 
 
 @pytest.mark.asyncio
-async def test_validate_maps_endpoint_probe_ssl_to_opnsense_ssl_error(
+async def test_validate_maps_firmware_request_ssl_to_opnsense_ssl_error(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify validate maps probe-time SSL failures to ``OPNsenseSSLError``.
+    """Verify validate maps an SSL failure on the firmware status request to ``OPNsenseSSLError``.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test asserts validate SSL mapping through endpoint probing.
+        None: This test asserts validate SSL mapping through the firmware status request.
     """
     client, session = make_mock_session_client(make_client)
     client._throw_errors = False
-    calls = 0
-
-    def _get(
-        _url: object,
-        *,
-        auth: object,
-        timeout: object,
-        ssl: object,
-    ) -> FakeResponse:
-        """Get.
-
-        Args:
-            _url (object): Requested endpoint URL.
-            auth (object): Authentication object passed by the client.
-            timeout (object): Timeout object passed by the client.
-            ssl (object): SSL verification setting passed by the client.
-
-        Returns:
-            FakeResponse: Response object returned by the mocked session getter.
-
-        Raises:
-            _TestClientSSLError: Always raised to simulate an SSL transport failure.
-        """
-        del _url, auth, timeout, ssl
-        nonlocal calls
-        calls += 1
-        raise _TestClientSSLError()
-
-    session.get = _get
+    router = install_fake_router(client, session, get_payloads=[_TestClientSSLError()])
     try:
         with pytest.raises(OPNsenseSSLError):
             await client.validate()
-        assert calls == 1
+        assert router.count("GET") == 1
         assert client._throw_errors is False
     finally:
         await client.async_close()
@@ -415,7 +387,7 @@ async def test_is_get_endpoint_available_caches_403_permission_error(
 
 
 @pytest.mark.asyncio
-async def test_validate_reprobes_cached_403_in_throw_mode(
+async def test_validate_requests_again_for_cached_403_in_throw_mode(
     make_client: MakeClientFactory,
 ) -> None:
     """Verify validation does not trust a cached permission failure.
@@ -424,42 +396,20 @@ async def test_validate_reprobes_cached_403_in_throw_mode(
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test asserts validation freshly probes cached permission failures.
+        None: This test asserts validation requests cached permission failures again.
     """
     client, session = make_mock_session_client(make_client)
-    calls = 0
-
-    def _get(*args: object, **kwargs: object) -> FakeResponse:
-        """Return a permission-denied endpoint response.
-
-        Args:
-            args (object): Positional arguments accepted by `_get`.
-            kwargs (object): Keyword arguments accepted by `_get`.
-
-        Returns:
-            FakeResponse: Synthetic permission-denied response returned by the GET request.
-        """
-        del args, kwargs
-        nonlocal calls
-        calls += 1
-        return FakeResponse(
-            status=403,
-            reason="Forbidden",
-            ok=False,
-            include_request_info=True,
-        )
-
-    session.get = _get
+    router = install_fake_router(client, session, get_payloads=[403, 403])
     try:
         path = "/api/core/firmware/status"
-        assert await client._is_get_endpoint_available(path) is False
+        assert await client.get_host_firmware_version() is None
         assert client._endpoint_availability[path] is False
         assert path in client._endpoint_permission_denied
 
         with pytest.raises(OPNsensePrivilegeMissing):
             await client.validate(require_device_id=False)
 
-        assert calls == 2
+        assert router.count("GET", path) == 2
         assert client._throw_errors is False
         assert path not in client._endpoint_availability
         assert path not in client._endpoint_checked_at
@@ -984,50 +934,29 @@ async def test_is_post_endpoint_available_allows_read_only_post_path(
     ],
 )
 @pytest.mark.asyncio
-async def test_validate_maps_endpoint_probe_http_errors_to_public_exceptions(
+async def test_validate_maps_firmware_request_http_errors_to_public_exceptions(
     status: int,
     expected_exception: type[Exception],
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify ``validate`` maps preliminary endpoint-probe HTTP failures.
+    """Verify ``validate`` maps HTTP failures on the firmware status request.
 
     Args:
-        status (int): HTTP response status returned by the endpoint probe.
+        status (int): HTTP response status returned by the firmware status request.
         expected_exception (type[Exception]): Public exception expected from ``validate``.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test asserts validation-time endpoint probe error mapping.
+        None: This test asserts validation-time firmware request error mapping.
     """
     client, session = make_mock_session_client(make_client)
     client._throw_errors = False
-    calls = 0
-
-    def _get(*args: Any, **kwargs: Any) -> Any:
-        """Get.
-
-        Args:
-            args (Any): Positional arguments accepted by `_get`.
-            kwargs (Any): Keyword arguments accepted by `_get`.
-
-        Returns:
-            Any: Decoded response payload returned by the GET request.
-        """
-        nonlocal calls
-        calls += 1
-        return FakeResponse(
-            status=status,
-            reason="ERR",
-            ok=False,
-            include_request_info=True,
-        )
-
-    session.get = _get
+    router = install_fake_router(client, session, get_payloads=[status])
     try:
         path = "/api/core/firmware/status"
         with pytest.raises(expected_exception):
             await client.validate()
-        assert calls == 1
+        assert router.count("GET", path) == 1
         assert client._throw_errors is False
         assert path not in client._endpoint_checked_at
         assert path not in client._endpoint_availability

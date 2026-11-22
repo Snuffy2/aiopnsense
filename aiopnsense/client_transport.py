@@ -390,6 +390,7 @@ class ClientTransportMixin:
         caller: str = "Unknown",
         *,
         read_body: bool = True,
+        response_format: Literal["json", "text"] = "json",
     ) -> EndpointOutcome:
         """Execute a GET request immediately and classify the response.
 
@@ -404,9 +405,11 @@ class ClientTransportMixin:
             read_body (bool): Whether to decode the body of a successful response.
                 ``False`` makes a status-only check: the body is not read and a
                 successful response carries no payload.
+            response_format (Literal["json", "text"], optional): Decoding mode for a
+                successful response body.
 
         Returns:
-            EndpointOutcome: ``DATA`` with the decoded payload (``None`` when
+            EndpointOutcome: ``DATA`` with the decoded payload or body text (``None`` when
                 ``read_body`` is ``False``) for a successful response,
                 ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any
                 other HTTP status, timeout or client error.
@@ -426,6 +429,8 @@ class ClientTransportMixin:
                     return EndpointOutcome.from_http_status(response.status, response.reason)
                 if not read_body:
                     return EndpointOutcome.data(None)
+                if response_format == "text":
+                    return EndpointOutcome.data(await response.text())
                 return EndpointOutcome.data(await response.json(content_type=None))
         except (aiohttp.ClientError, TimeoutError) as e:
             error = _map_opnsense_exception(e)

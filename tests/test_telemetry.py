@@ -404,6 +404,7 @@ async def test_telemetry_system_branches_with_boottime_and_uptime_variants(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
 
@@ -449,6 +450,7 @@ async def test_telemetry_system_invalid_uptime_without_boottime(
     """
     client, _session = make_mock_session_client(make_client)
     try:
+        client._use_snake_case = True
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
         client._safe_dict_get = AsyncMock(
