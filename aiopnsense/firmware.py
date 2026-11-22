@@ -63,6 +63,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
 
     _firmware_version: str | None
     _firmware_unknown_logged: set[tuple[str, str | None]]
+    _last_known_firmware_version: str | None
     _firmware_install_active: bool
 
     @staticmethod
@@ -84,12 +85,24 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         """Set or clear the cached firmware version.
 
         Every write of the cached version goes through this method so that the
-        firmware module is the only owner of the value.
+        firmware module is the only owner of the value. When a known version differs
+        from the last known one, everything derived from the old version is discarded.
+        Clearing the cached version, or a lookup that returns nothing, is not a change.
 
         Args:
             version (str | None): Version to cache, or ``None`` to force the next
                 lookup to read it from the Router.
         """
+        if version is not None:
+            last_known = self._last_known_firmware_version
+            if last_known is not None and version != last_known:
+                _LOGGER.debug(
+                    "Firmware version changed from %s to %s; resetting firmware-derived state",
+                    last_known,
+                    version,
+                )
+                self._reset_endpoint_state()
+            self._last_known_firmware_version = version
         self._firmware_version = version
 
     async def _firmware_capability(self, capability: FirmwareCapability) -> bool | None:

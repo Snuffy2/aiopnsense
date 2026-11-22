@@ -185,6 +185,18 @@ class ClientEndpointMixin:
         )
         return snake_case_path if use_snake_case else camel_case_path
 
+    def _reset_endpoint_state(self) -> None:
+        """Discard the endpoint style and all cached endpoint availability.
+
+        Called when the Router firmware version changes, because both were derived
+        from the old version. The availability, check-time and permission-denied
+        caches are cleared together so they cannot drift apart.
+        """
+        self._use_snake_case = None
+        self._endpoint_availability.clear()
+        self._endpoint_checked_at.clear()
+        self._endpoint_permission_denied.clear()
+
     def _clear_endpoint_cache_entry(self, cache_key: str) -> None:
         """Clear all cached endpoint state for a method-aware key.
 

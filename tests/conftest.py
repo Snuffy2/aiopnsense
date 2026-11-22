@@ -284,6 +284,7 @@ class ScriptedRouter:
         session.get.side_effect = self._probe
         client._get = self._get  # type: ignore[method-assign]
         client._post = self._post  # type: ignore[method-assign]
+        client._do_post = self._do_post  # type: ignore[method-assign]
 
     def _path(self, url: str) -> str:
         """Return the request path for a full URL.
@@ -306,6 +307,8 @@ class ScriptedRouter:
             Any: Firmware status payload, the configured endpoint payload, or ``None``.
         """
         if path == FIRMWARE_STATUS_PATH:
+            if not self.firmware_reachable:
+                return None
             return {"product": {"product_version": self.firmware}} if self.firmware else {}
         return self.endpoints.get(path)
 
@@ -356,6 +359,22 @@ class ScriptedRouter:
         del payload
         self.post_paths.append(path)
         return self._payload(path)
+
+    async def _do_post(
+        self, path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
+    ) -> Any:
+        """Serve a direct POST request that bypasses the request queue.
+
+        Args:
+            path (str): Request path.
+            payload (MutableMapping[str, Any] | None): Ignored request body.
+            caller (str): Ignored caller label.
+
+        Returns:
+            Any: Scripted payload for the path.
+        """
+        del caller
+        return await self._post(path, payload)
 
 
 @pytest.fixture

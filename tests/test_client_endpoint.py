@@ -1147,3 +1147,130 @@ async def test_unknown_firmware_is_logged_once_per_condition(
     assert router.post_paths == [DISMISS_SNAKE_PATH] * 3
     records = [record for record in caplog.records if expected_text in record.getMessage()]
     assert [record.levelno for record in records] == [expected_level]
+
+
+UPGRADE_PATH = "/api/core/firmware/upgrade"
+UPDATE_PATH = "/api/core/firmware/update"
+LATE_PATH = "/api/example/feature/get"
+
+
+@pytest.fixture
+def upgrade_router(
+    dismiss_router: tuple[Any, ScriptedRouter],
+) -> tuple[Any, ScriptedRouter]:
+    """Return a scripted Router that accepts firmware update and upgrade actions.
+
+    Args:
+        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+
+    Returns:
+        tuple[Any, ScriptedRouter]: Client and Router that accept firmware actions.
+    """
+    client, router = dismiss_router
+    router.endpoints[UPGRADE_PATH] = {"status": "ok"}
+    router.endpoints[UPDATE_PATH] = {"status": "ok"}
+    return client, router
+
+
+async def test_firmware_upgrade_across_threshold_switches_endpoint_style(
+    upgrade_router: tuple[Any, ScriptedRouter],
+) -> None:
+    """Verify the client switches endpoint style after the Router upgrades across 25.7.
+
+    Args:
+        upgrade_router (tuple[Any, ScriptedRouter]): Client and Router accepting upgrades.
+    """
+    client, router = upgrade_router
+    router.firmware = "25.1"
+    assert await client.close_notice("before") is True
+
+    await client.upgrade_firmware("upgrade")
+    router.firmware = "25.7"
+    await client.get_host_firmware_version()
+    assert await client.close_notice("after") is True
+
+    assert router.post_paths == [DISMISS_CAMEL_PATH, UPGRADE_PATH, DISMISS_SNAKE_PATH]
+
+
+async def test_firmware_upgrade_refreshes_endpoint_availability(
+    upgrade_router: tuple[Any, ScriptedRouter],
+) -> None:
+    """Verify endpoints that the new firmware adds are used without waiting for the TTL.
+
+    Args:
+        upgrade_router (tuple[Any, ScriptedRouter]): Client and Router accepting upgrades.
+    """
+    client, router = upgrade_router
+    router.firmware = "25.1"
+    assert await client.get_host_firmware_version() == "25.1"
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    router.endpoints[LATE_PATH] = {}
+    assert await client.is_endpoint_available(LATE_PATH) is False  # cached until a change
+    await client.upgrade_firmware("upgrade")
+    router.firmware = "25.7"
+    await client.get_host_firmware_version()
+
+    assert await client.is_endpoint_available(LATE_PATH) is True
+
+
+async def test_unchanged_firmware_version_keeps_endpoint_cache(
+    upgrade_router: tuple[Any, ScriptedRouter],
+) -> None:
+    """Verify re-reading an unchanged firmware version does not discard cached endpoints.
+
+    Args:
+        upgrade_router (tuple[Any, ScriptedRouter]): Client and Router accepting upgrades.
+    """
+    client, router = upgrade_router
+    router.firmware = "25.1"
+    assert await client.is_endpoint_available(LATE_PATH) is False
+    await client.get_host_firmware_version()
+
+    router.endpoints[LATE_PATH] = {}
+    await client.upgrade_firmware("update")
+    assert await client.get_host_firmware_version() == "25.1"
+
+    assert await client.is_endpoint_available(LATE_PATH) is False
+    assert router.probe_paths.count(LATE_PATH) == 1
+
+
+async def test_first_known_firmware_version_keeps_endpoint_cache(
+    dismiss_router: tuple[Any, ScriptedRouter],
+) -> None:
+    """Verify the first known version has nothing to discard.
+
+    Args:
+        dismiss_router (tuple[Any, ScriptedRouter]): Client and Router serving both styles.
+    """
+    client, router = dismiss_router
+    router.firmware = "25.1"
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    assert await client.get_host_firmware_version() == "25.1"
+
+    router.endpoints[LATE_PATH] = {}
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+
+async def test_failed_firmware_lookup_after_known_version_resets_nothing(
+    upgrade_router: tuple[Any, ScriptedRouter],
+) -> None:
+    """Verify an unreachable Router during an upgrade is not treated as a version change.
+
+    Args:
+        upgrade_router (tuple[Any, ScriptedRouter]): Client and Router accepting upgrades.
+    """
+    client, router = upgrade_router
+    router.firmware = "25.1"
+    assert await client.close_notice("before") is True
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    await client.upgrade_firmware("upgrade")
+    router.firmware_reachable = False
+    router.endpoints[LATE_PATH] = {}
+    assert await client.get_host_firmware_version() is None
+    assert await client.close_notice("during") is True
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    assert router.post_paths == [DISMISS_CAMEL_PATH, UPGRADE_PATH, DISMISS_CAMEL_PATH]
