@@ -446,41 +446,6 @@ async def test_keep_latest_leases_handles_list_values(make_client: ClientType) -
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("raw_reserved", "expected"),
-    [
-        ("1", True),
-        ("0", False),
-        (["hwaddr"], True),
-        ([], False),
-        (1, True),
-        (0, False),
-        (None, False),
-    ],
-)
-async def test_is_reserved_lease_handles_legacy_and_list_flags(
-    make_client: ClientType,
-    raw_reserved: object,
-    expected: bool,
-) -> None:
-    """Verify reserved lease detection supports legacy and new value shapes.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        raw_reserved (object): Raw ``is_reserved`` value from API payload.
-        expected (bool): Expected reserved/static detection result.
-
-    Returns:
-        None: This test validates reserved lease coercion behavior.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        assert client._is_reserved_lease(raw_reserved) is expected
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_normalize_lease_key_value_handles_nested_structures(make_client: ClientType) -> None:
     """Verify lease key normalization converts nested structures into hashable tuples.
 
@@ -505,31 +470,6 @@ async def test_normalize_lease_key_value_handles_nested_structures(make_client: 
         a_dict = dict(as_dict["a"])
         assert a_dict["list"] == (3, 4)
         assert a_dict["set"] == ("x", "y")
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_copy_lease_identity_fields_sets_reserved_by_only_for_non_empty_list(
-    make_client: ClientType,
-) -> None:
-    """Verify ``reserved_by`` is copied only for non-empty reservation lists.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates lease identity metadata normalization.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        lease: dict[str, object] = {}
-
-        client._copy_lease_identity_fields(lease, {"is_reserved": []})
-        assert "reserved_by" not in lease
-
-        client._copy_lease_identity_fields(lease, {"is_reserved": ["host1"]})
-        assert lease["reserved_by"] == ["host1"]
     finally:
         await client.async_close()
 

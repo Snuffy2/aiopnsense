@@ -5,7 +5,13 @@ from typing import Any
 
 import pytest
 
-from aiopnsense._dhcp_leases import ISC_LEASE_BACKEND, normalize_leases
+from aiopnsense._dhcp_leases import (
+    DNSMASQ_LEASE_BACKEND,
+    ISC_LEASE_BACKEND,
+    copy_identity_fields,
+    is_reserved_lease,
+    normalize_leases,
+)
 
 ROUTER_TZ = timezone(timedelta(hours=-5))
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=ROUTER_TZ)
@@ -115,3 +121,140 @@ def test_normalize_isc_leases_keeps_row_order_and_does_not_mutate_rows() -> None
 
     assert [lease["address"] for lease in leases] == ["192.0.2.2", "192.0.2.3"]
     assert rows == snapshot
+
+
+def _dnsmasq_row(**overrides: object) -> dict[str, Any]:
+    """Build a dnsmasq row, replacing or adding the given fields.
+
+    Args:
+        **overrides (object): Row fields to set on top of the defaults.
+
+    Returns:
+        dict[str, Any]: Raw dnsmasq lease row.
+    """
+    return {
+        "address": "192.0.2.1",
+        "hwaddr": "aa:bb:cc:dd:ee:01",
+        "if_name": "lan",
+        "if_descr": "LAN",
+        "is_reserved": "0",
+    } | overrides
+
+
+def _dnsmasq_lease(**overrides: object) -> dict[str, Any]:
+    """Build the lease expected for the default dnsmasq row, with overrides applied.
+
+    Args:
+        **overrides (object): Lease fields to set on top of the defaults.
+
+    Returns:
+        dict[str, Any]: Expected normalized lease.
+    """
+    return {
+        "address": "192.0.2.1",
+        "hostname": None,
+        "if_descr": "LAN",
+        "if_name": "lan",
+        "type": "dynamic",
+        "mac": "aa:bb:cc:dd:ee:01",
+        "expires": None,
+    } | overrides
+
+
+FUTURE = NOW + timedelta(hours=1)
+PAST = NOW - timedelta(hours=1)
+OVERFLOW_EPOCH = 10**40
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        pytest.param(
+            _dnsmasq_row(hostname="host."), _dnsmasq_lease(hostname="host."), id="dots-kept"
+        ),
+        pytest.param(
+            _dnsmasq_row(hostname="*"), _dnsmasq_lease(), id="star-hostname-is-placeholder"
+        ),
+        pytest.param(_dnsmasq_row(hostname=""), _dnsmasq_lease(), id="empty-hostname"),
+        pytest.param(
+            _dnsmasq_row(if_name="", **{"if": "em0"}),
+            _dnsmasq_lease(if_name="em0"),
+            id="empty-if-name-falls-back-to-if",
+        ),
+        pytest.param(
+            _dnsmasq_row(if_name="lan", **{"if": "em0"}), _dnsmasq_lease(), id="if-name-wins"
+        ),
+        pytest.param(_dnsmasq_row(hwaddr=""), _dnsmasq_lease(mac=None), id="empty-mac"),
+        pytest.param(
+            _dnsmasq_row(is_reserved="1", client_id="01:aa"),
+            _dnsmasq_lease(type="static", client_id="01:aa"),
+            id="reserved-flag-and-client-id",
+        ),
+        pytest.param(
+            _dnsmasq_row(is_reserved=["host1"]),
+            _dnsmasq_lease(type="static", reserved_by=["host1"]),
+            id="reserved-list",
+        ),
+        pytest.param(_dnsmasq_row(is_reserved=[]), _dnsmasq_lease(), id="empty-reserved-list"),
+        pytest.param(
+            _dnsmasq_row(expire=int(FUTURE.timestamp())),
+            _dnsmasq_lease(expires=FUTURE),
+            id="future-epoch",
+        ),
+        pytest.param(_dnsmasq_row(expire=int(PAST.timestamp())), None, id="past-epoch"),
+        pytest.param(
+            _dnsmasq_row(expire=OVERFLOW_EPOCH),
+            _dnsmasq_lease(expires=OVERFLOW_EPOCH),
+            id="overflowing-epoch-keeps-raw-value",
+        ),
+        pytest.param(
+            _dnsmasq_row(expire="never"), _dnsmasq_lease(expires="never"), id="non-integer-expire"
+        ),
+        pytest.param(_dnsmasq_row(expire=0), _dnsmasq_lease(expires=0), id="zero-expire"),
+    ],
+)
+def test_normalize_dnsmasq_leases(row: dict[str, Any], expected: dict[str, Any] | None) -> None:
+    """Dnsmasq rows become leases, or are omitted, according to the dnsmasq rules.
+
+    Args:
+        row (dict[str, Any]): Raw row handed to the normalizer.
+        expected (dict[str, Any] | None): Expected lease, or None when the row is omitted.
+    """
+    leases = normalize_leases([row], DNSMASQ_LEASE_BACKEND, now=NOW)
+
+    assert leases == ([] if expected is None else [expected])
+
+
+@pytest.mark.parametrize(
+    ("raw_reserved", "expected"),
+    [
+        ("1", True),
+        ("0", False),
+        (["hwaddr"], True),
+        ([], False),
+        (1, True),
+        (0, False),
+        (None, False),
+    ],
+)
+def test_is_reserved_lease_handles_legacy_and_list_flags(
+    raw_reserved: object, expected: bool
+) -> None:
+    """Reserved lease detection supports legacy and list value shapes.
+
+    Args:
+        raw_reserved (object): Raw ``is_reserved`` value from an API payload.
+        expected (bool): Expected reserved/static detection result.
+    """
+    assert is_reserved_lease(raw_reserved) is expected
+
+
+def test_copy_identity_fields_sets_reserved_by_only_for_non_empty_list() -> None:
+    """``reserved_by`` is copied only for non-empty reservation lists."""
+    lease: dict[str, Any] = {}
+
+    copy_identity_fields(lease, {"is_reserved": []})
+    assert "reserved_by" not in lease
+
+    copy_identity_fields(lease, {"is_reserved": ["host1"]})
+    assert lease["reserved_by"] == ["host1"]

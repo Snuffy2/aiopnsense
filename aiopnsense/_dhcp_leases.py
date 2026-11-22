@@ -1,6 +1,6 @@
 """Shared normalization of DHCP server rows into DHCP Leases.
 
-Each DHCP backend (ISC DHCP, and later dnsmasq and Kea) describes how its rows differ in a
+Each DHCP backend (ISC DHCP, dnsmasq, and later Kea) describes how its rows differ in a
 ``LeaseBackend``. ``normalize_leases`` applies that description to rows that were already
 fetched and checked to be a list, so the row filtering, hostname cleanup, expiry conversion and
 expired-row removal live in one place. Fetching, endpoint selection and timezone lookup stay
@@ -11,6 +11,8 @@ from collections.abc import Callable, Iterable, Mapping, MutableMapping
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from typing import Any
+
+from .helpers import api_value_matches, timestamp_to_datetime, try_to_int
 
 ISC_ENDS_FORMAT = "%Y/%m/%d %H:%M:%S"
 
@@ -32,6 +34,9 @@ class LeaseBackend:
         read_expiry (ExpiryReader): Reads a row's expiry. It receives the row, the reference
             time and the Router timezone, and returns whether the lease is still live and the
             value to report as ``expires``.
+        copy_identity_fields (bool): Whether to copy ``client_id`` and ``reserved_by``.
+        placeholder_hostnames (frozenset[str]): Hostnames the backend uses as a placeholder for
+            "no hostname", reported as None.
     """
 
     accepts: RowPredicate
@@ -39,18 +44,82 @@ class LeaseBackend:
     mac_key: str
     lease_type: TypeReader
     read_expiry: ExpiryReader
+    copy_identity_fields: bool = False
+    placeholder_hostnames: frozenset[str] = frozenset()
 
 
-def _clean_hostname(value: object) -> str | None:
-    """Return a row hostname, or None when it is missing or not a non-empty string.
+def _clean_hostname(value: object, placeholders: frozenset[str]) -> str | None:
+    """Return a row hostname, or None when it is missing or a placeholder.
 
     Args:
         value (object): Raw ``hostname`` value from a lease row.
+        placeholders (frozenset[str]): Hostnames that mean "no hostname".
 
     Returns:
-        str | None: The hostname when it is a non-empty string; otherwise None.
+        str | None: The hostname when it is a non-empty string other than a placeholder;
+            otherwise None.
     """
-    return value if isinstance(value, str) and len(value) > 0 else None
+    if not isinstance(value, str) or not value or value in placeholders:
+        return None
+    return value
+
+
+def _clean_mac(value: object) -> str | None:
+    """Return a row MAC address, or None when it is not a non-empty string.
+
+    Args:
+        value (object): Raw MAC value from a lease row.
+
+    Returns:
+        str | None: The MAC address when it is a non-empty string; otherwise None.
+    """
+    return value if isinstance(value, str) and value else None
+
+
+def is_reserved_lease(raw_reserved: object) -> bool:
+    """Return whether an ``is_reserved`` row value marks a reserved (static) lease.
+
+    Args:
+        raw_reserved (object): Raw ``is_reserved`` field returned by a DHCP lease API.
+
+    Returns:
+        bool: ``True`` for reserved/static lease rows, ``False`` otherwise.
+    """
+    if isinstance(raw_reserved, str):
+        return api_value_matches(raw_reserved, "1")
+    if isinstance(raw_reserved, list):
+        return len(raw_reserved) > 0
+    return bool(raw_reserved)
+
+
+def copy_identity_fields(lease: dict[str, Any], row: Mapping[str, Any]) -> None:
+    """Copy optional DHCP client identity metadata to a normalized lease.
+
+    Args:
+        lease (dict[str, Any]): Normalized lease being built; updated in place.
+        row (Mapping[str, Any]): Raw lease row returned by OPNsense.
+    """
+    if row.get("client_id") not in (None, ""):
+        lease["client_id"] = row.get("client_id")
+    raw_reserved = row.get("is_reserved")
+    if isinstance(raw_reserved, list) and raw_reserved:
+        lease["reserved_by"] = list(raw_reserved)
+
+
+def epoch_to_datetime(expiration: int | None) -> datetime | None:
+    """Convert a DHCP expiration timestamp without propagating platform overflow.
+
+    Args:
+        expiration (int | None): Parsed DHCP expiration timestamp in epoch seconds.
+
+    Returns:
+        datetime | None: Converted expiration, or ``None`` when the timestamp is outside the
+            platform-supported range.
+    """
+    try:
+        return timestamp_to_datetime(expiration)
+    except OverflowError, OSError:
+        return None
 
 
 def _read_if_name(row: Mapping[str, Any], keys: tuple[str, ...]) -> object:
@@ -99,18 +168,44 @@ def normalize_leases(
         live, expires = backend.read_expiry(row, now, router_tz)
         if not live:
             continue
-        leases.append(
-            {
-                "address": row.get("address"),
-                "hostname": _clean_hostname(row.get("hostname")),
-                "if_descr": row.get("if_descr"),
-                "if_name": _read_if_name(row, backend.if_name_keys),
-                "type": backend.lease_type(row),
-                "mac": row.get(backend.mac_key),
-                "expires": expires,
-            }
-        )
+        lease: dict[str, Any] = {
+            "address": row.get("address"),
+            "hostname": _clean_hostname(row.get("hostname"), backend.placeholder_hostnames),
+            "if_descr": row.get("if_descr"),
+            "if_name": _read_if_name(row, backend.if_name_keys),
+            "type": backend.lease_type(row),
+            "mac": _clean_mac(row.get(backend.mac_key)),
+        }
+        if backend.copy_identity_fields:
+            copy_identity_fields(lease, row)
+        lease["expires"] = expires
+        leases.append(lease)
     return leases
+
+
+def read_epoch_expiry(
+    row: Mapping[str, Any], now: datetime, router_tz: tzinfo | None
+) -> tuple[bool, object]:
+    """Read an ``expire`` value expressed in epoch seconds.
+
+    Args:
+        row (Mapping[str, Any]): Raw lease row.
+        now (datetime): Timezone-aware reference time.
+        router_tz (tzinfo | None): Unused; epoch values do not depend on the Router timezone.
+
+    Returns:
+        tuple[bool, object]: Whether the lease is still live and the value to report as
+            ``expires``. A missing, falsy or non-integer ``expire`` is live with the raw value,
+            as is a timestamp outside the platform datetime range; a past timestamp is not live.
+    """
+    raw_expire = row.get("expire")
+    expiration = try_to_int(raw_expire)
+    if not expiration:
+        return True, raw_expire
+    expiration_datetime = epoch_to_datetime(expiration)
+    if expiration_datetime is None:
+        return True, raw_expire
+    return expiration_datetime >= now, expiration_datetime
 
 
 def _accepts_isc_row(row: Mapping[str, Any]) -> bool:
@@ -162,6 +257,30 @@ def _read_isc_expiry(
     return expires >= now, expires
 
 
+def _accepts_any_row(row: Mapping[str, Any]) -> bool:
+    """Accept every mapping row.
+
+    Args:
+        row (Mapping[str, Any]): Raw lease row.
+
+    Returns:
+        bool: Always True.
+    """
+    return True
+
+
+def _read_dnsmasq_type(row: Mapping[str, Any]) -> object:
+    """Return ``static`` for reserved dnsmasq rows and ``dynamic`` otherwise.
+
+    Args:
+        row (Mapping[str, Any]): Raw dnsmasq lease row.
+
+    Returns:
+        object: The lease type derived from ``is_reserved``.
+    """
+    return "static" if is_reserved_lease(row.get("is_reserved")) else "dynamic"
+
+
 ISC_LEASE_BACKEND = LeaseBackend(
     accepts=_accepts_isc_row,
     if_name_keys=("if",),
@@ -170,3 +289,14 @@ ISC_LEASE_BACKEND = LeaseBackend(
     read_expiry=_read_isc_expiry,
 )
 """ISC DHCPv4 and DHCPv6 rows: active state, MAC required, type passed through, ``ends`` expiry."""
+
+DNSMASQ_LEASE_BACKEND = LeaseBackend(
+    accepts=_accepts_any_row,
+    if_name_keys=("if_name", "if"),
+    mac_key="hwaddr",
+    lease_type=_read_dnsmasq_type,
+    read_expiry=read_epoch_expiry,
+    copy_identity_fields=True,
+    placeholder_hostnames=frozenset({"*"}),
+)
+"""Dnsmasq rows: every row kept, ``*`` hostname is a placeholder, type from ``is_reserved``."""
