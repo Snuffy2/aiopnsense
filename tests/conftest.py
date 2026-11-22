@@ -248,6 +248,140 @@ def make_mock_session_client(
     return make_client(session=session, username=username, password=password, url=url), session
 
 
+FIRMWARE_STATUS_PATH = "/api/core/firmware/status"
+
+
+class FirmwareRouter:
+    """Router stand-in that scripts firmware status and endpoint responses for a client.
+
+    Probes go to the mocked session and data requests go to the client's transport
+    methods, so public client methods run unchanged against one scripted Router.
+
+    Attributes:
+        firmware (str | None): Version reported by the firmware status endpoint, or
+            ``None`` for a status payload without a version.
+        firmware_reachable (bool): Whether the firmware status endpoint answers.
+        endpoints (dict[str, Any]): JSON payload served for each path that exists.
+        get_paths (list[str]): Paths requested with GET, in order.
+        post_paths (list[str]): Paths requested with POST, in order.
+        probe_paths (list[str]): Paths probed for availability, in order.
+    """
+
+    def __init__(self, client: aiopnsense.OPNsenseClient, session: MagicMock) -> None:
+        """Wire the client and session to this scripted Router.
+
+        Args:
+            client (aiopnsense.OPNsenseClient): Client whose transport is scripted.
+            session (MagicMock): Mocked aiohttp session used for availability probes.
+        """
+        self._base_url = client._url
+        self.firmware: str | None = None
+        self.firmware_reachable = True
+        self.endpoints: dict[str, Any] = {}
+        self.get_paths: list[str] = []
+        self.post_paths: list[str] = []
+        self.probe_paths: list[str] = []
+        session.get.side_effect = self._probe
+        client._get = self._get  # type: ignore[method-assign]
+        client._post = self._post  # type: ignore[method-assign]
+        client._do_post = self._do_post  # type: ignore[method-assign]
+
+    def _payload(self, path: str) -> Any:
+        """Return the scripted JSON payload for a path.
+
+        Args:
+            path (str): Request path.
+
+        Returns:
+            Any: Firmware status payload, the configured endpoint payload, or ``None``.
+        """
+        if path == FIRMWARE_STATUS_PATH:
+            if not self.firmware_reachable:
+                return None
+            return {"product": {"product_version": self.firmware}} if self.firmware else {}
+        return self.endpoints.get(path)
+
+    def _probe(self, url: str, **_kwargs: Any) -> FakeResponse:
+        """Answer an availability probe.
+
+        Args:
+            url (str): Full probe URL.
+            **_kwargs (Any): Ignored aiohttp request options.
+
+        Returns:
+            FakeResponse: ``200`` when the path exists, otherwise ``404``.
+
+        Raises:
+            aiohttp.ClientConnectionError: The firmware status endpoint is unreachable.
+        """
+        path = url.removeprefix(self._base_url)
+        self.probe_paths.append(path)
+        if path == FIRMWARE_STATUS_PATH and not self.firmware_reachable:
+            raise aiohttp.ClientConnectionError("router unreachable")
+        exists = path == FIRMWARE_STATUS_PATH or path in self.endpoints
+        return FakeResponse(
+            status=200 if exists else 404, reason="OK" if exists else "Not Found", ok=exists
+        )
+
+    async def _get(self, path: str) -> Any:
+        """Serve a GET request.
+
+        Args:
+            path (str): Request path.
+
+        Returns:
+            Any: Scripted payload for the path.
+        """
+        self.get_paths.append(path)
+        return self._payload(path)
+
+    async def _post(self, path: str, payload: MutableMapping[str, Any] | None = None) -> Any:
+        """Serve a POST request.
+
+        Args:
+            path (str): Request path.
+            payload (MutableMapping[str, Any] | None): Ignored request body.
+
+        Returns:
+            Any: Scripted payload for the path.
+        """
+        del payload
+        self.post_paths.append(path)
+        return self._payload(path)
+
+    async def _do_post(
+        self, path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
+    ) -> Any:
+        """Serve a direct POST request that bypasses the request queue.
+
+        Args:
+            path (str): Request path.
+            payload (MutableMapping[str, Any] | None): Ignored request body.
+            caller (str): Ignored caller label.
+
+        Returns:
+            Any: Scripted payload for the path.
+        """
+        del caller
+        return await self._post(path, payload)
+
+
+@pytest.fixture
+def firmware_router(
+    make_client: Callable[..., aiopnsense.OPNsenseClient],
+) -> tuple[aiopnsense.OPNsenseClient, FirmwareRouter]:
+    """Return a client wired to a scripted Router.
+
+    Args:
+        make_client (Callable[..., aiopnsense.OPNsenseClient]): ``make_client`` fixture factory.
+
+    Returns:
+        tuple[aiopnsense.OPNsenseClient, FirmwareRouter]: Client and the Router that scripts it.
+    """
+    client, session = make_mock_session_client(make_client)
+    return client, FirmwareRouter(client, session)
+
+
 @pytest.fixture(autouse=True)
 def _patch_asyncio_create_task(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest

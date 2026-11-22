@@ -132,8 +132,7 @@ class OPNsenseClient(
             if require_device_id:
                 fw_ver = await self._run_validation_request(self.get_host_firmware_version)
             else:
-                await self._run_validation_request(self._store_host_firmware_version)
-                fw_ver = self._firmware_version
+                fw_ver = await self._run_validation_request(self._store_host_firmware_version)
 
             if fw_ver is None:
                 raise OPNsenseUnknownFirmware
