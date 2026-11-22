@@ -5,10 +5,11 @@ from typing import Any
 
 import aiohttp
 
+from ._error_policy import _attempt, _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .const import LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
 from .exceptions import OPNsenseError
-from .helpers import _LOGGER, _log_errors, api_value_matches, firmware_is_at_least
+from .helpers import _LOGGER, api_value_matches, firmware_is_at_least
 
 UNBOUND_SETTINGS_GET_ENDPOINT = "/api/unbound/settings/get"
 UNBOUND_SETTINGS_SET_ENDPOINT = "/api/unbound/settings/set"
@@ -209,7 +210,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         Returns:
             bool: ``True`` when OPNsense reports the expected toggle result
-                and the DNSBL apply step succeeds; otherwise, ``False``.
+                and the DNSBL apply step succeeds; otherwise, ``False``. When
+                ``throw_errors`` is enabled, a failed apply request raises an
+                ``OPNsenseError`` subclass instead of returning ``False``.
         """
         if not uuid:
             _LOGGER.error("Blocklist uuid must be provided for Unbound Extended Blocklists")
@@ -220,26 +223,23 @@ class UnboundMixin(AiopnsenseClientProtocol):
         response = await self._safe_dict_post(endpoint)
         result = response.get("result")
         if (set_state and result == "Enabled") or (not set_state and result == "Disabled"):
-            try:
-                dnsbl_resp = await self._post(UNBOUND_SERVICE_DNSBL_ENDPOINT)
-                _LOGGER.debug(
-                    "[_toggle_unbound_blocklist] uuid: %s, set_state: %s, response: %s, dnsbl_resp: %s",
-                    uuid,
-                    "On" if set_state else "Off",
-                    response,
-                    dnsbl_resp,
-                )
-                if isinstance(dnsbl_resp, MutableMapping) and dnsbl_resp.get(
-                    "status", "failed"
-                ).startswith("OK"):
-                    return True
-            except (OPNsenseError, TimeoutError, aiohttp.ClientError, ValueError, TypeError) as e:
-                _LOGGER.error(
-                    "Error applying unbound blocklist change for uuid %s. %s: %s",
-                    uuid,
-                    type(e).__name__,
-                    e,
-                )
+            dnsbl_resp = await _attempt(
+                self,
+                lambda: self._post(UNBOUND_SERVICE_DNSBL_ENDPOINT),
+                empty=None,
+                name="unbound blocklist apply",
+            )
+            _LOGGER.debug(
+                "[_toggle_unbound_blocklist] uuid: %s, set_state: %s, response: %s, dnsbl_resp: %s",
+                uuid,
+                "On" if set_state else "Off",
+                response,
+                dnsbl_resp,
+            )
+            if isinstance(dnsbl_resp, MutableMapping) and dnsbl_resp.get(
+                "status", "failed"
+            ).startswith("OK"):
+                return True
         return False
 
     async def _set_unbound_blocklist(self, set_state: bool, uuid: str | None = None) -> bool:

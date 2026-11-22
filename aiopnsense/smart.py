@@ -3,8 +3,9 @@
 from collections.abc import MutableMapping
 from typing import Any
 
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors
+from .helpers import _LOGGER
 
 SMART_SERVICE_LIST_ENDPOINT = "/api/smart/service/list"
 SMART_SERVICE_DETAIL_ENDPOINT = f"{SMART_SERVICE_LIST_ENDPOINT}/1"

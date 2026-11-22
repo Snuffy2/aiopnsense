@@ -5,16 +5,10 @@ from collections.abc import MutableMapping
 from datetime import datetime, timedelta
 from typing import Any
 
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .exceptions import OPNsenseError
-from .helpers import (
-    _LOGGER,
-    _log_errors,
-    api_value_matches,
-    dict_get,
-    timestamp_to_datetime,
-    try_to_int,
-)
+from .helpers import _LOGGER, api_value_matches, dict_get, timestamp_to_datetime, try_to_int
 
 OPENVPN_SESSIONS_SNAKE_ENDPOINT = "/api/openvpn/service/search_sessions"
 OPENVPN_SESSIONS_CAMELCASE_ENDPOINT = "/api/openvpn/service/searchSessions"

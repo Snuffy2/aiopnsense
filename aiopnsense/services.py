@@ -4,8 +4,9 @@ from collections.abc import MutableMapping
 from typing import Any
 from urllib.parse import quote
 
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors, api_value_matches
+from .helpers import _LOGGER, api_value_matches
 
 CORE_SERVICE_SEARCH_ENDPOINT = "/api/core/service/search"
 CORE_SERVICE_ENDPOINT_PREFIX = "/api/core/service/"

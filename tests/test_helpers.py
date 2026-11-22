@@ -15,6 +15,7 @@ from aiopnsense import (
     OPNsenseError,
     OPNsenseInvalidURL,
     OPNsenseTimeoutError,
+    _error_policy as aiopnsense_error_policy,
     helpers as aiopnsense_helpers,
 )
 from tests.conftest import make_mock_session_client
@@ -372,7 +373,7 @@ async def test_log_errors_decorator_re_raise_and_suppress() -> None:
             """
             self._throw_errors = throw_errors
 
-        @aiopnsense_helpers._log_errors
+        @aiopnsense_error_policy._log_errors
         async def boom(self) -> None:
             """Raise RuntimeError for testing error handling.
 
@@ -422,7 +423,7 @@ async def test_log_errors_captures_safe_details_and_caches_rendering(
 
         _throw_errors = False
 
-        @aiopnsense_helpers._log_errors
+        @aiopnsense_error_policy._log_errors
         async def boom(self) -> None:
             """Raise an exception whose message must be sanitized before logging.
 
@@ -479,7 +480,7 @@ def test_log_errors_preserves_wrapped_metadata() -> None:
     class Dummy:
         """Test helper exposing a decorated async echo method for autodoc checks."""
 
-        @aiopnsense_helpers._log_errors
+        @aiopnsense_error_policy._log_errors
         async def boom(self, value: str) -> str:
             """Return the provided value unchanged.
 
@@ -536,7 +537,7 @@ async def test_log_errors_timeout_re_raise_and_suppress(
             raise timeout_error
 
         # wrap the coroutine with the decorator
-        decorated = aiopnsense_helpers._log_errors(raising_timeout)
+        decorated = aiopnsense_error_policy._log_errors(raising_timeout)
 
         # When error throwing is enabled we expect a public timeout error.
         client._throw_errors = True
@@ -561,7 +562,7 @@ async def test_log_errors_re_raises_existing_opnsense_timeout_instance() -> None
 
         _throw_errors = True
 
-        @aiopnsense_helpers._log_errors
+        @aiopnsense_error_policy._log_errors
         async def boom(self) -> None:
             """Raise the pre-existing timeout error instance.
 
@@ -586,7 +587,7 @@ async def test_log_errors_redacts_url_userinfo() -> None:
 
         _throw_errors = True
 
-        @aiopnsense_helpers._log_errors
+        @aiopnsense_error_policy._log_errors
         async def boom(self) -> None:
             """Raise an invalid URL with credential leaks.
 

@@ -1,14 +1,21 @@
 """Tests for `aiopnsense.unbound`."""
 
+import asyncio
 from collections.abc import Callable
 from copy import deepcopy
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, call
 
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient, OPNsenseInvalidURL
+from aiopnsense import (
+    OPNsenseClient,
+    OPNsenseConnectionError,
+    OPNsenseInvalidURL,
+    OPNsenseTimeoutError,
+)
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -866,35 +873,90 @@ async def test_disable_unbound_blocklist_uses_expected_invalid_firmware_fallback
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["enable_unbound_blocklist", "disable_unbound_blocklist"])
 @pytest.mark.parametrize(
-    "apply_error",
+    ("make_apply_error", "expected_error"),
     [
-        aiohttp.ClientError("boom"),
-        OPNsenseInvalidURL("https://user:password@api.example/api/unbound/service/dnsbl"),
+        (lambda: aiohttp.ClientError("boom"), OPNsenseConnectionError),
+        (
+            lambda: OPNsenseInvalidURL(
+                "https://user:password@api.example/api/unbound/service/dnsbl"
+            ),
+            OPNsenseInvalidURL,
+        ),
+        (lambda: TimeoutError("slow"), OPNsenseTimeoutError),
     ],
 )
-async def test_toggle_unbound_blocklist_handles_apply_exception(
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_toggle_unbound_blocklist_apply_exception_follows_throw_errors(
     make_client: ClientType,
-    apply_error: Exception,
+    caplog: pytest.LogCaptureFixture,
+    method_name: str,
+    make_apply_error: Callable[[], Exception],
+    expected_error: type[Exception],
+    throw_errors: bool,
 ) -> None:
-    """Verify DNSBL toggle returns ``False`` when apply endpoint raises errors.
+    """Verify a failed DNSBL apply request returns ``False`` or raises per ``throw_errors``.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        apply_error (Exception): Apply-phase exception expected to produce a failed toggle.
+        caplog (pytest.LogCaptureFixture): Log capture used to check the failure is logged once.
+        method_name (str): Client toggle method name.
+        make_apply_error (Callable[[], Exception]): Factory for a fresh apply-phase exception,
+            because a raised public error is marked as logged.
+        expected_error (type[Exception]): Public error expected when errors are thrown.
+        throw_errors (bool): Client error propagation setting.
 
     Returns:
-        None: This test validates exception handling for DNSBL apply requests.
+        None: This test validates DNSBL apply failure handling in both error modes.
     """
     client, _session = make_mock_session_client(make_client)
+    client._throw_errors = throw_errors
+    try:
+        client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
+        client._safe_dict_post = AsyncMock(
+            return_value={"result": "Enabled" if method_name.startswith("enable") else "Disabled"}
+        )
+        client._post = AsyncMock(side_effect=make_apply_error())
+
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            if throw_errors:
+                with pytest.raises(expected_error):
+                    await getattr(client, method_name)("uuid1")
+            else:
+                assert await getattr(client, method_name)("uuid1") is False
+
+        failure_records = [record for record in caplog.records if record.levelno >= logging.WARNING]
+        assert len(failure_records) == 1
+        assert "password" not in caplog.text
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_toggle_unbound_blocklist_apply_cancellation_propagates(
+    make_client: ClientType,
+    throw_errors: bool,
+) -> None:
+    """Verify cancellation during the DNSBL apply request is never swallowed.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Client error propagation setting.
+
+    Returns:
+        None: This test validates cancellation propagation in both error modes.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._throw_errors = throw_errors
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
         client._safe_dict_post = AsyncMock(return_value={"result": "Enabled"})
-        client._post = AsyncMock(side_effect=apply_error)
+        client._post = AsyncMock(side_effect=asyncio.CancelledError())
 
-        result = await client.enable_unbound_blocklist("uuid1")
-
-        assert result is False
+        with pytest.raises(asyncio.CancelledError):
+            await client.enable_unbound_blocklist("uuid1")
     finally:
         await client.async_close()
 

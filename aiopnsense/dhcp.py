@@ -17,10 +17,10 @@ from ._dhcp_leases import (
     _kea_lease_backend,
     _normalize_leases,
 )
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .helpers import (
     _LOGGER,
-    _log_errors,
     api_value_matches,
     coerce_bool,
     dict_get,

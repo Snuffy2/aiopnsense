@@ -7,9 +7,10 @@ from typing import Any
 
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
-from .helpers import _LOGGER, _log_errors, dict_get, try_to_float, try_to_int
+from .helpers import _LOGGER, dict_get, try_to_float, try_to_int
 
 INTERFACE_OVERVIEW_EXPORT_ENDPOINT = "/api/interfaces/overview/export"
 SYSTEM_MBUF_ENDPOINT = "/api/diagnostics/system/system_mbuf"

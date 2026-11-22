@@ -4,8 +4,9 @@ from collections.abc import Mapping
 import re
 from typing import Any
 
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
-from .helpers import _LOGGER, _log_errors
+from .helpers import _LOGGER
 
 NUT_DIAGNOSTICS_UPS_STATUS_ENDPOINT = "/api/nut/diagnostics/upsstatus"
 _NUT_DOT_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")

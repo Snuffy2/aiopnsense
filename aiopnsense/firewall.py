@@ -5,9 +5,10 @@ import csv
 from io import StringIO
 from typing import Any
 
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .const import OPNSENSE_26_1_11_COMPAT_FIRMWARE, UNIFIED_NAT_TEMPLATE_FIRMWARE
-from .helpers import _LOGGER, _log_errors, api_value_matches, coerce_bool, firmware_is_at_least
+from .helpers import _LOGGER, api_value_matches, coerce_bool, firmware_is_at_least
 
 FIREWALL_FILTER_RULES_DOWNLOAD_ENDPOINT = "/api/firewall/filter/download_rules"
 FIREWALL_DNAT_RULES_SEARCH_ENDPOINT = "/api/firewall/d_nat/search_rule"
