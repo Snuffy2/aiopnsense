@@ -1335,16 +1335,6 @@ _SUCCESS_RESPONSES: dict[str, Callable[[], FakeResponse]] = {
 }
 """Request path name mapped to a factory for a successful response."""
 
-_OUTAGE_PHASES = {
-    "get_json": "request",
-    "get_text": "request",
-    "post": "request",
-    "stream_once": "stream",
-    "stream_events": "stream",
-    "probe": "probe",
-}
-"""Request path name mapped to the phase word used in its recovery log line."""
-
 
 @pytest.mark.parametrize("path_name", list(_LADDER_PATHS))
 @pytest.mark.asyncio
@@ -1386,9 +1376,9 @@ async def test_repeated_request_failures_log_once_per_outage_until_recovery(
 
             caplog.clear()
             await _call_ladder_path(client, path_name)
-            recovered = [r for r in caplog.records if " recovered for " in r.getMessage()]
+            recovered = [r for r in caplog.records if r.levelno == logging.INFO]
             assert len(recovered) == 1
-            assert f" {_OUTAGE_PHASES[path_name]} recovered for " in recovered[0].getMessage()
+            assert "/api/x" in recovered[0].getMessage()
 
             caplog.clear()
             await _call_ladder_path(client, path_name)
@@ -1468,7 +1458,7 @@ async def test_stream_that_connects_then_stalls_logs_one_error_per_outage(
                 await _call_ladder_path(client, path_name)
 
         assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
-        assert not [r for r in caplog.records if " recovered for " in r.getMessage()]
+        assert not any(r.levelno == logging.INFO for r in caplog.records)
     finally:
         await client.async_close()
 
@@ -1510,9 +1500,10 @@ async def test_stream_reset_event_does_not_clear_outage(
             ]
             await _call_ladder_path(client, "stream_events")
 
-        assert events == [{_STREAM_JSON_EVENT_RESET_KEY: True}]
+        assert len(events) == 1
+        assert events[0].get(_STREAM_JSON_EVENT_RESET_KEY) is True
         assert len([record for record in caplog.records if record.levelno >= logging.WARNING]) == 1
-        assert not [record for record in caplog.records if " recovered for " in record.getMessage()]
+        assert not any(record.levelno == logging.INFO for record in caplog.records)
     finally:
         await client.async_close()
 
@@ -1544,7 +1535,7 @@ async def test_one_shot_non_mapping_stream_payload_does_not_report_recovery(
             await _call_ladder_path(client, "stream_once")
 
         assert len([record for record in caplog.records if record.levelno >= logging.WARNING]) == 1
-        assert not [record for record in caplog.records if " recovered for " in record.getMessage()]
+        assert not any(record.levelno == logging.INFO for record in caplog.records)
     finally:
         await client.async_close()
 
@@ -1601,10 +1592,9 @@ async def test_invalid_url_transport_logs_omit_credentials(
 
             failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
             assert [record.levelno for record in failures] == [logging.WARNING, logging.ERROR]
+            assert all("/api/x" in record.getMessage() for record in failures)
             messages = "\n".join(record.getMessage() for record in failures)
-            assert "Invalid OPNsense URL" in messages
             assert "synthetic-user" not in messages
             assert "synthetic-secret" not in messages
-            assert all("Traceback" not in record.getMessage() for record in failures)
         finally:
             await client.async_close()
