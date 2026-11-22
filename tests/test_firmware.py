@@ -10,6 +10,7 @@ import aiohttp
 import pytest
 
 import aiopnsense
+from aiopnsense.const import OPNSENSE_MIN_FIRMWARE, OPNSENSE_RECOMMENDED_FIRMWARE
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
@@ -18,6 +19,7 @@ from aiopnsense.exceptions import (
     OPNsensePrivilegeMissing,
 )
 import aiopnsense.firmware as firmware_module
+from aiopnsense.helpers import firmware_is_at_least
 from tests.conftest import FakeResponse, make_mock_session_client
 
 
@@ -1203,3 +1205,15 @@ async def test_cancelled_firmware_check_does_not_dispatch_later(
         release_worker.set()
         finish_check.set()
         await client.async_close()
+
+
+def test_get_firmware_requirements_reports_library_thresholds() -> None:
+    """The public requirements should match the thresholds `validate` enforces."""
+    requirements = aiopnsense.get_firmware_requirements()
+
+    assert isinstance(requirements, aiopnsense.FirmwareRequirements)
+    assert requirements.minimum == OPNSENSE_MIN_FIRMWARE
+    assert requirements.recommended == OPNSENSE_RECOMMENDED_FIRMWARE
+    assert firmware_is_at_least(requirements.recommended, requirements.minimum) is True
+    with pytest.raises(AttributeError):
+        requirements.minimum = "0"  # type: ignore[misc]

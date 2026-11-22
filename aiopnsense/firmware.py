@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import MutableMapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 import math
 from typing import Any
@@ -11,7 +12,12 @@ import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._typing import AiopnsenseClientProtocol
-from .const import AMBIGUOUS_TZINFOS, DEFAULT_REQUEST_TIMEOUT_SECONDS
+from .const import (
+    AMBIGUOUS_TZINFOS,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    OPNSENSE_MIN_FIRMWARE,
+    OPNSENSE_RECOMMENDED_FIRMWARE,
+)
 from .exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
@@ -35,6 +41,35 @@ FIRMWARE_CHECK_ENDPOINT = "/api/core/firmware/check"
 FIRMWARE_UPGRADE_STATUS_ENDPOINT = "/api/core/firmware/upgradestatus"
 FIRMWARE_ACTION_ENDPOINT_PREFIX = "/api/core/firmware/"
 FIRMWARE_CHANGELOG_ENDPOINT_PREFIX = "/api/core/firmware/changelog/"
+
+
+@dataclass(frozen=True, slots=True)
+class FirmwareRequirements:
+    """OPNsense firmware releases that aiopnsense supports.
+
+    Attributes:
+        minimum (str): Minimum Firmware. Routers running an older release are
+            rejected by ``OPNsenseClient.validate``.
+        recommended (str): Recommended Firmware. Routers running an older
+            release are accepted, but some features return empty or missing data.
+    """
+
+    minimum: str
+    recommended: str
+
+
+def get_firmware_requirements() -> FirmwareRequirements:
+    """Return the Minimum Firmware and Recommended Firmware that aiopnsense supports.
+
+    This reads library constants and never contacts a Router, so callers such as
+    a config flow can use it before any client exists.
+
+    Returns:
+        FirmwareRequirements: Minimum Firmware and Recommended Firmware versions.
+    """
+    return FirmwareRequirements(
+        minimum=OPNSENSE_MIN_FIRMWARE, recommended=OPNSENSE_RECOMMENDED_FIRMWARE
+    )
 
 
 class FirmwareMixin(AiopnsenseClientProtocol):
