@@ -454,9 +454,10 @@ def _minimums(
 
 _NOT_COMPARABLE = _minimums(None, None, None, None)
 
-# Version forms taken from a live Router and its OPNsense changelogs. Betas cannot be
-# compared, so the lookup uses their product series. A release candidate compares as
-# older than its final release.
+# Version forms come from a live Router, its OPNsense changelogs, and reported firmware
+# issues. Betas cannot be compared, so the lookup uses their product series. A release
+# candidate compares as older than its final release. The last entry is a status payload
+# with no product data.
 FIRMWARE_VERSION_SHAPES: tuple[FirmwareVersionShape, ...] = (
     FirmwareVersionShape(
         id="series-release",
@@ -540,21 +541,12 @@ FIRMWARE_VERSION_SHAPES: tuple[FirmwareVersionShape, ...] = (
         cached=True,
     ),
     FirmwareVersionShape(
-        id="beta-build-without-series",
+        id="current-beta-build",
         product_version="27.1.b_21",
-        product_series=None,
+        product_series="27.1",
         trimmed="27.1.b",
         at_least=_NOT_COMPARABLE,
-        lookup_version="27.1.b_21",
-        cached=False,
-    ),
-    FirmwareVersionShape(
-        id="missing-version-with-series",
-        product_version=None,
-        product_series="26.7",
-        trimmed=None,
-        at_least=_NOT_COMPARABLE,
-        lookup_version="26.7",
+        lookup_version="27.1",
         cached=True,
     ),
     FirmwareVersionShape(

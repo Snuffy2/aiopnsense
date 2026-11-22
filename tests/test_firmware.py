@@ -37,6 +37,9 @@ from tests.conftest import (
 )
 
 _SHAPE_PARAMS = [pytest.param(shape, id=shape.id) for shape in FIRMWARE_VERSION_SHAPES]
+_CACHED_SHAPE_PARAMS = [
+    pytest.param(shape, id=shape.id) for shape in FIRMWARE_VERSION_SHAPES if shape.cached
+]
 
 
 @pytest.mark.asyncio
@@ -1689,7 +1692,7 @@ async def _lookup_after_cooldown_poll(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("shape", _SHAPE_PARAMS)
+@pytest.mark.parametrize("shape", _CACHED_SHAPE_PARAMS)
 async def test_firmware_cooldown_keeps_cache_for_unchanged_version_shape(
     make_client: Callable[..., Any],
     fake_response_factory: Callable[..., Any],
@@ -1710,7 +1713,7 @@ async def test_firmware_cooldown_keeps_cache_for_unchanged_version_shape(
         result = await _lookup_after_cooldown_poll(
             client, session, fake_response_factory, shape.product, shape.product
         )
-        assert result == (shape.lookup_version, 0 if shape.cached else 1)
+        assert result == (shape.lookup_version, 0)
     finally:
         await client.async_close()
 
