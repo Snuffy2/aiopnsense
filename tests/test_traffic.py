@@ -376,8 +376,7 @@ async def test_stream_interface_traffic_yields_normalized_samples(
             "interfaces": {"wan": {"bytes received": 1000, "bytes transmitted": 2000}},
         }
 
-    session = MagicMock()
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         router = install_fake_router(client, session)
         client._stream_json_events = cast(Any, fake_stream)
@@ -422,8 +421,7 @@ async def test_stream_interface_traffic_real_stream_path_keeps_non_ascii_name(
         make_client (Callable[..., Any]): Client factory using the real streaming code path.
         fake_stream_response_factory (FakeStreamResponseFactory): Factory serving the non-ASCII stream response.
     """
-    session = MagicMock()
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     install_fake_router(client, session)
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -467,8 +465,7 @@ async def test_stream_interface_traffic_closes_inner_iterator(
             nonlocal events_closed
             events_closed = True
 
-    session = MagicMock()
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         install_fake_router(client, session)
         client._stream_json_events = cast(Any, fake_stream)
@@ -504,8 +501,7 @@ async def test_stream_interface_traffic_clamps_poll_interval(
             "interfaces": {"wan": {"bytes received": 2000, "bytes transmitted": 3000}},
         }
 
-    session = MagicMock()
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         router = install_fake_router(client, session)
         client._stream_json_events = cast(Any, fake_stream)
@@ -554,8 +550,7 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
             "interfaces": {"wan": {"bytes received": 12000, "bytes transmitted": 14000}},
         }
 
-    session = MagicMock()
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     try:
         install_fake_router(client, session)
         client._stream_json_events = cast(Any, fake_stream)
@@ -601,8 +596,7 @@ async def test_stream_interface_traffic_passes_read_timeout_from_clamped_poll_in
             ]
         )
 
-    session = MagicMock()
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     install_fake_router(client, session)
     session.get = fake_get
     try:
@@ -627,8 +621,7 @@ async def test_stream_interface_traffic_reseeds_interval_after_malformed_json_ev
         make_client (Callable[..., Any]): Client factory using the real streaming code path.
         fake_stream_response_factory (FakeStreamResponseFactory): Factory serving a malformed JSON stream event.
     """
-    session = MagicMock()
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     install_fake_router(client, session)
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -658,8 +651,7 @@ async def test_stream_interface_traffic_reseeds_interval_after_non_mapping_json_
         fake_stream_response_factory (FakeStreamResponseFactory): Factory serving a non-mapping JSON stream event.
     """
 
-    session = MagicMock()
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     install_fake_router(client, session)
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -690,8 +682,7 @@ async def test_stream_interface_traffic_resets_interval_after_stream_json_reset(
         fake_stream_response_factory (FakeStreamResponseFactory): Factory serving a reset-marker stream event.
     """
 
-    session = MagicMock()
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     install_fake_router(client, session)
     session.get = lambda *a, **k: fake_stream_response_factory(
         [
@@ -734,8 +725,7 @@ async def test_stream_interface_traffic_ends_quietly_when_endpoint_unavailable(
         make_client (Callable[..., Any]): Client factory backed by a fake Router.
         status (int): HTTP status the Router returns for the stream endpoint.
     """
-    session = MagicMock()
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     router = install_fake_router(client, session, routes={("GET", STREAM_PATH): status})
     try:
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
@@ -806,8 +796,7 @@ async def test_stream_interface_traffic_returns_empty_iteration_on_check_error(
         make_client (MakeClientFactory): Client factory whose stream check fails.
         probe_error (Exception): Error raised by the Router for the stream endpoint.
     """
-    session = MagicMock()
-    client = make_client(session=session)
+    client, session = make_mock_session_client(make_client)
     router = install_fake_router(client, session, routes={("GET", STREAM_PATH): probe_error})
     try:
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]

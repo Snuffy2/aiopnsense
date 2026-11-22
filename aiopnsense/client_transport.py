@@ -388,7 +388,8 @@ class ClientTransportMixin:
         Unlike ``_do_get``, an HTTP or transport failure is returned as an
         outcome instead of being logged and raised, so the endpoint module can
         tell a missing endpoint from a transient failure and apply the
-        ``throw_errors`` policy itself.
+        ``throw_errors`` policy itself. Successful responses still run a custom
+        session response validator before the body is decoded.
 
         Args:
             path (str): API endpoint path to request.
@@ -419,6 +420,7 @@ class ClientTransportMixin:
                 _LOGGER.debug("[get_outcome] Response %s: %s", response.status, response.reason)
                 if not response.ok:
                     return EndpointOutcome.from_http_status(response.status, response.reason)
+                await self._validate_outcome_response(response)
                 if not read_body:
                     return EndpointOutcome.data(None)
                 if response_format == "text":
@@ -428,6 +430,20 @@ class ClientTransportMixin:
             error = _map_opnsense_exception(e)
             error.__cause__ = e
             return EndpointOutcome.transient(error, f"{type(e).__name__}: {e}")
+
+    async def _validate_outcome_response(self, response: aiohttp.ClientResponse) -> None:
+        """Run the caller's validator after HTTP status classification succeeds.
+
+        Outcome requests handle HTTP failure statuses directly. The per-request
+        override also disables custom session validators, so run the callable
+        explicitly before accepting a successful response.
+
+        Args:
+            response (aiohttp.ClientResponse): Successful response to validate.
+        """
+        validator = self._session.raise_for_status
+        if callable(validator):
+            await validator(response)
 
     def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
         """Normalize per-call timeout values to a positive float in seconds.
@@ -564,8 +580,9 @@ class ClientTransportMixin:
         Unlike ``_do_post``, an HTTP or transport failure is returned as an
         outcome instead of being logged and raised, so the endpoint module can
         tell a missing endpoint from a transient failure and apply the
-        ``throw_errors`` policy itself. The request always carries the caller's
-        payload; no payload-less probe is sent.
+        ``throw_errors`` policy itself. Successful responses still run a custom
+        session response validator before the body is decoded. The request
+        always carries the caller's payload; no payload-less probe is sent.
 
         Args:
             path (str): API endpoint path to request.
@@ -592,6 +609,7 @@ class ClientTransportMixin:
                 _LOGGER.debug("[post_outcome] Response %s: %s", response.status, response.reason)
                 if not response.ok:
                     return EndpointOutcome.from_http_status(response.status, response.reason)
+                await self._validate_outcome_response(response)
                 return EndpointOutcome.data(await response.json(content_type=None))
         except (aiohttp.ClientError, TimeoutError) as e:
             error = _map_opnsense_exception(e)

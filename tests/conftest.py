@@ -55,6 +55,8 @@ def legacy_dnsbl_payload() -> dict[str, Any]:
 class FakeClientSession:
     """Minimal fake aiohttp session for unit tests."""
 
+    raise_for_status = False
+
     async def __aenter__(self) -> Self:
         """Enter async context.
 
@@ -246,7 +248,7 @@ def make_mock_session_client(
     Returns:
         tuple[aiopnsense.OPNsenseClient, MagicMock]: Created client and mocked session.
     """
-    session = MagicMock(spec=aiohttp.ClientSession)
+    session = MagicMock(spec=aiohttp.ClientSession, raise_for_status=False)
     return make_client(session=session, username=username, password=password, url=url), session
 
 

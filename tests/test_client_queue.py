@@ -6,8 +6,9 @@ import contextlib
 import json
 import logging
 from typing import Any, Never, Self
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseError, client_queue as aiopnsense_client_queue, vpn as aiopnsense_vpn
@@ -29,6 +30,69 @@ def no_queue_request_interval(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
     monkeypatch.setattr(aiopnsense_client_queue, "QUEUE_REQUEST_INTERVAL_SECONDS", 0)
+
+
+@pytest.mark.parametrize(
+    ("method_name", "request_method", "absent"),
+    [("get_nut_ups_status", "GET", {}), ("get_ndp_entries", "POST", None)],
+)
+async def test_outcome_reads_respect_custom_response_validator(
+    method_name: str,
+    request_method: str,
+    absent: dict[str, Any] | None,
+    make_client: MakeClientFactory,
+) -> None:
+    """A session validator can reject a successful read while HTTP 404 remains absence.
+
+    Args:
+        method_name (str): Public read method to invoke.
+        request_method (str): Expected HTTP method for the read.
+        absent (dict[str, Any] | None): Public return value for an absent endpoint.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    status = 200
+    requests: list[str] = []
+    rejected = aiohttp.ClientPayloadError("response rejected by caller")
+    validate_response = AsyncMock(side_effect=rejected)
+
+    async def respond(
+        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Supply a Router response without opening a socket.
+
+        Args:
+            request (aiohttp.ClientRequest): Request prepared by the real session.
+            _handler (aiohttp.ClientHandlerType): Network handler replaced by this middleware.
+
+        Returns:
+            aiohttp.ClientResponse: Simulated response at the middleware boundary.
+        """
+        requests.append(request.method)
+        response = MagicMock(spec=aiohttp.ClientResponse)
+        response.status = status
+        response.ok = status == 200
+        response.reason = "OK" if status == 200 else "Not Found"
+        response.connection = None
+        response._raw_cookie_headers = ()
+        response.__aenter__.return_value = response
+        response.json.return_value = {"status": {"ups.status": "OL"}, "rows": [], "total": 0}
+        return response
+
+    async with aiohttp.ClientSession(
+        middlewares=[respond], raise_for_status=validate_response
+    ) as session:
+        client = make_client(session=session, throw_errors=True)
+        read = getattr(client, method_name)
+        with pytest.raises(OPNsenseConnectionError) as exc_info:
+            await read()
+        assert exc_info.value.__cause__ is rejected
+        validate_response.assert_awaited_once()
+
+        status = 404
+        assert await read() == absent
+        assert await read() == absent
+        assert requests == [request_method, request_method]
+        validate_response.assert_awaited_once()
 
 
 @pytest.mark.asyncio
