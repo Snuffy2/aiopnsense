@@ -22,6 +22,7 @@ from yarl import URL
 
 import aiopnsense
 from aiopnsense import client_queue
+from aiopnsense._endpoint_outcome import EndpointOutcome
 
 MakeClientFactory = Callable[..., aiopnsense.OPNsenseClient]
 
@@ -620,7 +621,7 @@ class RouterRequest:
 
 
 class ScriptedRouter:
-    """Router stand-in that replaces a client's ``_post`` and ``_get`` transport.
+    """Router stand-in for a client's Toggle transport.
 
     The cancellation-aware queued POST that VPN Toggles use is answered from the same
     script. Replies are scripted per ``(method, path)``. An unscripted request is recorded and
@@ -657,30 +658,36 @@ class ScriptedRouter:
             client_kwargs (Any): Keyword arguments forwarded to ``make_client``.
 
         Returns:
-            aiopnsense.OPNsenseClient: Client with ``_post`` and ``_get`` scripted.
+            aiopnsense.OPNsenseClient: Client with scripted Toggle requests.
         """
         client = self._make_client(**client_kwargs)
         client._use_snake_case = True
         client._post = self._post
         client._get = self._get
-        client._is_get_endpoint_available = self._is_get_endpoint_available
+        client._queue_request = self._queue_outcome_read
         client._queue_post_with_cancellation = self._post_with_cancellation
         return client
 
-    async def _is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
-        """Answer an endpoint availability probe from the script.
-
-        An endpoint is available when the script has a GET reply for it, so a test makes
-        an endpoint unavailable by leaving it unscripted.
+    async def _queue_outcome_read(
+        self, method: str, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> EndpointOutcome:
+        """Answer an alias lookup through the queued outcome request seam.
 
         Args:
-            path (str): API path being probed.
-            force_refresh (bool): Ignored; the script has no cache.
+            method (str): Queue operation requested by the client.
+            path (str): API path being read.
+            payload (MutableMapping[str, Any] | None): Unused body for the GET request.
 
         Returns:
-            bool: ``True`` when a GET reply is scripted for ``path``.
+            EndpointOutcome: Scripted payload or an absent endpoint.
+
+        Raises:
+            ValueError: The test requests an operation other than a GET outcome.
         """
-        return ("GET", path) in self._replies
+        if method != "get_outcome":
+            raise ValueError(f"Unexpected scripted Router operation: {method}")
+        reply = await self._get(path)
+        return EndpointOutcome.absent() if reply is None else EndpointOutcome.data(reply)
 
     def requested(self, path: str, *, method: str = "POST") -> bool:
         """Return whether the client sent a request.

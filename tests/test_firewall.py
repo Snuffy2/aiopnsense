@@ -673,21 +673,21 @@ async def test_toggle_alias_missing_lookup_does_not_raise_in_throw_mode(
         ),
         pytest.param(
             {"rows": [{"name": "alias1", "uuid": "aid"}]},
-            [{"result": "ok"}, {"result": "not-saved"}],
+            [{"result": "Disabled"}, {"result": "not-saved"}],
             False,
             2,
             id="save-failed",
         ),
         pytest.param(
             {"rows": [{"name": "alias1", "uuid": "aid"}]},
-            [{"result": "ok"}, {"result": "saved"}, {"status": "failed"}],
+            [{"result": "Disabled"}, {"result": "saved"}, {"status": "failed"}],
             False,
             3,
             id="apply-failed",
         ),
         pytest.param(
             {"rows": [{"name": "alias1", "uuid": "aid"}]},
-            [{"result": "ok"}, {"result": "saved"}, {"status": "ok"}],
+            [{"result": "Disabled"}, {"result": "saved"}, {"status": "ok"}],
             True,
             3,
             id="success",
@@ -762,7 +762,7 @@ async def test_firewall_switched_endpoints_follow_selected_case(
     result, router = await _toggle_alias(
         make_client,
         {"rows": [{"name": "alias1", "uuid": "aid"}]},
-        post_payloads=[{"result": "ok"}, {"result": "saved"}, {"status": "ok"}],
+        post_payloads=[{"result": "Enabled"}, {"result": "saved"}, {"status": "ok"}],
         use_snake_case=use_snake_case,
     )
 

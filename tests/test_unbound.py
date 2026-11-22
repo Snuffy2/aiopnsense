@@ -18,7 +18,12 @@ from aiopnsense import (
     OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
-from tests.conftest import RouterReply, ScriptedRouter, install_fake_router, make_mock_session_client
+from tests.conftest import (
+    RouterReply,
+    ScriptedRouter,
+    install_fake_router,
+    make_mock_session_client,
+)
 
 ClientType = Callable[..., OPNsenseClient]
 DNSBL_PATH = "/api/unbound/settings/search_dnsbl"
