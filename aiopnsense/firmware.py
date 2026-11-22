@@ -5,6 +5,7 @@ from collections.abc import MutableMapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import math
+from time import monotonic
 from typing import Any
 from warnings import deprecated
 
@@ -16,6 +17,7 @@ from ._typing import AiopnsenseClientProtocol
 from .const import (
     AMBIGUOUS_TZINFOS,
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    FIRMWARE_CHECK_COOLDOWN_SECONDS,
     OPNSENSE_MIN_FIRMWARE,
     OPNSENSE_RECOMMENDED_FIRMWARE,
 )
@@ -62,6 +64,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
 
     _firmware_version: str | None
     _firmware_install_active: bool
+    _firmware_check_requested_at: float | None
 
     @staticmethod
     def get_firmware_requirements() -> FirmwareRequirements:
@@ -119,6 +122,10 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         self, *, check_for_updates: bool = True
     ) -> MutableMapping[str, Any]:
         """Return firmware status and trigger a refresh when cached data is stale.
+
+        One client requests at most one automatic check per hour, even when the
+        status still needs a refresh. A verified ``install_firmware`` ends the
+        cooldown so the next call can refresh the installed state.
 
         Args:
             check_for_updates (bool): Allow automatic refresh checks when idle.
@@ -193,11 +200,21 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             # Serialize our check dispatch with install activation. The server's
             # lock is also shared with checks from other clients/the web GUI.
             async with self._firmware_action_lock:
-                if not self._firmware_install_active:
+                requested_at = self._firmware_check_requested_at
+                cooling_down = (
+                    requested_at is not None
+                    and monotonic() - requested_at < FIRMWARE_CHECK_COOLDOWN_SECONDS
+                )
+                if cooling_down:
+                    _LOGGER.debug("Skipping firmware check during cooldown")
+                elif not self._firmware_install_active:
                     running = await self._safe_dict_get(FIRMWARE_RUNNING_ENDPOINT)
                     if running.get("status") == "ready":
                         _LOGGER.info("Triggering firmware check")
                         self._firmware_version = None
+                        # Start the cooldown before dispatch: a failed or cancelled
+                        # POST may still have started a check on the Router.
+                        self._firmware_check_requested_at = monotonic()
                         # Do not queue this mutation: a cancelled queue caller
                         # can leave a CHECK that runs after the action lock releases.
                         await self._do_post(FIRMWARE_CHECK_ENDPOINT)
@@ -318,6 +335,8 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 await self._observe_firmware_install(
                     type, target_version, baseline_log, poll_interval
                 )
+            # The update flushed the Router's availability data, so allow a fresh check.
+            self._firmware_check_requested_at = None
         except TimeoutError as err:
             raise OPNsenseError("Firmware installation deadline exceeded") from err
         finally:

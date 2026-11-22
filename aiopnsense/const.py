@@ -15,6 +15,9 @@ LEGACY_CAMELCASE_ENDPOINT_FIRMWARE = "25.7"
 OPNSENSE_26_1_11_COMPAT_FIRMWARE = "26.1.11"
 OPNSENSE_INTERFACE_ASSIGNMENT_FIRMWARE = "26.7.6"
 
+# Minimum time, in seconds, between automatic firmware checks from one client.
+FIRMWARE_CHECK_COOLDOWN_SECONDS = 3600
+
 
 # Default timeout, in seconds, for API requests.
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60

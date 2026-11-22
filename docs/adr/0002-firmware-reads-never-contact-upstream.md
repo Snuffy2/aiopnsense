@@ -17,11 +17,14 @@ This was confirmed against `FirmwareController.php`, `actions_firmware.conf` and
 - **Read the installed version from `/info`.** Rejected: it contacts the mirrors on every call. This caused the first reports.
 - **Use `POST /status` for fresh data.** Rejected: it blocks for seconds while the check runs, and a poll would run one each time.
 - **Never request a check and rely on the Router's daily cron.** Rejected: the status can be empty or incomplete until a check runs, and the update entity needs those details.
+- **Fix each repeating condition without a rate limit.** Rejected: this is what past fixes did, and each new condition brought the problem back.
 
 ## Consequences
 
 - A new firmware read must use an endpoint and method from the table above, or first be traced through its controller action and configd script to show it does not reach `pkg update`. An endpoint's name and HTTP method do not establish this.
-- A check is requested only when the status is an error, older than one day, missing data, or reports a newer version without details. Any of these conditions that a check cannot clear repeats the check on every idle poll. **This gap is still open:** there is no cooldown between checks, so a persistent mirror error, a non-comparable version or an invalid `last_check` still produces one check per poll.
+- A check is requested only when the status is an error, older than one day, missing data, or reports a newer version without details. Some of these conditions cannot be cleared by a check, such as a mirror outage, a non-comparable version or an invalid `last_check`, so each client requests at most one automatic check per hour regardless of the status. The cooldown is the backstop for the next condition nobody anticipated.
+- The cooldown starts when a check POST is attempted, because a failed or cancelled POST may still have reached the Router. A Router that reports `busy` does not start it. A verified `install_firmware` ends it, because the update flushes the Router's availability data.
+- The cooldown lives in memory on one client. A restart or a second client can request its own check, and update details can take up to an hour to appear after a failed check.
 - `check` is on the unsafe POST probe list, so an availability probe can never start one.
 - Other clients and the web GUI can also start checks, so the `running` test does not reserve the firmware lock (see `docs/diagnostics/firmware-update-debugging.md`).
 
