@@ -319,14 +319,12 @@ async def test_unbound_attempt_keeps_domain_caller_in_queue_diagnostics(
         None: This test asserts the caller label in the actual transport report.
     """
     client, session = make_mock_session_client(make_client)
-    task: asyncio.Task | None = None
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
         client._safe_dict_get = AsyncMock(return_value={"unbound": {"dnsbl": {}}})
         session.post.return_value = FakeResponse(
             status=500, reason="Internal Server Error", ok=False
         )
-        task = asyncio.get_running_loop().create_task(client._process_queue())
 
         with caplog.at_level(logging.ERROR, logger="aiopnsense"):
             result = await client.enable_unbound_blocklist()
@@ -334,10 +332,6 @@ async def test_unbound_attempt_keeps_domain_caller_in_queue_diagnostics(
         assert result is False
         assert "called by _set_unbound_blocklist_legacy" in caplog.text
     finally:
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
         await client.async_close()
 
 

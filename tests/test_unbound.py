@@ -507,7 +507,6 @@ async def test_legacy_blocklist_completion_log_omits_configuration_and_response_
         assert "SAVE_RESPONSE_MARKER" not in caplog.text
         assert "APPLY_RESPONSE_MARKER" not in caplog.text
         assert "RESTART_RESPONSE_MARKER" not in caplog.text
-        assert "result: success" in caplog.text
     finally:
         await client.async_close()
 

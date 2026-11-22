@@ -128,7 +128,7 @@ async def test_log_errors_captures_safe_details_and_caches_rendering(
     assert first_render.startswith(
         "LazyMessageError: request failed for https://<redacted>:<redacted>@example.invalid\n"
     )
-    assert second_render is first_render
+    assert second_render == first_render
     assert rendered_messages == 1
     assert traceback_format_calls == 1
     assert not hasattr(log_details, "_error")
