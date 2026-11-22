@@ -1583,3 +1583,35 @@ async def test_transport_failure_log_omits_credentials_from_configured_url(
         assert "synthetic-password" not in messages
     finally:
         await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_invalid_url_transport_logs_omit_credentials(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Real aiohttp URL validation failures redact credentials in probe and request logs.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    async with aiohttp.ClientSession() as session:
+        client = make_client(
+            session=session,
+            url="https://synthetic-user:synthetic-secret@opnsense.invalid:bad",
+        )
+        try:
+            with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+                assert not await client._is_get_endpoint_available("/api/x", force_refresh=True)
+                assert await client._do_get("/api/x", caller="test") is None
+
+            failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
+            assert [record.levelno for record in failures] == [logging.WARNING, logging.ERROR]
+            messages = "\n".join(record.getMessage() for record in failures)
+            assert "Invalid OPNsense URL" in messages
+            assert "synthetic-user" not in messages
+            assert "synthetic-secret" not in messages
+            assert all("Traceback" not in record.getMessage() for record in failures)
+        finally:
+            await client.async_close()

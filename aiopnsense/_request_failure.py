@@ -14,7 +14,7 @@ from .exceptions import (
     _map_opnsense_exception,
     _opnsense_http_error,
 )
-from .helpers import _log_request_failure, _RequestLoggingClient
+from .helpers import _log_request_failure, _redacted_exception_message, _RequestLoggingClient
 
 REQUEST_PHASE = "request"
 """Request phase of immediate GET and POST data calls."""
@@ -152,7 +152,7 @@ def _report_transport_failure(
             method.upper(),
             path,
             type(exc).__name__,
-            exc,
+            _redacted_exception_message(exc),
             error=logged_error,
         )
     else:
@@ -168,7 +168,7 @@ def _report_transport_failure(
             *origin_args,
             path,
             type(exc).__name__,
-            exc,
+            _redacted_exception_message(exc),
             error=logged_error,
         )
     return error

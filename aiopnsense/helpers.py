@@ -34,15 +34,7 @@ class _ExceptionLogDetails:
             error (Exception): Caught exception to redact and render.
         """
         self._error_type = type(error).__name__
-        self._logged_message = (
-            _INVALID_URL_ERROR_MESSAGE
-            if isinstance(error, aiohttp.InvalidURL)
-            else re.sub(
-                r"(://)([^:/@\s]+):([^@\s]+)@",
-                r"\1<redacted>:<redacted>@",
-                str(error),
-            )
-        )
+        self._logged_message = _redacted_exception_message(error)
         self._traceback_snapshot = traceback.extract_tb(error.__traceback__)
         self._rendered: str | None = None
 
@@ -58,6 +50,24 @@ class _ExceptionLogDetails:
                 f"{''.join(self._traceback_snapshot.format())}"
             )
         return self._rendered
+
+
+def _redacted_exception_message(error: Exception) -> str:
+    """Return exception text with URL credentials removed.
+
+    Args:
+        error (Exception): Exception whose message may contain a URL.
+
+    Returns:
+        str: Safe exception message for logging.
+    """
+    if isinstance(error, aiohttp.InvalidURL):
+        return _INVALID_URL_ERROR_MESSAGE
+    return re.sub(
+        r"(://)([^:/@\s]+):([^@\s]+)@",
+        r"\1<redacted>:<redacted>@",
+        str(error),
+    )
 
 
 def _log_request_failure(
