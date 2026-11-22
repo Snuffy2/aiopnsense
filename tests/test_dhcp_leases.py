@@ -9,7 +9,10 @@ from aiopnsense._dhcp_leases import (
     DNSMASQ_LEASE_BACKEND,
     ISC_LEASE_BACKEND,
     copy_identity_fields,
+    has_authoritative_reservation_metadata,
+    is_live_row,
     is_reserved_lease,
+    kea_lease_backend,
     normalize_leases,
 )
 
@@ -258,3 +261,176 @@ def test_copy_identity_fields_sets_reserved_by_only_for_non_empty_list() -> None
 
     copy_identity_fields(lease, {"is_reserved": ["host1"]})
     assert lease["reserved_by"] == ["host1"]
+
+
+RESERVATIONS = {"aa:bb:cc:dd:ee:01": "192.0.2.1"}
+
+
+def _kea_row(**overrides: object) -> dict[str, Any]:
+    """Build an active Kea DHCPv4 row, replacing or adding the given fields.
+
+    Args:
+        **overrides (object): Row fields to set on top of the defaults.
+
+    Returns:
+        dict[str, Any]: Raw Kea lease row.
+    """
+    return {
+        "address": "192.0.2.1",
+        "hwaddr": "aa:bb:cc:dd:ee:01",
+        "if_name": "lan",
+        "if_descr": "LAN",
+        "state": "0",
+        "is_reserved": "0",
+    } | overrides
+
+
+@pytest.mark.parametrize(
+    ("row", "require_hardware_address", "reservations", "expected"),
+    [
+        pytest.param(_kea_row(), True, None, _dnsmasq_lease(), id="active-string-state"),
+        pytest.param(_kea_row(state=0), True, None, _dnsmasq_lease(), id="active-integer-state"),
+        pytest.param(_kea_row(state="1"), True, None, None, id="non-active-state"),
+        pytest.param(_kea_row(state=None), True, None, None, id="missing-state"),
+        pytest.param(_kea_row(hwaddr=""), True, None, None, id="v4-requires-mac"),
+        pytest.param(
+            _kea_row(hwaddr=None, duid="00:01"),
+            False,
+            None,
+            _dnsmasq_lease(mac=None, duid="00:01"),
+            id="v6-allows-missing-mac-and-copies-duid",
+        ),
+        pytest.param(
+            _kea_row(hostname="."),
+            True,
+            None,
+            _dnsmasq_lease(hostname=""),
+            id="dot-only-hostname-becomes-empty-string",
+        ),
+        pytest.param(
+            _kea_row(hostname="host.example."),
+            True,
+            None,
+            _dnsmasq_lease(hostname="host.example"),
+            id="surrounding-dots-stripped",
+        ),
+        pytest.param(
+            _kea_row(hostname="*"),
+            True,
+            None,
+            _dnsmasq_lease(hostname="*"),
+            id="star-hostname-kept",
+        ),
+        pytest.param(
+            _kea_row(is_reserved="1", client_id="01:aa"),
+            True,
+            None,
+            _dnsmasq_lease(type="static", client_id="01:aa"),
+            id="authoritative-reserved-flag",
+        ),
+        pytest.param(
+            _kea_row(is_reserved=["res-1"]),
+            True,
+            None,
+            _dnsmasq_lease(type="static", reserved_by=["res-1"]),
+            id="authoritative-reserved-list",
+        ),
+        pytest.param(
+            _kea_row(is_reserved=[]), True, None, _dnsmasq_lease(), id="authoritative-empty-list"
+        ),
+        pytest.param(
+            _kea_row(is_reserved=None),
+            True,
+            None,
+            _dnsmasq_lease(type="unknown"),
+            id="no-metadata-no-reservation-data-is-unknown",
+        ),
+        pytest.param(
+            _kea_row(is_reserved=None),
+            True,
+            RESERVATIONS,
+            _dnsmasq_lease(type="static"),
+            id="reservation-matches-mac-and-address",
+        ),
+        pytest.param(
+            _kea_row(is_reserved=None, address="192.0.2.9"),
+            True,
+            RESERVATIONS,
+            _dnsmasq_lease(address="192.0.2.9", type="dynamic"),
+            id="reservation-for-another-address",
+        ),
+        pytest.param(
+            _kea_row(is_reserved=None), True, {}, _dnsmasq_lease(), id="empty-reservation-data"
+        ),
+        pytest.param(
+            _kea_row(is_reserved="bogus"),
+            True,
+            RESERVATIONS,
+            _dnsmasq_lease(type="static"),
+            id="unsupported-metadata-falls-back-to-reservations",
+        ),
+        pytest.param(
+            _kea_row(expire=int(FUTURE.timestamp())),
+            True,
+            None,
+            _dnsmasq_lease(expires=FUTURE),
+            id="future-epoch",
+        ),
+        pytest.param(_kea_row(expire=int(PAST.timestamp())), True, None, None, id="past-epoch"),
+        pytest.param(
+            _kea_row(expire=OVERFLOW_EPOCH),
+            True,
+            None,
+            _dnsmasq_lease(expires=OVERFLOW_EPOCH),
+            id="overflowing-epoch-keeps-raw-value",
+        ),
+    ],
+)
+def test_normalize_kea_leases(
+    row: dict[str, Any],
+    require_hardware_address: bool,
+    reservations: dict[str, str] | None,
+    expected: dict[str, Any] | None,
+) -> None:
+    """Kea rows become leases, or are omitted, according to the Kea rules.
+
+    Args:
+        row (dict[str, Any]): Raw row handed to the normalizer.
+        require_hardware_address (bool): Whether the backend is DHCPv4 and requires a MAC.
+        reservations (dict[str, str] | None): Reservation map, or None when unavailable.
+        expected (dict[str, Any] | None): Expected lease, or None when the row is omitted.
+    """
+    backend = kea_lease_backend(
+        require_hardware_address=require_hardware_address, reservations=reservations
+    )
+
+    leases = normalize_leases([row], backend, now=NOW)
+
+    assert leases == ([] if expected is None else [expected])
+    assert is_live_row(row, backend, now=NOW) is (expected is not None)
+
+
+@pytest.mark.parametrize(
+    ("raw_reserved", "expected"),
+    [
+        ("0", True),
+        ("1", True),
+        (0, True),
+        (1, True),
+        (True, True),
+        ([], True),
+        (["host1"], True),
+        ("2", False),
+        ("yes", False),
+        (None, False),
+        (1.0, False),
+    ],
+)
+def test_has_authoritative_reservation_metadata(raw_reserved: object, expected: bool) -> None:
+    """Only list, string, integer and boolean flags classify a Kea lease authoritatively.
+
+    Args:
+        raw_reserved (object): Raw ``is_reserved`` value from Kea.
+        expected (bool): Whether the value is authoritative.
+    """
+    assert has_authoritative_reservation_metadata(raw_reserved) is expected
