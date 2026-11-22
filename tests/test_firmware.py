@@ -1208,7 +1208,10 @@ async def test_cancelled_firmware_check_does_not_dispatch_later(
 
 
 def test_get_firmware_requirements_reports_library_thresholds() -> None:
-    """The public requirements should match the thresholds `validate` enforces."""
+    """Return the library's Minimum and Recommended Firmware as an immutable value.
+
+    The Minimum Firmware is not above the Recommended Firmware.
+    """
     requirements = aiopnsense.OPNsenseClient.get_firmware_requirements()
 
     assert isinstance(requirements, aiopnsense.OPNsenseClient.FirmwareRequirements)
