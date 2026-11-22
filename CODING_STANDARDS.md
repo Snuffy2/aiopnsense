@@ -29,7 +29,7 @@ Standards for code in `aiopnsense/` and `tests/`. Rules that `ruff`, `mypy` or `
 
 ## Errors and logging
 
-- Catch specific exceptions. A broad `except Exception` is allowed only where it already exists, in the shared `_log_errors` decorator and the queue worker, and carries a reason.
+- Catch specific exceptions. A broad `except Exception` is allowed only where it already exists, in the shared `_log_errors` decorator, the queue worker and the cleanup guard in `OPNsenseClient.__aenter__` that keeps a failing `async_close()` from replacing the validation error, and carries a reason.
 - Never swallow `asyncio.CancelledError`; re-raise it.
 - Public methods follow the client's `throw_errors` setting: with it off they return the documented empty value (`None`, `False` or an empty mapping) after logging, and with it on they raise a subclass of `OPNsenseError`. Get this behavior from `@_log_errors` or the `_safe_*` transport helpers instead of writing a new `try/except` around requests, unless the method needs its own error semantics, as the VPN Toggle does for cancellation.
 - Log with `%`-style lazy arguments, never f-strings. Prefix debug messages in public methods with the method name in brackets, for example `[toggle_firewall_rule]`.
