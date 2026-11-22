@@ -739,7 +739,10 @@ class VPNMixin(AiopnsenseClientProtocol):
         changed = response.get("changed")
         if toggle_on_off is None:
             return None if changed else False
-        if response.get("result") != ("Enabled" if toggle_on_off == "on" else "Disabled"):
+        result = response.get("result")
+        if not isinstance(changed, bool) or not isinstance(result, str):
+            return False
+        if result != ("Enabled" if toggle_on_off == "on" else "Disabled"):
             return False
         if changed is False:
             return True
@@ -774,7 +777,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         )
         payload = await self._safe_dict_get(endpoint)
         enabled = self._mapping_value(payload, item_key).get("enabled")
-        if enabled not in {"0", "1"}:
+        if not isinstance(enabled, str) or enabled not in {"0", "1"}:
             _LOGGER.debug("[toggle_vpn_instance] WireGuard state unavailable: %s", endpoint)
             return None
         return enabled == ("1" if toggle_on_off == "on" else "0")
@@ -800,7 +803,8 @@ class VPNMixin(AiopnsenseClientProtocol):
         response = await self._safe_dict_post(url)
         if (
             toggle_on_off is not None
-            and response.get("changed")
+            and response.get("changed") is True
+            and isinstance(response.get("result"), str)
             and response.get("result") in {"Enabled", "Disabled"}
             and response.get("result") != ("Enabled" if toggle_on_off == "on" else "Disabled")
         ):
@@ -812,6 +816,43 @@ class VPNMixin(AiopnsenseClientProtocol):
             response = await self._safe_dict_post(url)
         return response
 
+    async def _apply_vpn_service(self, vpn_type: str) -> bool:
+        """Apply saved VPN changes and clear pending items on success.
+
+        Args:
+            vpn_type (str): VPN service whose saved changes should be applied.
+
+        Returns:
+            bool: Whether OPNsense confirmed the service reconfigure.
+        """
+        endpoint = {
+            "openvpn": OPENVPN_SERVICE_RECONFIGURE_ENDPOINT,
+            "wireguard": WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT,
+            "ipsec": IPSEC_SERVICE_RECONFIGURE_ENDPOINT,
+        }[vpn_type]
+        response = await self._safe_dict_post(endpoint)
+        succeeded = (
+            response.get("result", "") == "ok"
+            if vpn_type in {"openvpn", "wireguard"}
+            else response.get("status", "") == "ok"
+        )
+        if succeeded:
+            self._vpn_pending_apply[vpn_type].clear()
+        return succeeded
+
+    async def _record_vpn_change_and_apply(self, vpn_type: str, item: tuple[str, str]) -> bool:
+        """Record a saved item before applying, preserving retries on failure.
+
+        Args:
+            vpn_type (str): VPN service with the saved change.
+            item (tuple[str, str]): Collection and instance UUID.
+
+        Returns:
+            bool: Whether the service reconfigure succeeded.
+        """
+        self._vpn_pending_apply[vpn_type].add(item)
+        return await self._apply_vpn_service(vpn_type)
+
     async def toggle_vpn_instance(
         self,
         vpn_type: str,
@@ -819,27 +860,56 @@ class VPNMixin(AiopnsenseClientProtocol):
         uuid: str,
         toggle_on_off: str | None = None,
     ) -> bool:
-        """Toggle the specified VPN instance or set it to an explicit state.
+        """Toggle a VPN instance and retry known unapplied changes.
 
         Args:
-            vpn_type (str): Vpn type used by this operation.
-            clients_servers (str): WireGuard collection to toggle. Use
-                ``clients`` for a client entry or ``servers`` for a server
-                entry. IPsec only supports ``connections``. Ignored for OpenVPN.
-            uuid (str): UUID of the VPN instance to toggle.
-            toggle_on_off (str | None, optional): Target state. Use ``on`` to
-                enable, ``off`` to disable, or ``None`` to let OPNsense toggle
-                the current state. WireGuard reads the current state first
-                because released firmware through 26.7.9 ignores the target.
+            vpn_type (str): VPN implementation to toggle.
+            clients_servers (str): WireGuard collection containing the instance;
+                IPsec uses ``connections`` and OpenVPN ignores this value.
+            uuid (str): VPN instance UUID.
+            toggle_on_off (str | None): ``on`` or ``off`` for an explicit state.
+                ``None`` or an unrecognized string uses legacy flip behavior.
+                WireGuard reads state before toggling because firmware through
+                26.7.9 ignores its target path, then best-effort corrects a
+                mismatched result. A per-service client lock serializes this
+                client's toggles. Independent clients and external writers can
+                still race. Known saved changes are retained only on this
+                client and retried by a later matching request; transport
+                failures can leave remote apply state unknown.
 
         Returns:
-            bool: True when the toggle completes or the item is already in the
-                explicit target state, in which case the service is not
-                reconfigured; otherwise, False.
+            bool: Whether the requested toggle or pending service apply succeeded.
+        """
+        lock = self._vpn_service_locks.get(vpn_type)
+        if lock is None:
+            return False
+        async with lock:
+            return await self._toggle_vpn_instance_locked(
+                vpn_type, clients_servers, uuid, toggle_on_off
+            )
+
+    async def _toggle_vpn_instance_locked(
+        self,
+        vpn_type: str,
+        clients_servers: str,
+        uuid: str,
+        toggle_on_off: str | None = None,
+    ) -> bool:
+        """Toggle an instance while holding its service-local client lock.
+
+        Args:
+            vpn_type (str): VPN implementation to toggle.
+            clients_servers (str): Collection containing the instance.
+            uuid (str): VPN instance UUID.
+            toggle_on_off (str | None): Target state or legacy flip mode.
+
+        Returns:
+            bool: Whether the toggle or any matching pending apply succeeded.
         """
         if toggle_on_off not in {"on", "off"}:
             toggle_on_off = None
         if vpn_type == "openvpn":
+            item = ("instances", uuid)
             url = f"{OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX}{uuid}"
             if toggle_on_off == "on":
                 url = f"{url}/1"
@@ -858,15 +928,19 @@ class VPNMixin(AiopnsenseClientProtocol):
                     "UUID %s",
                     uuid,
                 )
+                if early_result and item in self._vpn_pending_apply["openvpn"]:
+                    return await self._apply_vpn_service("openvpn")
                 return early_result
-            reconfigure = await self._safe_dict_post(OPENVPN_SERVICE_RECONFIGURE_ENDPOINT)
+            reconfigure_succeeded = await self._record_vpn_change_and_apply(
+                "openvpn",
+                item,
+            )
             _LOGGER.debug(
                 "[toggle_vpn_instance] OpenVPN service reconfigure response after toggling UUID "
                 "%s: %s",
                 uuid,
-                reconfigure,
+                reconfigure_succeeded,
             )
-            reconfigure_succeeded = reconfigure.get("result", "") == "ok"
             if not reconfigure_succeeded:
                 _LOGGER.debug(
                     "[toggle_vpn_instance] OpenVPN service reconfigure did not report success "
@@ -893,12 +967,15 @@ class VPNMixin(AiopnsenseClientProtocol):
                 )
             else:
                 return False
+            item = (clients_servers, uuid)
             in_target_state = await self._wireguard_is_in_target_state(
                 get_snake, get_camel, item_key, toggle_on_off
             )
             if in_target_state is None:
                 return False
             if in_target_state:
+                if item in self._vpn_pending_apply["wireguard"]:
+                    return await self._apply_vpn_service("wireguard")
                 return True
             if toggle_on_off == "on":
                 url = f"{url}/1"
@@ -907,12 +984,17 @@ class VPNMixin(AiopnsenseClientProtocol):
             success = await self._post_wireguard_toggle(url, toggle_on_off)
             early_result = self._vpn_toggle_early_result(success, toggle_on_off)
             if early_result is not None:
+                if early_result and item in self._vpn_pending_apply["wireguard"]:
+                    return await self._apply_vpn_service("wireguard")
                 return early_result
-            reconfigure = await self._safe_dict_post(WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT)
-            return reconfigure.get("result", "") == "ok"
+            return await self._record_vpn_change_and_apply(
+                "wireguard",
+                item,
+            )
         if vpn_type == "ipsec":
             if clients_servers != "connections":
                 return False
+            item = ("connections", uuid)
             url = await self._get_endpoint_path(
                 snake_case_path=f"{IPSEC_CONNECTION_TOGGLE_SNAKE_ENDPOINT_PREFIX}{uuid}",
                 camel_case_path=f"{IPSEC_CONNECTION_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}",
@@ -929,15 +1011,20 @@ class VPNMixin(AiopnsenseClientProtocol):
             )
             early_result = self._vpn_toggle_early_result(success, toggle_on_off)
             if early_result is not None:
+                if early_result and item in self._vpn_pending_apply["ipsec"]:
+                    return await self._apply_vpn_service("ipsec")
                 return early_result
-            reconfigure = await self._safe_dict_post(IPSEC_SERVICE_RECONFIGURE_ENDPOINT)
+            reconfigure_succeeded = await self._record_vpn_change_and_apply(
+                "ipsec",
+                item,
+            )
             _LOGGER.debug(
                 "[toggle_vpn_instance] IPsec service reconfigure response after toggling UUID "
                 "%s: %s",
                 uuid,
-                reconfigure,
+                reconfigure_succeeded,
             )
-            return reconfigure.get("status", "") == "ok"
+            return reconfigure_succeeded
         return False
 
     @staticmethod
