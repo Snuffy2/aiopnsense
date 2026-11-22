@@ -1,7 +1,14 @@
 """Shared pytest fixtures for aiopnsense."""
 
 import asyncio
-from collections.abc import AsyncGenerator, Callable, Coroutine, Generator, MutableMapping
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Coroutine,
+    Generator,
+    MutableMapping,
+)
 import contextlib
 from dataclasses import dataclass
 from types import TracebackType
@@ -13,6 +20,7 @@ import pytest
 from yarl import URL
 
 import aiopnsense
+from aiopnsense import client_queue
 
 MakeClientFactory = Callable[..., aiopnsense.OPNsenseClient]
 
@@ -442,3 +450,65 @@ async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClien
         for client in clients:
             with contextlib.suppress(Exception):
                 await client.async_close()
+
+
+class VpnQueueTasks:
+    """Track tasks started by a VPN queue test for fixture cleanup."""
+
+    def __init__(self) -> None:
+        """Initialize the task list."""
+        self.tasks: list[asyncio.Task[Any]] = []
+
+    def start[T](
+        self, coroutine: Coroutine[Any, Any, T], *, eager_start: bool = False
+    ) -> asyncio.Task[T]:
+        """Start and track a test task.
+
+        Args:
+            coroutine (Coroutine[Any, Any, T]): Public operation or queue blocker.
+            eager_start (bool): Run to first suspension before returning.
+
+        Returns:
+            asyncio.Task[T]: Task running the operation.
+        """
+        task = asyncio.create_task(coroutine, eager_start=eager_start)
+        self.tasks.append(task)
+        return task
+
+
+@pytest.fixture
+async def vpn_queue_tasks(make_client: MakeClientFactory) -> AsyncIterator[VpnQueueTasks]:
+    """Cancel and join any test tasks left running before clients close.
+
+    Args:
+        make_client (MakeClientFactory): Provides clients and closes them after task cleanup.
+
+    Yields:
+        VpnQueueTasks: Task starter for the test.
+    """
+    tasks = VpnQueueTasks()
+    yield tasks
+    for task in tasks.tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*tasks.tasks, return_exceptions=True)
+
+
+@pytest.fixture
+async def vpn_toggle_client(
+    make_client: MakeClientFactory, monkeypatch: pytest.MonkeyPatch
+) -> aiopnsense.OPNsenseClient:
+    """Use the real request queue with mocked VPN transport responses.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        monkeypatch (pytest.MonkeyPatch): Fixture for restoring queue task creation.
+
+    Returns:
+        aiopnsense.OPNsenseClient: Client configured for snake_case endpoints by default.
+    """
+    monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
+    monkeypatch.setattr(client_queue, "QUEUE_REQUEST_INTERVAL_SECONDS", 0)
+    client = make_client()
+    client._use_snake_case = True
+    return client

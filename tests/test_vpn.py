@@ -9,30 +9,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 import aiopnsense as aiopnsense_module
-from aiopnsense import OPNsenseClient, client_queue, vpn as aiopnsense_vpn
+from aiopnsense import OPNsenseClient, vpn as aiopnsense_vpn
 from tests.conftest import make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
-
-
-@pytest.fixture
-async def vpn_toggle_client(
-    make_client: ClientType, monkeypatch: pytest.MonkeyPatch
-) -> OPNsenseClient:
-    """Use the real request queue with mocked VPN transport responses.
-
-    Args:
-        make_client (ClientType): Client factory fixture.
-        monkeypatch (pytest.MonkeyPatch): Fixture for restoring queue task creation.
-
-    Returns:
-        OPNsenseClient: Client configured for snake_case endpoints by default.
-    """
-    monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
-    monkeypatch.setattr(client_queue, "QUEUE_REQUEST_INTERVAL_SECONDS", 0)
-    client = make_client()
-    client._use_snake_case = True
-    return client
 
 
 @pytest.mark.asyncio
@@ -1652,13 +1632,38 @@ async def test_get_ipsec_children_skip_phase2_without_connected_sessions(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("vpn_type", "collection", "snake_case", "expected_toggle"),
+    ("vpn_type", "collection", "snake_case", "expected_toggle", "expected_get"),
     [
-        ("ipsec", "connections", True, "/api/ipsec/connections/toggle_connection/uuid/1"),
-        ("ipsec", "connections", False, "/api/ipsec/connections/toggleConnection/uuid/1"),
-        ("wireguard", "clients", True, "/api/wireguard/client/toggle_client/uuid/1"),
-        ("wireguard", "clients", False, "/api/wireguard/client/toggleClient/uuid/1"),
-        ("wireguard", "servers", True, "/api/wireguard/server/toggle_server/uuid/1"),
+        ("ipsec", "connections", True, "/api/ipsec/connections/toggle_connection/uuid/1", None),
+        ("ipsec", "connections", False, "/api/ipsec/connections/toggleConnection/uuid/1", None),
+        (
+            "wireguard",
+            "clients",
+            True,
+            "/api/wireguard/client/toggle_client/uuid/1",
+            "/api/wireguard/client/get_client/uuid",
+        ),
+        (
+            "wireguard",
+            "clients",
+            False,
+            "/api/wireguard/client/toggleClient/uuid/1",
+            "/api/wireguard/client/getClient/uuid",
+        ),
+        (
+            "wireguard",
+            "servers",
+            True,
+            "/api/wireguard/server/toggle_server/uuid/1",
+            "/api/wireguard/server/get_server/uuid",
+        ),
+        (
+            "wireguard",
+            "servers",
+            False,
+            "/api/wireguard/server/toggleServer/uuid/1",
+            "/api/wireguard/server/getServer/uuid",
+        ),
     ],
 )
 async def test_toggle_vpn_instance_posts_to_firmware_endpoints(
@@ -1667,6 +1672,7 @@ async def test_toggle_vpn_instance_posts_to_firmware_endpoints(
     collection: str,
     snake_case: bool,
     expected_toggle: str,
+    expected_get: str | None,
 ) -> None:
     """Send the explicit target and then apply it using the firmware's endpoints.
 
@@ -1676,6 +1682,7 @@ async def test_toggle_vpn_instance_posts_to_firmware_endpoints(
         collection (str): Collection containing the requested item.
         snake_case (bool): Whether firmware uses snake_case endpoint names.
         expected_toggle (str): Expected toggle endpoint path.
+        expected_get (str | None): Expected state-read endpoint, if needed.
     """
     client = vpn_toggle_client
     client._use_snake_case = snake_case
@@ -1685,6 +1692,9 @@ async def test_toggle_vpn_instance_posts_to_firmware_endpoints(
     client._do_post = posts
 
     assert await client.toggle_vpn_instance(vpn_type, collection, "uuid", "on") is True
+    assert [call.args[0] for call in client._do_get.await_args_list] == (
+        [expected_get] if expected_get else []
+    )
     assert [call.args[0] for call in posts.await_args_list] == [
         expected_toggle,
         f"/api/{vpn_type}/service/reconfigure",
@@ -2046,6 +2056,26 @@ async def test_toggle_vpn_instance_retries_known_failed_apply(
     assert await client.toggle_vpn_instance(vpn_type, collection, "uuid", "on") is True
     assert api.reconfigure_count == 2
     assert api.mutation_count == (2 if external_change else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("collection", ["clients", "servers"])
+async def test_wireguard_toggle_rejects_empty_uuid(
+    vpn_toggle_client: OPNsenseClient, collection: str
+) -> None:
+    """Reject an empty item UUID before reading or changing configuration.
+
+    Args:
+        vpn_toggle_client (OPNsenseClient): Client with a running request queue.
+        collection (str): WireGuard collection under test.
+    """
+    client = vpn_toggle_client
+    client._do_get = AsyncMock(return_value={collection[:-1]: {"enabled": "1"}})
+    client._do_post = AsyncMock()
+
+    assert await client.toggle_vpn_instance("wireguard", collection, "", "on") is False
+    client._do_get.assert_not_awaited()
+    client._do_post.assert_not_awaited()
 
 
 @pytest.mark.asyncio

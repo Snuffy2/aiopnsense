@@ -790,8 +790,10 @@ class VPNMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Toggle response when the caller remains active.
 
         Raises:
-            cancellation: The original ``asyncio.CancelledError`` received after
-                dispatch.
+            cancellation: The original ``asyncio.CancelledError`` from caller
+                cancellation, propagated after the dispatched response is
+                processed. Client shutdown can cancel the worker before its
+                response is received.
         """
         self._ensure_vpn_operation_current(shutdown_generation)
         response, cancellation = await self._safe_dict_post_with_cancellation(url)
@@ -893,8 +895,9 @@ class VPNMixin(AiopnsenseClientProtocol):
             bool: Whether OPNsense confirmed the service reconfigure.
 
         Raises:
-            cancelled: The original caller cancellation after the dispatched apply
-                response has been processed.
+            cancelled: The original ``asyncio.CancelledError`` from caller
+                cancellation, propagated after the dispatched apply response
+                has been processed.
         """
         endpoint = {
             "openvpn": OPENVPN_SERVICE_RECONFIGURE_ENDPOINT,
@@ -949,9 +952,13 @@ class VPNMixin(AiopnsenseClientProtocol):
                 client's toggles. Independent clients and external writers can
                 still race. Known saved changes are retained only on this
                 client and retried by a later matching request; transport
-                failures can leave remote apply state unknown. A call cancelled
-                after a VPN POST dispatch waits for its response before
-                cancellation propagates, so an acknowledged save can be tracked.
+                failures can leave remote apply state unknown. If the caller
+                cancels after a VPN POST dispatch, the call waits for its
+                response before propagating cancellation so an acknowledged
+                save can be tracked. Closing the client can cancel the queue
+                worker before the response arrives. If OPNsense saved the
+                change, the client may not track it, and a later matching
+                request can skip the service reconfigure.
 
         Returns:
             bool: Whether the requested toggle or pending service apply succeeded.
@@ -1050,6 +1057,8 @@ class VPNMixin(AiopnsenseClientProtocol):
                 )
             return reconfigure_succeeded
         if vpn_type == "wireguard":
+            if not uuid:
+                return False
             if clients_servers == "clients":
                 item_key = "client"
                 get_snake = f"{WIREGUARD_CLIENT_GET_SNAKE_ENDPOINT_PREFIX}{uuid}"

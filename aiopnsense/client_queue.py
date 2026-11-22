@@ -170,9 +170,9 @@ class ClientQueueMixin:
         Raises:
             asyncio.CancelledError: Raised when cancellation occurs before the
                 queued POST begins dispatching.
-            cancelled: The original caller cancellation, re-raised if the
-                dispatched POST raises or its future is cancelled before a
-                response is available.
+            cancelled: The original ``asyncio.CancelledError`` from caller
+                cancellation, re-raised if the dispatched POST fails or its
+                future is cancelled before a response is available.
         """
         loop = await self._get_active_loop()
         future = loop.create_future()
