@@ -323,7 +323,7 @@ class ClientQueueMixin:
     async def async_close(self) -> None:
         """Cancel background work, invalidate VPN waiters, and clear the queue.
 
-        Cancellation increments the VPN generation, so in-progress VPN callers
+        Closing increments the VPN generation, so in-progress VPN callers
         cannot dispatch follow-up writes after this close operation begins.
         """
         _LOGGER.debug("Closing OPNsenseClient and cancelling background tasks")
@@ -347,16 +347,20 @@ class ClientQueueMixin:
                         "Error during background task cancellation. %s: %s", type(e).__name__, e
                     )
 
-            while not self._request_queue.empty():
-                try:
-                    entry = self._request_queue.get_nowait()
-                    future = entry[3]
-                    if future is not None and not future.done():
-                        future.set_exception(asyncio.CancelledError("OPNsenseClient is closing"))
-                except asyncio.QueueEmpty:
-                    break
-            self._workers = []
-            self._loop = None
-            _LOGGER.debug("Request queue cleared")
         finally:
-            self._vpn_close_count -= 1
+            try:
+                while not self._request_queue.empty():
+                    try:
+                        entry = self._request_queue.get_nowait()
+                        future = entry[3]
+                        if future is not None and not future.done():
+                            future.set_exception(
+                                asyncio.CancelledError("OPNsenseClient is closing")
+                            )
+                    except asyncio.QueueEmpty:
+                        break
+                self._workers = []
+                self._loop = None
+                _LOGGER.debug("Request queue cleared")
+            finally:
+                self._vpn_close_count -= 1

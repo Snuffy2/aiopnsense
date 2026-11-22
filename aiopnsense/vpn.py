@@ -959,7 +959,8 @@ class VPNMixin(AiopnsenseClientProtocol):
                 reconfigure unless this client tracks an earlier unapplied save.
 
         Raises:
-            asyncio.CancelledError: If client shutdown begins during this operation.
+            asyncio.CancelledError: If shutdown interrupts the call. A completed
+                service apply can still report success during shutdown.
         """
         lock = self._vpn_service_locks.get(vpn_type)
         if lock is None:
