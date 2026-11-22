@@ -15,10 +15,8 @@ from .exceptions import (
     OPNsenseUnknownFirmware,
     OPNsenseVoucherServerError,
 )
-from .firmware import FirmwareRequirements, get_firmware_requirements
 
 __all__ = [
-    "FirmwareRequirements",
     "OPNsenseBelowMinFirmware",
     "OPNsenseClient",
     "OPNsenseConnectionError",
@@ -32,5 +30,4 @@ __all__ = [
     "OPNsenseTimeoutError",
     "OPNsenseUnknownFirmware",
     "OPNsenseVoucherServerError",
-    "get_firmware_requirements",
 ]

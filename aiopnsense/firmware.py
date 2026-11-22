@@ -43,40 +43,40 @@ FIRMWARE_ACTION_ENDPOINT_PREFIX = "/api/core/firmware/"
 FIRMWARE_CHANGELOG_ENDPOINT_PREFIX = "/api/core/firmware/changelog/"
 
 
-@dataclass(frozen=True, slots=True)
-class FirmwareRequirements:
-    """OPNsense firmware releases that aiopnsense supports.
-
-    Attributes:
-        minimum (str): Minimum Firmware. Routers running an older release are
-            rejected by ``OPNsenseClient.validate``.
-        recommended (str): Recommended Firmware. Routers running an older
-            release are accepted, but some features return empty or missing data.
-    """
-
-    minimum: str
-    recommended: str
-
-
-def get_firmware_requirements() -> FirmwareRequirements:
-    """Return the Minimum Firmware and Recommended Firmware that aiopnsense supports.
-
-    This reads library constants and never contacts a Router, so callers such as
-    a config flow can use it before any client exists.
-
-    Returns:
-        FirmwareRequirements: Minimum Firmware and Recommended Firmware versions.
-    """
-    return FirmwareRequirements(
-        minimum=OPNSENSE_MIN_FIRMWARE, recommended=OPNSENSE_RECOMMENDED_FIRMWARE
-    )
-
-
 class FirmwareMixin(AiopnsenseClientProtocol):
     """Firmware methods for OPNsenseClient."""
 
+    @dataclass(frozen=True, slots=True)
+    class FirmwareRequirements:
+        """OPNsense firmware releases that aiopnsense supports.
+
+        Attributes:
+            minimum (str): Minimum Firmware. Routers running an older release are
+                rejected by ``OPNsenseClient.validate``.
+            recommended (str): Recommended Firmware. Routers running an older
+                release are accepted, but some features return empty or missing data.
+        """
+
+        minimum: str
+        recommended: str
+
     _firmware_version: str | None
     _firmware_install_active: bool
+
+    @staticmethod
+    def get_firmware_requirements() -> FirmwareRequirements:
+        """Return the Minimum Firmware and Recommended Firmware that aiopnsense supports.
+
+        This reads library constants and never contacts a Router. It can be called on
+        the class, such as ``OPNsenseClient.get_firmware_requirements()``, before any
+        client exists, for example from a config flow.
+
+        Returns:
+            FirmwareRequirements: Minimum Firmware and Recommended Firmware versions.
+        """
+        return FirmwareMixin.FirmwareRequirements(
+            minimum=OPNSENSE_MIN_FIRMWARE, recommended=OPNSENSE_RECOMMENDED_FIRMWARE
+        )
 
     async def _store_host_firmware_version(self) -> None:
         """Cache the installed OPNsense firmware version or product series."""
