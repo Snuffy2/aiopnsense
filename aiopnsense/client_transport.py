@@ -19,7 +19,12 @@ from ._request_failure import (
 )
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .exceptions import _map_opnsense_exception
-from .helpers import _LOGGER, _log_request_recovery, _redacted_exception_message
+from .helpers import (
+    _LOGGER,
+    _log_request_recovery,
+    _redact_url_credentials,
+    _redacted_exception_message,
+)
 
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
 
@@ -622,7 +627,11 @@ class ClientTransportMixin:
                 raise_for_status=raise_for_status,
             ) as response:
                 response_entered = True
-                _LOGGER.debug("[get_outcome] Response %s: %s", response.status, response.reason)
+                _LOGGER.debug(
+                    "[get_outcome] Response %s: %s",
+                    response.status,
+                    _redact_url_credentials(str(response.reason)),
+                )
                 if not response.ok:
                     return _EndpointOutcome.from_http_status(response.status, response.reason)
                 if not read_body:
@@ -814,7 +823,11 @@ class ClientTransportMixin:
                 raise_for_status=raise_for_status,
             ) as response:
                 response_entered = True
-                _LOGGER.debug("[post_outcome] Response %s: %s", response.status, response.reason)
+                _LOGGER.debug(
+                    "[post_outcome] Response %s: %s",
+                    response.status,
+                    _redact_url_credentials(str(response.reason)),
+                )
                 if not response.ok:
                     return _EndpointOutcome.from_http_status(response.status, response.reason)
                 return _EndpointOutcome.data(await response.json(content_type=None))

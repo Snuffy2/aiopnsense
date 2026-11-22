@@ -13,7 +13,12 @@ from ._error_policy import _error_if_throwing, _throws_errors
 from ._request_failure import _PROBE_PHASE, _REQUEST_PHASE, _request_log_url
 from .const import SNAKE_CASE_ENDPOINTS_CAPABILITY, FirmwareCapability
 from .exceptions import OPNsenseUnknownFirmware
-from .helpers import _LOGGER, _log_request_failure, _log_request_recovery
+from .helpers import (
+    _LOGGER,
+    _log_request_failure,
+    _log_request_recovery,
+    _redact_url_credentials,
+)
 
 
 class ClientEndpointMixin:
@@ -375,7 +380,7 @@ class ClientEndpointMixin:
             "Transient %s failure for %s. %s. Not caching result.",
             method.upper(),
             path,
-            outcome.detail,
+            _redact_url_credentials(outcome.detail),
             error=error,
         )
         if error is not None:

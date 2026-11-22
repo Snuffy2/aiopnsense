@@ -311,6 +311,64 @@ async def test_nested_auth_404_is_transient_and_retried(
         ]
 
 
+@pytest.mark.parametrize("middleware_raises", [False, True], ids=["response", "raised"])
+async def test_endpoint_http_failure_logs_redact_url_credentials(
+    middleware_raises: bool, make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Redact URL credentials in endpoint failure logs and retain the HTTP error.
+
+    Args:
+        middleware_raises (bool): Whether middleware raises or returns the HTTP failure.
+        make_client (MakeClientFactory): Fixture factory returning OPNsense clients.
+        caplog (pytest.LogCaptureFixture): Captured request logs.
+    """
+    reason = "Upstream https://test-user:test-password@router.invalid/auth failed"
+
+    async def respond(
+        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Simulate a failed response through a real aiohttp session.
+
+        Args:
+            request (aiohttp.ClientRequest): Request prepared by aiohttp.
+            _handler (aiohttp.ClientHandlerType): Network handler replaced by middleware.
+
+        Returns:
+            aiohttp.ClientResponse: Simulated HTTP failure.
+
+        Raises:
+            aiohttp.ClientResponseError: The HTTP failure raised by middleware.
+        """
+        if middleware_raises:
+            raise aiohttp.ClientResponseError(request.request_info, (), status=500, message=reason)
+        response = MagicMock(spec=aiohttp.ClientResponse)
+        response.status = 500
+        response.ok = False
+        response.reason = reason
+        response.connection = None
+        response._raw_cookie_headers = ()
+        response.__aenter__.return_value = response
+        return response
+
+    async with aiohttp.ClientSession(middlewares=[respond]) as session:
+        client = make_client(session=session, throw_errors=True)
+        try:
+            with (
+                caplog.at_level(logging.DEBUG, logger="aiopnsense"),
+                pytest.raises(OPNsenseConnectionError) as error,
+            ):
+                await client.get_nut_ups_status()
+            assert error.value.status == 500
+            assert reason in str(error.value)
+            if middleware_raises:
+                assert isinstance(error.value.__cause__, aiohttp.ClientResponseError)
+            assert "router.invalid/auth" in caplog.text
+            assert "test-user" not in caplog.text
+            assert "test-password" not in caplog.text
+        finally:
+            await client.async_close()
+
+
 @pytest.mark.parametrize(
     "validator_error",
     [

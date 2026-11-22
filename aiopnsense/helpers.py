@@ -63,10 +63,22 @@ def _redacted_exception_message(error: Exception) -> str:
     """
     if isinstance(error, aiohttp.InvalidURL):
         return _INVALID_URL_ERROR_MESSAGE
+    return _redact_url_credentials(str(error))
+
+
+def _redact_url_credentials(message: str) -> str:
+    """Redact credentials embedded in URLs in a log message.
+
+    Args:
+        message (str): Text that may contain URLs with credentials.
+
+    Returns:
+        str: Text with URL credentials redacted.
+    """
     return re.sub(
         r"(://)([^:/@\s]+):([^@\s]+)@",
         r"\1<redacted>:<redacted>@",
-        str(error),
+        message,
     )
 
 
