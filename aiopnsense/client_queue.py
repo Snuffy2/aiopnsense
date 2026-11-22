@@ -155,13 +155,16 @@ class ClientQueueMixin:
 
         Returns:
             tuple[MutableMapping[str, Any] | list | None, asyncio.CancelledError | None]:
-                The response and any caller cancellation received after dispatch began.
+                The response and any original caller cancellation received after
+                dispatch began. Callers process the response before propagating
+                the returned cancellation.
 
         Raises:
             asyncio.CancelledError: Raised when cancellation occurs before the
                 queued POST begins dispatching.
-            cancelled: The original caller cancellation, re-raised after a
-                dispatched POST finishes.
+            cancelled: The original caller cancellation, re-raised if the
+                dispatched POST raises or its future is cancelled before a
+                response is available.
         """
         loop = await self._get_active_loop()
         future = loop.create_future()
