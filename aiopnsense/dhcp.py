@@ -10,12 +10,12 @@ from typing import Any, Literal
 from warnings import deprecated
 
 from ._dhcp_leases import (
-    DNSMASQ_LEASE_BACKEND,
-    ISC_LEASE_BACKEND,
-    has_authoritative_reservation_metadata,
-    is_live_row,
-    kea_lease_backend,
-    normalize_leases,
+    _DNSMASQ_LEASE_BACKEND,
+    _ISC_LEASE_BACKEND,
+    _has_authoritative_reservation_metadata,
+    _is_live_row,
+    _kea_lease_backend,
+    _normalize_leases,
 )
 from ._typing import AiopnsenseClientProtocol
 from .helpers import (
@@ -675,12 +675,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
         leases_info: list = response.get("rows", [])
         current_time = datetime.now().astimezone()
         res_info: list[Any] | None
-        lease_backend = kea_lease_backend(
+        lease_backend = _kea_lease_backend(
             require_hardware_address=require_hardware_address, reservations=None
         )
         needs_reservation_lookup = any(
-            is_live_row(lease_info, lease_backend, now=current_time)
-            and not has_authoritative_reservation_metadata(lease_info.get("is_reserved"))
+            _is_live_row(lease_info, lease_backend, now=current_time)
+            and not _has_authoritative_reservation_metadata(lease_info.get("is_reserved"))
             for lease_info in leases_info
         )
         if (
@@ -713,9 +713,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
                     continue
                 if hw_address := res.get("hw_address", None):
                     reservations[hw_address] = res.get("ip_address", "")
-        return normalize_leases(
+        return _normalize_leases(
             leases_info,
-            kea_lease_backend(
+            _kea_lease_backend(
                 require_hardware_address=require_hardware_address,
                 reservations=None if res_info is None else reservations,
             ),
@@ -776,9 +776,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
             return []
-        return normalize_leases(
+        return _normalize_leases(
             self._keep_latest_leases(leases_info),
-            DNSMASQ_LEASE_BACKEND,
+            _DNSMASQ_LEASE_BACKEND,
             now=datetime.now().astimezone(),
         )
 
@@ -850,9 +850,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
             return []
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
-        return normalize_leases(
+        return _normalize_leases(
             leases_info,
-            ISC_LEASE_BACKEND,
+            _ISC_LEASE_BACKEND,
             now=datetime.now().astimezone(),
             router_tz=opnsense_tz,
         )

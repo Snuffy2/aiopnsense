@@ -6,11 +6,11 @@ from typing import Any
 import pytest
 
 from aiopnsense._dhcp_leases import (
-    DNSMASQ_LEASE_BACKEND,
-    ISC_LEASE_BACKEND,
-    is_live_row,
-    kea_lease_backend,
-    normalize_leases,
+    _DNSMASQ_LEASE_BACKEND,
+    _ISC_LEASE_BACKEND,
+    _is_live_row,
+    _kea_lease_backend,
+    _normalize_leases,
 )
 
 ROUTER_TZ = timezone(timedelta(hours=-5))
@@ -107,7 +107,7 @@ def test_normalize_isc_leases(row: object, expected: dict[str, Any] | None) -> N
         row (object): Raw row handed to the normalizer.
         expected (dict[str, Any] | None): Expected lease, or None when the row is omitted.
     """
-    leases = normalize_leases([row], ISC_LEASE_BACKEND, now=NOW, router_tz=ROUTER_TZ)
+    leases = _normalize_leases([row], _ISC_LEASE_BACKEND, now=NOW, router_tz=ROUTER_TZ)
 
     assert leases == ([] if expected is None else [expected])
 
@@ -117,7 +117,7 @@ def test_normalize_isc_leases_keeps_row_order_and_does_not_mutate_rows() -> None
     rows = [_isc_row(address="192.0.2.2"), _isc_row(state="expired"), _isc_row(address="192.0.2.3")]
     snapshot = [dict(row) for row in rows]
 
-    leases = normalize_leases(rows, ISC_LEASE_BACKEND, now=NOW, router_tz=ROUTER_TZ)
+    leases = _normalize_leases(rows, _ISC_LEASE_BACKEND, now=NOW, router_tz=ROUTER_TZ)
 
     assert [lease["address"] for lease in leases] == ["192.0.2.2", "192.0.2.3"]
     assert rows == snapshot
@@ -225,7 +225,7 @@ def test_normalize_dnsmasq_leases(row: dict[str, Any], expected: dict[str, Any] 
         row (dict[str, Any]): Raw row handed to the normalizer.
         expected (dict[str, Any] | None): Expected lease, or None when the row is omitted.
     """
-    leases = normalize_leases([row], DNSMASQ_LEASE_BACKEND, now=NOW)
+    leases = _normalize_leases([row], _DNSMASQ_LEASE_BACKEND, now=NOW)
 
     assert leases == ([] if expected is None else [expected])
 
@@ -388,11 +388,11 @@ def test_normalize_kea_leases(
         reservations (dict[str, str] | None): Reservation map, or None when unavailable.
         expected (dict[str, Any] | None): Expected lease, or None when the row is omitted.
     """
-    backend = kea_lease_backend(
+    backend = _kea_lease_backend(
         require_hardware_address=require_hardware_address, reservations=reservations
     )
 
-    leases = normalize_leases([row], backend, now=NOW)
+    leases = _normalize_leases([row], backend, now=NOW)
 
     assert leases == ([] if expected is None else [expected])
-    assert is_live_row(row, backend, now=NOW) is (expected is not None)
+    assert _is_live_row(row, backend, now=NOW) is (expected is not None)
