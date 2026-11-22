@@ -7,7 +7,7 @@ from typing import Any
 from ._error_policy import _log_boolean_errors, _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import ToggleSpec, ToggleStep, ToggleTarget
-from .const import EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY, LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
+from .const import EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY
 from .helpers import _LOGGER, api_value_matches
 
 UNBOUND_SETTINGS_GET_ENDPOINT = "/api/unbound/settings/get"
@@ -20,16 +20,6 @@ UNBOUND_SETTINGS_TOGGLE_DNSBL_ENDPOINT_PREFIX = "/api/unbound/settings/toggle_dn
 
 class UnboundMixin(AiopnsenseClientProtocol):
     """Unbound DNS blocklist methods for OPNsenseClient."""
-
-    async def _uses_legacy_unbound_blocklist(self) -> bool | None:
-        """Return whether firmware requires legacy Unbound DNSBL handling.
-
-        Returns:
-            bool | None: ``True`` when firmware is below ``25.7.8``, ``False``
-            for newer firmware, or ``None`` when the firmware is unknown.
-        """
-        extended = await self._firmware_capability(EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY)
-        return None if extended is None else not extended
 
     @_log_errors
     async def _get_unbound_blocklist_legacy(
@@ -128,11 +118,13 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 set to the regular DNSBL settings. Returns an empty mapping when
                 the endpoint is unavailable or malformed.
         """
-        use_legacy = await self._uses_legacy_unbound_blocklist()
-        if use_legacy is not False:
+        extended_supported = await self._firmware_capability_enabled(
+            EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY
+        )
+        if not extended_supported:
             _LOGGER.debug(
                 "Getting Unbound regular blocklists for OPNsense < %s or unknown firmware",
-                LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
+                EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY.minimum,
             )
             return {"legacy": await self._get_unbound_blocklist_legacy()}
 
@@ -197,26 +189,26 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 errors during the save or apply raise when ``throw_errors`` is
                 enabled.
         """
-        use_legacy = await self._uses_legacy_unbound_blocklist()
+        supported = await self._firmware_capability(EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY)
         state_name = "enable" if set_state else "disable"
-        if use_legacy is True:
+        if supported is False:
             if uuid is not None:
                 _LOGGER.error(
                     "Blocklist uuid %s is unsupported when trying to %s legacy Unbound blocklists on OPNsense < %s",
                     uuid,
                     state_name,
-                    LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
+                    EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY.minimum,
                 )
                 return False
             _LOGGER.debug(
                 "Using Unbound regular blocklists for OPNsense < %s",
-                LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
+                EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY.minimum,
             )
             return await self._set_unbound_blocklist_legacy(set_state=set_state)
-        if use_legacy is False:
+        if supported is True:
             _LOGGER.debug(
                 "Using Unbound extended blocklists for OPNsense >= %s",
-                LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
+                EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY.minimum,
             )
             return await self._toggle_unbound_blocklist(set_state=set_state, uuid=uuid)
 

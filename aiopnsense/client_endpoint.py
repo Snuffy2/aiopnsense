@@ -9,11 +9,7 @@ import aiohttp
 from ._error_policy import _raise_if_throwing, _throws_errors
 from ._request_failure import _PROBE_PHASE, _report_http_failure, _report_transport_failure
 from ._typing import AiopnsenseClientProtocol
-from .const import (
-    DEFAULT_REQUEST_TIMEOUT_SECONDS,
-    LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
-    SNAKE_CASE_ENDPOINTS_CAPABILITY,
-)
+from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS, SNAKE_CASE_ENDPOINTS_CAPABILITY
 from .exceptions import OPNsenseUnknownFirmware
 from .helpers import _LOGGER, _log_request_recovery
 
@@ -160,7 +156,7 @@ class ClientEndpointMixin:
             "Using %s endpoints for OPNsense %s %s",
             "snake_case" if uses_snake_case else "camelCase",
             ">=" if uses_snake_case else "<",
-            LEGACY_CAMELCASE_ENDPOINT_FIRMWARE,
+            SNAKE_CASE_ENDPOINTS_CAPABILITY.minimum,
         )
 
     async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str:
@@ -267,19 +263,15 @@ class ClientEndpointMixin:
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
                 ssl=self._verify_ssl,
             ) as response:
-                if response.ok:
-                    _log_request_recovery(self, normalized_method, path, _PROBE_PHASE)
+                available = response.ok
+                if available or response.status == 404:
+                    if available:
+                        _log_request_recovery(self, normalized_method, path, _PROBE_PHASE)
                     if self._endpoint_cache_generation == cache_generation:
                         self._endpoint_permission_denied.discard(cache_key)
-                        self._endpoint_availability[cache_key] = True
+                        self._endpoint_availability[cache_key] = available
                         self._endpoint_checked_at[cache_key] = now
-                    return True
-                if response.status == 404:
-                    if self._endpoint_cache_generation == cache_generation:
-                        self._endpoint_permission_denied.discard(cache_key)
-                        self._endpoint_availability[cache_key] = False
-                        self._endpoint_checked_at[cache_key] = now
-                    return False
+                    return available
 
                 http_error = _report_http_failure(
                     self,
