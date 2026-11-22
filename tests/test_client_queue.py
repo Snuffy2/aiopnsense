@@ -288,20 +288,12 @@ async def test_failed_stream_read_logs_once_through_queue_and_public_wrapper(
     client._get_endpoint_path = AsyncMock(return_value="/api/cpu/type")
     client._is_get_endpoint_available = AsyncMock(return_value=True)
     client._safe_list_get = AsyncMock(return_value=["Intel (2 cores)"])
-    task: asyncio.Task | None = None
     try:
-        client._request_queue = asyncio.Queue()
-        task = asyncio.get_running_loop().create_task(client._process_queue())
-
         with caplog.at_level("ERROR"), pytest.raises(OPNsenseConnectionError):
             await client._get_telemetry_cpu()
 
         assert [record.levelname for record in caplog.records] == ["ERROR"]
     finally:
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
         await asyncio.wait_for(client.async_close(), timeout=2)
 
 

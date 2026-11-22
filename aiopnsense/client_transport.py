@@ -103,26 +103,7 @@ class ClientTransportMixin:
                     response.reason,
                 )
 
-                if response.ok:
-                    buffer = ""
-                    message_count = 0
-
-                    async for chunk in response.content.iter_chunked(1024):
-                        buffer += chunk.decode("utf-8")
-                        while "\n\n" in buffer:
-                            message, buffer = buffer.split("\n\n", 1)
-                            lines = message.splitlines()
-                            for line in lines:
-                                if line.startswith("data:"):
-                                    message_count += 1
-                                    if message_count == 2:
-                                        response_str: str = line[len("data:") :].strip()
-                                        response_json = json.loads(response_str)
-                                        if isinstance(response_json, MutableMapping):
-                                            _log_request_recovery(self, "get", path, STREAM_PHASE)
-                                            return dict(response_json)
-                                        return {}
-                else:
+                if not response.ok:
                     http_error = _report_http_failure(
                         self,
                         method="get",
@@ -136,6 +117,26 @@ class ClientTransportMixin:
                         caller=caller,
                     )
                     _raise_if_throwing(self, http_error)
+                    return {}
+
+                buffer = ""
+                message_count = 0
+                async for chunk in response.content.iter_chunked(1024):
+                    buffer += chunk.decode("utf-8")
+                    while "\n\n" in buffer:
+                        message, buffer = buffer.split("\n\n", 1)
+                        for line in message.splitlines():
+                            if not line.startswith("data:"):
+                                continue
+                            message_count += 1
+                            if message_count != 2:
+                                continue
+                            response_str: str = line[len("data:") :].strip()
+                            response_json = json.loads(response_str)
+                            if not isinstance(response_json, MutableMapping):
+                                return {}
+                            _log_request_recovery(self, "get", path, STREAM_PHASE)
+                            return dict(response_json)
         except (aiohttp.ClientError, TimeoutError) as e:
             transport_error = _report_transport_failure(
                 self,
