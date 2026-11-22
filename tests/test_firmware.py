@@ -1401,6 +1401,26 @@ def _firmware_status(**overrides: Any) -> dict[str, Any]:
     }
 
 
+def _firmware_status_for_shape(shape: FirmwareVersionShape) -> dict[str, Any]:
+    """Build the firmware status a Router returns for a version shape.
+
+    A shape without a product version models the error a Router returns when firmware
+    metadata is unavailable, which has no ``product`` key at all.
+
+    Args:
+        shape (FirmwareVersionShape): Version form reported by the Router.
+
+    Returns:
+        dict[str, Any]: Error status without product data, or an error status with the shape's product.
+    """
+    if shape.product_version is None:
+        return {
+            "status_msg": "Firmware status check was aborted internally. Please try again.",
+            "status": "error",
+        }
+    return _firmware_status(status="error", product=shape.product)
+
+
 def _configure_firmware_polls(
     client: Any, status: dict[str, Any], running: list[str] | None = None
 ) -> None:
@@ -1638,7 +1658,7 @@ async def test_firmware_lookup_handles_router_version_shapes(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        _configure_firmware_polls(client, _firmware_status(product=shape.product))
+        _configure_firmware_polls(client, _firmware_status_for_shape(shape))
         status_reads = cast(AsyncMock, client._safe_dict_get)
 
         assert await client.get_host_firmware_version() == shape.lookup_version
@@ -1653,26 +1673,26 @@ async def _lookup_after_cooldown_poll(
     client: Any,
     session: MagicMock,
     fake_response_factory: Callable[..., Any],
-    initial_product: dict[str, Any],
-    changed_product: dict[str, Any],
+    initial_status: dict[str, Any],
+    changed_status: dict[str, Any],
 ) -> tuple[str | None, int]:
-    """Change the reported version during cooldown and run the next version lookup.
+    """Change the firmware status during cooldown and run the next version lookup.
 
-    The returned version alone cannot show a wrongly cleared cache, because the next
-    read returns the same value either way, so the status reads are returned as well.
+    The status object is updated in place, because the poll mock serves that same
+    object. The returned version alone cannot show a wrongly cleared cache, because the
+    next read returns the same value either way, so the status reads are returned as well.
 
     Args:
         client (Any): Client under test.
         session (MagicMock): Mock session receiving the check POST.
         fake_response_factory (Callable[..., Any]): HTTP response factory.
-        initial_product (dict[str, Any]): Product fields before the cooldown poll.
-        changed_product (dict[str, Any]): Product fields that change during cooldown.
+        initial_status (dict[str, Any]): Firmware status served before the cooldown poll.
+        changed_status (dict[str, Any]): Firmware status that replaces it during cooldown.
 
     Returns:
         tuple[str | None, int]: Version from the final lookup and its status reads.
     """
-    status = _firmware_status(status="error", product=initial_product)
-    _configure_firmware_polls(client, status)
+    _configure_firmware_polls(client, initial_status)
     status_reads = cast(AsyncMock, client._safe_dict_get)
     session.post.return_value = fake_response_factory(
         json_payload={"status": "ok", "msg_uuid": "check"}
@@ -1682,8 +1702,9 @@ async def _lookup_after_cooldown_poll(
     assert session.post.call_count == 1
     await client.get_host_firmware_version()
 
-    status["product"].update(changed_product)
-    await client.get_firmware_update_info()
+    initial_status.clear()
+    initial_status.update(changed_status)
+    assert await client.get_firmware_update_info() == changed_status
 
     reads_before = status_reads.await_count
     version = await client.get_host_firmware_version()
@@ -1711,7 +1732,11 @@ async def test_firmware_cooldown_keeps_cache_for_unchanged_version_shape(
     client, session = make_mock_session_client(make_client)
     try:
         result = await _lookup_after_cooldown_poll(
-            client, session, fake_response_factory, shape.product, shape.product
+            client,
+            session,
+            fake_response_factory,
+            _firmware_status_for_shape(shape),
+            _firmware_status_for_shape(shape),
         )
         assert result == (shape.lookup_version, 0)
     finally:
@@ -1742,8 +1767,8 @@ async def test_firmware_cooldown_refreshes_cache_for_new_version_shape(
             client,
             session,
             fake_response_factory,
-            {"product_version": previous_version},
-            shape.product,
+            _firmware_status(status="error", product={"product_version": previous_version}),
+            _firmware_status_for_shape(shape),
         )
         assert result == ((shape.lookup_version, 1) if shape.cached else (previous_version, 0))
     finally:
@@ -1798,7 +1823,11 @@ async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
     client, session = make_mock_session_client(make_client)
     try:
         result = await _lookup_after_cooldown_poll(
-            client, session, fake_response_factory, initial_product, changed_product
+            client,
+            session,
+            fake_response_factory,
+            _firmware_status(status="error", product=initial_product),
+            _firmware_status(status="error", product=changed_product),
         )
         assert result == (expected_version, expected_reads)
     finally:

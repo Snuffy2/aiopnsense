@@ -457,8 +457,8 @@ _NOT_COMPARABLE = _minimums(None, None, None, None)
 # Release and hotfix forms come from a live Router and its OPNsense changelogs. The beta is
 # the `opnsense-devel` package version, and its series is inferred from that version. Betas
 # cannot be compared, so the lookup uses their product series. A release candidate compares
-# as older than its final release. The last entry is a status with no product version or
-# series.
+# as older than its final release. The last entry is the error status OPNsense returns
+# without product data.
 FIRMWARE_VERSION_SHAPES: tuple[FirmwareVersionShape, ...] = (
     FirmwareVersionShape(
         id="series-release",
@@ -533,7 +533,7 @@ FIRMWARE_VERSION_SHAPES: tuple[FirmwareVersionShape, ...] = (
         cached=True,
     ),
     FirmwareVersionShape(
-        id="missing-version-and-series",
+        id="missing-product",
         product_version=None,
         product_series=None,
         trimmed=None,
