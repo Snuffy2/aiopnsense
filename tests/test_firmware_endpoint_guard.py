@@ -1,10 +1,16 @@
 """Enforce the firmware endpoint rule from ADR 0002 on production code.
 
-The guard is a static AST check. It resolves string constants, imports, attribute
-access, concatenation and f-strings, then fails closed: a status or check path is
-allowed only in the uses listed here, so copying one into a variable or helper is a
-violation. It cannot see a path computed at runtime or built with ``str.format``,
-``%`` or ``join``, such as ``f"{PREFIX}{type}"`` when ``type`` is not a constant.
+The guard is a static AST check that reads each module on its own. It resolves string
+constants, f-strings, concatenation and imports that rename a guarded constant, then
+reports each expression that builds a firmware path the rule does not allow. Status reads
+are allowed only through the GET helpers, the check path only in the one dispatch in
+``FirmwareMixin._request_firmware_check``, and the action prefix only in
+``FirmwareMixin.install_firmware`` and ``FirmwareMixin.upgrade_firmware``.
+
+Known limits: it does not follow values held in local variables, class attributes or
+``+=``. Any use of the action prefix outside the two install methods still fails,
+including the assignment that copies it into a local. It cannot see paths built with
+``str.format``, ``%`` or ``join``.
 """
 
 import ast
@@ -17,9 +23,13 @@ import pytest
 PACKAGE = Path(__file__).resolve().parents[1] / "aiopnsense"
 FIRMWARE_MODULE = "firmware.py"
 CHECK_DISPATCH_SCOPE = ("FirmwareMixin", "_request_firmware_check")
+ACTION_SCOPES = frozenset(
+    {("FirmwareMixin", "install_firmware"), ("FirmwareMixin", "upgrade_firmware")}
+)
 ENDPOINT_DEFINITIONS = {
     "FIRMWARE_CHECK_ENDPOINT": "check",
     "FIRMWARE_STATUS_ENDPOINT": "status",
+    "FIRMWARE_ACTION_ENDPOINT_PREFIX": "action",
 }
 GUARDED_CONSTANTS: dict[str, str] = {
     "FIRMWARE_ACTION_ENDPOINT_PREFIX": "/api/core/firmware/",
@@ -38,22 +48,26 @@ GET_HELPERS = frozenset(
         "_safe_list_get",
     }
 )
-GUARDED_PATH = re.compile(r"/api/core/firmware/(info|status|check)(?![\w-])", re.IGNORECASE)
+# Matches a named endpoint, or the bare prefix and the prefix before an unresolved part.
+GUARDED_PATH = re.compile(
+    r"/api/core/firmware/(?:(?P<endpoint>info|status|check)(?![\w-])|(?=\0|\Z))",
+    re.IGNORECASE,
+)
 UNKNOWN = "\0"
-
-FIRMWARE_SOURCE = """
-FIRMWARE_STATUS_ENDPOINT = "/api/core/firmware/status"
-FIRMWARE_CHECK_ENDPOINT = "/api/core/firmware/check"
-FIRMWARE_ACTION_ENDPOINT_PREFIX = "/api/core/firmware/"
-
-class FirmwareMixin:
-    async def _request_firmware_check(self):
-        await self._do_post(FIRMWARE_CHECK_ENDPOINT)
-
-    async def probe(self, value):
-        {statement}
-"""
+ACTION_LABEL = "firmware action prefix outside install_firmware or upgrade_firmware"
 CHECK_DISPATCH = "await self._do_post(FIRMWARE_CHECK_ENDPOINT)"
+
+
+def _violation_label(endpoint: str) -> str:
+    """Return the text that describes a reported endpoint in a violation.
+
+    Args:
+        endpoint (str): Endpoint name the guard reports.
+
+    Returns:
+        str: ``ACTION_LABEL`` for ``action``, otherwise the firmware path.
+    """
+    return ACTION_LABEL if endpoint == "action" else f"/api/core/firmware/{endpoint}"
 
 
 def _resolve(node: ast.AST, constants: dict[str, str]) -> str:
@@ -80,30 +94,15 @@ def _resolve(node: ast.AST, constants: dict[str, str]) -> str:
     return UNKNOWN
 
 
-def _import_key(source: str, level: int) -> str:
-    """Return the package-relative file that an import names.
-
-    Args:
-        source (str): Dotted module name from the import statement.
-        level (int): ``0`` for an absolute import, ``1`` for a sibling relative import.
-
-    Returns:
-        str: Path such as ``firmware.py``, matching the keys of the parsed modules.
-    """
-    name = source.removeprefix("aiopnsense.") if level == 0 else source
-    return f"{name.replace('.', '/')}.py"
-
-
-def _module_constants(module: ast.Module, imported: dict[str, dict[str, str]]) -> dict[str, str]:
+def _module_constants(module: ast.Module) -> dict[str, str]:
     """Return one module's string constants by replaying its statements in source order.
 
-    Imports anywhere in the module count, so function-local imports are followed too.
-    Each assignment is resolved against the names defined before it, and a name whose
-    new value cannot be resolved is removed.
+    Each top-level assignment is resolved against the names defined before it, and a name
+    whose new value cannot be resolved is removed. An import that renames a guarded
+    constant binds its alias to the guarded value.
 
     Args:
         module (ast.Module): Parsed module.
-        imported (dict[str, dict[str, str]]): Constants of the other package modules.
 
     Returns:
         dict[str, str]: Constant values by name.
@@ -115,16 +114,10 @@ def _module_constants(module: ast.Module, imported: dict[str, dict[str, str]]) -
     statements += [node for node in module.body if isinstance(node, (ast.Assign, ast.AnnAssign))]
     for statement in sorted(statements, key=lambda node: (node.lineno, node.col_offset)):
         match statement:
-            case ast.ImportFrom(module=str() as source, names=names, level=level) if level <= 1:
-                source_constants = imported.get(_import_key(source, level), {})
+            case ast.ImportFrom(names=names):
                 for alias in names:
-                    local = alias.asname or alias.name
-                    if alias.name == "*":
-                        scope.update(source_constants)
-                    elif (value := source_constants.get(alias.name)) is not None:
-                        scope[local] = value
-                    else:
-                        scope.pop(local, None)
+                    if alias.asname and alias.name in GUARDED_CONSTANTS:
+                        scope[alias.asname] = GUARDED_CONSTANTS[alias.name]
             case (
                 ast.Assign(targets=[ast.Name(id=name)], value=value)
                 | ast.AnnAssign(target=ast.Name(id=name), value=ast.expr() as value)
@@ -137,40 +130,51 @@ def _module_constants(module: ast.Module, imported: dict[str, dict[str, str]]) -
     return scope
 
 
-def _package_constants(modules: dict[str, ast.Module]) -> dict[str, dict[str, str]]:
-    """Return each module's string constants, following imports between modules.
-
-    Each pass rebuilds every module from empty. A pass repeats only while a rebuilt
-    module differs from the stored one, so a constant that extends itself settles on
-    its final value.
+def _child_scope(node: ast.AST, scope: tuple[str, ...]) -> tuple[str, ...]:
+    """Return the enclosing-scope names that apply to the children of a node.
 
     Args:
-        modules (dict[str, ast.Module]): Parsed modules by package-relative path.
+        node (ast.AST): Parent node.
+        scope (tuple[str, ...]): Names of the classes and functions enclosing ``node``.
 
     Returns:
-        dict[str, dict[str, str]]: Constant values by module and name.
+        tuple[str, ...]: ``scope`` extended by ``node``'s name when it is a class or function.
     """
-    constants: dict[str, dict[str, str]] = {path: {} for path in modules}
-    changed = True
-    while changed:
-        changed = False
-        for path, module in modules.items():
-            rebuilt = _module_constants(module, constants)
-            if rebuilt != constants[path]:
-                constants[path] = rebuilt
-                changed = True
-    return constants
+    if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        return (*scope, node.name)
+    return scope
 
 
-def _references(node: ast.AST, constants: dict[str, str]) -> Iterator[tuple[ast.expr, str]]:
+def _scoped_nodes(
+    node: ast.AST, scope: tuple[str, ...] = ()
+) -> Iterator[tuple[ast.AST, tuple[str, ...]]]:
+    """Yield every node below ``node`` with the names of its enclosing classes and functions.
+
+    Args:
+        node (ast.AST): Node to walk.
+        scope (tuple[str, ...]): Names of the classes and functions enclosing ``node``.
+
+    Yields:
+        tuple[ast.AST, tuple[str, ...]]: Node and its enclosing scope.
+    """
+    yield node, scope
+    for child in ast.iter_child_nodes(node):
+        yield from _scoped_nodes(child, _child_scope(node, scope))
+
+
+def _references(
+    node: ast.AST, constants: dict[str, str], scope: tuple[str, ...] = ()
+) -> Iterator[tuple[ast.expr, str, tuple[str, ...]]]:
     """Yield the outermost expressions that build a guarded firmware path.
 
     Args:
         node (ast.AST): Node to search.
         constants (dict[str, str]): String constants visible in the module.
+        scope (tuple[str, ...]): Names of the classes and functions enclosing ``node``.
 
     Yields:
-        tuple[ast.expr, str]: Expression and the endpoint name it builds.
+        tuple[ast.expr, str, tuple[str, ...]]: Expression, the endpoint it builds (``action``
+            for the bare prefix or a prefix followed by a runtime value), and its scope.
     """
     if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
         return  # Docstrings can explain the rule without sending a request.
@@ -183,10 +187,10 @@ def _references(node: ast.AST, constants: dict[str, str]) -> Iterator[tuple[ast.
             | ast.Attribute(ctx=ast.Load())
         ):
             if found := GUARDED_PATH.search(_resolve(node, constants)):
-                yield node, found[1].lower()
+                yield node, (found["endpoint"] or "action").lower(), scope
                 return
     for child in ast.iter_child_nodes(node):
-        yield from _references(child, constants)
+        yield from _references(child, constants, _child_scope(node, scope))
 
 
 def _self_method(call: ast.Call) -> str | None:
@@ -246,32 +250,26 @@ def _is_status_read(call: ast.Call) -> bool:
     )
 
 
-def _check_dispatch_paths(module: ast.Module) -> list[ast.expr]:
+def _check_dispatch_paths(module: ast.Module, constants: dict[str, str]) -> list[ast.expr]:
     """Return the path arguments of ``_do_post`` calls in the approved check dispatch.
 
     Args:
         module (ast.Module): Parsed firmware module.
+        constants (dict[str, str]): String constants visible in the module.
 
     Returns:
-        list[ast.expr]: Path arguments that resolve to the check endpoint.
+        list[ast.expr]: Path arguments in ``FirmwareMixin._request_firmware_check`` that
+            resolve to the check endpoint.
     """
-    for statement in module.body:
-        if isinstance(statement, ast.ClassDef) and statement.name == CHECK_DISPATCH_SCOPE[0]:
-            for method in statement.body:
-                if (
-                    isinstance(method, ast.AsyncFunctionDef)
-                    and method.name == CHECK_DISPATCH_SCOPE[1]
-                ):
-                    return [
-                        path
-                        for node in ast.walk(method)
-                        if isinstance(node, ast.Call)
-                        and _self_method(node) == "_do_post"
-                        and (path := _call_path(node)) is not None
-                        and _resolve(path, GUARDED_CONSTANTS)
-                        == GUARDED_CONSTANTS["FIRMWARE_CHECK_ENDPOINT"]
-                    ]
-    return []
+    return [
+        path
+        for node, scope in _scoped_nodes(module)
+        if scope == CHECK_DISPATCH_SCOPE
+        and isinstance(node, ast.Call)
+        and _self_method(node) == "_do_post"
+        and (path := _call_path(node)) is not None
+        and _resolve(path, constants) == GUARDED_CONSTANTS["FIRMWARE_CHECK_ENDPOINT"]
+    ]
 
 
 def _module_violations(
@@ -298,8 +296,9 @@ def _module_violations(
             and (path := _call_path(node)) is not None
         ):
             allowed[id(path)] = "status"
+    is_firmware = relative_path == FIRMWARE_MODULE
     violations: list[str] = []
-    if relative_path == FIRMWARE_MODULE:
+    if is_firmware:
         for statement in module.body:
             match statement:
                 case (
@@ -307,7 +306,7 @@ def _module_violations(
                     | ast.AnnAssign(target=ast.Name(id=name), value=ast.expr() as value)
                 ) if name in ENDPOINT_DEFINITIONS:
                     allowed[id(value)] = ENDPOINT_DEFINITIONS[name]
-        dispatches = _check_dispatch_paths(module)
+        dispatches = _check_dispatch_paths(module, constants)
         for path in dispatches:
             allowed[id(path)] = "check"
         if len(dispatches) != 1:
@@ -317,9 +316,10 @@ def _module_violations(
             )
 
     violations += [
-        f"aiopnsense/{relative_path}:{expression.lineno}: /api/core/firmware/{endpoint}"
-        for expression, endpoint in _references(module, constants)
+        f"aiopnsense/{relative_path}:{expression.lineno}: {_violation_label(endpoint)}"
+        for expression, endpoint, scope in _references(module, constants)
         if allowed.get(id(expression)) != endpoint
+        and not (is_firmware and endpoint == "action" and scope in ACTION_SCOPES)
     ]
     return violations
 
@@ -333,13 +333,39 @@ def _source_violations(sources: dict[str, str]) -> list[str]:
     Returns:
         list[str]: Violations from every module.
     """
-    modules = {path: ast.parse(source, filename=path) for path, source in sources.items()}
-    constants = _package_constants(modules)
-    return [
-        violation
-        for path, module in modules.items()
-        for violation in _module_violations(module, path, constants[path])
-    ]
+    violations: list[str] = []
+    for path, source in sources.items():
+        module = ast.parse(source, filename=path)
+        violations += _module_violations(module, path, _module_constants(module))
+    return violations
+
+
+def _firmware_source(
+    statement: str = "pass", *, method: str = "probe", dispatch: str = CHECK_DISPATCH
+) -> str:
+    """Return a minimal firmware module with a statement in one method.
+
+    Args:
+        statement (str): Body of ``method``, indented to sit inside it.
+        method (str): Name of the method that receives ``statement``.
+        dispatch (str): Body of ``FirmwareMixin._request_firmware_check``.
+
+    Returns:
+        str: Python source of the fixture module.
+    """
+    return f"""
+FIRMWARE_STATUS_ENDPOINT = "/api/core/firmware/status"
+FIRMWARE_CHECK_ENDPOINT = "/api/core/firmware/check"
+FIRMWARE_ACTION_ENDPOINT_PREFIX = "/api/core/firmware/"
+FIRMWARE_CHANGELOG_ENDPOINT_PREFIX = "/api/core/firmware/changelog/"
+
+class FirmwareMixin:
+    async def _request_firmware_check(self):
+        {dispatch}
+
+    async def {method}(self, value):
+        {statement}
+"""
 
 
 def test_production_code_follows_firmware_endpoint_rule() -> None:
@@ -383,6 +409,17 @@ def test_production_code_follows_firmware_endpoint_rule() -> None:
         ("await self._do_post(path=FIRMWARE_CHECK_ENDPOINT)", "check"),
         ("path = FIRMWARE_CHECK_ENDPOINT", "check"),
         ("await self._do_post(fw.FIRMWARE_CHECK_ENDPOINT)", "check"),
+        ('await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{value}")', "action"),
+        (
+            'action = "check"\n        await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{action}")',
+            "action",
+        ),
+        (
+            'action = "info"\n        await self._get(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{action}")',
+            "action",
+        ),
+        ("base = FIRMWARE_ACTION_ENDPOINT_PREFIX", "action"),
+        ('await self._do_post("/api/core/firmware/" + value)', "action"),
     ],
 )
 def test_guard_rejects_forbidden_firmware_requests(statement: str, endpoint: str) -> None:
@@ -392,122 +429,126 @@ def test_guard_rejects_forbidden_firmware_requests(statement: str, endpoint: str
         statement (str): Statement added to a firmware method.
         endpoint (str): Firmware endpoint the statement must be reported for.
     """
-    source = FIRMWARE_SOURCE.replace("{statement}", statement)
-
-    violations = _source_violations({FIRMWARE_MODULE: source})
+    violations = _source_violations({FIRMWARE_MODULE: _firmware_source(statement)})
 
     assert len(violations) == 1
-    assert violations[0].endswith(f"/api/core/firmware/{endpoint}")
+    assert violations[0].endswith(_violation_label(endpoint))
 
 
-def test_guard_follows_constants_imported_by_another_module() -> None:
-    """Report a check dispatched from another module through an imported alias."""
-    other = """
-from .firmware import FIRMWARE_CHECK_ENDPOINT as CHECK
+def _dispatching_module(call: str, imports: str = "") -> str:
+    """Return a second module whose ``request`` dispatches the check path.
 
-async def request(client):
-    await client._do_post(CHECK)
-"""
-    source = FIRMWARE_SOURCE.replace("{statement}", "pass")
+    Args:
+        call (str): Path argument passed to ``client._do_post``.
+        imports (str): Import line placed above ``request``, if any.
 
-    violations = _source_violations({FIRMWARE_MODULE: source, "other.py": other})
-
-    assert violations == ["aiopnsense/other.py:5: /api/core/firmware/check"]
+    Returns:
+        str: Python source of the second module.
+    """
+    return f"{imports}\n\nasync def request(client):\n    await client._do_post({call})\n"
 
 
 @pytest.mark.parametrize(
-    "other",
+    ("other", "endpoint"),
     [
-        """
-async def request(client):
-    await client._do_post(firmware.FIRMWARE_CHECK_ENDPOINT)
-""",
-        """
-from aiopnsense.firmware import FIRMWARE_CHECK_ENDPOINT
-
-async def request(client):
-    await client._do_post(FIRMWARE_CHECK_ENDPOINT)
-""",
-        """
-from aiopnsense.firmware import FIRMWARE_CHECK_ENDPOINT as CHECK
-
-async def request(client):
-    await client._do_post(CHECK)
-""",
-        """
+        (_dispatching_module("firmware.FIRMWARE_CHECK_ENDPOINT"), "check"),
+        (
+            _dispatching_module(
+                "FIRMWARE_CHECK_ENDPOINT", "from aiopnsense.firmware import FIRMWARE_CHECK_ENDPOINT"
+            ),
+            "check",
+        ),
+        (
+            _dispatching_module(
+                "CHECK", "from aiopnsense.firmware import FIRMWARE_CHECK_ENDPOINT as CHECK"
+            ),
+            "check",
+        ),
+        (
+            _dispatching_module("CHECK", "from .firmware import FIRMWARE_CHECK_ENDPOINT as CHECK"),
+            "check",
+        ),
+        (
+            """
 async def request(client):
     from .firmware import FIRMWARE_CHECK_ENDPOINT as CHECK
     await client._do_post(CHECK)
 """,
-        """
-from .firmware import *
-
-async def request(client):
-    await client._do_post(FIRMWARE_CHECK_ENDPOINT)
-""",
+            "check",
+        ),
+        (_dispatching_module("FIRMWARE_CHECK_ENDPOINT", "from .firmware import *"), "check"),
+        ('FIRMWARE_ACTION_ENDPOINT_PREFIX = "/api/core/firmware/"\n', "action"),
     ],
-    ids=["attribute", "absolute", "absolute-alias", "function-local", "star"],
+    ids=[
+        "attribute",
+        "absolute",
+        "absolute-alias",
+        "relative-alias",
+        "function-local",
+        "star",
+        "prefix-literal",
+    ],
 )
-def test_guard_rejects_check_reached_through_other_module(other: str) -> None:
-    """Report a check dispatched from another module by any supported import form.
+def test_guard_rejects_firmware_path_from_another_module(other: str, endpoint: str) -> None:
+    """Report a firmware path built in another module by any supported form.
 
     Args:
-        other (str): Source of a second module that dispatches the check endpoint.
+        other (str): Source of a second module that reaches a firmware path.
+        endpoint (str): Firmware endpoint the other module must be reported for.
     """
-    source = FIRMWARE_SOURCE.replace("{statement}", "pass")
-
-    violations = _source_violations({FIRMWARE_MODULE: source, "other.py": other})
+    violations = _source_violations({FIRMWARE_MODULE: _firmware_source(), "other.py": other})
 
     assert len(violations) == 1
     assert violations[0].startswith("aiopnsense/other.py:")
-    assert violations[0].endswith("/api/core/firmware/check")
-
-
-def test_self_extending_constant_terminates_without_violation() -> None:
-    """Finish when a constant is rebuilt from its own value in an unrelated module."""
-    other = 'BASE = "/a"\nBASE = BASE + "/b"\n'
-    source = FIRMWARE_SOURCE.replace("{statement}", "pass")
-
-    assert _source_violations({FIRMWARE_MODULE: source, "other.py": other}) == []
-
-
-def test_self_extending_constant_keeps_final_value() -> None:
-    """Resolve a self-extending constant to its final value when it is used."""
-    other = (
-        'BASE = "/api/core/firmware/st"\n'
-        'BASE = BASE + "atus"\n'
-        "\n"
-        "async def request(client):\n"
-        "    await client._do_post(BASE)\n"
-    )
-    source = FIRMWARE_SOURCE.replace("{statement}", "pass")
-
-    violations = _source_violations({FIRMWARE_MODULE: source, "other.py": other})
-
-    assert violations == [
-        "aiopnsense/other.py:2: /api/core/firmware/status",
-        "aiopnsense/other.py:5: /api/core/firmware/status",
-    ]
+    assert violations[0].endswith(_violation_label(endpoint))
 
 
 @pytest.mark.parametrize(
-    ("body", "found"),
+    ("other", "expected"),
+    [
+        ('BASE = "/a"\nBASE = BASE + "/b"\n', []),
+        (
+            """
+BASE = "/api/core/firmware/st"
+BASE = BASE + "atus"
+
+async def request(client):
+    await client._do_post(BASE)
+""",
+            [
+                "aiopnsense/other.py:3: /api/core/firmware/status",
+                "aiopnsense/other.py:6: /api/core/firmware/status",
+            ],
+        ),
+    ],
+    ids=["unguarded-final-value", "guarded-final-value"],
+)
+def test_module_constant_is_replayed_in_source_order(other: str, expected: list[str]) -> None:
+    """Resolve each use of a self-extending constant against the value before it.
+
+    Args:
+        other (str): Source of a second module that rebuilds a constant from its own value.
+        expected (list[str]): Violations the other module must produce.
+    """
+    assert _source_violations({FIRMWARE_MODULE: _firmware_source(), "other.py": other}) == expected
+
+
+@pytest.mark.parametrize(
+    ("dispatch", "found"),
     [
         ("pass", 0),
         (f"{CHECK_DISPATCH}\n        {CHECK_DISPATCH}", 2),
     ],
     ids=["removed", "duplicated"],
 )
-def test_guard_requires_exactly_one_check_dispatch(body: str, found: int) -> None:
+def test_guard_requires_exactly_one_check_dispatch(dispatch: str, found: int) -> None:
     """Report a firmware module whose check dispatch is removed or duplicated.
 
     Args:
-        body (str): Replacement for the check dispatch in ``_request_firmware_check``.
+        dispatch (str): Replacement body for ``_request_firmware_check``.
         found (int): Number of check dispatches the report must state.
     """
-    source = FIRMWARE_SOURCE.replace(CHECK_DISPATCH, body).replace("{statement}", "pass")
-
-    violations = _source_violations({FIRMWARE_MODULE: source})
+    violations = _source_violations({FIRMWARE_MODULE: _firmware_source(dispatch=dispatch)})
 
     message = "FirmwareMixin._request_firmware_check must contain exactly one check dispatch"
     assert violations == [f"aiopnsense/firmware.py: {message}, found {found}"]
@@ -515,11 +556,22 @@ def test_guard_requires_exactly_one_check_dispatch(body: str, found: int) -> Non
 
 def test_guard_allows_annotated_endpoint_definitions() -> None:
     """Accept annotated endpoint definitions in the firmware module."""
-    source = (
-        FIRMWARE_SOURCE.replace('FIRMWARE_STATUS_ENDPOINT = "', 'FIRMWARE_STATUS_ENDPOINT: str = "')
-        .replace('FIRMWARE_CHECK_ENDPOINT = "', 'FIRMWARE_CHECK_ENDPOINT: str = "')
-        .replace("{statement}", "pass")
-    )
+    source = _firmware_source()
+    for name in ENDPOINT_DEFINITIONS:
+        source = source.replace(f"{name} = ", f"{name}: str = ")
+
+    assert _source_violations({FIRMWARE_MODULE: source}) == []
+
+
+@pytest.mark.parametrize("method", ["install_firmware", "upgrade_firmware"])
+def test_guard_allows_action_prefix_in_install_methods(method: str) -> None:
+    """Accept the action prefix in the two install methods that validate ``type``.
+
+    Args:
+        method (str): Install method that dispatches the action.
+    """
+    statement = 'await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}")'
+    source = _firmware_source(statement, method=method)
 
     assert _source_violations({FIRMWARE_MODULE: source}) == []
 
@@ -533,8 +585,8 @@ def test_guard_allows_annotated_endpoint_definitions() -> None:
         "await self._firmware_request(FIRMWARE_STATUS_ENDPOINT)",
         "await self._firmware_request(FIRMWARE_STATUS_ENDPOINT, post=False)",
         "self._endpoint_availability.get(FIRMWARE_STATUS_ENDPOINT)",
-        'await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{value}")',
         'await self._safe_dict_get("/api/core/firmware/upgradestatus")',
+        'await self._safe_dict_post(f"{FIRMWARE_CHANGELOG_ENDPOINT_PREFIX}{value}")',
         '"""Never call /api/core/firmware/info."""',
     ],
 )
@@ -544,6 +596,4 @@ def test_guard_allows_safe_firmware_requests(statement: str) -> None:
     Args:
         statement (str): Statement added to a firmware method.
     """
-    source = FIRMWARE_SOURCE.replace("{statement}", statement)
-
-    assert _source_violations({FIRMWARE_MODULE: source}) == []
+    assert _source_violations({FIRMWARE_MODULE: _firmware_source(statement)}) == []
