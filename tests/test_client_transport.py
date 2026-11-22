@@ -1361,14 +1361,7 @@ async def test_repeated_request_failures_log_once_per_outage_until_recovery(
         caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
     """
     session_method, _empty_value = _LADDER_PATHS[path_name]
-
-    def failure() -> FakeResponse:
-        """Build a failed server response.
-
-        Returns:
-            FakeResponse: Response with a 500 status.
-        """
-        return FakeResponse(status=500, reason="Failure", ok=False, stream_chunks=[b""])
+    failed_response = FakeResponse(status=500, reason="Failure", ok=False, stream_chunks=[b""])
 
     session = MagicMock()
     setattr(
@@ -1376,11 +1369,11 @@ async def test_repeated_request_failures_log_once_per_outage_until_recovery(
         session_method,
         MagicMock(
             side_effect=[
-                failure(),
-                failure(),
-                failure(),
+                failed_response,
+                failed_response,
+                failed_response,
                 _SUCCESS_RESPONSES[path_name](),
-                failure(),
+                failed_response,
             ]
         ),
     )
