@@ -325,7 +325,10 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                     running = await self._safe_dict_get(FIRMWARE_RUNNING_ENDPOINT)
                     if running.get("status") == "ready":
                         _LOGGER.info("Triggering firmware check")
-                        self._record_firmware_version(None)
+                        # A check cannot install firmware. If the cache is already
+                        # empty, let a version read in progress finish filling it.
+                        if self._firmware_version is not None:
+                            self._record_firmware_version(None)
                         # Do not queue this mutation: a cancelled queue caller
                         # can leave a CHECK that runs after the action lock releases.
                         await self._do_post(FIRMWARE_CHECK_ENDPOINT)

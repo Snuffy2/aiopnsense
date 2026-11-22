@@ -240,6 +240,65 @@ async def test_validation_reads_firmware_across_an_empty_cache_observation(
 
 
 @pytest.mark.asyncio
+async def test_validation_survives_repeated_automatic_firmware_checks(
+    firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An automatic check preserves a fresh read once the old cache is clear.
+
+    Args:
+        firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
+        monkeypatch (pytest.MonkeyPatch): Pauses firmware responses during validation.
+    """
+    client, router = firmware_router
+    router.firmware = "26.7.7"
+    router.endpoints[firmware_module.FIRMWARE_RUNNING_ENDPOINT] = {"status": "ready"}
+    assert await client.get_host_firmware_version() == "26.7.7"
+
+    pending_reads: asyncio.Queue[asyncio.Event] = asyncio.Queue()
+    request = client._get
+
+    async def delay_validation_read(path: str) -> Any:
+        """Hold each validation response until its corresponding check has run.
+
+        Args:
+            path (str): Requested endpoint.
+
+        Returns:
+            Any: The scripted Router response.
+        """
+        response = await request(path)
+        if (
+            asyncio.current_task() is validation
+            and path == firmware_module.FIRMWARE_STATUS_ENDPOINT
+        ):
+            resume_read = asyncio.Event()
+            pending_reads.put_nowait(resume_read)
+            await resume_read.wait()
+        return response
+
+    monkeypatch.setattr(client, "_get", delay_validation_read)
+    validation = asyncio.get_running_loop().create_task(client.validate(require_device_id=False))
+    try:
+        async with asyncio.timeout(1):
+            first_read = await pending_reads.get()
+            await client.get_firmware_update_info()
+            router.firmware = "26.7.8"
+            first_read.set()
+            retry = await pending_reads.get()
+            await client.get_firmware_update_info()
+            retry.set()
+            await validation
+    finally:
+        if not validation.done():
+            validation.cancel()
+        await asyncio.gather(validation, return_exceptions=True)
+
+    assert router.post_paths == [firmware_module.FIRMWARE_CHECK_ENDPOINT] * 2
+    assert await client.get_host_firmware_version() == "26.7.8"
+
+
+@pytest.mark.asyncio
 async def test_delayed_firmware_read_cannot_overwrite_verified_install(
     install_client: Callable[..., Any],
 ) -> None:
