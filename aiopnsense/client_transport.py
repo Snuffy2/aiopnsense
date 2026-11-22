@@ -1,5 +1,6 @@
 """Raw HTTP transport and response coercion helpers for OPNsenseClient."""
 
+import asyncio
 import codecs
 from collections.abc import AsyncGenerator, MutableMapping
 import json
@@ -50,6 +51,21 @@ class ClientTransportMixin:
 
             Returns:
                 MutableMapping[str, Any] | list | None: Decoded response payload.
+            """
+            ...
+
+        async def _queue_post_with_cancellation(
+            self, path: str, payload: MutableMapping[str, Any] | None = None
+        ) -> tuple[MutableMapping[str, Any] | list | None, asyncio.CancelledError | None]:
+            """Queue a POST and retain its response when cancellation follows dispatch.
+
+            Args:
+                path (str): API endpoint path to request.
+                payload (MutableMapping[str, Any] | None): Optional request body.
+
+            Returns:
+                tuple[MutableMapping[str, Any] | list | None, asyncio.CancelledError | None]:
+                    Response and any cancellation received after dispatch began.
             """
             ...
 
@@ -538,6 +554,22 @@ class ClientTransportMixin:
         """
         result = await self._post(path=path, payload=payload)
         return dict(result) if isinstance(result, MutableMapping) else {}
+
+    async def _safe_dict_post_with_cancellation(
+        self, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> tuple[dict[str, Any], asyncio.CancelledError | None]:
+        """Post through the queue while preserving dispatched responses on cancellation.
+
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None): Optional request body.
+
+        Returns:
+            tuple[dict[str, Any], asyncio.CancelledError | None]: Dictionary
+                response and any cancellation received after dispatch began.
+        """
+        result, cancelled = await self._queue_post_with_cancellation(path, payload)
+        return (dict(result) if isinstance(result, MutableMapping) else {}, cancelled)
 
     async def _safe_list_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None

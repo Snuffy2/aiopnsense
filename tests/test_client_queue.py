@@ -1204,3 +1204,252 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
             assert result[collection]["disabled"]["enabled"] is False
     finally:
         await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_wireguard_cancelled_dispatched_toggle_retains_ack_and_lock(
+    make_client: MakeClientFactory,
+) -> None:
+    """Record a dispatched save before cancellation releases the service lock.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._use_snake_case = True
+    mutation_started = asyncio.Event()
+    release_mutation = asyncio.Event()
+    state = {
+        "read_enabled": "0",
+        "enabled": "1",
+        "applied": "1",
+        "toggles": 0,
+        "reconfigures": 0,
+    }
+
+    async def do_get(
+        path: str, caller: str = "Unknown", timeout_seconds: float | None = None
+    ) -> MutableMapping[str, Any]:
+        """Return current WireGuard configuration state.
+
+        Args:
+            path (str): Endpoint path.
+            caller (str): Queue caller label.
+            timeout_seconds (float | None): Optional request timeout.
+
+        Returns:
+            MutableMapping[str, Any]: Current client state payload.
+        """
+        return {"client": {"enabled": state["read_enabled"]}}
+
+    async def do_post(
+        path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
+    ) -> MutableMapping[str, Any]:
+        """Save target state or apply configuration through the real queue.
+
+        Args:
+            path (str): Endpoint path.
+            payload (MutableMapping[str, Any] | None): Optional request body.
+            caller (str): Queue caller label.
+
+        Returns:
+            MutableMapping[str, Any]: Simulated endpoint response.
+        """
+        if path.endswith("/service/reconfigure"):
+            state["reconfigures"] += 1
+            state["applied"] = state["enabled"]
+            return {"result": "ok"}
+        state["toggles"] += 1
+        state["enabled"] = "0"
+        mutation_started.set()
+        await release_mutation.wait()
+        return {"changed": True, "result": "Disabled"}
+
+    client._do_get = AsyncMock(side_effect=do_get)
+    client._do_post = AsyncMock(side_effect=do_post)
+    loop = asyncio.get_running_loop()
+    cancelled_call: asyncio.Task[bool] | None = None
+    retry_call: asyncio.Task[bool] | None = None
+    try:
+        cancelled_call = loop.create_task(
+            client.toggle_vpn_instance("wireguard", "clients", "uuid", "on")
+        )
+        await asyncio.wait_for(mutation_started.wait(), timeout=3)
+        cancelled_call.cancel()
+        retry_call = loop.create_task(
+            client.toggle_vpn_instance("wireguard", "clients", "uuid", "off")
+        )
+        await asyncio.sleep(0)
+        assert not cancelled_call.done()
+        assert (state["toggles"], state["reconfigures"]) == (1, 0)
+        assert client._do_get.await_count == 1
+
+        release_mutation.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(cancelled_call, timeout=3)
+        assert await asyncio.wait_for(retry_call, timeout=3) is True
+        assert state == {
+            "read_enabled": "0",
+            "enabled": "0",
+            "applied": "0",
+            "toggles": 1,
+            "reconfigures": 1,
+        }
+    finally:
+        release_mutation.set()
+        for task in (cancelled_call, retry_call):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (cancelled_call, retry_call) if task is not None),
+            return_exceptions=True,
+        )
+        await asyncio.wait_for(client.async_close(), timeout=3)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_service_apply_stays_serialized_until_acknowledged(
+    make_client: MakeClientFactory,
+) -> None:
+    """Hold the service lock through an in-flight apply response.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+    """
+    client, _session = make_mock_session_client(make_client)
+    applied_reconfigure_started = asyncio.Event()
+    release_reconfigure = asyncio.Event()
+    state = {"enabled": "0", "applied": "0", "toggles": 0, "reconfigures": 0}
+
+    async def do_post(
+        path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
+    ) -> MutableMapping[str, Any]:
+        """Capture saved config at dispatch and report service apply completion.
+
+        Args:
+            path (str): Endpoint path.
+            payload (MutableMapping[str, Any] | None): Optional request body.
+            caller (str): Queue caller label.
+
+        Returns:
+            MutableMapping[str, Any]: Simulated endpoint response.
+        """
+        if path.endswith("/service/reconfigure"):
+            state["reconfigures"] += 1
+            saved_at_dispatch = state["enabled"]
+            if state["reconfigures"] == 1:
+                applied_reconfigure_started.set()
+                await release_reconfigure.wait()
+            state["applied"] = saved_at_dispatch
+            return {"result": "ok", "status": "ok"}
+        state["toggles"] += 1
+        state["enabled"] = "1" if path.endswith("/1") else "0"
+        return {
+            "changed": True,
+            "result": "Enabled" if state["enabled"] == "1" else "Disabled",
+        }
+
+    client._do_post = AsyncMock(side_effect=do_post)
+    loop = asyncio.get_running_loop()
+    first: asyncio.Task[bool] | None = None
+    second: asyncio.Task[bool] | None = None
+    try:
+        first = loop.create_task(client.toggle_vpn_instance("openvpn", "servers", "uuid", "on"))
+        await asyncio.wait_for(applied_reconfigure_started.wait(), timeout=3)
+        first.cancel()
+        second = loop.create_task(client.toggle_vpn_instance("openvpn", "servers", "uuid", "off"))
+        await asyncio.sleep(0)
+        assert not first.done()
+        assert (state["toggles"], state["reconfigures"]) == (1, 1)
+
+        release_reconfigure.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(first, timeout=3)
+        assert await asyncio.wait_for(second, timeout=3) is True
+        assert state == {"enabled": "0", "applied": "0", "toggles": 2, "reconfigures": 2}
+    finally:
+        release_reconfigure.set()
+        for task in (first, second):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (first, second) if task is not None),
+            return_exceptions=True,
+        )
+        await asyncio.wait_for(client.async_close(), timeout=3)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_queued_public_toggle_is_not_dispatched(
+    make_client: MakeClientFactory,
+) -> None:
+    """Skip a public targeted toggle cancelled while queued behind another POST.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+    """
+    client, _session = make_mock_session_client(make_client)
+    client._max_workers = 1
+    blocking_post_started = asyncio.Event()
+    release_blocking_post = asyncio.Event()
+    barrier_post_started = asyncio.Event()
+    dispatched: list[str] = []
+
+    async def do_post(
+        path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
+    ) -> MutableMapping[str, Any]:
+        """Block the worker, then record requests dispatched after it resumes.
+
+        Args:
+            path (str): Endpoint path.
+            payload (MutableMapping[str, Any] | None): Optional request body.
+            caller (str): Queue caller label.
+
+        Returns:
+            MutableMapping[str, Any]: Simulated success response.
+        """
+        dispatched.append(path)
+        if path == "/block":
+            blocking_post_started.set()
+            await release_blocking_post.wait()
+        elif path == "/barrier":
+            barrier_post_started.set()
+        return {"result": "ok"}
+
+    client._do_post = AsyncMock(side_effect=do_post)
+    loop = asyncio.get_running_loop()
+    blocker: asyncio.Task[Any] | None = None
+    cancelled_toggle: asyncio.Task[bool] | None = None
+    barrier: asyncio.Task[Any] | None = None
+    try:
+        blocker = loop.create_task(client._post("/block"))
+        await asyncio.wait_for(blocking_post_started.wait(), timeout=3)
+        cancelled_toggle = loop.create_task(
+            client.toggle_vpn_instance("openvpn", "servers", "uuid", "on")
+        )
+
+        async def queued_toggle_visible() -> None:
+            """Wait until the public toggle's POST is queued behind the blocker."""
+            while client._request_queue.qsize() == 0:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(queued_toggle_visible(), timeout=3)
+        cancelled_toggle.cancel()
+        release_blocking_post.set()
+        await asyncio.wait_for(blocker, timeout=3)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(cancelled_toggle, timeout=3)
+        barrier = loop.create_task(client._post("/barrier"))
+        await asyncio.wait_for(barrier_post_started.wait(), timeout=3)
+        await asyncio.wait_for(barrier, timeout=3)
+        assert dispatched == ["/block", "/barrier"]
+    finally:
+        release_blocking_post.set()
+        for task in (blocker, cancelled_toggle, barrier):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (blocker, cancelled_toggle, barrier) if task is not None),
+            return_exceptions=True,
+        )
+        await asyncio.wait_for(client.async_close(), timeout=3)

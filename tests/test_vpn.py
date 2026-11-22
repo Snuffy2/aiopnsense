@@ -200,9 +200,10 @@ async def test_toggle_vpn_instance_variants(
     client._is_get_endpoint_available = AsyncMock(return_value=True)
 
     if isinstance(post_resp, list):
-        client._safe_dict_post = AsyncMock(side_effect=post_resp)
+        post_mock = AsyncMock(side_effect=post_resp)
     else:
-        client._safe_dict_post = AsyncMock(return_value=post_resp)
+        post_mock = AsyncMock(return_value=post_resp)
+    use_mocked_vpn_posts(client, post_mock)
 
     res = await client.toggle_vpn_instance(vpn_type, path, "uuid")
     assert res is expected
@@ -951,14 +952,15 @@ async def test_vpn_switched_endpoints_follow_selected_case(
         client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_get = AsyncMock(return_value={"rows": []})
         client._get = AsyncMock(return_value={})
-        client._safe_dict_post = AsyncMock(side_effect=[{"changed": True}, {"result": "ok"}])
+        post_mock = AsyncMock(side_effect=[{"changed": True}, {"result": "ok"}])
+        use_mocked_vpn_posts(client, post_mock)
 
         await client.get_openvpn()
         await client.toggle_vpn_instance("wireguard", "clients", "uuid")
 
         client._safe_dict_get.assert_any_await(expected_sessions)
         client._safe_dict_get.assert_any_await(expected_routes)
-        assert client._safe_dict_post.await_args_list[0].args[0] == expected_client_toggle
+        assert post_mock.await_args_list[0].args[0] == expected_client_toggle
     finally:
         await client.async_close()
 
@@ -1651,10 +1653,11 @@ async def test_toggle_vpn_instance_ipsec_posts_toggle_then_reconfigure(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case
-        client._safe_dict_post = AsyncMock(side_effect=[{"changed": True}, {"status": "ok"}])
+        post_mock = AsyncMock(side_effect=[{"changed": True}, {"status": "ok"}])
+        use_mocked_vpn_posts(client, post_mock)
 
         assert await client.toggle_vpn_instance("ipsec", "connections", "uuid-1") is True
-        assert [call.args[0] for call in client._safe_dict_post.await_args_list] == [
+        assert [call.args[0] for call in post_mock.await_args_list] == [
             f"{expected_prefix}uuid-1",
             aiopnsense_vpn.IPSEC_SERVICE_RECONFIGURE_ENDPOINT,
         ]
@@ -1897,6 +1900,48 @@ def use_fake_vpn_api(client: OPNsenseClient, api: FakeVpnToggleApi) -> None:
     client._use_snake_case = True
     client._safe_dict_get = AsyncMock(side_effect=api.get)
     client._safe_dict_post = AsyncMock(side_effect=api.post)
+
+    async def post_with_cancellation_state(
+        path: str, payload: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any], asyncio.CancelledError | None]:
+        """Return a fake POST response without simulating cancellation.
+
+        Args:
+            path (str): Requested endpoint.
+            payload (dict[str, Any] | None): Unused request payload.
+
+        Returns:
+            tuple[dict[str, Any], asyncio.CancelledError | None]: Simulated response and cancellation state.
+        """
+        return await api.post(path, payload), None
+
+    client._safe_dict_post_with_cancellation = AsyncMock(side_effect=post_with_cancellation_state)
+
+
+def use_mocked_vpn_posts(client: OPNsenseClient, post_mock: AsyncMock) -> None:
+    """Adapt an existing safe-post mock to the cancellation-aware VPN seam.
+
+    Args:
+        client (OPNsenseClient): Client under test.
+        post_mock (AsyncMock): Mock supplying endpoint responses.
+    """
+    client._safe_dict_post = post_mock
+
+    async def post_with_cancellation_state(
+        path: str, payload: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any], asyncio.CancelledError | None]:
+        """Return the mock response and a non-cancelled marker.
+
+        Args:
+            path (str): Requested endpoint.
+            payload (dict[str, Any] | None): Optional request body.
+
+        Returns:
+            tuple[dict[str, Any], asyncio.CancelledError | None]: Mock response and cancellation state.
+        """
+        return await post_mock(path, payload), None
+
+    client._safe_dict_post_with_cancellation = AsyncMock(side_effect=post_with_cancellation_state)
 
 
 @pytest.mark.asyncio
@@ -2143,17 +2188,18 @@ async def test_toggle_vpn_instance_wireguard_rejects_malformed_fields(
             if malformed_phase == "read"
             else {"client": {"enabled": "0"}}
         )
-        client._safe_dict_post = AsyncMock(
+        post_mock = AsyncMock(
             return_value={"changed": True, "result": []}
             if malformed_phase == "toggle"
             else {"result": "ok"}
         )
+        use_mocked_vpn_posts(client, post_mock)
 
         assert await client.toggle_vpn_instance("wireguard", "clients", "uuid", "on") is False
         if malformed_phase == "read":
-            client._safe_dict_post.assert_not_awaited()
+            post_mock.assert_not_awaited()
         else:
-            assert client._safe_dict_post.await_count == 1
+            assert post_mock.await_count == 1
     finally:
         await client.async_close()
 
@@ -2232,39 +2278,49 @@ async def test_toggle_vpn_instance_retries_after_cancelled_reconfigure(
     """
     client, _session = make_mock_session_client(make_client)
     reconfigure_started = asyncio.Event()
-    never_release = asyncio.Event()
+    release_reconfigure = asyncio.Event()
+    caller_cancelled = asyncio.Event()
     api = FakeVpnToggleApi("0", honors_target=True)
     original_post = api.post
     first: asyncio.Task[bool] | None = None
 
     async def post_with_blocked_first_reconfigure(
         path: str, payload: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Block the first reconfigure until its caller is cancelled.
+    ) -> tuple[dict[str, Any], asyncio.CancelledError | None]:
+        """Return a failed first reconfigure after its caller cancels.
 
         Args:
             path (str): Requested endpoint.
             payload (dict[str, Any] | None): Unused request payload.
 
         Returns:
-            dict[str, Any]: Simulated endpoint response.
+            tuple[dict[str, Any], asyncio.CancelledError | None]: Simulated response.
         """
         if path.endswith("/service/reconfigure") and not reconfigure_started.is_set():
             reconfigure_started.set()
-            await never_release.wait()
-        return await original_post(path, payload)
+            try:
+                await release_reconfigure.wait()
+            except asyncio.CancelledError as cancelled:
+                caller_cancelled.set()
+                await release_reconfigure.wait()
+                return {"result": "failed", "status": "failed"}, cancelled
+        return await original_post(path, payload), None
 
     try:
         use_fake_vpn_api(client, api)
-        client._safe_dict_post = AsyncMock(side_effect=post_with_blocked_first_reconfigure)
+        client._safe_dict_post_with_cancellation = AsyncMock(
+            side_effect=post_with_blocked_first_reconfigure
+        )
         first = asyncio.create_task(client.toggle_vpn_instance("openvpn", "servers", "uuid", "on"))
         await asyncio.wait_for(reconfigure_started.wait(), timeout=1)
         first.cancel()
+        await asyncio.wait_for(caller_cancelled.wait(), timeout=1)
+        release_reconfigure.set()
         with pytest.raises(asyncio.CancelledError):
             await first
 
         assert (api.enabled, api.applied_enabled, api.toggle_count) == ("1", "0", 1)
-        client._safe_dict_post = AsyncMock(side_effect=original_post)
+        use_fake_vpn_api(client, api)
         assert await client.toggle_vpn_instance("openvpn", "servers", "uuid", "on") is True
         assert (api.enabled, api.applied_enabled, api.toggle_count, api.reconfigure_count) == (
             "1",

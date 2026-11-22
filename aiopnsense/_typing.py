@@ -58,6 +58,10 @@ class AiopnsenseClientProtocol(Protocol):
         self, path: str, payload: MutableMapping[str, Any] | None = None
     ) -> dict[str, Any]: ...
 
+    async def _safe_dict_post_with_cancellation(
+        self, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> tuple[dict[str, Any], asyncio.CancelledError | None]: ...
+
     async def _safe_list_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
     ) -> list: ...
