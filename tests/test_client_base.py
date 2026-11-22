@@ -1,6 +1,8 @@
 """Tests for client validation and base object behavior."""
 
+import asyncio
 import contextlib
+import functools
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -277,6 +279,190 @@ async def test_validate_raises_unknown_firmware_for_invalid_recommended_comparis
         get_host_firmware_version.assert_awaited_once()
         get_device_unique_id.assert_not_awaited()
         assert firmware_is_at_least.call_count == 2
+    finally:
+        await client.async_close()
+
+
+async def _start_workers_then(client: OPNsenseClient, probe: AsyncMock) -> str:
+    """Start the lazy queue workers, then run a firmware probe like a real request would.
+
+    Args:
+        client (OPNsenseClient): Client whose queue workers are started.
+        probe (AsyncMock): Mock that returns a firmware version or raises the injected error.
+
+    Returns:
+        str: Firmware version returned by ``probe``.
+    """
+    await client._ensure_workers_started()
+    return await probe()
+
+
+def _firmware_probe(client: OPNsenseClient, outcome: str | BaseException) -> AsyncMock:
+    """Build a ``get_host_firmware_version`` mock that starts workers before its outcome.
+
+    Args:
+        client (OPNsenseClient): Client whose queue workers the probe starts.
+        outcome (str | BaseException): Firmware version to return, or exception to raise.
+
+    Returns:
+        AsyncMock: Mock suitable for replacing ``client.get_host_firmware_version``.
+    """
+    return AsyncMock(
+        side_effect=functools.partial(_start_workers_then, client, AsyncMock(side_effect=[outcome]))
+    )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_exception"),
+    [
+        ("20.1", OPNsenseBelowMinFirmware),
+        (aiohttp.ClientConnectionError("connection"), OPNsenseConnectionError),
+        (asyncio.CancelledError(), asyncio.CancelledError),
+    ],
+    ids=["below-min-firmware", "connection-error", "cancelled"],
+)
+@pytest.mark.asyncio
+async def test_async_context_manager_closes_client_when_validation_fails(
+    outcome: str | BaseException,
+    expected_exception: type[BaseException],
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify a failed ``async with`` entry closes the client and re-raises the error.
+
+    Args:
+        outcome (str | BaseException): Firmware version or exception from the firmware probe.
+        expected_exception (type[BaseException]): Exception expected from entering the context.
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts cleanup and exception propagation on failed entry.
+    """
+    client, _session = make_mock_session_client(make_client)
+    monkeypatch.setattr(
+        client,
+        "get_host_firmware_version",
+        _firmware_probe(client, outcome),
+    )
+    body = MagicMock()
+    try:
+        with pytest.raises(expected_exception) as exc_info:
+            async with client:
+                body()
+
+        if isinstance(outcome, asyncio.CancelledError):
+            assert exc_info.value is outcome
+        body.assert_not_called()
+        assert client._workers == []
+        assert all(
+            task.done() for task in asyncio.all_tasks() if "_process_queue" in repr(task.get_coro())
+        )
+
+        # A caller's own cleanup after the failed ``async with`` must still work.
+        await client.async_close()
+        assert client._workers == []
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_close_failure_does_not_mask_validation_error(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify a failing ``async_close`` does not replace the validation error.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts the original validation error propagates.
+    """
+    client, _session = make_mock_session_client(make_client)
+    real_async_close = client.async_close
+    monkeypatch.setattr(
+        client,
+        "get_host_firmware_version",
+        _firmware_probe(client, "20.1"),
+    )
+    failing_close = AsyncMock(side_effect=RuntimeError("close failed"))
+    monkeypatch.setattr(client, "async_close", failing_close)
+    try:
+        with pytest.raises(OPNsenseBelowMinFirmware):
+            async with client:
+                pass  # pragma: no cover
+
+        failing_close.assert_awaited_once()
+    finally:
+        monkeypatch.setattr(client, "async_close", real_async_close)
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_cancelled_close_still_propagates_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify cancellation during cleanup is not swallowed and keeps the original error.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts the cancellation propagates with the validation error chained.
+    """
+    client, _session = make_mock_session_client(make_client)
+    real_async_close = client.async_close
+    monkeypatch.setattr(
+        client,
+        "get_host_firmware_version",
+        _firmware_probe(client, "20.1"),
+    )
+    monkeypatch.setattr(client, "async_close", AsyncMock(side_effect=asyncio.CancelledError))
+    try:
+        with pytest.raises(asyncio.CancelledError) as exc_info:
+            async with client:
+                pass  # pragma: no cover
+
+        assert isinstance(exc_info.value.__context__, OPNsenseBelowMinFirmware)
+    finally:
+        monkeypatch.setattr(client, "async_close", real_async_close)
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_stays_open_until_exit_when_validation_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify a successful ``async with`` entry leaves the client open until exit.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+
+    Returns:
+        None: This test asserts the client closes only in ``__aexit__``.
+    """
+    client, _session = make_mock_session_client(make_client)
+    _patch_validate_requests(
+        monkeypatch,
+        client,
+        _firmware_probe(client, f"{OPNSENSE_RECOMMENDED_FIRMWARE}_1"),
+        AsyncMock(return_value="aa_bb_cc"),
+    )
+    try:
+        async with client as managed_client:
+            assert managed_client is client
+            workers = list(client._workers)
+            assert workers
+            assert not any(worker.done() for worker in workers)
+
+        assert client._workers == []
+        assert all(worker.done() for worker in workers)
     finally:
         await client.async_close()
 

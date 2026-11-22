@@ -50,10 +50,30 @@ class OPNsenseClient(
     async def __aenter__(self) -> Self:
         """Validate the client before entering an async context manager.
 
+        Python does not call ``__aexit__`` when ``__aenter__`` raises, so a failed or
+        cancelled validation closes the client here before its original exception
+        propagates. A failure while closing is logged and never replaces that exception.
+        Closing the client again afterwards is safe.
+
         Returns:
-            Self: Validated client instance.
+            Self: Validated client instance. Validation errors, including cancellation,
+                propagate unchanged after the client is closed.
         """
-        await self.validate()
+        validated = False
+        try:
+            await self.validate()
+            validated = True
+        finally:
+            if not validated:
+                try:
+                    await self.async_close()
+                except Exception as e:  # noqa: BLE001
+                    # Cleanup must not mask the validation error that is already propagating.
+                    _LOGGER.warning(
+                        "[__aenter__] Error closing client after failed validation. %s: %s",
+                        type(e).__name__,
+                        e,
+                    )
         return self
 
     async def __aexit__(

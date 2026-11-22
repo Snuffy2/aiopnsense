@@ -30,8 +30,10 @@ Explicit validation
 -------------------
 
 Use ``async with`` for normal lifecycle management. Entering the client context already
-calls ``validate()``. Call ``await client.validate()`` yourself only when you want an
-explicit startup check before reusing a long-lived client outside the context manager.
+calls ``validate()``. If validation fails, the client is closed before the error is raised
+from ``async with``, so no background tasks are left running. Call ``await client.validate()``
+yourself only when you want an explicit startup check before reusing a long-lived client
+outside the context manager.
 
 .. code-block:: python
 
