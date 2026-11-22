@@ -28,7 +28,15 @@ from aiopnsense.system import (
     CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
     CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
 )
-from tests.conftest import FakeResponse, FirmwareRouter, make_mock_session_client
+from tests.conftest import (
+    FIRMWARE_VERSION_SHAPES,
+    FakeResponse,
+    FirmwareRouter,
+    FirmwareVersionShape,
+    make_mock_session_client,
+)
+
+_SHAPE_PARAMS = [pytest.param(shape, id=shape.id) for shape in FIRMWARE_VERSION_SHAPES]
 
 
 @pytest.mark.asyncio
@@ -537,10 +545,13 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
 @pytest.mark.parametrize(
     ("product_version", "product_latest"),
     [
-        pytest.param("26.1.1", "26.1.1", id="equal-base-versions"),
+        *(
+            pytest.param(shape.product_version, shape.product_version, id=f"at-latest-{shape.id}")
+            for shape in FIRMWARE_VERSION_SHAPES
+            if shape.version_is_comparable
+        ),
         pytest.param("26.7.6_3", "26.7.6", id="installed-hotfix-ahead-of-base"),
         pytest.param("26.7.6_3", "26.7.6.0", id="installed-hotfix-ahead-of-zero-component-base"),
-        pytest.param("26.7.6_3", "26.7.6_3", id="equal-hotfix-versions"),
         pytest.param("26.7.6_10", "26.7.6_9", id="installed-hotfix-ahead-of-revision"),
         pytest.param("26.7.7", "26.7.6_9", id="installed-base-ahead-of-hotfix"),
     ],
@@ -1612,50 +1623,140 @@ async def test_dispatched_firmware_action_ends_check_cooldown(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("shape", _SHAPE_PARAMS)
+async def test_firmware_lookup_handles_router_version_shapes(
+    make_client: Callable[..., Any], shape: FirmwareVersionShape
+) -> None:
+    """Return each reported form and reread the Router only when it was not cached.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        shape (FirmwareVersionShape): Version form reported by the Router.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        _configure_firmware_polls(client, _firmware_status(product=shape.product))
+        status_reads = cast(AsyncMock, client._safe_dict_get)
+
+        assert await client.get_host_firmware_version() == shape.lookup_version
+        reads_before = status_reads.await_count
+        assert await client.get_host_firmware_version() == shape.lookup_version
+        assert status_reads.await_count - reads_before == (0 if shape.cached else 1)
+    finally:
+        await client.async_close()
+
+
+async def _lookup_after_cooldown_poll(
+    client: Any,
+    session: MagicMock,
+    fake_response_factory: Callable[..., Any],
+    initial_product: dict[str, Any],
+    changed_product: dict[str, Any],
+) -> tuple[str | None, int]:
+    """Change the reported version during cooldown and run the next version lookup.
+
+    The returned version alone cannot show a wrongly cleared cache, because the next
+    read returns the same value either way, so the status reads are returned as well.
+
+    Args:
+        client (Any): Client under test.
+        session (MagicMock): Mock session receiving the check POST.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        initial_product (dict[str, Any]): Product fields before the cooldown poll.
+        changed_product (dict[str, Any]): Product fields that change during cooldown.
+
+    Returns:
+        tuple[str | None, int]: Version from the final lookup and its status reads.
+    """
+    status = _firmware_status(status="error", product=initial_product)
+    _configure_firmware_polls(client, status)
+    status_reads = cast(AsyncMock, client._safe_dict_get)
+    session.post.return_value = fake_response_factory(
+        json_payload={"status": "ok", "msg_uuid": "check"}
+    )
+
+    await client.get_firmware_update_info()
+    assert session.post.call_count == 1
+    await client.get_host_firmware_version()
+
+    status["product"].update(changed_product)
+    await client.get_firmware_update_info()
+
+    reads_before = status_reads.await_count
+    version = await client.get_host_firmware_version()
+    assert session.post.call_count == 1
+    return version, status_reads.await_count - reads_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", _SHAPE_PARAMS)
+async def test_firmware_cooldown_keeps_cache_for_unchanged_version_shape(
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    shape: FirmwareVersionShape,
+) -> None:
+    """An unchanged status during cooldown does not clear a cached version.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
+        shape (FirmwareVersionShape): Version form reported by the Router.
+    """
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
+    client, session = make_mock_session_client(make_client)
+    try:
+        result = await _lookup_after_cooldown_poll(
+            client, session, fake_response_factory, shape.product, shape.product
+        )
+        assert result == (shape.lookup_version, 0 if shape.cached else 1)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", _SHAPE_PARAMS)
+async def test_firmware_cooldown_refreshes_cache_for_new_version_shape(
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    shape: FirmwareVersionShape,
+) -> None:
+    """A change to a usable version refreshes the cache, and any other change keeps it.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
+        shape (FirmwareVersionShape): Version form the Router changes to.
+    """
+    previous_version = "25.7.1"
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
+    client, session = make_mock_session_client(make_client)
+    try:
+        result = await _lookup_after_cooldown_poll(
+            client,
+            session,
+            fake_response_factory,
+            {"product_version": previous_version},
+            shape.product,
+        )
+        assert result == ((shape.lookup_version, 1) if shape.cached else (previous_version, 0))
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("initial_product", "changed_product", "expected_version", "expected_reads"),
     [
-        pytest.param(
-            {"product_version": "26.7.9"},
-            {"product_version": "26.7.10"},
-            "26.7.10",
-            1,
-            id="out-of-band-upgrade",
-        ),
-        pytest.param(
-            {"product_version": "26.1.11"},
-            {"product_version": "26.7.b_110", "product_series": "26.7"},
-            "26.7",
-            1,
-            id="beta-series-fallback",
-        ),
-        pytest.param(
-            {"product_version": "26.7.b_110", "product_series": "26.7"},
-            {"product_version": "26.7.b_110", "product_series": "26.7"},
-            "26.7",
-            0,
-            id="unchanged-series-fallback",
-        ),
         pytest.param(
             {"product_version": "26.7.9"},
             {"product_version": "not-a-version", "product_series": "not-a-series"},
             "26.7.9",
             0,
             id="no-comparable-version-or-series",
-        ),
-        pytest.param(
-            {"product_version": "26.7.9"},
-            {"product_version": "26.7.9"},
-            "26.7.9",
-            0,
-            id="unchanged-version",
-        ),
-        pytest.param(
-            {"product_version": "26.7.9_1"},
-            {"product_version": "26.7.9_1"},
-            "26.7.9_1",
-            0,
-            id="unchanged-hotfix",
         ),
         pytest.param(
             {"product_version": "26.7.9_1"},
@@ -1678,11 +1779,8 @@ async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
     """A comparable version change seen during cooldown refreshes the cache without a check POST.
 
     The version compared is the one the normal lookup would use: the product
-    version, or its product series when the version is not comparable. An
-    unchanged version, or a status with no comparable version or series, leaves
-    the cached version in place. The returned version alone cannot show a wrongly
-    cleared cache, because the next read returns the same value either way, so the
-    test counts the status reads made by the final lookup instead.
+    version, or its product series when the version is not comparable. A status
+    with no comparable version or series leaves the cached version in place.
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
@@ -1696,24 +1794,10 @@ async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
     client, session = make_mock_session_client(make_client)
     try:
-        status = _firmware_status(status="error", product=initial_product)
-        _configure_firmware_polls(client, status)
-        status_reads = cast(AsyncMock, client._safe_dict_get)
-        session.post.return_value = fake_response_factory(
-            json_payload={"status": "ok", "msg_uuid": "check"}
+        result = await _lookup_after_cooldown_poll(
+            client, session, fake_response_factory, initial_product, changed_product
         )
-
-        await client.get_firmware_update_info()
-        assert session.post.call_count == 1
-        await client.get_host_firmware_version()
-
-        status["product"].update(changed_product)
-        await client.get_firmware_update_info()
-
-        reads_before = status_reads.await_count
-        assert await client.get_host_firmware_version() == expected_version
-        assert status_reads.await_count - reads_before == expected_reads
-        assert session.post.call_count == 1
+        assert result == (expected_version, expected_reads)
     finally:
         await client.async_close()
 

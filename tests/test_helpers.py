@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 
 from aiopnsense import OPNsenseClient, helpers as aiopnsense_helpers
+from tests.conftest import FIRMWARE_RELEASE_ORDER, FIRMWARE_VERSION_SHAPES
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -107,9 +108,11 @@ def test_normalize_datetime(
 @pytest.mark.parametrize(
     ("firmware_version", "expected"),
     [
-        (None, None),
-        ("   ", None),
-        ("26.1.11_4", "26.1.11"),
+        *(
+            pytest.param(shape.product_version, shape.trimmed, id=shape.id)
+            for shape in FIRMWARE_VERSION_SHAPES
+        ),
+        pytest.param("   ", None, id="blank"),
     ],
 )
 def test_trim_firmware_suffix_handles_empty_and_suffixed_versions(
@@ -140,7 +143,6 @@ def test_trim_firmware_suffix_handles_empty_and_suffixed_versions(
         pytest.param("25.1.0", "25.1.1", False, id="zero-padded-older-than-patch-minimum"),
         pytest.param("25.0", "25.1", False, id="older-minor"),
         pytest.param("25.0.0", "25.1", False, id="zero-padded-older-minor"),
-        pytest.param("26.1.1_3", "26.1.1", True, id="build-suffix-trimmed"),
         pytest.param("25.1.0_2", "25.1", True, id="build-suffix-with-trailing-zero"),
         pytest.param("26.1.1_3", "26.1.2", False, id="build-suffix-older-patch"),
     ],
@@ -159,9 +161,29 @@ def test_firmware_is_at_least_ignores_trailing_zero_components(
 
 
 @pytest.mark.parametrize(
+    ("firmware_version", "minimum_version", "expected"),
+    [
+        pytest.param(shape.product_version, minimum, expected, id=f"{shape.id}-vs-{minimum}")
+        for shape in FIRMWARE_VERSION_SHAPES
+        for minimum, expected in shape.at_least.items()
+    ],
+)
+def test_firmware_is_at_least_handles_router_version_shapes(
+    firmware_version: str | None, minimum_version: str, expected: bool | None
+) -> None:
+    """Compare each version form a Router reports against the minimum versions.
+
+    Args:
+        firmware_version (str | None): Firmware version reported by the Router.
+        minimum_version (str): Minimum firmware version to satisfy.
+        expected (bool | None): Expected result, or ``None`` when not comparable.
+    """
+    assert aiopnsense_helpers.firmware_is_at_least(firmware_version, minimum_version) is expected
+
+
+@pytest.mark.parametrize(
     ("firmware_version", "minimum_version"),
     [
-        pytest.param(None, "25.1", id="none-firmware"),
         pytest.param("", "25.1", id="empty-firmware"),
         pytest.param("   ", "25.1", id="blank-firmware"),
         pytest.param("not-a-version", "25.1", id="unparsable-firmware"),
@@ -183,18 +205,10 @@ def test_firmware_is_at_least_returns_none_for_uncomparable_versions(
 @pytest.mark.parametrize(
     ("firmware_version", "comparison_version", "expected"),
     [
-        ("26.7.6", "26.7.6_3", False),
-        ("26.7.6_3", "26.7.6", True),
-        ("26.7.6_3", "26.7.6_3", False),
-        ("26.7.6_10", "26.7.6_9", True),
-        ("26.7.6_9", "26.7.6_10", False),
-        ("26.7.7", "26.7.6_9", True),
-        ("26.7.6_9", "26.7.7", False),
         ("26.7.6_0", "26.7.6", False),
         ("26.7.6_3", "26.7.6.0", True),
         ("26.7.6.0", "26.7.6_3", False),
         (" 26.7.6_3 ", " 26.7.6 ", True),
-        ("26.7_9", "26.7.1", False),
         ("26.7.6rc1", "26.7.6", False),
         ("26.7.6", "26.7.6rc1", True),
     ],
@@ -210,6 +224,38 @@ def test_firmware_is_newer_orders_base_versions_and_hotfix_revisions(
         expected (bool): Whether the candidate is newer.
     """
     assert aiopnsense_helpers.firmware_is_newer(firmware_version, comparison_version) is expected
+
+
+def test_firmware_is_newer_follows_router_release_order() -> None:
+    """Rank every pair of real releases, in both directions, by release order."""
+    wrong_results = [
+        (candidate, other, result)
+        for candidate_index, candidate in enumerate(FIRMWARE_RELEASE_ORDER)
+        for other_index, other in enumerate(FIRMWARE_RELEASE_ORDER)
+        if (result := aiopnsense_helpers.firmware_is_newer(candidate, other))
+        is not (candidate_index > other_index)
+    ]
+
+    assert wrong_results == []
+
+
+@pytest.mark.parametrize(
+    "beta_version",
+    [
+        pytest.param(shape.product_version, id=shape.id)
+        for shape in FIRMWARE_VERSION_SHAPES
+        if shape.product_version is not None and not shape.version_is_comparable
+    ],
+)
+def test_firmware_is_newer_cannot_rank_beta_against_releases(beta_version: str) -> None:
+    """Report a beta as not comparable against every real release, in both directions.
+
+    Args:
+        beta_version (str): Beta version reported by the Router.
+    """
+    for release in FIRMWARE_RELEASE_ORDER:
+        assert aiopnsense_helpers.firmware_is_newer(beta_version, release) is None
+        assert aiopnsense_helpers.firmware_is_newer(release, beta_version) is None
 
 
 @pytest.mark.parametrize(
