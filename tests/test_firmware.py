@@ -10,7 +10,11 @@ import aiohttp
 import pytest
 
 import aiopnsense
-from aiopnsense.const import OPNSENSE_MIN_FIRMWARE, OPNSENSE_RECOMMENDED_FIRMWARE
+from aiopnsense.const import (
+    FIRMWARE_CHECK_COOLDOWN_SECONDS,
+    OPNSENSE_MIN_FIRMWARE,
+    OPNSENSE_RECOMMENDED_FIRMWARE,
+)
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
@@ -253,6 +257,10 @@ async def test_validation_survives_repeated_automatic_firmware_checks(
     client, router = firmware_router
     router.firmware = "26.7.7"
     router.endpoints[firmware_module.FIRMWARE_RUNNING_ENDPOINT] = {"status": "ready"}
+    router.endpoints[firmware_module.FIRMWARE_CHECK_ENDPOINT] = {
+        "status": "ok",
+        "msg_uuid": "check",
+    }
     assert await client.get_host_firmware_version() == "26.7.7"
 
     pending_reads: asyncio.Queue[asyncio.Event] = asyncio.Queue()
@@ -277,6 +285,8 @@ async def test_validation_survives_repeated_automatic_firmware_checks(
             await resume_read.wait()
         return response
 
+    now = 1000.0
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: now)
     monkeypatch.setattr(client, "_get", delay_validation_read)
     validation = asyncio.get_running_loop().create_task(client.validate(require_device_id=False))
     try:
@@ -286,6 +296,7 @@ async def test_validation_survives_repeated_automatic_firmware_checks(
             router.firmware = "26.7.8"
             first_read.set()
             retry = await pending_reads.get()
+            now += FIRMWARE_CHECK_COOLDOWN_SECONDS
             await client.get_firmware_update_info()
             retry.set()
             await validation
@@ -1349,6 +1360,401 @@ async def test_firmware_automatic_check_is_suppressed(
         session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
         await client.get_firmware_update_info(check_for_updates=check)
         assert session.post.call_count == 0
+    finally:
+        await client.async_close()
+
+
+def _firmware_status(**overrides: Any) -> dict[str, Any]:
+    """Build a recent, healthy firmware status with optional field overrides.
+
+    Args:
+        **overrides (Any): Top-level status fields or ``product`` fields to replace.
+
+    Returns:
+        dict[str, Any]: Firmware status response.
+    """
+    product = {
+        "product_version": "26.7.9",
+        "product_latest": "26.7.9",
+        "product_check": {"status": "ok"},
+    }
+    product.update(overrides.pop("product", {}))
+    return {
+        "product": product,
+        "status_msg": "There are no updates available on the selected mirror.",
+        "last_check": datetime.now(UTC).isoformat(),
+        **overrides,
+    }
+
+
+def _configure_firmware_polls(
+    client: Any, status: dict[str, Any], running: list[str] | None = None
+) -> None:
+    """Serve an unchanging firmware status and a sequence of lock states.
+
+    Args:
+        client (Any): Client under test.
+        status (dict[str, Any]): Status returned on each poll.
+        running (list[str] | None): Lock states to serve, ending on the last one.
+    """
+    states = list(running or ["ready"])
+
+    def read(path: str) -> dict[str, Any]:
+        """Return the mocked response for a firmware read.
+
+        Args:
+            path (str): Firmware endpoint path.
+
+        Returns:
+            dict[str, Any]: Lock state or firmware status.
+        """
+        if path.endswith("/running"):
+            return {"status": states.pop(0) if len(states) > 1 else states[0]}
+        return status
+
+    client._is_get_endpoint_available = AsyncMock(return_value=True)
+    client._safe_dict_get = AsyncMock(side_effect=read)
+    client._get_opnsense_timezone = AsyncMock(return_value=UTC)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [
+        pytest.param(_firmware_status(status="error"), id="mirror-error"),
+        pytest.param(
+            _firmware_status(product={"product_latest": "26.7.10"}),
+            id="newer-version-without-details",
+        ),
+        pytest.param(
+            _firmware_status(product={"product_latest": "26.7.9_bad"}),
+            id="incomparable-version",
+        ),
+        pytest.param(_firmware_status(last_check="not a date"), id="invalid-last-check"),
+        pytest.param(_firmware_status(product={"product_check": None}), id="empty-check"),
+    ],
+)
+async def test_persistent_refresh_condition_checks_once_per_cooldown(
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    status: dict[str, Any],
+) -> None:
+    """A status that a check cannot clear requests one check per hour.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
+        status (dict[str, Any]): Status that keeps requesting a refresh.
+    """
+    now = 1000.0
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: now)
+    client, session = make_mock_session_client(make_client)
+    try:
+        _configure_firmware_polls(client, status)
+        session.post.return_value = fake_response_factory(
+            json_payload={"status": "ok", "msg_uuid": "check"}
+        )
+
+        for _ in range(3):
+            await client.get_firmware_update_info()
+        assert session.post.call_count == 1
+
+        now += 3599
+        await client.get_firmware_update_info()
+        assert session.post.call_count == 1
+
+        now += 1
+        await client.get_firmware_update_info()
+        assert session.post.call_count == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_busy_router_does_not_start_firmware_check_cooldown(
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A poll that finds the Router busy can still check on the next poll.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
+    """
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
+    client, session = make_mock_session_client(make_client)
+    try:
+        _configure_firmware_polls(client, _firmware_status(status="error"), ["busy", "ready"])
+        session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
+
+        await client.get_firmware_update_info()
+        assert session.post.call_count == 0
+
+        await client.get_firmware_update_info()
+        assert session.post.call_count == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unacknowledged",
+    [
+        pytest.param(aiohttp.ClientError("connection lost"), id="transport-failure"),
+        pytest.param({"status": "failure"}, id="non-ok-response"),
+        pytest.param({"status": "ok", "msg_uuid": ""}, id="empty-msg-uuid"),
+    ],
+)
+async def test_unacknowledged_firmware_check_does_not_start_cooldown(
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    unacknowledged: Any,
+) -> None:
+    """Only an acknowledged check starts the cooldown, so a failed check is retried next poll.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
+        unacknowledged (Any): Transport exception or non-ok response payload for the first check.
+    """
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
+    client, session = make_mock_session_client(make_client)
+    try:
+        _configure_firmware_polls(client, _firmware_status(status="error"))
+        first = (
+            unacknowledged
+            if isinstance(unacknowledged, BaseException)
+            else fake_response_factory(json_payload=unacknowledged)
+        )
+        session.post.side_effect = [
+            first,
+            fake_response_factory(json_payload={"status": "ok", "msg_uuid": "check"}),
+        ]
+
+        await client.get_firmware_update_info()
+        assert session.post.call_count == 1
+
+        await client.get_firmware_update_info()
+        assert session.post.call_count == 2
+
+        await client.get_firmware_update_info()
+        assert session.post.call_count == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "observations"),
+    [
+        pytest.param(
+            "verified-install",
+            [(_install_progress("done", "***DONE***"), "ready", "26.7.9")],
+            id="verified-install",
+        ),
+        pytest.param(
+            "failed-install",
+            [(_install_progress("error"), "ready", "26.7.9")],
+            id="failed-install",
+        ),
+        pytest.param("deprecated-upgrade", [], id="deprecated-upgrade"),
+    ],
+)
+async def test_dispatched_firmware_action_ends_check_cooldown(
+    install_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+    observations: list[Any],
+) -> None:
+    """Dispatching an update or upgrade lets the next poll check again, whatever its outcome.
+
+    Args:
+        install_client (Callable[..., Any]): Lifecycle transport factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
+        action (str): Install outcome or deprecated call that dispatches the action.
+        observations (list[Any]): Progress observations served after dispatch.
+    """
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
+    client, session = install_client(observations)
+    try:
+        _configure_firmware_polls(client, _firmware_status(status="error"))
+        session.post.return_value = fake_response_factory(
+            json_payload={"status": "ok", "msg_uuid": "check"}
+        )
+
+        await client.get_firmware_update_info()
+        await client.get_firmware_update_info()
+        assert session.post.call_count == 1
+
+        if action == "deprecated-upgrade":
+            with pytest.warns(DeprecationWarning, match=r"Use install_firmware\(target_version="):
+                await client.upgrade_firmware("upgrade")  # type: ignore[deprecated]
+        elif action == "failed-install":
+            with pytest.raises(OPNsenseError, match="reported 'error'"):
+                await client.install_firmware(target_version="26.7.9", poll_interval=0.001)
+        else:
+            await client.install_firmware(target_version="26.7.9", poll_interval=0.001)
+        assert session.post.call_count == 2
+
+        await client.get_firmware_update_info()
+        assert session.post.call_count == 3
+        assert session.post.call_args.args[0] == "http://localhost/api/core/firmware/check"
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_product", "changed_product", "expected_version", "expected_reads"),
+    [
+        pytest.param(
+            {"product_version": "26.7.9"},
+            {"product_version": "26.7.10"},
+            "26.7.10",
+            1,
+            id="out-of-band-upgrade",
+        ),
+        pytest.param(
+            {"product_version": "26.1.11"},
+            {"product_version": "26.7.b_110", "product_series": "26.7"},
+            "26.7",
+            1,
+            id="beta-series-fallback",
+        ),
+        pytest.param(
+            {"product_version": "26.7.b_110", "product_series": "26.7"},
+            {"product_version": "26.7.b_110", "product_series": "26.7"},
+            "26.7",
+            0,
+            id="unchanged-series-fallback",
+        ),
+        pytest.param(
+            {"product_version": "26.7.9"},
+            {"product_version": "not-a-version", "product_series": "not-a-series"},
+            "26.7.9",
+            0,
+            id="no-comparable-version-or-series",
+        ),
+        pytest.param(
+            {"product_version": "26.7.9"},
+            {"product_version": "26.7.9"},
+            "26.7.9",
+            0,
+            id="unchanged-version",
+        ),
+        pytest.param(
+            {"product_version": "26.7.9_1"},
+            {"product_version": "26.7.9_1"},
+            "26.7.9_1",
+            0,
+            id="unchanged-hotfix",
+        ),
+        pytest.param(
+            {"product_version": "26.7.9_1"},
+            {"product_version": "26.7.9_2"},
+            "26.7.9_2",
+            1,
+            id="hotfix-bump",
+        ),
+    ],
+)
+async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    initial_product: dict[str, Any],
+    changed_product: dict[str, Any],
+    expected_version: str,
+    expected_reads: int,
+) -> None:
+    """A comparable version change seen during cooldown refreshes the cache without a check POST.
+
+    The version compared is the one the normal lookup would use: the product
+    version, or its product series when the version is not comparable. An
+    unchanged version, or a status with no comparable version or series, leaves
+    the cached version in place. The returned version alone cannot show a wrongly
+    cleared cache, because the next read returns the same value either way, so the
+    test counts the status reads made by the final lookup instead.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
+        initial_product (dict[str, Any]): Product fields before the cooldown poll.
+        changed_product (dict[str, Any]): Product fields that change during cooldown.
+        expected_version (str): Version returned after the cooldown poll.
+        expected_reads (int): Status reads expected from the final version lookup.
+    """
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
+    client, session = make_mock_session_client(make_client)
+    try:
+        status = _firmware_status(status="error", product=initial_product)
+        _configure_firmware_polls(client, status)
+        status_reads = cast(AsyncMock, client._safe_dict_get)
+        session.post.return_value = fake_response_factory(
+            json_payload={"status": "ok", "msg_uuid": "check"}
+        )
+
+        await client.get_firmware_update_info()
+        assert session.post.call_count == 1
+        await client.get_host_firmware_version()
+
+        status["product"].update(changed_product)
+        await client.get_firmware_update_info()
+
+        reads_before = status_reads.await_count
+        assert await client.get_host_firmware_version() == expected_version
+        assert status_reads.await_count - reads_before == expected_reads
+        assert session.post.call_count == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_firmware_update_info_sends_one_check(
+    make_client: Callable[..., Any],
+    fake_response_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent polls on a status that stays stale share one acknowledged check.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
+    """
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
+    client, session = make_mock_session_client(make_client)
+    try:
+        _configure_firmware_polls(client, _firmware_status(last_check="not a date"))
+        response = fake_response_factory(json_payload={"status": "ok"})
+
+        async def slow_json(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+            """Yield to the event loop while the check is in flight.
+
+            Args:
+                _args (Any): Unused decoding arguments.
+                _kwargs (Any): Unused decoding options.
+
+            Returns:
+                dict[str, str]: Check dispatch acknowledgement.
+            """
+            await asyncio.sleep(0)
+            return {"status": "ok", "msg_uuid": "check"}
+
+        response.json = slow_json
+        session.post.return_value = response
+
+        await asyncio.gather(*(client.get_firmware_update_info() for _ in range(5)))
+        assert session.post.call_count == 1
     finally:
         await client.async_close()
 

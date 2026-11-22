@@ -90,6 +90,7 @@ class ClientBaseMixin(
         self._firmware_invalidation_id: int = 0
         self._firmware_install_active: bool = False
         self._firmware_action_lock = asyncio.Lock()
+        self._firmware_check_requested_at: float | None = None
         self._active_close_count = 0
         self._use_snake_case: bool | None = None
         self._endpoint_availability: dict[str, bool] = {}

@@ -5,6 +5,7 @@ from collections.abc import MutableMapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import math
+from time import monotonic
 from typing import Any
 from warnings import deprecated
 
@@ -16,6 +17,7 @@ from ._typing import AiopnsenseClientProtocol
 from .const import (
     AMBIGUOUS_TZINFOS,
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    FIRMWARE_CHECK_COOLDOWN_SECONDS,
     OPNSENSE_MIN_FIRMWARE,
     OPNSENSE_RECOMMENDED_FIRMWARE,
     FirmwareCapability,
@@ -68,6 +70,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
     _firmware_version_observation_id: int
     _firmware_invalidation_id: int
     _firmware_install_active: bool
+    _firmware_check_requested_at: float | None
 
     @staticmethod
     def get_firmware_requirements() -> FirmwareRequirements:
@@ -176,6 +179,37 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         supported = await self._firmware_capability(capability)
         return capability.unknown_answer if supported is None else supported
 
+    def _status_firmware_version(self, firmware_info: MutableMapping[str, Any]) -> str | None:
+        """Return the firmware version from a status payload, or its product series.
+
+        A product version that is missing or not comparable falls back to the product
+        series, which is logged at debug level. The result can still be incomparable,
+        so callers cache it only when it compares.
+
+        Args:
+            firmware_info (MutableMapping[str, Any]): Firmware status payload from OPNsense.
+
+        Returns:
+            str | None: Product version, or the product series when the version is not
+                comparable, or ``None`` when neither value is a string.
+        """
+        raw_firmware = dict_get(firmware_info, "product.product_version")
+        firmware: str | None = raw_firmware if isinstance(raw_firmware, str) else None
+        comparable_firmware = trim_firmware_suffix(firmware)
+        if not comparable_firmware or firmware_is_at_least(comparable_firmware, "0") is None:
+            old = firmware
+            product_series = dict_get(firmware_info, "product.product_series")
+            firmware = product_series if isinstance(product_series, str) else old
+            if firmware != old:
+                _LOGGER.debug(
+                    "[get_host_firmware_version] firmware: %s not valid SemVer, using %s",
+                    old,
+                    firmware,
+                )
+        else:
+            _LOGGER.debug("[get_host_firmware_version] firmware: %s", firmware)
+        return firmware
+
     async def _store_host_firmware_version(self) -> str | None:
         """Read and cache the installed OPNsense firmware version or product series.
 
@@ -212,21 +246,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         else:
             return None
 
-        raw_firmware = dict_get(firmware_info, "product.product_version")
-        firmware: str | None = raw_firmware if isinstance(raw_firmware, str) else None
-        comparable_firmware = trim_firmware_suffix(firmware)
-        if not comparable_firmware or firmware_is_at_least(comparable_firmware, "0") is None:
-            old = firmware
-            product_series = dict_get(firmware_info, "product.product_series")
-            firmware = product_series if isinstance(product_series, str) else old
-            if firmware != old:
-                _LOGGER.debug(
-                    "[get_host_firmware_version] firmware: %s not valid SemVer, using %s",
-                    old,
-                    firmware,
-                )
-        else:
-            _LOGGER.debug("[get_host_firmware_version] firmware: %s", firmware)
+        firmware = self._status_firmware_version(firmware_info)
         return self._record_firmware_version(firmware, observation_id=payload_id)
 
     @_log_errors
@@ -247,6 +267,11 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         self, *, check_for_updates: bool = True
     ) -> MutableMapping[str, Any]:
         """Return firmware status and trigger a refresh when cached data is stale.
+
+        One client requests at most one acknowledged automatic check per hour, even
+        when the status still needs a refresh. Dispatching a firmware update or
+        upgrade, through ``install_firmware`` or the deprecated ``upgrade_firmware``,
+        ends the cooldown so the next call can refresh the installed state.
 
         Args:
             check_for_updates (bool): Allow automatic refresh checks when idle.
@@ -318,22 +343,70 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             and not self._firmware_install_active
             and (error_status or last_check_expired or missing_data or update_needs_info)
         ):
-            # Serialize our check dispatch with install activation. The server's
-            # lock is also shared with checks from other clients/the web GUI.
-            async with self._firmware_action_lock:
-                if not self._firmware_install_active:
-                    running = await self._safe_dict_get(FIRMWARE_RUNNING_ENDPOINT)
-                    if running.get("status") == "ready":
-                        _LOGGER.info("Triggering firmware check")
-                        # A check cannot install firmware. If the cache is already
-                        # empty, let a version read in progress finish filling it.
-                        if self._firmware_version is not None:
-                            self._record_firmware_version(None)
-                        # Do not queue this mutation: a cancelled queue caller
-                        # can leave a CHECK that runs after the action lock releases.
-                        await self._do_post(FIRMWARE_CHECK_ENDPOINT)
+            await self._request_firmware_check(status)
 
         return status
+
+    async def _request_firmware_check(self, status: MutableMapping[str, Any]) -> None:
+        """Dispatch an automatic firmware check when the cooldown and install state allow it.
+
+        The running read, the cache clear and the POST all run under the firmware action
+        lock. The cooldown starts only after OPNsense acknowledges the check.
+
+        Args:
+            status (MutableMapping[str, Any]): Firmware status payload from the current
+                read. During cooldown, a comparable version that differs from the cached
+                version clears the cache.
+        """
+        # Serialize our check dispatch with install activation. The server's
+        # lock is also shared with checks from other clients/the web GUI.
+        async with self._firmware_action_lock:
+            if self._firmware_install_active:
+                return
+
+            requested_at = self._firmware_check_requested_at
+            if requested_at is not None and (
+                monotonic() - requested_at < FIRMWARE_CHECK_COOLDOWN_SECONDS
+            ):
+                _LOGGER.debug("Skipping firmware check during cooldown")
+                # A check would otherwise have refreshed the cached version after
+                # an upgrade made outside this client. Only a comparable version
+                # that the normal lookup would use clears the cache, so a status
+                # with no comparable version or series does not clear it on
+                # every poll.
+                if self._firmware_version is None:
+                    return
+                status_version = self._status_firmware_version(status)
+                if (
+                    status_version != self._firmware_version
+                    and firmware_is_at_least(status_version, "0") is not None
+                ):
+                    self._record_firmware_version(None)
+                return
+
+            running = await self._safe_dict_get(FIRMWARE_RUNNING_ENDPOINT)
+            if running.get("status") != "ready":
+                return
+
+            _LOGGER.info("Triggering firmware check")
+            # A check cannot install firmware. If the cache is already
+            # empty, let a version read in progress finish filling it.
+            if self._firmware_version is not None:
+                self._record_firmware_version(None)
+            # Do not queue this mutation: a cancelled queue caller
+            # can leave a CHECK that runs after the action lock releases.
+            response = await self._do_post(FIRMWARE_CHECK_ENDPOINT)
+            # Only an acknowledged check starts the cooldown. OPNsense
+            # returns status ok even when configd fails, leaving msg_uuid
+            # empty, so an acknowledgement needs a non-empty msg_uuid. A
+            # failed, rejected or cancelled POST leaves the next poll free to retry.
+            if (
+                isinstance(response, MutableMapping)
+                and response.get("status") == "ok"
+                and isinstance(response.get("msg_uuid"), str)
+                and response["msg_uuid"].strip()
+            ):
+                self._firmware_check_requested_at = monotonic()
 
     async def _firmware_request(self, path: str, *, post: bool = False) -> MutableMapping[str, Any]:
         """Read firmware state or dispatch once without cached endpoint probes.
@@ -387,7 +460,8 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         The action is dispatched exactly once. Transport ambiguity never causes
         a retry. A new action log, terminal state, idle server and installed
         target version must agree before this method returns. Rebooting updates
-        additionally require an observed outage followed by reconnection.
+        additionally require an observed outage followed by reconnection. Dispatch
+        ends the automatic check cooldown, whatever the outcome.
 
         Args:
             type (str): ``update`` for a minor update or ``upgrade`` for a major one.
@@ -433,6 +507,8 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                     baseline_log = baseline.get("log", "")
                     if not isinstance(baseline_log, str):
                         raise OPNsenseError("Malformed pre-install firmware log")
+                    # Dispatch flushes the Router's availability data, so the next poll may check again.
+                    self._firmware_check_requested_at = None
                     try:
                         response = await self._firmware_request(
                             f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}", post=True
@@ -604,6 +680,8 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 if self._firmware_install_active:
                     raise OPNsenseError("A firmware installation is already active on this client")
                 self._record_firmware_version(None)
+                # Dispatch flushes the Router's availability data, so the next poll may check again.
+                self._firmware_check_requested_at = None
                 response = await self._do_post(
                     f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}", caller="upgrade_firmware"
                 )

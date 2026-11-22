@@ -18,6 +18,7 @@ class AiopnsenseClientProtocol(Protocol):
 
     _firmware_install_active: bool
     _firmware_action_lock: asyncio.Lock
+    _firmware_check_requested_at: float | None
     _active_close_count: int
     _session: aiohttp.ClientSession
     _url: str
