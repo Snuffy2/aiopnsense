@@ -19,7 +19,9 @@ from .helpers import _LOGGER, _log_request_failure, _log_request_recovery
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
 
 type _ResponseStatusValidator = Callable[[aiohttp.ClientResponse], Awaitable[None]]
-type _ValidatorFailure = aiohttp.ClientError | TimeoutError | json.JSONDecodeError
+type _ValidatorFailure = (
+    aiohttp.ClientError | TimeoutError | UnicodeDecodeError | json.JSONDecodeError
+)
 type _ValidatorErrors = list[tuple[_ValidatorFailure, aiohttp.ClientResponse]]
 type _OutcomeResponses = list[aiohttp.ClientResponse]
 
@@ -50,13 +52,19 @@ def _outcome_raise_for_status(
         Raises:
             aiohttp.ClientError: Propagated from the session validator or aiohttp response.
             TimeoutError: Propagated from the session validator.
+            UnicodeDecodeError: Propagated from the session validator.
             json.JSONDecodeError: Propagated from the session validator.
         """
         responses.append(response)
         try:
             if callable(validator):
                 await validator(response)
-        except (aiohttp.ClientError, TimeoutError, json.JSONDecodeError) as error:
+        except (
+            aiohttp.ClientError,
+            TimeoutError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as error:
             validator_errors.append((error, response))
             raise
 
@@ -111,13 +119,18 @@ def _classify_outcome_response_error(
 
 
 def _classify_outcome_payload_error(
-    error: aiohttp.ClientPayloadError | aiohttp.ContentTypeError | json.JSONDecodeError,
+    error: (
+        aiohttp.ClientPayloadError
+        | aiohttp.ContentTypeError
+        | UnicodeDecodeError
+        | json.JSONDecodeError
+    ),
     validator_errors: _ValidatorErrors,
 ) -> EndpointOutcome | None:
     """Treat a validator body-read error as absence only for its actual 404 response.
 
     Args:
-        error (aiohttp.ClientPayloadError | aiohttp.ContentTypeError | json.JSONDecodeError):
+        error (aiohttp.ClientPayloadError | aiohttp.ContentTypeError | UnicodeDecodeError | json.JSONDecodeError):
             Raised response body or decoding error.
         validator_errors (_ValidatorErrors): Errors raised while validating a response.
 
@@ -584,6 +597,8 @@ class ClientTransportMixin:
                 other HTTP status, timeout or client error.
 
         Raises:
+            UnicodeDecodeError: For invalid text encoding outside an attributable validator
+                failure on a delivered 404.
             json.JSONDecodeError: For undecodable JSON outside an attributable validator
                 failure on a delivered 404.
         """
@@ -609,7 +624,7 @@ class ClientTransportMixin:
                 if response_format == "text":
                     return EndpointOutcome.data(await response.text())
                 return EndpointOutcome.data(await response.json(content_type=None))
-        except json.JSONDecodeError as e:
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
             outcome = _classify_outcome_payload_error(e, validator_errors)
             if outcome is not None:
                 return outcome
@@ -787,6 +802,8 @@ class ClientTransportMixin:
                 HTTP status, timeout or client error.
 
         Raises:
+            UnicodeDecodeError: For invalid text encoding outside an attributable validator
+                failure on a delivered 404.
             json.JSONDecodeError: For undecodable JSON outside an attributable validator
                 failure on a delivered 404.
         """
@@ -809,7 +826,7 @@ class ClientTransportMixin:
                 if not response.ok:
                     return EndpointOutcome.from_http_status(response.status, response.reason)
                 return EndpointOutcome.data(await response.json(content_type=None))
-        except json.JSONDecodeError as e:
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
             outcome = _classify_outcome_payload_error(e, validator_errors)
             if outcome is not None:
                 return outcome

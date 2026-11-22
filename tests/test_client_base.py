@@ -519,6 +519,59 @@ async def test_cancelled_outcome_reads_release_queue_workers(
 
 
 @pytest.mark.asyncio
+async def test_outcome_post_cancelled_before_transport_dispatch_sends_no_request(
+    make_client: MakeClientFactory,
+) -> None:
+    """Skip an outcome POST cancelled after dequeue but before transport starts.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    requests: list[tuple[str, str]] = []
+
+    def session_get(url: str, **_kwargs: Any) -> FakeResponse:
+        """Return an empty service listing after the cancelled POST.
+
+        Args:
+            url (str): Requested URL.
+            _kwargs (Any): HTTP options supplied by aiohttp callers.
+
+        Returns:
+            FakeResponse: Empty service listing.
+        """
+        requests.append(("GET", url))
+        return FakeResponse(json_payload={"rows": []})
+
+    def session_post(url: str, **_kwargs: Any) -> FakeResponse:
+        """Record a POST that should not run for the cancelled SMART read.
+
+        Args:
+            url (str): Requested URL.
+            _kwargs (Any): HTTP options supplied by aiohttp callers.
+
+        Returns:
+            FakeResponse: Successful empty response.
+        """
+        requests.append(("POST", url))
+        return FakeResponse(json_payload={})
+
+    session.get = session_get
+    session.post = session_post
+    caller = asyncio.create_task(client.get_smart_info("nvme0"))
+    try:
+        await asyncio.sleep(0)
+        asyncio.get_running_loop().call_soon(caller.cancel)
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+
+        assert await asyncio.wait_for(client.get_services(), timeout=2) == []
+        assert requests == [("GET", "http://localhost/api/core/service/search")]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_validate_can_skip_device_unique_id_requirement(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,

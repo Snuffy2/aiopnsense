@@ -319,6 +319,7 @@ async def test_nested_auth_404_is_transient_and_retried(
             (),
             message="unexpected content type",
         ),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
         json.JSONDecodeError("invalid JSON", "", 0),
     ],
 )
