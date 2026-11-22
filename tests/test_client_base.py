@@ -8,7 +8,7 @@ import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient, client as aiopnsense_client
-from aiopnsense.const import OPNSENSE_LTD_FIRMWARE, OPNSENSE_MIN_FIRMWARE
+from aiopnsense.const import OPNSENSE_MIN_FIRMWARE, OPNSENSE_RECOMMENDED_FIRMWARE
 from aiopnsense.exceptions import (
     OPNsenseBelowMinFirmware,
     OPNsenseConnectionError,
@@ -167,7 +167,7 @@ async def test_validate_handles_firmware_thresholds_and_restores_throw_errors(
             side_effect=[
                 "24.7",
                 f"{OPNSENSE_MIN_FIRMWARE}_1",
-                f"{OPNSENSE_LTD_FIRMWARE}_1",
+                f"{OPNSENSE_RECOMMENDED_FIRMWARE}_1",
             ]
         )
         get_device_unique_id = AsyncMock(return_value="aa_bb_cc")
@@ -189,7 +189,7 @@ async def test_validate_handles_firmware_thresholds_and_restores_throw_errors(
         logger_warning.assert_called_once_with(
             "OPNsense Firmware of %s is below the recommended >= %s. aiopnsense will work, but there may be some missing features.",
             f"{OPNSENSE_MIN_FIRMWARE}_1",
-            OPNSENSE_LTD_FIRMWARE,
+            OPNSENSE_RECOMMENDED_FIRMWARE,
         )
         assert client._throw_errors is False
 
@@ -301,7 +301,7 @@ async def test_validate_can_skip_device_unique_id_requirement(
     try:
 
         async def _refresh_firmware_version() -> None:
-            client._firmware_version = OPNSENSE_LTD_FIRMWARE
+            client._firmware_version = OPNSENSE_RECOMMENDED_FIRMWARE
 
         _store_host_firmware_version = AsyncMock(side_effect=_refresh_firmware_version)
         get_device_unique_id = AsyncMock(side_effect=OPNsenseMissingDeviceUniqueID)
@@ -338,7 +338,7 @@ async def test_validate_raises_when_device_unique_id_missing(
     client, _session = make_mock_session_client(make_client)
     client._throw_errors = False
     try:
-        get_host_firmware_version = AsyncMock(return_value=OPNSENSE_LTD_FIRMWARE)
+        get_host_firmware_version = AsyncMock(return_value=OPNSENSE_RECOMMENDED_FIRMWARE)
         get_device_unique_id = AsyncMock(side_effect=OPNsenseMissingDeviceUniqueID)
         _patch_validate_requests(
             monkeypatch,
@@ -391,7 +391,7 @@ async def test_validate_maps_device_unique_id_failures_and_restores_throw_errors
     client, _session = make_mock_session_client(make_client)
     client._throw_errors = False
     try:
-        get_host_firmware_version = AsyncMock(return_value=OPNSENSE_LTD_FIRMWARE)
+        get_host_firmware_version = AsyncMock(return_value=OPNSENSE_RECOMMENDED_FIRMWARE)
         get_device_unique_id = AsyncMock(side_effect=side_effect)
         _patch_validate_requests(
             monkeypatch,

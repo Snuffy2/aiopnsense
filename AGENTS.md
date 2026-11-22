@@ -28,6 +28,7 @@
 
 ## Coding standards
 
+- The full standards are in `CODING_STANDARDS.md`; the rules below are the core subset.
 - Add typing annotations to all functions and classes (including return types).
 - Add or update docstrings for all files, classes and methods, including private methods and nested methods. Method docstrings must follow the Google Style.
 - For protocol-only typing contract files such as `aiopnsense/_typing.py`, keep protocol members as typed signatures with `...`; do not add per-method docstrings or `abstractmethod` boilerplate.

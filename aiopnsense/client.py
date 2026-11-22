@@ -7,7 +7,7 @@ from typing import Self, TypeVar
 import aiohttp
 
 from .client_base import ClientBaseMixin
-from .const import OPNSENSE_LTD_FIRMWARE, OPNSENSE_MIN_FIRMWARE
+from .const import OPNSENSE_MIN_FIRMWARE, OPNSENSE_RECOMMENDED_FIRMWARE
 from .dhcp import DHCPMixin
 from .exceptions import OPNsenseBelowMinFirmware, OPNsenseUnknownFirmware, _map_opnsense_exception
 from .firewall import FirewallMixin
@@ -127,14 +127,14 @@ class OPNsenseClient(
                 )
                 raise OPNsenseBelowMinFirmware(msg)
 
-            meets_recommended_firmware = firmware_is_at_least(fw_ver, OPNSENSE_LTD_FIRMWARE)
+            meets_recommended_firmware = firmware_is_at_least(fw_ver, OPNSENSE_RECOMMENDED_FIRMWARE)
             if meets_recommended_firmware is None:
                 raise OPNsenseUnknownFirmware
             if not meets_recommended_firmware:
                 _LOGGER.warning(
                     "OPNsense Firmware of %s is below the recommended >= %s. aiopnsense will work, but there may be some missing features.",
                     fw_ver,
-                    OPNSENSE_LTD_FIRMWARE,
+                    OPNSENSE_RECOMMENDED_FIRMWARE,
                 )
 
             if require_device_id:
