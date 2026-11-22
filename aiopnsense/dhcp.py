@@ -9,6 +9,7 @@ import re
 from typing import Any, Literal
 from warnings import deprecated
 
+from ._dhcp_leases import ISC_LEASE_BACKEND, normalize_leases
 from ._typing import AiopnsenseClientProtocol
 from .helpers import (
     _LOGGER,
@@ -950,54 +951,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
             list: Normalized ISC DHCPv4 lease entries. Non-active, expired,
                 malformed, and MAC-less rows are omitted.
         """
-        lease_endpoint = await self._get_endpoint_path(
+        return await self._get_isc_dhcp_leases(
             snake_case_path=ISC_DHCPV4_LEASES_SEARCH_ENDPOINT,
             camel_case_path=ISC_DHCPV4_LEASES_SEARCH_CAMELCASE_ENDPOINT,
+            service_name="ISC DHCPv4",
+            opnsense_tz=opnsense_tz,
         )
-        if not await self._is_get_endpoint_available(lease_endpoint):
-            _LOGGER.debug("ISC DHCPv4 lease endpoint unavailable")
-            return []
-        response = await self._safe_dict_get(lease_endpoint)
-        leases_info: list = response.get("rows", [])
-        if not isinstance(leases_info, list):
-            return []
-        if opnsense_tz is None:
-            opnsense_tz = await self._get_opnsense_timezone()
-        leases: list = []
-        current_time = datetime.now().astimezone()
-        for lease_info in leases_info:
-            if (
-                not isinstance(lease_info, MutableMapping)
-                or lease_info.get("state", "") != "active"
-                or not lease_info.get("mac", None)
-            ):
-                continue
-            lease: dict[str, Any] = {}
-            lease["address"] = lease_info.get("address", None)
-            lease["hostname"] = (
-                lease_info.get("hostname", None)
-                if isinstance(lease_info.get("hostname", None), str)
-                and len(lease_info.get("hostname", "")) > 0
-                else None
-            )
-            lease["if_descr"] = lease_info.get("if_descr", None)
-            lease["if_name"] = lease_info.get("if", None)
-            lease["type"] = lease_info.get("type", None)
-            lease["mac"] = lease_info.get("mac", None)
-            if lease_info.get("ends", None):
-                try:
-                    dt: datetime = datetime.strptime(
-                        lease_info.get("ends", None), "%Y/%m/%d %H:%M:%S"
-                    ).replace(tzinfo=opnsense_tz)
-                except TypeError, ValueError:
-                    continue
-                lease["expires"] = dt
-                if lease["expires"] < current_time:
-                    continue
-            else:
-                lease["expires"] = lease_info.get("ends", None)
-            leases.append(lease)
-        return leases
 
     async def _get_isc_dhcpv6_leases(self, opnsense_tz: tzinfo | None = None) -> list:
         """Return active IPv6 DHCP leases reported by ISC DHCP.
@@ -1010,12 +969,38 @@ class DHCPMixin(AiopnsenseClientProtocol):
             list: Normalized ISC DHCPv6 lease entries. Non-active, expired,
                 malformed, and MAC-less rows are omitted.
         """
-        lease_endpoint = await self._get_endpoint_path(
+        return await self._get_isc_dhcp_leases(
             snake_case_path=ISC_DHCPV6_LEASES_SEARCH_ENDPOINT,
             camel_case_path=ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT,
+            service_name="ISC DHCPv6",
+            opnsense_tz=opnsense_tz,
+        )
+
+    async def _get_isc_dhcp_leases(
+        self,
+        snake_case_path: str,
+        camel_case_path: str,
+        service_name: str,
+        opnsense_tz: tzinfo | None = None,
+    ) -> list:
+        """Return active DHCP leases reported by an ISC DHCP lease endpoint.
+
+        Args:
+            snake_case_path (str): ISC lease search endpoint path using snake_case.
+            camel_case_path (str): ISC lease search endpoint path using camelCase.
+            service_name (str): Display name used for debug logging.
+            opnsense_tz (tzinfo | None, optional): Timezone used to localize
+                ISC ``ends`` timestamps. Fetched from OPNsense when omitted.
+
+        Returns:
+            list: Normalized ISC lease entries for the supplied endpoint.
+        """
+        lease_endpoint = await self._get_endpoint_path(
+            snake_case_path=snake_case_path,
+            camel_case_path=camel_case_path,
         )
         if not await self._is_get_endpoint_available(lease_endpoint):
-            _LOGGER.debug("ISC DHCPv6 lease endpoint unavailable")
+            _LOGGER.debug("%s lease endpoint unavailable", service_name)
             return []
         response = await self._safe_dict_get(lease_endpoint)
         leases_info: list = response.get("rows", [])
@@ -1023,38 +1008,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
             return []
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
-        leases: list = []
-        current_time = datetime.now().astimezone()
-        for lease_info in leases_info:
-            if (
-                not isinstance(lease_info, MutableMapping)
-                or lease_info.get("state", "") != "active"
-                or not lease_info.get("mac", None)
-            ):
-                continue
-            lease: dict[str, Any] = {}
-            lease["address"] = lease_info.get("address", None)
-            lease["hostname"] = (
-                lease_info.get("hostname", None)
-                if isinstance(lease_info.get("hostname", None), str)
-                and len(lease_info.get("hostname", "")) > 0
-                else None
-            )
-            lease["if_descr"] = lease_info.get("if_descr", None)
-            lease["if_name"] = lease_info.get("if", None)
-            lease["type"] = lease_info.get("type", None)
-            lease["mac"] = lease_info.get("mac", None)
-            if lease_info.get("ends", None):
-                try:
-                    dt: datetime = datetime.strptime(
-                        lease_info.get("ends", None), "%Y/%m/%d %H:%M:%S"
-                    ).replace(tzinfo=opnsense_tz)
-                except TypeError, ValueError:
-                    continue
-                lease["expires"] = dt
-                if lease["expires"] < current_time:
-                    continue
-            else:
-                lease["expires"] = lease_info.get("ends", None)
-            leases.append(lease)
-        return leases
+        return normalize_leases(
+            leases_info,
+            ISC_LEASE_BACKEND,
+            now=datetime.now().astimezone(),
+            router_tz=opnsense_tz,
+        )
