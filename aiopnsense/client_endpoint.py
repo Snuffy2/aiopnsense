@@ -13,12 +13,7 @@ from ._error_policy import _error_if_throwing, _throws_errors
 from ._request_failure import _PROBE_PHASE, _REQUEST_PHASE, _request_log_url
 from .const import SNAKE_CASE_ENDPOINTS_CAPABILITY, FirmwareCapability
 from .exceptions import OPNsenseUnknownFirmware
-from .helpers import (
-    _LOGGER,
-    _log_request_failure,
-    _log_request_recovery,
-    _redact_url_credentials,
-)
+from .helpers import _LOGGER, _log_request_failure, _log_request_recovery, _redact_url_credentials
 
 
 class ClientEndpointMixin:
@@ -41,7 +36,14 @@ class ClientEndpointMixin:
         _verify_ssl: bool
 
         async def _firmware_capability(self, capability: FirmwareCapability) -> bool | None:
-            """Evaluate a firmware capability against the detected firmware."""
+            """Evaluate a firmware capability against the detected firmware.
+
+            Args:
+                capability (FirmwareCapability): Capability to evaluate.
+
+            Returns:
+                bool | None: Whether the capability is supported, if known.
+            """
             ...
 
         async def _do_get_outcome(

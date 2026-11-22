@@ -228,14 +228,14 @@ async def test_validation_reads_firmware_across_an_empty_cache_observation(
     request = client._fetch_endpoint_outcome
 
     async def delay_first_status_request(path: str, **kwargs: Any) -> _EndpointOutcome:
-        """Hold the first status request at the selected stage.
+        """Hold the first completed firmware status request.
 
         Args:
             path (str): Requested endpoint.
-            kwargs (Any): Options passed to the transport.
+            kwargs (Any): Options passed to the endpoint fetch.
 
         Returns:
-            Any: The scripted transport result.
+            _EndpointOutcome: The scripted Router response.
         """
         response = await request(path, **kwargs)
         if path == firmware_module.FIRMWARE_STATUS_ENDPOINT and not lookup_started.is_set():
@@ -349,7 +349,15 @@ async def test_delayed_firmware_read_cannot_overwrite_verified_install(
     release_old_read = asyncio.Event()
 
     async def read_old_firmware(_path: str, **_kwargs: Any) -> _EndpointOutcome:
-        """Hold the older firmware result until the installation succeeds."""
+        """Hold the older firmware result until the installation succeeds.
+
+        Args:
+            _path (str): Requested endpoint.
+            _kwargs (Any): Unused endpoint fetch options.
+
+        Returns:
+            _EndpointOutcome: The old firmware version.
+        """
         old_read_started.set()
         await release_old_read.wait()
         return _EndpointOutcome.data({"product": {"product_version": "26.1.1"}})
