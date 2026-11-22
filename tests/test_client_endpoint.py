@@ -1274,3 +1274,28 @@ async def test_failed_firmware_lookup_after_known_version_resets_nothing(
     assert await client.is_endpoint_available(LATE_PATH) is False
 
     assert router.post_paths == [DISMISS_CAMEL_PATH, UPGRADE_PATH, DISMISS_CAMEL_PATH]
+
+
+async def test_not_comparable_firmware_version_resets_nothing(
+    upgrade_router: tuple[Any, ScriptedRouter],
+) -> None:
+    """Verify a version that cannot be compared is not treated as a version change.
+
+    Args:
+        upgrade_router (tuple[Any, ScriptedRouter]): Client and Router accepting upgrades.
+    """
+    client, router = upgrade_router
+    router.firmware = "25.1"
+    assert await client.get_host_firmware_version() == "25.1"
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    await client.upgrade_firmware("update")
+    router.firmware = "weird"
+    router.endpoints[LATE_PATH] = {}
+    assert await client.get_host_firmware_version() == "weird"
+    assert await client.is_endpoint_available(LATE_PATH) is False
+
+    await client.upgrade_firmware("update")
+    router.firmware = "25.1"
+    assert await client.get_host_firmware_version() == "25.1"
+    assert await client.is_endpoint_available(LATE_PATH) is False

@@ -87,13 +87,14 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         Every write of the cached version goes through this method so that the
         firmware module is the only owner of the value. When a known version differs
         from the last known one, everything derived from the old version is discarded.
-        Clearing the cached version, or a lookup that returns nothing, is not a change.
+        Clearing the cached version, a lookup that returns nothing, or a version that
+        cannot be compared is not a change.
 
         Args:
             version (str | None): Version to cache, or ``None`` to force the next
                 lookup to read it from the Router.
         """
-        if version is not None:
+        if version is not None and firmware_is_at_least(version, "0") is not None:
             last_known = self._last_known_firmware_version
             if last_known is not None and version != last_known:
                 _LOGGER.debug(
