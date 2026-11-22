@@ -63,6 +63,16 @@ NEW_CARP_STATUS_ENDPOINT_CAPABILITY = FirmwareCapability(
     minimum=OPNSENSE_26_1_11_COMPAT_FIRMWARE,
     unknown_answer=False,
 )
+# The Unbound feature maps this capability onto its blocklist methods. Reads, and writes
+# without an entry UUID, use the legacy blocklist unless the capability is supported.
+# Known firmware decides writes that carry a UUID. While the firmware is unknown, a write
+# uses the extended blocklist only when an entry UUID is supplied, since only the
+# extended blocklist addresses entries by UUID.
+EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY = FirmwareCapability(
+    name="extended Unbound blocklist",
+    minimum=LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
+    unknown_answer=False,
+)
 
 
 # Default timeout, in seconds, for API requests.

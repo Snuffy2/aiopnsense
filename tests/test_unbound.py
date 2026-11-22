@@ -23,28 +23,6 @@ ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
-async def test_uses_legacy_unbound_blocklist_returns_none_without_error_on_missing_firmware(
-    make_client: ClientType,
-) -> None:
-    """Verify missing firmware returns ``None``.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    Returns:
-        None: This test validates handling for missing firmware values.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client.get_host_firmware_version = AsyncMock(return_value=None)
-
-        result = await client._uses_legacy_unbound_blocklist()
-
-        assert result is None
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_get_unbound_blocklist_returns_uuid_mapping(make_client: ClientType) -> None:
     """The DNSBL search response should be normalized into a UUID-keyed mapping.
 
@@ -287,53 +265,6 @@ async def test_get_unbound_blocklist_legacy_uses_empty_strings_for_non_mapping_s
                 "wildcards": "",
             }
         }
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("firmware_version", ["not-a-version", None])
-async def test_get_unbound_blocklist_falls_back_to_legacy_endpoint_on_invalid_firmware(
-    make_client: ClientType,
-    firmware_version: str | None,
-    legacy_dnsbl_payload: dict[str, Any],
-) -> None:
-    """Invalid firmware versions should fall back to the legacy DNSBL endpoint.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        firmware_version (str | None): Firmware version returned by the mocked client.
-        legacy_dnsbl_payload (dict[str, Any]): Shared legacy DNSBL payload fixture.
-
-    Returns:
-        None: This test validates the legacy fallback path when firmware comparison fails.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
-        payload = deepcopy(legacy_dnsbl_payload)
-        payload["unbound"]["dnsbl"]["enabled"] = "1"
-        payload["unbound"]["dnsbl"]["type"] = {"ads": {"selected": 1}}
-        client._is_get_endpoint_available = AsyncMock()
-        client._safe_dict_get = AsyncMock(return_value=payload)
-
-        result = await client.get_unbound_blocklist()
-
-        assert result == {
-            "legacy": {
-                "enabled": "1",
-                "safesearch": "0",
-                "nxdomain": "1",
-                "address": "0.0.0.0",
-                "type": "ads",
-                "lists": "",
-                "whitelists": "",
-                "blocklists": "",
-                "wildcards": "",
-            }
-        }
-        client._is_get_endpoint_available.assert_not_awaited()
-        client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/get")
     finally:
         await client.async_close()
 
@@ -927,3 +858,177 @@ async def test_toggle_unbound_blocklist_apply_cancellation_propagates(
             await client.enable_unbound_blocklist("uuid1")
     finally:
         await client.async_close()
+
+
+UNBOUND_GET_PATH = "/api/unbound/settings/get"
+UNBOUND_SET_PATH = "/api/unbound/settings/set"
+UNBOUND_SEARCH_DNSBL_PATH = "/api/unbound/settings/search_dnsbl"
+UNBOUND_DNSBL_PATH = "/api/unbound/service/dnsbl"
+UNBOUND_RESTART_PATH = "/api/unbound/service/restart"
+UNBOUND_TOGGLE_PATH = "/api/unbound/settings/toggle_dnsbl/uuid1/"
+
+LEGACY_FIRMWARE_VERSIONS = ["25.7.7", "25.7.7_1"]
+EXTENDED_FIRMWARE_VERSIONS = ["25.7.8", "26.1"]
+UNKNOWN_FIRMWARE = [
+    pytest.param(None, id="missing"),
+    pytest.param("not-a-version", id="not-comparable"),
+]
+
+
+@pytest.fixture
+def unbound_router(
+    scripted_router: tuple[OPNsenseClient, ScriptedRouter],
+    legacy_dnsbl_payload: dict[str, Any],
+) -> tuple[OPNsenseClient, ScriptedRouter]:
+    """Return a scripted Router serving both the legacy and the extended Unbound blocklist.
+
+    Args:
+        scripted_router (tuple[OPNsenseClient, ScriptedRouter]): Client and the Router that
+            scripts it.
+        legacy_dnsbl_payload (dict[str, Any]): Shared legacy DNSBL payload fixture.
+
+    Returns:
+        tuple[OPNsenseClient, ScriptedRouter]: Client and Router with both blocklist APIs.
+    """
+    client, router = scripted_router
+    router.endpoints.update(
+        {
+            UNBOUND_GET_PATH: deepcopy(legacy_dnsbl_payload),
+            UNBOUND_SEARCH_DNSBL_PATH: {"rows": [{"uuid": "uuid1", "enabled": "1"}]},
+            UNBOUND_SET_PATH: {"result": "saved"},
+            UNBOUND_DNSBL_PATH: {"status": "OK"},
+            UNBOUND_RESTART_PATH: {"response": "OK"},
+            f"{UNBOUND_TOGGLE_PATH}1": {"result": "Enabled"},
+            f"{UNBOUND_TOGGLE_PATH}0": {"result": "Disabled"},
+        }
+    )
+    return client, router
+
+
+@pytest.mark.parametrize(
+    ("firmware", "expect_legacy"),
+    [
+        *[pytest.param(firmware, True, id=f"legacy-{firmware}") for firmware in LEGACY_FIRMWARE_VERSIONS],
+        *[
+            pytest.param(firmware, False, id=f"extended-{firmware}")
+            for firmware in EXTENDED_FIRMWARE_VERSIONS
+        ],
+        *[
+            pytest.param(param.values[0], True, id=f"unknown-{param.id}")
+            for param in UNKNOWN_FIRMWARE
+        ],
+    ],
+)
+async def test_get_unbound_blocklist_uses_method_for_firmware(
+    unbound_router: tuple[OPNsenseClient, ScriptedRouter],
+    firmware: str | None,
+    expect_legacy: bool,
+) -> None:
+    """Verify reads use the extended blocklist from 25.7.8 and the legacy one otherwise.
+
+    Args:
+        unbound_router (tuple[OPNsenseClient, ScriptedRouter]): Client and Router with both APIs.
+        firmware (str | None): Firmware version reported by the Router.
+        expect_legacy (bool): Whether the legacy blocklist is expected.
+    """
+    client, router = unbound_router
+    router.firmware = firmware
+
+    result = await client.get_unbound_blocklist()
+
+    if expect_legacy:
+        assert list(result) == ["legacy"]
+        assert router.get_paths[-1] == UNBOUND_GET_PATH
+    else:
+        assert result == {"uuid1": {"uuid": "uuid1", "enabled": "1"}}
+        assert UNBOUND_GET_PATH not in router.get_paths
+
+
+@pytest.mark.parametrize("method_name", ["enable_unbound_blocklist", "disable_unbound_blocklist"])
+@pytest.mark.parametrize(
+    ("firmware", "uuid", "expected_result", "expect_legacy_save", "expect_toggle"),
+    [
+        *[
+            pytest.param(firmware, None, True, True, False, id=f"legacy-{firmware}")
+            for firmware in LEGACY_FIRMWARE_VERSIONS
+        ],
+        pytest.param("25.7.7", "uuid1", False, False, False, id="legacy-refuses-uuid"),
+        pytest.param("25.7.8", "uuid1", True, False, True, id="extended-uuid"),
+        pytest.param("25.7.8", None, False, False, False, id="extended-needs-uuid"),
+        pytest.param(None, None, True, True, False, id="unknown-missing-no-uuid"),
+        pytest.param(None, "uuid1", True, False, True, id="unknown-missing-uuid"),
+        pytest.param("not-a-version", None, True, True, False, id="unknown-not-comparable-no-uuid"),
+        pytest.param("not-a-version", "uuid1", True, False, True, id="unknown-not-comparable-uuid"),
+        pytest.param(None, "", False, False, False, id="unknown-empty-uuid"),
+    ],
+)
+async def test_unbound_blocklist_write_uses_method_for_firmware(
+    unbound_router: tuple[OPNsenseClient, ScriptedRouter],
+    method_name: str,
+    firmware: str | None,
+    uuid: str | None,
+    expected_result: bool,
+    expect_legacy_save: bool,
+    expect_toggle: bool,
+) -> None:
+    """Verify writes pick the blocklist method from firmware and the supplied UUID.
+
+    Known firmware decides the method. Unknown firmware uses the extended blocklist only when
+    an entry UUID is supplied, and the legacy one otherwise.
+
+    Args:
+        unbound_router (tuple[OPNsenseClient, ScriptedRouter]): Client and Router with both APIs.
+        method_name (str): Public enable or disable method under test.
+        firmware (str | None): Firmware version reported by the Router.
+        uuid (str | None): Entry UUID passed to the method.
+        expected_result (bool): Expected method result.
+        expect_legacy_save (bool): Whether the legacy settings save and restart are expected.
+        expect_toggle (bool): Whether the extended per-entry toggle is expected.
+    """
+    client, router = unbound_router
+    router.firmware = firmware
+    state = "1" if method_name == "enable_unbound_blocklist" else "0"
+
+    assert await getattr(client, method_name)(uuid) is expected_result
+
+    assert (UNBOUND_SET_PATH in router.post_paths) is expect_legacy_save
+    assert (UNBOUND_RESTART_PATH in router.post_paths) is expect_legacy_save
+    assert (f"{UNBOUND_TOGGLE_PATH}{state}" in router.post_paths) is expect_toggle
+
+
+@pytest.mark.parametrize(
+    ("firmware", "expected_level", "expected_text"),
+    [
+        pytest.param(None, logging.DEBUG, "firmware version is unavailable", id="missing"),
+        pytest.param("not-a-version", logging.ERROR, "cannot be compared", id="not-comparable"),
+    ],
+)
+async def test_unbound_unknown_firmware_is_logged_once_by_the_capability_rule(
+    unbound_router: tuple[OPNsenseClient, ScriptedRouter],
+    caplog: pytest.LogCaptureFixture,
+    firmware: str | None,
+    expected_level: int,
+    expected_text: str,
+) -> None:
+    """Verify unknown firmware is reported once, at the level the capability rule sets.
+
+    Args:
+        unbound_router (tuple[OPNsenseClient, ScriptedRouter]): Client and Router with both APIs.
+        caplog (pytest.LogCaptureFixture): Log capture fixture.
+        firmware (str | None): Unknown firmware value reported by the Router.
+        expected_level (int): Level the unknown-firmware message must use.
+        expected_text (str): Text identifying the unknown-firmware reason.
+    """
+    client, router = unbound_router
+    router.firmware = firmware
+    caplog.set_level(logging.DEBUG, logger="aiopnsense")
+
+    await client.get_unbound_blocklist()
+    await client.enable_unbound_blocklist()
+    await client.disable_unbound_blocklist()
+
+    firmware_records = [
+        record for record in caplog.records if "unknown-firmware answer" in record.getMessage()
+    ]
+    assert [record.levelno for record in firmware_records] == [expected_level]
+    assert expected_text in firmware_records[0].getMessage()

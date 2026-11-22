@@ -7,8 +7,8 @@ from typing import Any
 from ._error_policy import _log_boolean_errors, _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import ToggleSpec, ToggleStep, ToggleTarget
-from .const import LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
-from .helpers import _LOGGER, api_value_matches, firmware_is_at_least
+from .const import EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY, LEGACY_UNBOUND_BLOCKLIST_FIRMWARE
+from .helpers import _LOGGER, api_value_matches
 
 UNBOUND_SETTINGS_GET_ENDPOINT = "/api/unbound/settings/get"
 UNBOUND_SETTINGS_SET_ENDPOINT = "/api/unbound/settings/set"
@@ -26,23 +26,10 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         Returns:
             bool | None: ``True`` when firmware is below ``25.7.8``, ``False``
-            for newer firmware, or ``None`` when the version cannot be
-            compared.
+            for newer firmware, or ``None`` when the firmware is unknown.
         """
-        firmware = await self.get_host_firmware_version()
-        if firmware is None:
-            _LOGGER.debug(
-                "Firmware version unavailable when determining which Unbound Blocklist method to use"
-            )
-            return None
-        uses_extended_blocklist = firmware_is_at_least(firmware, LEGACY_UNBOUND_BLOCKLIST_FIRMWARE)
-        if uses_extended_blocklist is not None:
-            return not uses_extended_blocklist
-        _LOGGER.error(
-            "Error comparing firmware version %s when determining which Unbound Blocklist method to use",
-            firmware,
-        )
-        return None
+        extended = await self._firmware_capability(EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY)
+        return None if extended is None else not extended
 
     @_log_errors
     async def _get_unbound_blocklist_legacy(
@@ -144,7 +131,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
         use_legacy = await self._uses_legacy_unbound_blocklist()
         if use_legacy is not False:
             _LOGGER.debug(
-                "Getting Unbound regular blocklists for OPNsense < %s or when firmware detection is unavailable",
+                "Getting Unbound regular blocklists for OPNsense < %s or unknown firmware",
                 LEGACY_UNBOUND_BLOCKLIST_FIRMWARE,
             )
             return {"legacy": await self._get_unbound_blocklist_legacy()}
@@ -233,10 +220,6 @@ class UnboundMixin(AiopnsenseClientProtocol):
             )
             return await self._toggle_unbound_blocklist(set_state=set_state, uuid=uuid)
 
-        _LOGGER.debug(
-            "Unable to determine Unbound blocklist mode from firmware; using %s fallback",
-            "extended" if uuid is not None else "legacy",
-        )
         if uuid is not None:
             return await self._toggle_unbound_blocklist(set_state=set_state, uuid=uuid)
         return await self._set_unbound_blocklist_legacy(set_state=set_state)
