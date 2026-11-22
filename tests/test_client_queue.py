@@ -11,7 +11,12 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseError, client_queue as aiopnsense_client_queue, vpn as aiopnsense_vpn
+from aiopnsense import (
+    OPNsenseError,
+    client_queue as aiopnsense_client_queue,
+    unbound as aiopnsense_unbound,
+    vpn as aiopnsense_vpn,
+)
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseInvalidAuth,
@@ -1168,6 +1173,68 @@ async def test_stream_interface_traffic_does_not_enqueue_request(
         await client.async_close()
 
 
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_legacy_unbound_apply_http_failure_through_queue(
+    make_client: MakeClientFactory,
+    legacy_dnsbl_payload: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+    throw_errors: bool,
+) -> None:
+    """Log the DNSBL apply HTTP failure and skip the service restart.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        legacy_dnsbl_payload (dict[str, Any]): Complete legacy DNSBL settings.
+        caplog (pytest.LogCaptureFixture): Captured request logs.
+        throw_errors (bool): Whether the client raises public request errors.
+    """
+    base_url = "https://router.example.invalid"
+    username, password = "fake-api-key", "fake-api-secret"
+    client, session = make_mock_session_client(
+        make_client, username=username, password=password, url=base_url
+    )
+    client.toggle_throwing_errors(throw_errors)
+    client._firmware_version = "25.7.7"
+    apply_url = f"{base_url}{aiopnsense_unbound.UNBOUND_SERVICE_DNSBL_ENDPOINT}"
+    session.get.side_effect = [
+        FakeResponse(json_payload=legacy_dnsbl_payload),
+        FakeResponse(status=503, reason="Service Unavailable", ok=False),
+    ]
+    session.post.side_effect = [
+        FakeResponse(json_payload={"result": "saved"}),
+        FakeResponse(json_payload={"response": "OK"}),
+    ]
+
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            if throw_errors:
+                with pytest.raises(OPNsenseConnectionError, match="503"):
+                    await client.enable_unbound_blocklist()
+            else:
+                assert await client.enable_unbound_blocklist() is False
+
+        assert [call.args[0] for call in session.get.call_args_list] == [
+            f"{base_url}{aiopnsense_unbound.UNBOUND_SETTINGS_GET_ENDPOINT}",
+            apply_url,
+        ]
+        assert [call.args[0] for call in session.post.call_args_list] == [
+            f"{base_url}{aiopnsense_unbound.UNBOUND_SETTINGS_SET_ENDPOINT}"
+        ]
+        http_failures = [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno >= logging.WARNING
+            and "503" in record.getMessage()
+            and "Service Unavailable" in record.getMessage()
+        ]
+        assert len(http_failures) == 1
+        assert apply_url in http_failures[0]
+        assert username not in caplog.text
+        assert password not in caplog.text
+    finally:
+        await client.async_close()
+
+
 class _MalformedJSONResponse(FakeResponse):
     """Successful response whose body is not valid JSON."""
 
@@ -1323,6 +1390,50 @@ async def test_get_openvpn_malformed_routes_json_through_queue(
             assert "clients" not in openvpn["servers"]["vpn-1"]
             assert "connected_clients" not in openvpn["servers"]["vpn-1"]
             assert openvpn["clients"] == {}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_openvpn_keeps_connected_session_when_inventory_probe_returns_404(
+    make_client: MakeClientFactory, throw_errors: bool
+) -> None:
+    """Preserve primary OpenVPN session data when provider inventory is absent.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        throw_errors (bool): Whether the client raises public request errors.
+    """
+    base_url = "https://router.example.invalid"
+    client, session = make_mock_session_client(make_client, url=base_url)
+    client.toggle_throwing_errors(throw_errors)
+    client._use_snake_case = True
+    providers_url = f"{base_url}{aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT}"
+    responses = {
+        f"{base_url}{aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT}": FakeResponse(
+            json_payload={"rows": [{"id": "vpn-1_1", "type": "server", "status": "connected"}]}
+        ),
+        f"{base_url}{aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT}": FakeResponse(
+            json_payload={"rows": []}
+        ),
+        providers_url: FakeResponse(status=404, reason="Not Found", ok=False),
+        f"{base_url}{aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT}": FakeResponse(
+            json_payload={"rows": []}
+        ),
+        f"{base_url}{aiopnsense_vpn.OPENVPN_INSTANCE_DETAILS_ENDPOINT_PREFIX}vpn-1": FakeResponse(
+            json_payload={"instance": {}}
+        ),
+    }
+    session.get.side_effect = lambda url, **kwargs: responses[url]
+
+    try:
+        openvpn = await client.get_openvpn()
+
+        assert openvpn is not None
+        assert set(openvpn["servers"]) == {"vpn-1"}
+        assert openvpn["servers"]["vpn-1"]["status"] == "up"
+        assert openvpn["servers"]["vpn-1"]["connected_clients"] == 0
+        assert [call.args[0] for call in session.get.call_args_list].count(providers_url) == 1
     finally:
         await client.async_close()
 

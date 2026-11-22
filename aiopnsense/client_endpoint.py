@@ -8,7 +8,7 @@ from warnings import deprecated
 
 import aiohttp
 
-from ._endpoint_outcome import EndpointOutcome
+from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _error_if_throwing, _throws_errors
 from ._typing import AiopnsenseClientProtocol
 from .const import LEGACY_CAMELCASE_ENDPOINT_FIRMWARE
@@ -41,7 +41,7 @@ class ClientEndpointMixin:
             *,
             read_body: bool = True,
             response_format: Literal["json", "text"] = "json",
-        ) -> EndpointOutcome:
+        ) -> _EndpointOutcome:
             """Execute an immediate GET request and classify the response.
 
             Args:
@@ -52,7 +52,7 @@ class ClientEndpointMixin:
                     a successful response body.
 
             Returns:
-                EndpointOutcome: Classified transport response.
+                _EndpointOutcome: Classified transport response.
             """
             ...
 
@@ -158,7 +158,7 @@ class ClientEndpointMixin:
         self,
         path: str,
         response_format: Literal["json", "text"] = "json",
-    ) -> EndpointOutcome:
+    ) -> _EndpointOutcome:
         """Fetch a GET endpoint once and report whether it returned data, is absent or failed.
 
         Args:
@@ -168,7 +168,7 @@ class ClientEndpointMixin:
                 body text in the ``DATA`` outcome; ``"json"`` returns the decoded body.
 
         Returns:
-            EndpointOutcome: The outcome described by ``_fetch_gated_outcome``. A 403 or a
+            _EndpointOutcome: The outcome described by ``_fetch_gated_outcome``. A 403 or a
                 transient failure raises instead when ``self._throw_errors`` is ``True``.
         """
         return await self._fetch_gated_outcome("get", path, response_format=response_format)
@@ -177,7 +177,7 @@ class ClientEndpointMixin:
         self,
         path: str,
         payload: MutableMapping[str, Any] | None = None,
-    ) -> EndpointOutcome:
+    ) -> _EndpointOutcome:
         """Send one POST with its payload and report whether it returned data, is absent or failed.
 
         The payload is the real request body; no payload-less probe is sent.
@@ -187,7 +187,7 @@ class ClientEndpointMixin:
             payload (MutableMapping[str, Any] | None): Request body sent with the POST.
 
         Returns:
-            EndpointOutcome: The outcome described by ``_fetch_gated_outcome``. A 403 or a
+            _EndpointOutcome: The outcome described by ``_fetch_gated_outcome``. A 403 or a
                 transient failure raises instead when ``self._throw_errors`` is ``True``.
         """
         return await self._fetch_gated_outcome("post", path, payload)
@@ -197,7 +197,7 @@ class ClientEndpointMixin:
         path: str,
         *,
         force_refresh: bool = False,
-    ) -> EndpointOutcome:
+    ) -> _EndpointOutcome:
         """Report whether a GET endpoint is present, absent or failed, without reading its payload.
 
         Used for reads that are not a plain bounded fetch, such as streams and
@@ -212,7 +212,7 @@ class ClientEndpointMixin:
                 The result of a dispatched request is cached.
 
         Returns:
-            EndpointOutcome: ``DATA`` (with no payload) when the endpoint answers
+            _EndpointOutcome: ``DATA`` (with no payload) when the endpoint answers
                 successfully, ``ABSENT`` for a 404 or a 403, or ``TRANSIENT`` for any
                 other failure. A 403 or a transient failure raises the mapped
                 ``OPNsenseError`` instead when ``self._throw_errors`` is ``True``.
@@ -230,7 +230,7 @@ class ClientEndpointMixin:
         response_format: Literal["json", "text"] = "json",
         status_only: bool = False,
         force_refresh: bool = False,
-    ) -> EndpointOutcome:
+    ) -> _EndpointOutcome:
         """Send one availability-gated request and report whether it returned data, is absent or failed.
 
         A dispatched request both checks availability and returns the data. The
@@ -253,7 +253,7 @@ class ClientEndpointMixin:
             force_refresh (bool): Whether to bypass cached present and absent answers.
 
         Returns:
-            EndpointOutcome: ``DATA`` with the decoded payload or body text, ``ABSENT`` when the
+            _EndpointOutcome: ``DATA`` with the decoded payload or body text, ``ABSENT`` when the
                 Router reports the endpoint missing (404) or not permitted (403), or
                 ``TRANSIENT`` for any other failure. A 403 or a transient failure
                 raises the mapped ``OPNsenseError`` instead when ``self._throw_errors``
@@ -284,17 +284,17 @@ class ClientEndpointMixin:
             and self._endpoint_availability.get(cache_key) is False
             and not (_throws_errors(self) and cache_key in self._endpoint_permission_denied)
         ):
-            return EndpointOutcome.absent()
+            return _EndpointOutcome.absent()
         if (
             status_only
             and not force_refresh
             and cache_is_fresh
             and self._endpoint_availability.get(cache_key) is True
         ):
-            return EndpointOutcome.data(None)
+            return _EndpointOutcome.data(None)
 
         if status_only:
-            outcome: EndpointOutcome = await self._do_get_outcome(
+            outcome: _EndpointOutcome = await self._do_get_outcome(
                 path,
                 "_check_endpoint_status",
                 read_body=False,

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import aiohttp
 from yarl import URL
 
-from ._endpoint_outcome import EndpointOutcome
+from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _error_if_throwing, _raise_if_throwing
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception, _opnsense_http_error
@@ -79,7 +79,7 @@ def _classify_outcome_response_error(
     method: str,
     url: str,
     validator_errors: _ValidatorErrors,
-) -> EndpointOutcome | None:
+) -> _EndpointOutcome | None:
     """Classify middleware or validator errors that carry an HTTP status.
 
     Args:
@@ -92,7 +92,7 @@ def _classify_outcome_response_error(
             Errors raised by the session callback and the response being validated.
 
     Returns:
-        EndpointOutcome | None: Classified status outcome, or ``None`` when the
+        _EndpointOutcome | None: Classified status outcome, or ``None`` when the
             error came from response processing or does not match its response.
     """
     if isinstance(error, aiohttp.ClientHttpProxyError) or not 400 <= error.status <= 599:
@@ -104,7 +104,7 @@ def _classify_outcome_response_error(
                 error.request_info, response
             ):
                 return None
-            outcome = EndpointOutcome.from_http_status(error.status, error.message)
+            outcome = _EndpointOutcome.from_http_status(error.status, error.message)
             if outcome.error is not None:
                 outcome.error.__cause__ = error
             return outcome
@@ -112,7 +112,7 @@ def _classify_outcome_response_error(
     if response_entered or responses or not _response_error_matches_request(error, method, url):
         return None
 
-    outcome = EndpointOutcome.from_http_status(error.status, error.message)
+    outcome = _EndpointOutcome.from_http_status(error.status, error.message)
     if outcome.error is not None:
         outcome.error.__cause__ = error
     return outcome
@@ -126,7 +126,7 @@ def _classify_outcome_payload_error(
         | json.JSONDecodeError
     ),
     validator_errors: _ValidatorErrors,
-) -> EndpointOutcome | None:
+) -> _EndpointOutcome | None:
     """Treat a validator body-read error as absence only for its actual 404 response.
 
     Args:
@@ -135,13 +135,13 @@ def _classify_outcome_payload_error(
         validator_errors (_ValidatorErrors): Errors raised while validating a response.
 
     Returns:
-        EndpointOutcome | None: Absent for a body-read error on a delivered 404,
+        _EndpointOutcome | None: Absent for a body-read error on a delivered 404,
             or ``None`` for unrelated and transient errors.
     """
     for validator_error, response in validator_errors:
         if validator_error is error:
             if response.status == 404:
-                return EndpointOutcome.absent()
+                return _EndpointOutcome.absent()
             return None
     return None
 
@@ -571,7 +571,7 @@ class ClientTransportMixin:
         *,
         read_body: bool = True,
         response_format: Literal["json", "text"] = "json",
-    ) -> EndpointOutcome:
+    ) -> _EndpointOutcome:
         """Execute a GET request immediately and classify the response.
 
         Unlike ``_do_get``, an HTTP or transport failure is returned as an
@@ -591,7 +591,7 @@ class ClientTransportMixin:
                 successful response body.
 
         Returns:
-            EndpointOutcome: ``DATA`` with the decoded payload or body text (``None`` when
+            _EndpointOutcome: ``DATA`` with the decoded payload or body text (``None`` when
                 ``read_body`` is ``False``) for a successful response,
                 ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any
                 other HTTP status, timeout or client error.
@@ -618,12 +618,12 @@ class ClientTransportMixin:
                 response_entered = True
                 _LOGGER.debug("[get_outcome] Response %s: %s", response.status, response.reason)
                 if not response.ok:
-                    return EndpointOutcome.from_http_status(response.status, response.reason)
+                    return _EndpointOutcome.from_http_status(response.status, response.reason)
                 if not read_body:
-                    return EndpointOutcome.data(None)
+                    return _EndpointOutcome.data(None)
                 if response_format == "text":
-                    return EndpointOutcome.data(await response.text())
-                return EndpointOutcome.data(await response.json(content_type=None))
+                    return _EndpointOutcome.data(await response.text())
+                return _EndpointOutcome.data(await response.json(content_type=None))
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             outcome = _classify_outcome_payload_error(e, validator_errors)
             if outcome is not None:
@@ -649,7 +649,7 @@ class ClientTransportMixin:
                     return outcome
             error = _map_opnsense_exception(e)
             error.__cause__ = e
-            return EndpointOutcome.transient(error, f"{type(e).__name__}: {e}")
+            return _EndpointOutcome.transient(error, f"{type(e).__name__}: {e}")
 
     def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
         """Normalize per-call timeout values to a positive float in seconds.
@@ -780,7 +780,7 @@ class ClientTransportMixin:
         path: str,
         payload: MutableMapping[str, Any] | None = None,
         caller: str = "Unknown",
-    ) -> EndpointOutcome:
+    ) -> _EndpointOutcome:
         """Execute a POST request immediately and classify the response.
 
         Unlike ``_do_post``, an HTTP or transport failure is returned as an
@@ -797,7 +797,7 @@ class ClientTransportMixin:
             caller (str): Caller name used for diagnostics.
 
         Returns:
-            EndpointOutcome: ``DATA`` with the decoded payload for a successful response,
+            _EndpointOutcome: ``DATA`` with the decoded payload for a successful response,
                 ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any other
                 HTTP status, timeout or client error.
 
@@ -824,8 +824,8 @@ class ClientTransportMixin:
                 response_entered = True
                 _LOGGER.debug("[post_outcome] Response %s: %s", response.status, response.reason)
                 if not response.ok:
-                    return EndpointOutcome.from_http_status(response.status, response.reason)
-                return EndpointOutcome.data(await response.json(content_type=None))
+                    return _EndpointOutcome.from_http_status(response.status, response.reason)
+                return _EndpointOutcome.data(await response.json(content_type=None))
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             outcome = _classify_outcome_payload_error(e, validator_errors)
             if outcome is not None:
@@ -851,7 +851,7 @@ class ClientTransportMixin:
                     return outcome
             error = _map_opnsense_exception(e)
             error.__cause__ = e
-            return EndpointOutcome.transient(error, f"{type(e).__name__}: {e}")
+            return _EndpointOutcome.transient(error, f"{type(e).__name__}: {e}")
 
     async def _safe_dict_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None

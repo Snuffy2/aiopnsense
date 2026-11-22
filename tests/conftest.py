@@ -22,7 +22,7 @@ from yarl import URL
 
 import aiopnsense
 from aiopnsense import client_queue
-from aiopnsense._endpoint_outcome import EndpointOutcome
+from aiopnsense._endpoint_outcome import _EndpointOutcome
 
 MakeClientFactory = Callable[..., aiopnsense.OPNsenseClient]
 
@@ -672,7 +672,7 @@ class ScriptedRouter:
 
     async def _queue_outcome_read(
         self, method: str, path: str, payload: MutableMapping[str, Any] | None = None
-    ) -> EndpointOutcome:
+    ) -> _EndpointOutcome:
         """Answer an alias lookup through the queued outcome request seam.
 
         Args:
@@ -681,7 +681,7 @@ class ScriptedRouter:
             payload (MutableMapping[str, Any] | None): Unused body for the GET request.
 
         Returns:
-            EndpointOutcome: Scripted payload or an absent endpoint.
+            _EndpointOutcome: Scripted payload or an absent endpoint.
 
         Raises:
             ValueError: The test requests an operation other than a GET outcome.
@@ -689,7 +689,7 @@ class ScriptedRouter:
         if method != "get_outcome":
             raise ValueError(f"Unexpected scripted Router operation: {method}")
         reply = await self._get(path)
-        return EndpointOutcome.absent() if reply is None else EndpointOutcome.data(reply)
+        return _EndpointOutcome.absent() if reply is None else _EndpointOutcome.data(reply)
 
     def requested(self, path: str, *, method: str = "POST") -> bool:
         """Return whether the client sent a request.

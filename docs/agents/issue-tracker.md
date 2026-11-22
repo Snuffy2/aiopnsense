@@ -14,6 +14,11 @@ Issues and specs for this repo live as markdown files in `.scratch/`.
 
 Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
 
+Before coding a refactor, write down the public behavior to preserve in its spec.
+List any intentional caller-visible output changes with representative before-and-after cases,
+and name where each change will be documented. For API docstring guidance, see
+[Coding Standards](../../CODING_STANDARDS.md#docstrings-and-comments).
+
 ## When a skill says "fetch the relevant ticket"
 
 Read the file at the referenced path. The user will normally pass the path or the issue number directly.

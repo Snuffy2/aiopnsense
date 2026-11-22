@@ -7,7 +7,7 @@ from functools import partial
 import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from ._endpoint_outcome import EndpointOutcome
+from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _attempt
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
@@ -61,7 +61,7 @@ class ClientQueueMixin:
             *,
             read_body: bool = True,
             response_format: Literal["json", "text"] = "json",
-        ) -> EndpointOutcome:
+        ) -> _EndpointOutcome:
             """Execute an immediate GET request and classify the response.
 
             Args:
@@ -72,7 +72,7 @@ class ClientQueueMixin:
                     a successful response body.
 
             Returns:
-                EndpointOutcome: Classified transport response.
+                _EndpointOutcome: Classified transport response.
             """
             ...
 
@@ -81,7 +81,7 @@ class ClientQueueMixin:
             path: str,
             payload: MutableMapping[str, Any] | None = None,
             caller: str = "Unknown",
-        ) -> EndpointOutcome:
+        ) -> _EndpointOutcome:
             """Execute an immediate POST request and classify the response.
 
             Args:
@@ -90,7 +90,7 @@ class ClientQueueMixin:
                 caller (str): Calling method name used for diagnostics.
 
             Returns:
-                EndpointOutcome: Classified transport response.
+                _EndpointOutcome: Classified transport response.
             """
             ...
 
@@ -161,19 +161,19 @@ class ClientQueueMixin:
 
     async def _run_cancellable_outcome_request(
         self,
-        request: Callable[[], Coroutine[Any, Any, EndpointOutcome]],
+        request: Callable[[], Coroutine[Any, Any, _EndpointOutcome]],
         future: asyncio.Future[Any] | None,
-    ) -> EndpointOutcome | None:
+    ) -> _EndpointOutcome | None:
         """Run an outcome request without retaining a worker after caller cancellation.
 
         Args:
-            request (Callable[[], Coroutine[Any, Any, EndpointOutcome]]): Transport
+            request (Callable[[], Coroutine[Any, Any, _EndpointOutcome]]): Transport
                 request to dispatch after confirming its caller is still waiting.
             future (asyncio.Future[Any] | None): Queue future owned by the requesting
                 caller, or ``None`` for a queue entry without a waiter.
 
         Returns:
-            EndpointOutcome | None: Request result, or ``None`` when the caller
+            _EndpointOutcome | None: Request result, or ``None`` when the caller
                 cancelled the request while it was in flight.
 
         Raises:
@@ -182,11 +182,11 @@ class ClientQueueMixin:
         if future is None:
             return await request()
 
-        async def dispatch_if_waiting() -> EndpointOutcome | None:
+        async def dispatch_if_waiting() -> _EndpointOutcome | None:
             """Start transport only while its caller still awaits the result.
 
             Returns:
-                EndpointOutcome | None: Request result, or ``None`` if its
+                _EndpointOutcome | None: Request result, or ``None`` if its
                     caller cancelled before transport began.
             """
             if future.cancelled():

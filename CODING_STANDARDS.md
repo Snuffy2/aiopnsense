@@ -5,7 +5,7 @@ Standards for code in `aiopnsense/` and `tests/`. Rules that `ruff`, `mypy` or `
 ## Language and tooling
 
 - Target Python 3.14 or newer. PEP 695 type parameters and PEP 758 grouped exception handlers are allowed.
-- Run `pytest` and `prek` through the repository virtualenv (`./.venv/bin/...`), never the system Python. A worktree without dependency changes may use the main checkout's virtualenv.
+- Run Python, `pytest`, and `prek` through the repository virtualenv (`./.venv/bin/...`). A worktree without dependency changes may use the main checkout's virtualenv. Follow the [worktree import guidance](AGENTS.md#local-tooling-note) for ad hoc Python commands.
 - Run the full test suite by default. When running a subset, say why.
 
 ## Structure
@@ -42,6 +42,7 @@ Standards for code in `aiopnsense/` and `tests/`. Rules that `ruff`, `mypy` or `
 ## Public API and return shapes
 
 - Names without a leading underscore are public. Deprecate with `warnings.deprecated`, naming the replacement, and keep the old behavior working, as `get_arp_table` does.
+- The pytest suite enforces a leading underscore on module-scope classes, functions, type aliases, plain `=` assignments and annotated assignments in private modules, including declarations inside control flow. It skips declarations local to classes and functions. `AiopnsenseClientProtocol` in `_typing.py` is the internal mixin contract and keeps its established name.
 - Return new structured data as frozen, slotted dataclasses rather than loose dictionaries.
 
 ## Firmware compatibility

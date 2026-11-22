@@ -8,7 +8,7 @@ from typing import Any
 from .exceptions import OPNsenseError, _opnsense_http_error
 
 
-class EndpointStatus(StrEnum):
+class _EndpointStatus(StrEnum):
     """What the Router said about one endpoint request."""
 
     DATA = "data"
@@ -17,11 +17,11 @@ class EndpointStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class EndpointOutcome:
+class _EndpointOutcome:
     """Result of a single request that also tells absent from transient failure.
 
     Attributes:
-        status (EndpointStatus): ``DATA`` for a successful response, ``ABSENT``
+        status (_EndpointStatus): ``DATA`` for a successful response, ``ABSENT``
             when the Router reports the endpoint missing (404) or not permitted
             (403), and ``TRANSIENT`` for any other failure.
         payload (MutableMapping[str, Any] | list | str | None): Decoded response
@@ -32,14 +32,14 @@ class EndpointOutcome:
         detail (str): Short failure description for log messages.
     """
 
-    status: EndpointStatus
+    status: _EndpointStatus
     payload: MutableMapping[str, Any] | list | str | None = None
     http_status: int | None = None
     error: OPNsenseError | None = None
     detail: str = ""
 
     @classmethod
-    def data(cls, payload: MutableMapping[str, Any] | list | str | None) -> EndpointOutcome:
+    def data(cls, payload: MutableMapping[str, Any] | list | str | None) -> _EndpointOutcome:
         """Build the outcome of a successful request.
 
         Args:
@@ -47,21 +47,21 @@ class EndpointOutcome:
                 the body text for a text read.
 
         Returns:
-            EndpointOutcome: Outcome with the ``DATA`` status.
+            _EndpointOutcome: Outcome with the ``DATA`` status.
         """
-        return cls(EndpointStatus.DATA, payload=payload)
+        return cls(_EndpointStatus.DATA, payload=payload)
 
     @classmethod
-    def absent(cls) -> EndpointOutcome:
+    def absent(cls) -> _EndpointOutcome:
         """Build the outcome of an endpoint the Router does not provide.
 
         Returns:
-            EndpointOutcome: Outcome with the ``ABSENT`` status.
+            _EndpointOutcome: Outcome with the ``ABSENT`` status.
         """
-        return cls(EndpointStatus.ABSENT, http_status=404)
+        return cls(_EndpointStatus.ABSENT, http_status=404)
 
     @classmethod
-    def from_http_status(cls, status: int, reason: str | None) -> EndpointOutcome:
+    def from_http_status(cls, status: int, reason: str | None) -> _EndpointOutcome:
         """Classify a non-successful HTTP response.
 
         Args:
@@ -69,18 +69,18 @@ class EndpointOutcome:
             reason (str | None): HTTP response reason phrase.
 
         Returns:
-            EndpointOutcome: ``ABSENT`` for 404 and 403, otherwise ``TRANSIENT``.
+            _EndpointOutcome: ``ABSENT`` for 404 and 403, otherwise ``TRANSIENT``.
         """
         if status == 404:
             return cls.absent()
         error = _opnsense_http_error(status, reason)
         detail = f"Response {status}: {reason}"
         if status == 403:
-            return cls(EndpointStatus.ABSENT, http_status=status, error=error, detail=detail)
-        return cls(EndpointStatus.TRANSIENT, http_status=status, error=error, detail=detail)
+            return cls(_EndpointStatus.ABSENT, http_status=status, error=error, detail=detail)
+        return cls(_EndpointStatus.TRANSIENT, http_status=status, error=error, detail=detail)
 
     @classmethod
-    def transient(cls, error: OPNsenseError, detail: str) -> EndpointOutcome:
+    def transient(cls, error: OPNsenseError, detail: str) -> _EndpointOutcome:
         """Build the outcome of a transport failure.
 
         Args:
@@ -88,9 +88,9 @@ class EndpointOutcome:
             detail (str): Short failure description for log messages.
 
         Returns:
-            EndpointOutcome: Outcome with the ``TRANSIENT`` status.
+            _EndpointOutcome: Outcome with the ``TRANSIENT`` status.
         """
-        return cls(EndpointStatus.TRANSIENT, error=error, detail=detail)
+        return cls(_EndpointStatus.TRANSIENT, error=error, detail=detail)
 
     @property
     def is_data(self) -> bool:
@@ -99,7 +99,7 @@ class EndpointOutcome:
         Returns:
             bool: ``True`` when ``status`` is ``DATA``.
         """
-        return self.status is EndpointStatus.DATA
+        return self.status is _EndpointStatus.DATA
 
     @property
     def is_absent(self) -> bool:
@@ -108,7 +108,7 @@ class EndpointOutcome:
         Returns:
             bool: ``True`` when ``status`` is ``ABSENT``.
         """
-        return self.status is EndpointStatus.ABSENT
+        return self.status is _EndpointStatus.ABSENT
 
     @property
     def is_transient(self) -> bool:
@@ -117,7 +117,7 @@ class EndpointOutcome:
         Returns:
             bool: ``True`` when ``status`` is ``TRANSIENT``.
         """
-        return self.status is EndpointStatus.TRANSIENT
+        return self.status is _EndpointStatus.TRANSIENT
 
     def mapping(self) -> dict[str, Any]:
         """Return the payload as a dictionary.

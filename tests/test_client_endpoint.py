@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import aiohttp
 import pytest
 
-from aiopnsense._endpoint_outcome import EndpointOutcome
+from aiopnsense._endpoint_outcome import _EndpointOutcome
 import aiopnsense.client_endpoint
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
@@ -743,7 +743,7 @@ def test_endpoint_outcome_coerces_payload_shape(
         mapping (dict[str, Any]): Expected ``mapping()`` result.
         sequence (list): Expected ``sequence()`` result.
     """
-    outcome = EndpointOutcome.data(payload)
+    outcome = _EndpointOutcome.data(payload)
 
     assert outcome.is_data
     assert outcome.mapping() == mapping
