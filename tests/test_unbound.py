@@ -686,23 +686,29 @@ async def test_legacy_unbound_blocklist_request_failure_follows_throw_errors(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("save_response", [{}, {"result": "failed"}, []])
+@pytest.mark.parametrize("save_response", [{}, {"result": "failed"}, [], None])
+@pytest.mark.parametrize("throw_errors", [False, True])
 async def test_enable_unbound_blocklist_legacy_does_not_apply_or_restart_after_failed_save(
     make_client: ClientType,
-    save_response: dict[str, Any] | list[Any],
+    save_response: object,
     legacy_dnsbl_payload: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+    throw_errors: bool,
 ) -> None:
     """Verify legacy DNSBL updates stop before apply and restart on failed save.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        save_response (dict[str, Any] | list[Any]): Mock response returned by the legacy save request.
+        save_response (object): Mock response returned by the legacy save request.
         legacy_dnsbl_payload (dict[str, Any]): Legacy DNSBL settings returned before the failed save.
+        caplog (pytest.LogCaptureFixture): Captured logs for malformed save responses.
+        throw_errors (bool): Client error propagation setting.
 
     Returns:
         None: This test validates that failed legacy saves do not trigger apply or restart calls.
     """
     client, _session = make_mock_session_client(make_client)
+    client._throw_errors = throw_errors
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
         payload = deepcopy(legacy_dnsbl_payload)
@@ -710,9 +716,11 @@ async def test_enable_unbound_blocklist_legacy_does_not_apply_or_restart_after_f
         client._post = AsyncMock(return_value=save_response)
         client._get = AsyncMock()
 
-        result = await client.enable_unbound_blocklist()
+        with caplog.at_level(logging.ERROR, logger="aiopnsense"):
+            result = await client.enable_unbound_blocklist()
 
         assert result is False
+        assert "Unable to save legacy unbound blocklist state On" in caplog.text
         client._post.assert_awaited_once_with(
             "/api/unbound/settings/set",
             payload={
@@ -737,23 +745,29 @@ async def test_enable_unbound_blocklist_legacy_does_not_apply_or_restart_after_f
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("dnsbl_response", [{"status": None}, {"status": 1}, []])
+@pytest.mark.parametrize("dnsbl_response", [{"status": None}, {"status": 1}, [], None])
+@pytest.mark.parametrize("throw_errors", [False, True])
 async def test_enable_unbound_blocklist_legacy_returns_false_for_malformed_apply_status(
     make_client: ClientType,
-    dnsbl_response: dict[str, Any] | list[Any],
+    dnsbl_response: object,
     legacy_dnsbl_payload: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+    throw_errors: bool,
 ) -> None:
     """Verify legacy DNSBL updates fail closed on malformed apply responses.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        dnsbl_response (dict[str, Any] | list[Any]): Mock response returned by the DNSBL apply request.
+        dnsbl_response (object): Mock response returned by the DNSBL apply request.
         legacy_dnsbl_payload (dict[str, Any]): Legacy DNSBL settings used before malformed apply status.
+        caplog (pytest.LogCaptureFixture): Captured logs for malformed apply responses.
+        throw_errors (bool): Client error propagation setting.
 
     Returns:
         None: This test validates malformed apply-response handling for legacy DNSBL writes.
     """
     client, _session = make_mock_session_client(make_client)
+    client._throw_errors = throw_errors
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
         payload = deepcopy(legacy_dnsbl_payload)
@@ -761,9 +775,11 @@ async def test_enable_unbound_blocklist_legacy_returns_false_for_malformed_apply
         client._post = AsyncMock(side_effect=[{"result": "saved"}, {"response": "OK"}])
         client._get = AsyncMock(return_value=dnsbl_response)
 
-        result = await client.enable_unbound_blocklist()
+        with caplog.at_level(logging.ERROR, logger="aiopnsense"):
+            result = await client.enable_unbound_blocklist()
 
         assert result is False
+        assert "Malformed legacy unbound dnsbl apply response for state On" in caplog.text
         assert client._post.await_args_list == [
             call(
                 "/api/unbound/settings/set",

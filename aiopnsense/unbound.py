@@ -14,6 +14,7 @@ UNBOUND_SERVICE_DNSBL_ENDPOINT = "/api/unbound/service/dnsbl"
 UNBOUND_SERVICE_RESTART_ENDPOINT = "/api/unbound/service/restart"
 UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT = "/api/unbound/settings/search_dnsbl"
 UNBOUND_SETTINGS_TOGGLE_DNSBL_ENDPOINT_PREFIX = "/api/unbound/settings/toggle_dnsbl/"
+_LEGACY_REQUEST_FAILED = object()
 
 
 class UnboundMixin(AiopnsenseClientProtocol):
@@ -96,11 +97,11 @@ class UnboundMixin(AiopnsenseClientProtocol):
         response = await _attempt(
             self,
             lambda: self._post(UNBOUND_SETTINGS_SET_ENDPOINT, payload=payload),
-            empty=None,
+            empty=_LEGACY_REQUEST_FAILED,
             name=f"legacy unbound blocklist save ({'On' if set_state else 'Off'})",
         )
 
-        if response is None:
+        if response is _LEGACY_REQUEST_FAILED:
             # The failed request was already logged.
             return False
         if not isinstance(response, MutableMapping) or response.get("result", "failed") != "saved":
@@ -114,11 +115,11 @@ class UnboundMixin(AiopnsenseClientProtocol):
         dnsbl_resp = await _attempt(
             self,
             lambda: self._get(UNBOUND_SERVICE_DNSBL_ENDPOINT),
-            empty=None,
+            empty=_LEGACY_REQUEST_FAILED,
             name=f"legacy unbound blocklist apply ({'On' if set_state else 'Off'})",
         )
 
-        if dnsbl_resp is None:
+        if dnsbl_resp is _LEGACY_REQUEST_FAILED:
             # The failed request was already logged.
             return False
         dnsbl_status = dnsbl_resp.get("status") if isinstance(dnsbl_resp, MutableMapping) else None
