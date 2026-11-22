@@ -21,7 +21,7 @@ _REQUEST_ERROR_LOGGED_ATTRIBUTE = "_aiopnsense_request_error_logged"
 class _RequestLoggingClient(Protocol):
     """Client state required by request outage logging helpers."""
 
-    _request_outages: set[tuple[str, str, str]]
+    _request_outages: dict[tuple[str, str, str], int | None]
 
 
 class _ExceptionLogDetails:
@@ -34,15 +34,7 @@ class _ExceptionLogDetails:
             error (Exception): Caught exception to redact and render.
         """
         self._error_type = type(error).__name__
-        self._logged_message = (
-            _INVALID_URL_ERROR_MESSAGE
-            if isinstance(error, aiohttp.InvalidURL)
-            else re.sub(
-                r"(://)([^:/@\s]+):([^@\s]+)@",
-                r"\1<redacted>:<redacted>@",
-                str(error),
-            )
-        )
+        self._logged_message = _redacted_exception_message(error)
         self._traceback_snapshot = traceback.extract_tb(error.__traceback__)
         self._rendered: str | None = None
 
@@ -60,6 +52,24 @@ class _ExceptionLogDetails:
         return self._rendered
 
 
+def _redacted_exception_message(error: Exception) -> str:
+    """Return exception text with URL credentials removed.
+
+    Args:
+        error (Exception): Exception whose message may contain a URL.
+
+    Returns:
+        str: Safe exception message for logging.
+    """
+    if isinstance(error, aiohttp.InvalidURL):
+        return _INVALID_URL_ERROR_MESSAGE
+    return re.sub(
+        r"(://)([^:/@\s]+):([^@\s]+)@",
+        r"\1<redacted>:<redacted>@",
+        str(error),
+    )
+
+
 def _log_request_failure(
     client: _RequestLoggingClient,
     method: str,
@@ -69,24 +79,28 @@ def _log_request_failure(
     message: str,
     *args: Any,
     error: BaseException | None = None,
+    failure_status: int | None = None,
 ) -> None:
-    """Log one request failure per client, method, path, and request phase.
+    """Log a request failure unless it repeats the active outage classification.
 
     Args:
         client (_RequestLoggingClient): Client holding request outage state.
         method (str): HTTP method used by the request.
         path (str): Requested API path.
-        phase (str): ``probe`` for availability checks or ``request`` for data calls.
+        phase (str): ``probe`` for availability checks, ``request`` for data calls or
+            ``stream`` for streaming reads.
         level (int): Log level for the first failure in the current outage.
         message (str): Failure message format.
         args (Any): Values for the failure message format.
         error (BaseException | None): Public exception that will be raised, if any.
+        failure_status (int | None): Status that distinguishes a failure from
+            other failures during the same outage.
     """
     key = (method.upper(), path, phase)
-    if key in client._request_outages:
+    if key in client._request_outages and client._request_outages[key] == failure_status:
         _LOGGER.debug(message, *args)
     else:
-        client._request_outages.add(key)
+        client._request_outages[key] = failure_status
         _LOGGER.log(level, message, *args)
     if error is not None:
         _mark_request_error_logged(error)
@@ -104,11 +118,12 @@ def _log_request_recovery(
         client (_RequestLoggingClient): Client holding request outage state.
         method (str): HTTP method used by the request.
         path (str): Requested API path.
-        phase (str): ``probe`` for availability checks or ``request`` for data calls.
+        phase (str): ``probe`` for availability checks, ``request`` for data calls or
+            ``stream`` for streaming reads.
     """
     key = (method.upper(), path, phase)
     if key in client._request_outages:
-        client._request_outages.remove(key)
+        del client._request_outages[key]
         _LOGGER.info("%s %s recovered for %s", method.upper(), phase, path)
 
 

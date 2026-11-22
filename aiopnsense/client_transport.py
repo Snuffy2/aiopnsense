@@ -4,15 +4,19 @@ import asyncio
 import codecs
 from collections.abc import AsyncGenerator, MutableMapping
 import json
-import logging
 from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
 
-from ._error_policy import _error_if_throwing, _raise_if_throwing
+from ._error_policy import _raise_if_throwing
+from ._request_failure import (
+    _REQUEST_PHASE,
+    _STREAM_PHASE,
+    _report_http_failure,
+    _report_transport_failure,
+)
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
-from .exceptions import OPNsenseError, _map_opnsense_exception, _opnsense_http_error
-from .helpers import _LOGGER, _log_request_failure, _log_request_recovery
+from .helpers import _LOGGER, _log_request_recovery
 
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
 
@@ -22,7 +26,7 @@ class ClientTransportMixin:
 
     if TYPE_CHECKING:
         _password: str
-        _request_outages: set[tuple[str, str, str]]
+        _request_outages: dict[tuple[str, str, str], int | None]
         _rest_api_query_count: int
         _session: aiohttp.ClientSession
         _throw_errors: bool
@@ -85,7 +89,7 @@ class ClientTransportMixin:
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        _LOGGER.debug("[get_from_stream] url: %s", url)
+        _LOGGER.debug("[get_from_stream] path: %s", path)
         try:
             async with self._session.get(
                 url,
@@ -99,45 +103,50 @@ class ClientTransportMixin:
                     response.reason,
                 )
 
-                if response.ok:
-                    buffer = ""
-                    message_count = 0
+                if not response.ok:
+                    http_error = _report_http_failure(
+                        self,
+                        method="get",
+                        path=path,
+                        phase=_STREAM_PHASE,
+                        operation="do_get_from_stream",
+                        url=url,
+                        status=response.status,
+                        reason=response.reason,
+                        caller=caller,
+                    )
+                    _raise_if_throwing(self, http_error)
+                    return {}
 
-                    async for chunk in response.content.iter_chunked(1024):
-                        buffer += chunk.decode("utf-8")
-                        while "\n\n" in buffer:
-                            message, buffer = buffer.split("\n\n", 1)
-                            lines = message.splitlines()
-                            for line in lines:
-                                if line.startswith("data:"):
-                                    message_count += 1
-                                    if message_count == 2:
-                                        response_str: str = line[len("data:") :].strip()
-                                        response_json = json.loads(response_str)
-                                        return (
-                                            dict(response_json)
-                                            if isinstance(response_json, MutableMapping)
-                                            else {}
-                                        )
-                else:
-                    if response.status == 403:
-                        _LOGGER.error(
-                            "Permission Error in do_get_from_stream (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
-                            caller,
-                            url,
-                        )
-                    else:
-                        _LOGGER.error(
-                            "Error in do_get_from_stream (called by %s). Path: %s. Response %s: %s",
-                            caller,
-                            url,
-                            response.status,
-                            response.reason,
-                        )
-                    _raise_if_throwing(self, _opnsense_http_error(response.status, response.reason))
+                buffer = ""
+                message_count = 0
+                async for chunk in response.content.iter_chunked(1024):
+                    buffer += chunk.decode("utf-8")
+                    while "\n\n" in buffer:
+                        message, buffer = buffer.split("\n\n", 1)
+                        for line in message.splitlines():
+                            if not line.startswith("data:"):
+                                continue
+                            message_count += 1
+                            if message_count != 2:
+                                continue
+                            response_str: str = line[len("data:") :].strip()
+                            response_json = json.loads(response_str)
+                            if not isinstance(response_json, MutableMapping):
+                                return {}
+                            _log_request_recovery(self, "get", path, _STREAM_PHASE)
+                            return dict(response_json)
         except (aiohttp.ClientError, TimeoutError) as e:
-            _LOGGER.error("Client error. %s: %s", type(e).__name__, e)
-            _raise_if_throwing(self, _map_opnsense_exception(e), e)
+            transport_error = _report_transport_failure(
+                self,
+                method="get",
+                path=path,
+                phase=_STREAM_PHASE,
+                operation="do_get_from_stream",
+                exc=e,
+                caller=caller,
+            )
+            _raise_if_throwing(self, transport_error, e)
 
         return {}
 
@@ -165,7 +174,7 @@ class ClientTransportMixin:
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        _LOGGER.debug("[stream_json_events] url: %s", url)
+        _LOGGER.debug("[stream_json_events] path: %s", path)
         try:
             async with self._session.get(
                 url,
@@ -178,21 +187,20 @@ class ClientTransportMixin:
                 ssl=self._verify_ssl,
             ) as response:
                 if not response.ok:
-                    if response.status == 403:
-                        _LOGGER.error(
-                            "Permission Error in stream_json_events. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
-                            url,
-                        )
-                    else:
-                        _LOGGER.error(
-                            "Error in stream_json_events. Path: %s. Response %s: %s",
-                            url,
-                            response.status,
-                            response.reason,
-                        )
-                    _raise_if_throwing(self, _opnsense_http_error(response.status, response.reason))
+                    http_error = _report_http_failure(
+                        self,
+                        method="get",
+                        path=path,
+                        phase=_STREAM_PHASE,
+                        operation="stream_json_events",
+                        url=url,
+                        status=response.status,
+                        reason=response.reason,
+                    )
+                    _raise_if_throwing(self, http_error)
                     return
 
+                recovered = False
                 decoder = codecs.getincrementaldecoder("utf-8")()
                 buffer = ""
                 pending_cr = False
@@ -209,6 +217,7 @@ class ClientTransportMixin:
                         tuple[str, list[dict[str, Any]]]: Remaining unparsed buffer
                             text and decoded JSON events.
                     """
+                    nonlocal recovered
                     events: list[dict[str, Any]] = []
                     drain_buffer = source_buffer
                     while "\n\n" in drain_buffer:
@@ -241,6 +250,9 @@ class ClientTransportMixin:
                             if yield_reset_events:
                                 events.append({_STREAM_JSON_EVENT_RESET_KEY: True})
                             continue
+                        if not recovered:
+                            _log_request_recovery(self, "get", path, _STREAM_PHASE)
+                            recovered = True
                         events.append(dict(response_json))
 
                     return drain_buffer, events
@@ -294,8 +306,15 @@ class ClientTransportMixin:
                 for event in events:
                     yield event
         except (aiohttp.ClientError, TimeoutError) as err:
-            _LOGGER.error("Client error in stream_json_events. %s: %s", type(err).__name__, err)
-            _raise_if_throwing(self, _map_opnsense_exception(err), err)
+            transport_error = _report_transport_failure(
+                self,
+                method="get",
+                path=path,
+                phase=_STREAM_PHASE,
+                operation="stream_json_events",
+                exc=err,
+            )
+            _raise_if_throwing(self, transport_error, err)
 
     async def _do_get(
         self,
@@ -321,7 +340,7 @@ class ClientTransportMixin:
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        _LOGGER.debug("[get] url: %s", url)
+        _LOGGER.debug("[get] path: %s", path)
         timeout_total: float = self._normalize_timeout_seconds(timeout_seconds)
         try:
             async with self._session.get(
@@ -336,50 +355,31 @@ class ClientTransportMixin:
                         result = await response.text()
                     else:
                         result = await response.json(content_type=None)
-                    _log_request_recovery(self, "get", path, "request")
+                    _log_request_recovery(self, "get", path, _REQUEST_PHASE)
                     return result
-                error: OPNsenseError = _opnsense_http_error(response.status, response.reason)
-                if response.status == 403:
-                    _log_request_failure(
-                        self,
-                        "get",
-                        path,
-                        "request",
-                        logging.ERROR,
-                        "Permission Error in do_get (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
-                        caller,
-                        url,
-                        error=_error_if_throwing(self, error),
-                    )
-                else:
-                    _log_request_failure(
-                        self,
-                        "get",
-                        path,
-                        "request",
-                        logging.ERROR,
-                        "Error in do_get (called by %s). Path: %s. Response %s: %s",
-                        caller,
-                        url,
-                        response.status,
-                        response.reason,
-                        error=_error_if_throwing(self, error),
-                    )
-                _raise_if_throwing(self, error)
+                http_error = _report_http_failure(
+                    self,
+                    method="get",
+                    path=path,
+                    phase=_REQUEST_PHASE,
+                    operation="do_get",
+                    url=url,
+                    status=response.status,
+                    reason=response.reason,
+                    caller=caller,
+                )
+                _raise_if_throwing(self, http_error)
         except (aiohttp.ClientError, TimeoutError) as e:
-            error = _map_opnsense_exception(e)
-            _log_request_failure(
+            transport_error = _report_transport_failure(
                 self,
-                "get",
-                path,
-                "request",
-                logging.ERROR,
-                "Client error. %s: %s",
-                type(e).__name__,
-                e,
-                error=_error_if_throwing(self, error),
+                method="get",
+                path=path,
+                phase=_REQUEST_PHASE,
+                operation="do_get",
+                exc=e,
+                caller=caller,
             )
-            _raise_if_throwing(self, error, e)
+            _raise_if_throwing(self, transport_error, e)
 
         return None
 
@@ -463,7 +463,7 @@ class ClientTransportMixin:
         """
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        _LOGGER.debug("[post] url: %s", url)
+        _LOGGER.debug("[post] path: %s", path)
         try:
             async with self._session.post(
                 url,
@@ -475,50 +475,31 @@ class ClientTransportMixin:
                 _LOGGER.debug("[post] Response %s: %s", response.status, response.reason)
                 if response.ok:
                     response_json: dict[str, Any] | list = await response.json(content_type=None)
-                    _log_request_recovery(self, "post", path, "request")
+                    _log_request_recovery(self, "post", path, _REQUEST_PHASE)
                     return response_json
-                error: OPNsenseError = _opnsense_http_error(response.status, response.reason)
-                if response.status == 403:
-                    _log_request_failure(
-                        self,
-                        "post",
-                        path,
-                        "request",
-                        logging.ERROR,
-                        "Permission Error in do_post (called by %s). Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
-                        caller,
-                        url,
-                        error=_error_if_throwing(self, error),
-                    )
-                else:
-                    _log_request_failure(
-                        self,
-                        "post",
-                        path,
-                        "request",
-                        logging.ERROR,
-                        "Error in do_post (called by %s). Path: %s. Response %s: %s",
-                        caller,
-                        url,
-                        response.status,
-                        response.reason,
-                        error=_error_if_throwing(self, error),
-                    )
-                _raise_if_throwing(self, error)
+                http_error = _report_http_failure(
+                    self,
+                    method="post",
+                    path=path,
+                    phase=_REQUEST_PHASE,
+                    operation="do_post",
+                    url=url,
+                    status=response.status,
+                    reason=response.reason,
+                    caller=caller,
+                )
+                _raise_if_throwing(self, http_error)
         except (aiohttp.ClientError, TimeoutError) as e:
-            error = _map_opnsense_exception(e)
-            _log_request_failure(
+            transport_error = _report_transport_failure(
                 self,
-                "post",
-                path,
-                "request",
-                logging.ERROR,
-                "Client error. %s: %s",
-                type(e).__name__,
-                e,
-                error=_error_if_throwing(self, error),
+                method="post",
+                path=path,
+                phase=_REQUEST_PHASE,
+                operation="do_post",
+                exc=e,
+                caller=caller,
             )
-            _raise_if_throwing(self, error, e)
+            _raise_if_throwing(self, transport_error, e)
 
         return None
 
