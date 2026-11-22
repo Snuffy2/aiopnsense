@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import aiohttp
 
 from ._error_policy import _raise_if_throwing, _throws_errors
-from ._request_failure import _report_http_failure, _report_transport_failure
+from ._request_failure import REQUEST_PHASE, _report_http_failure, _report_transport_failure
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .exceptions import _map_opnsense_exception, _opnsense_http_error
 from .helpers import _LOGGER, _log_request_recovery
@@ -336,13 +336,13 @@ class ClientTransportMixin:
                         result = await response.text()
                     else:
                         result = await response.json(content_type=None)
-                    _log_request_recovery(self, "get", path, "request")
+                    _log_request_recovery(self, "get", path, REQUEST_PHASE)
                     return result
                 http_error = _report_http_failure(
                     self,
                     method="get",
                     path=path,
-                    phase="request",
+                    phase=REQUEST_PHASE,
                     operation="do_get",
                     url=url,
                     status=response.status,
@@ -356,7 +356,7 @@ class ClientTransportMixin:
                 self,
                 method="get",
                 path=path,
-                phase="request",
+                phase=REQUEST_PHASE,
                 operation="do_get",
                 url=url,
                 exc=e,
@@ -459,13 +459,13 @@ class ClientTransportMixin:
                 _LOGGER.debug("[post] Response %s: %s", response.status, response.reason)
                 if response.ok:
                     response_json: dict[str, Any] | list = await response.json(content_type=None)
-                    _log_request_recovery(self, "post", path, "request")
+                    _log_request_recovery(self, "post", path, REQUEST_PHASE)
                     return response_json
                 http_error = _report_http_failure(
                     self,
                     method="post",
                     path=path,
-                    phase="request",
+                    phase=REQUEST_PHASE,
                     operation="do_post",
                     url=url,
                     status=response.status,
@@ -479,7 +479,7 @@ class ClientTransportMixin:
                 self,
                 method="post",
                 path=path,
-                phase="request",
+                phase=REQUEST_PHASE,
                 operation="do_post",
                 url=url,
                 exc=e,

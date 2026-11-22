@@ -16,8 +16,14 @@ from .exceptions import (
 )
 from .helpers import _log_request_failure, _RequestLoggingClient
 
+REQUEST_PHASE = "request"
+"""Request phase of immediate GET and POST data calls."""
+
 PROBE_PHASE = "probe"
 """Request phase of endpoint availability probes, which log transient failures as warnings."""
+
+STREAM_PHASE = "stream"
+"""Request phase of the streaming reads."""
 
 _PERMISSION_GUIDANCE = (
     "Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access"
