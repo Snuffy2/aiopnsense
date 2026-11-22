@@ -306,12 +306,12 @@ async def test_get_enqueues_and_processes(returned: Any, make_client: MakeClient
         await client.async_close()
 
 
-async def test_unbound_attempt_keeps_domain_caller_in_queue_diagnostics(
+async def test_unbound_toggle_identifies_failed_save_in_queue_diagnostics(
     make_client: MakeClientFactory,
     caplog: pytest.LogCaptureFixture,
     legacy_dnsbl_payload: dict[str, Any],
 ) -> None:
-    """Keep Unbound's domain method in transport failure diagnostics.
+    """Identify the public Unbound operation and endpoint when a queued save fails.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning client instances.
@@ -319,7 +319,7 @@ async def test_unbound_attempt_keeps_domain_caller_in_queue_diagnostics(
         legacy_dnsbl_payload (dict[str, Any]): Complete settings that allow the save request.
 
     Returns:
-        None: This test asserts the caller label in the actual transport report.
+        None: This test asserts the operation label and request path in the diagnostics.
     """
     client, session = make_mock_session_client(make_client)
     try:
@@ -333,7 +333,11 @@ async def test_unbound_attempt_keeps_domain_caller_in_queue_diagnostics(
             result = await client.enable_unbound_blocklist()
 
         assert result is False
-        assert "called by _set_unbound_blocklist_legacy" in caplog.text
+        assert any(
+            "[enable_unbound_blocklist] save" in record.message
+            and "/api/unbound/settings/set" in record.message
+            for record in caplog.records
+        )
     finally:
         await client.async_close()
 
@@ -1298,6 +1302,98 @@ async def test_wireguard_cancelled_dispatched_toggle_retains_ack_and_lock(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("vpn_type", "collection", "toggle", "apply", "apply_ok"),
+    [
+        pytest.param(
+            "openvpn",
+            "instances",
+            "/api/openvpn/instances/toggle/uuid/1",
+            "/api/openvpn/service/reconfigure",
+            {"result": "ok"},
+            id="openvpn",
+        ),
+        pytest.param(
+            "ipsec",
+            "connections",
+            "/api/ipsec/connections/toggle_connection/uuid/1",
+            "/api/ipsec/service/reconfigure",
+            {"status": "ok"},
+            id="ipsec",
+        ),
+    ],
+)
+async def test_cancelled_dispatched_vpn_save_is_applied_by_next_matching_toggle(
+    make_client: MakeClientFactory,
+    vpn_queue_tasks: VpnQueueTasks,
+    vpn_type: str,
+    collection: str,
+    toggle: str,
+    apply: str,
+    apply_ok: dict[str, object],
+) -> None:
+    """A caller cancelled after its save was dispatched waits, then re-raises.
+
+    The acknowledged save is tracked, so a later request for the same target, which
+    the Router reports as already matching, still applies the service.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
+        vpn_type (str): VPN service under test.
+        collection (str): Collection containing the instance.
+        toggle (str): Save endpoint for target ``on``.
+        apply (str): Service apply endpoint.
+        apply_ok (dict[str, object]): Confirmed apply reply.
+    """
+    client = make_client()
+    client._use_snake_case = True
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def post(path: str, *_request_args: object) -> dict[str, object]:
+        """Hold the first save until its caller has cancelled.
+
+        Args:
+            path (str): Requested endpoint.
+            *_request_args (object): Unused POST payload and caller.
+
+        Returns:
+            dict[str, object]: Router reply.
+        """
+        if path == apply:
+            return apply_ok
+        if not started.is_set():
+            started.set()
+            await release.wait()
+            return {"changed": True, "result": "Enabled"}
+        return {"changed": False, "result": "Enabled"}
+
+    client._do_post = AsyncMock(side_effect=post)
+    try:
+        cancelled = vpn_queue_tasks.start(
+            client.toggle_vpn_instance(vpn_type, collection, "uuid", "on")
+        )
+        await asyncio.wait_for(started.wait(), timeout=3)
+        cancelled.cancel()
+        await asyncio.sleep(0)
+        assert not cancelled.done()
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(cancelled, timeout=3)
+        assert [call.args[0] for call in client._do_post.await_args_list] == [toggle]
+
+        assert await client.toggle_vpn_instance(vpn_type, collection, "uuid", "on") is True
+        assert [call.args[0] for call in client._do_post.await_args_list] == [
+            toggle,
+            toggle,
+            apply,
+        ]
+    finally:
+        release.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("first_result", "retry_applies"),
     [
         pytest.param("ok", False, id="acknowledged"),
@@ -1404,7 +1500,7 @@ async def test_cancelled_queued_firewall_rule_toggle_sends_no_post(
         blocked_response,
         FakeResponse(json_payload={"status": "done"}),
     ]
-    session.post.return_value = FakeResponse(json_payload={"result": "ok", "status": "OK"})
+    session.post.return_value = FakeResponse(json_payload={"result": "Enabled", "status": "OK"})
 
     blocker = vpn_queue_tasks.start(client.upgrade_status())
     await asyncio.wait_for(blocker_started.wait(), timeout=3)
@@ -1419,6 +1515,53 @@ async def test_cancelled_queued_firewall_rule_toggle_sends_no_post(
     # This request can succeed only after the worker has passed the cancelled save.
     assert await asyncio.wait_for(client.upgrade_status(), timeout=3) == {"status": "done"}
     session.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("firmware", "item"),
+    [("25.7.7", None), ("25.7.8", "blocklist-id")],
+    ids=["legacy", "extended"],
+)
+async def test_unbound_toggle_returns_false_on_malformed_apply_response(
+    make_client: MakeClientFactory,
+    firmware: str,
+    item: str | None,
+    legacy_dnsbl_payload: dict[str, Any],
+) -> None:
+    """Return False when an HTTP 200 apply reply cannot be parsed.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        firmware (str): Firmware selecting the Unbound backend.
+        item (str | None): Extended blocklist identifier, if applicable.
+        legacy_dnsbl_payload (dict[str, Any]): Complete settings for the legacy save.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.get_host_firmware_version = AsyncMock(return_value=firmware)
+    malformed_apply = FakeResponse()
+    malformed_apply.json = AsyncMock(side_effect=json.JSONDecodeError("invalid", "<html>", 0))
+
+    base_url = "http://localhost/api/unbound"
+    apply_url = f"{base_url}/service/dnsbl"
+    get_responses: dict[str, FakeResponse] = {}
+    post_responses: dict[str, FakeResponse] = {}
+    if item is None:
+        get_responses[f"{base_url}/settings/get"] = FakeResponse(json_payload=legacy_dnsbl_payload)
+        get_responses[apply_url] = malformed_apply
+        post_responses[f"{base_url}/settings/set"] = FakeResponse(json_payload={"result": "saved"})
+    else:
+        post_responses[f"{base_url}/settings/toggle_dnsbl/{item}/1"] = FakeResponse(
+            json_payload={"result": "Enabled"}
+        )
+        post_responses[apply_url] = malformed_apply
+    session.get.side_effect = lambda url, **_: get_responses[url]
+    session.post.side_effect = lambda url, **_: post_responses[url]
+
+    assert await client.enable_unbound_blocklist(item) is False
+    apply_request = session.get if item is None else session.post
+    assert any(call.args[0] == apply_url for call in apply_request.call_args_list)
+    assert all(args[0] != f"{base_url}/service/restart" for args, _ in session.post.call_args_list)
 
 
 @pytest.mark.asyncio

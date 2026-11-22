@@ -3,9 +3,12 @@
 import asyncio
 from collections.abc import AsyncGenerator, MutableMapping
 from datetime import tzinfo
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import aiohttp
+
+if TYPE_CHECKING:
+    from .client_toggle import ToggleSpec, ToggleTarget
 
 
 class AiopnsenseClientProtocol(Protocol):
@@ -13,9 +16,6 @@ class AiopnsenseClientProtocol(Protocol):
 
     _firmware_install_active: bool
     _firmware_action_lock: asyncio.Lock
-    _vpn_service_locks: dict[str, asyncio.Lock]
-    _vpn_pending_apply: dict[str, set[tuple[str, str]]]
-    _vpn_shutdown_generation: int
     _active_close_count: int
     _session: aiohttp.ClientSession
     _url: str
@@ -85,3 +85,8 @@ class AiopnsenseClientProtocol(Protocol):
     async def _is_post_endpoint_available(
         self, path: str, force_refresh: bool = False
     ) -> bool | None: ...
+
+    @staticmethod
+    def _parse_toggle_target(toggle_on_off: object) -> ToggleTarget: ...
+
+    async def _run_toggle(self, spec: ToggleSpec) -> bool: ...
