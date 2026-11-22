@@ -8,10 +8,8 @@ import pytest
 from aiopnsense._dhcp_leases import (
     DNSMASQ_LEASE_BACKEND,
     ISC_LEASE_BACKEND,
-    copy_identity_fields,
     has_authoritative_reservation_metadata,
     is_live_row,
-    is_reserved_lease,
     kea_lease_backend,
     normalize_leases,
 )
@@ -200,6 +198,11 @@ OVERFLOW_EPOCH = 10**40
         ),
         pytest.param(_dnsmasq_row(is_reserved=[]), _dnsmasq_lease(), id="empty-reserved-list"),
         pytest.param(
+            _dnsmasq_row(is_reserved=1), _dnsmasq_lease(type="static"), id="reserved-integer"
+        ),
+        pytest.param(_dnsmasq_row(is_reserved=0), _dnsmasq_lease(), id="unreserved-integer"),
+        pytest.param(_dnsmasq_row(is_reserved=None), _dnsmasq_lease(), id="missing-reserved-flag"),
+        pytest.param(
             _dnsmasq_row(expire=int(FUTURE.timestamp())),
             _dnsmasq_lease(expires=FUTURE),
             id="future-epoch",
@@ -226,41 +229,6 @@ def test_normalize_dnsmasq_leases(row: dict[str, Any], expected: dict[str, Any] 
     leases = normalize_leases([row], DNSMASQ_LEASE_BACKEND, now=NOW)
 
     assert leases == ([] if expected is None else [expected])
-
-
-@pytest.mark.parametrize(
-    ("raw_reserved", "expected"),
-    [
-        ("1", True),
-        ("0", False),
-        (["hwaddr"], True),
-        ([], False),
-        (1, True),
-        (0, False),
-        (None, False),
-    ],
-)
-def test_is_reserved_lease_handles_legacy_and_list_flags(
-    raw_reserved: object, expected: bool
-) -> None:
-    """Reserved lease detection supports legacy and list value shapes.
-
-    Args:
-        raw_reserved (object): Raw ``is_reserved`` value from an API payload.
-        expected (bool): Expected reserved/static detection result.
-    """
-    assert is_reserved_lease(raw_reserved) is expected
-
-
-def test_copy_identity_fields_sets_reserved_by_only_for_non_empty_list() -> None:
-    """``reserved_by`` is copied only for non-empty reservation lists."""
-    lease: dict[str, Any] = {}
-
-    copy_identity_fields(lease, {"is_reserved": []})
-    assert "reserved_by" not in lease
-
-    copy_identity_fields(lease, {"is_reserved": ["host1"]})
-    assert lease["reserved_by"] == ["host1"]
 
 
 RESERVATIONS = {"aa:bb:cc:dd:ee:01": "192.0.2.1"}

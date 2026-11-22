@@ -99,7 +99,7 @@ def _clean_mac(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def is_reserved_lease(raw_reserved: object) -> bool:
+def _is_reserved_lease(raw_reserved: object) -> bool:
     """Return whether an ``is_reserved`` row value marks a reserved (static) lease.
 
     Args:
@@ -115,7 +115,7 @@ def is_reserved_lease(raw_reserved: object) -> bool:
     return bool(raw_reserved)
 
 
-def copy_identity_fields(lease: dict[str, Any], row: Mapping[str, Any]) -> None:
+def _copy_identity_fields(lease: dict[str, Any], row: Mapping[str, Any]) -> None:
     """Copy optional DHCP client identity metadata to a normalized lease.
 
     Args:
@@ -129,7 +129,7 @@ def copy_identity_fields(lease: dict[str, Any], row: Mapping[str, Any]) -> None:
         lease["reserved_by"] = list(raw_reserved)
 
 
-def epoch_to_datetime(expiration: int | None) -> datetime | None:
+def _epoch_to_datetime(expiration: int | None) -> datetime | None:
     """Convert a DHCP expiration timestamp without propagating platform overflow.
 
     Args:
@@ -202,7 +202,7 @@ def normalize_leases(
         if backend.copy_duid and "duid" in row:
             lease["duid"] = row["duid"]
         if backend.copy_identity_fields:
-            copy_identity_fields(lease, row)
+            _copy_identity_fields(lease, row)
         lease["expires"] = expires
         leases.append(lease)
     return leases
@@ -234,7 +234,7 @@ def is_live_row(
     )
 
 
-def read_epoch_expiry(
+def _read_epoch_expiry(
     row: Mapping[str, Any], now: datetime, router_tz: tzinfo | None
 ) -> tuple[bool, object]:
     """Read an ``expire`` value expressed in epoch seconds.
@@ -253,7 +253,7 @@ def read_epoch_expiry(
     expiration = try_to_int(raw_expire)
     if not expiration:
         return True, raw_expire
-    expiration_datetime = epoch_to_datetime(expiration)
+    expiration_datetime = _epoch_to_datetime(expiration)
     if expiration_datetime is None:
         return True, raw_expire
     return expiration_datetime >= now, expiration_datetime
@@ -329,7 +329,7 @@ def _read_dnsmasq_type(row: Mapping[str, Any]) -> object:
     Returns:
         object: The lease type derived from ``is_reserved``.
     """
-    return "static" if is_reserved_lease(row.get("is_reserved")) else "dynamic"
+    return "static" if _is_reserved_lease(row.get("is_reserved")) else "dynamic"
 
 
 def has_authoritative_reservation_metadata(raw_reserved: object) -> bool:
@@ -389,7 +389,7 @@ def kea_lease_backend(
         """
         raw_reserved = row.get("is_reserved")
         if has_authoritative_reservation_metadata(raw_reserved):
-            return "static" if is_reserved_lease(raw_reserved) else "dynamic"
+            return "static" if _is_reserved_lease(raw_reserved) else "dynamic"
         if reservations is None:
             return "unknown"
         hwaddr = row.get("hwaddr")
@@ -402,7 +402,7 @@ def kea_lease_backend(
         if_name_keys=("if_name",),
         mac_key="hwaddr",
         lease_type=lease_type,
-        read_expiry=read_epoch_expiry,
+        read_expiry=_read_epoch_expiry,
         copy_identity_fields=True,
         copy_duid=True,
         strip_hostname_dots=True,
@@ -423,7 +423,7 @@ DNSMASQ_LEASE_BACKEND = LeaseBackend(
     if_name_keys=("if_name", "if"),
     mac_key="hwaddr",
     lease_type=_read_dnsmasq_type,
-    read_expiry=read_epoch_expiry,
+    read_expiry=_read_epoch_expiry,
     copy_identity_fields=True,
     placeholder_hostnames=frozenset({"*"}),
 )
