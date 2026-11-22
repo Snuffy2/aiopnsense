@@ -1250,7 +1250,7 @@ async def _call_ladder_path(client: Any, path_name: str) -> Any:
         return await client._do_get_from_stream("/api/x", caller="t")
     if path_name == "stream_events":
         return [event async for event in client._stream_json_events("/api/x")]
-    return await client._is_get_endpoint_available("/api/x")
+    return await client._is_get_endpoint_available("/api/x", force_refresh=True)
 
 
 @pytest.mark.parametrize("path_name", list(_LADDER_PATHS))
@@ -1321,5 +1321,84 @@ async def test_request_failure_ladder_is_identical_across_request_paths(
         expected_level = probe_level if path_name == "probe" else logging.ERROR
         assert failures
         assert failures[0].levelno == expected_level
+    finally:
+        await client.async_close()
+
+
+_SUCCESS_RESPONSES: dict[str, Callable[[], FakeResponse]] = {
+    "get_json": lambda: FakeResponse(json_payload={"ok": True}),
+    "get_text": lambda: FakeResponse(text_payload="ok"),
+    "post": lambda: FakeResponse(json_payload={"ok": True}),
+    "stream_once": lambda: FakeResponse(stream_chunks=[b'data: {"a": 1}\n\ndata: {"a": 2}\n\n']),
+    "stream_events": lambda: FakeResponse(stream_chunks=[b'data: {"a": 1}\n\n']),
+    "probe": lambda: FakeResponse(),
+}
+"""Request path name mapped to a factory for a successful response."""
+
+_OUTAGE_PHASES = {
+    "get_json": "request",
+    "get_text": "request",
+    "post": "request",
+    "stream_once": "stream",
+    "stream_events": "stream",
+    "probe": "probe",
+}
+"""Request path name mapped to the phase word used in its recovery log line."""
+
+
+@pytest.mark.parametrize("path_name", ["get_json", "get_text", "post", "probe"])
+@pytest.mark.asyncio
+async def test_repeated_request_failures_log_once_per_outage_until_recovery(
+    path_name: str,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A repeated failure stays quiet, and a recovered path reports the next outage again.
+
+    Args:
+        path_name (str): Key of ``_LADDER_PATHS`` selecting the request path.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    session_method, _empty_value = _LADDER_PATHS[path_name]
+
+    def failure() -> FakeResponse:
+        """Build a failed server response.
+
+        Returns:
+            FakeResponse: Response with a 500 status.
+        """
+        return FakeResponse(status=500, reason="Failure", ok=False, stream_chunks=[b""])
+
+    session = MagicMock()
+    setattr(
+        session,
+        session_method,
+        MagicMock(
+            side_effect=[
+                failure(),
+                failure(),
+                failure(),
+                _SUCCESS_RESPONSES[path_name](),
+                failure(),
+            ]
+        ),
+    )
+    client = make_client(session=session)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            for _attempt in range(3):
+                await _call_ladder_path(client, path_name)
+            assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
+
+            caplog.clear()
+            await _call_ladder_path(client, path_name)
+            recovered = [r for r in caplog.records if " recovered for " in r.getMessage()]
+            assert len(recovered) == 1
+            assert f" {_OUTAGE_PHASES[path_name]} recovered for " in recovered[0].getMessage()
+
+            caplog.clear()
+            await _call_ladder_path(client, path_name)
+            assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
     finally:
         await client.async_close()
