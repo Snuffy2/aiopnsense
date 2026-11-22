@@ -5,6 +5,24 @@ Each DHCP backend (ISC DHCP, dnsmasq and Kea) describes how its rows differ in a
 fetched and checked to be a list, so the row filtering, hostname cleanup, expiry conversion and
 expired-row removal live in one place. Fetching, endpoint selection and timezone lookup stay
 with the callers.
+
+The backends differ on purpose in these ways. Keep them unless a change says otherwise.
+
+- Row kept: Kea needs ``state`` matching ``0`` (and a ``hwaddr`` for DHCPv4); dnsmasq keeps
+  every mapping row; ISC needs ``state`` exactly ``active`` and a ``mac``.
+- Interface name: Kea uses ``if_name``; dnsmasq uses ``if_name`` and falls back to ``if``; ISC
+  uses ``if``.
+- Hostname: Kea strips leading and trailing dots, so a hostname of ``.`` is reported as an
+  empty string, not None; dnsmasq reports ``*`` as None and keeps dots; ISC changes nothing.
+- Type: Kea uses authoritative ``is_reserved`` metadata, then the reservation map, then
+  ``unknown`` when there is no reservation data; dnsmasq derives it from ``is_reserved``; ISC
+  passes the row's ``type`` through.
+- Identity fields: Kea and dnsmasq copy ``client_id`` and ``reserved_by``; Kea also copies
+  ``duid``; ISC copies none of them.
+- Expiry: Kea and dnsmasq read epoch seconds from ``expire``, and keep a lease whose value is
+  missing, not an integer or outside the platform datetime range, reporting the raw value; ISC
+  reads ``ends`` in the Router timezone and drops a row whose ``ends`` cannot be parsed.
+- MAC: a value that is not a non-empty string is reported as None.
 """
 
 from collections.abc import Callable, Iterable, Mapping, MutableMapping
