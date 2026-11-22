@@ -5,7 +5,7 @@ Standards for code in `aiopnsense/` and `tests/`. Rules that `ruff`, `mypy` or `
 ## Language and tooling
 
 - Target Python 3.14 or newer. PEP 695 type parameters and PEP 758 grouped exception handlers are allowed.
-- Run `pytest` and `prek` through the repository virtualenv (`./.venv/bin/...`), never the system Python. A worktree without dependency changes may use the main checkout's virtualenv.
+- Run Python, `pytest`, and `prek` through the repository virtualenv (`./.venv/bin/...`). A worktree without dependency changes may use the main checkout's virtualenv. Follow the [worktree import guidance](AGENTS.md#local-tooling-note) for ad hoc Python commands.
 - Run the full test suite by default. When running a subset, say why.
 
 ## Structure

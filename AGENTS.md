@@ -9,13 +9,12 @@
 - Be concise and explain coding steps briefly when making code changes; include code snippets and tests where relevant.
 - For non-trivial edits, provide a short plan. For small, low-risk edits, implement and include a one-line summary.
 - Focus on a single conceptual change at a time when public APIs or multiple modules are affected.
-- Maintain project style and Python 3.14+ compatibility.
 - If deviating from these guidelines, explicitly state which guideline is deviated from and why.
 - Any changes that require changes to both hass-opnsense and aiopnsense require coordinated branches in both repositories.
 
 ## Agent permissions and venv policy
 
-- Agents may create and use a repository-local venv at `./.venv`. Use `./.venv/bin/python`, `./.venv/bin/pytest`, and `./.venv/bin/prek` for local commands unless using the main checkout venv for a git worktree with no dependency changes. With the main checkout venv, run ad hoc Python (`python -c`, scripts) from the worktree root: from any other directory `import aiopnsense` resolves to the main checkout. `pytest` always imports the worktree's package.
+- Agents may create a repository-local venv at `./.venv`.
 - The project uses `pyproject.toml` dependency groups (`lint`, `pytest`, `dev`). Installing packages from repo manifests into `./.venv` is allowed for running tests or local tooling after approval; avoid unrelated network operations without explicit consent.
 
 ## Folder structure (repo-specific)
@@ -29,20 +28,12 @@
 
 ## Coding standards
 
-- The full standards are in `CODING_STANDARDS.md`; the rules below are the core subset.
-- Add typing annotations to all functions and classes (including return types).
-- Add or update docstrings for all files, classes and methods, including private methods and nested methods. Method docstrings must follow the Google Style.
-- For protocol-only typing contract files such as `aiopnsense/_typing.py`, keep protocol members as typed signatures with `...`; do not add per-method docstrings or `abstractmethod` boilerplate.
-- Preserve existing comments and keep imports at the top of files.
-- Do not use `assert` or `cast` in main code.
-- Follow existing repository style; run `prek`.
-- Python 3.14 syntax is allowed, including PEP 695 type parameters and PEP 758 grouped exception handlers.
+- Before editing code or tests, read [CODING_STANDARDS.md](CODING_STANDARDS.md) for Python compatibility, typing, docstrings, and validation.
+- When changing a public method's return or exception behavior, trace its callers in both downstreams named in the [README](README.md#origin-and-purpose), hass-opnsense and Home Assistant Core. Identify which client instances reach the method and their effective `throw_errors` modes.
 
 ## Local tooling note
 
-- Use the repo's `prek` and `pytest` commands through the applicable repo venv path (`./.venv` here, or the main checkout venv for a worktree with no dependency changes). Do not use system Python.
 - The main checkout's venv installs `aiopnsense` editable from the main checkout. `pytest` run through it from a worktree imports the worktree's code, but ad-hoc scripts and probes (`python -c`, scratch scripts) import the main checkout. Run them with `PYTHONPATH` set to the worktree root and check `aiopnsense.__file__` before trusting the result.
-- By default, run the full pytest suite. If running targeted tests, explain why.
 - After changing docs, public API docstrings or `docs/source/api`, run `prek run --all-files --hook-stage manual docs-build` (without `--all-files` prek stashes unstaged edits and builds only the staged tree). It builds the docs with warnings as errors, as Read the Docs does, and installs the `docs` extra from `uv.lock` on first use.
 
 ## Error handling & logging
@@ -53,10 +44,7 @@
 
 ## Testing
 
-- Use `pytest`.
-- Add typed, well-documented tests in `tests/` and use fixtures in `conftest.py`.
-- Use `importlib` only in workflow script or other script/module-loading tests; minimize `cast` and `Any` unless the test boundary requires them.
-- Parameterize tests when appropriate; avoid duplicate test functions.
+- Use `importlib` only in workflow script or other script/module-loading tests.
 
 ## PR & branch behavior
 
