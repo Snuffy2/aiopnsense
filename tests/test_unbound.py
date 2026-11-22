@@ -471,6 +471,48 @@ async def test_enable_disable_unbound_blocklist_legacy_for_older_firmware(
 
 
 @pytest.mark.asyncio
+async def test_legacy_blocklist_completion_log_omits_configuration_and_response_data(
+    make_client: ClientType,
+    caplog: pytest.LogCaptureFixture,
+    legacy_dnsbl_payload: dict[str, Any],
+) -> None:
+    """Legacy completion logs should report outcome without logging API data.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Captured logs for the public operation.
+        legacy_dnsbl_payload (dict[str, Any]): Legacy DNSBL settings returned before the save.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client.get_host_firmware_version = AsyncMock(return_value="25.7.7")
+        payload = deepcopy(legacy_dnsbl_payload)
+        payload["unbound"]["dnsbl"]["address"] = "CONFIG_MARKER"
+        client._safe_dict_get = AsyncMock(return_value=payload)
+        client._post = AsyncMock(
+            side_effect=[
+                {"result": "saved", "detail": "SAVE_RESPONSE_MARKER"},
+                {"response": "OK", "detail": "RESTART_RESPONSE_MARKER"},
+            ]
+        )
+        client._get = AsyncMock(
+            return_value={"status": "OK applied", "detail": "APPLY_RESPONSE_MARKER"}
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            result = await client.enable_unbound_blocklist()
+
+        assert result is True
+        assert "CONFIG_MARKER" not in caplog.text
+        assert "SAVE_RESPONSE_MARKER" not in caplog.text
+        assert "APPLY_RESPONSE_MARKER" not in caplog.text
+        assert "RESTART_RESPONSE_MARKER" not in caplog.text
+        assert "result: success" in caplog.text
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method_name",
     ["enable_unbound_blocklist", "disable_unbound_blocklist"],

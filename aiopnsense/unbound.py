@@ -141,22 +141,24 @@ class UnboundMixin(AiopnsenseClientProtocol):
         restart_resp = await _attempt(
             self,
             lambda: self._post(UNBOUND_SERVICE_RESTART_ENDPOINT),
-            empty=None,
+            empty=_LEGACY_REQUEST_FAILED,
             name=f"legacy unbound blocklist restart ({'On' if set_state else 'Off'})",
         )
 
-        _LOGGER.debug(
-            "[_set_unbound_blocklist_legacy] set_state: %s, payload: %s, response: %s, dnsbl_resp: %s, restart_resp: %s",
-            "On" if set_state else "Off",
-            payload,
-            response,
-            dnsbl_resp,
-            restart_resp,
-        )
-        return (
+        if restart_resp is _LEGACY_REQUEST_FAILED:
+            # The failed request was already logged.
+            return False
+
+        restart_succeeded = (
             isinstance(restart_resp, MutableMapping)
             and restart_resp.get("response", "failed") == "OK"
         )
+        _LOGGER.debug(
+            "[_set_unbound_blocklist_legacy] set_state: %s, result: %s",
+            "On" if set_state else "Off",
+            "success" if restart_succeeded else "failure",
+        )
+        return restart_succeeded
 
     @_log_errors
     async def get_unbound_blocklist(self) -> dict[str, Any]:
