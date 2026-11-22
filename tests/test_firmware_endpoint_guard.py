@@ -4,13 +4,15 @@ The guard is a static AST check that reads each module on its own. It resolves s
 constants, f-strings, concatenation and imports that rename a guarded constant, then
 reports each expression that builds a firmware path the rule does not allow. Status reads
 are allowed only through the GET helpers, the check path only in the one dispatch in
-``FirmwareMixin._request_firmware_check``, and the action prefix only in
-``FirmwareMixin.install_firmware`` and ``FirmwareMixin.upgrade_firmware``.
+``FirmwareMixin._request_firmware_check``, and the action prefix and the ``update`` and
+``upgrade`` paths only in ``FirmwareMixin.install_firmware`` and
+``FirmwareMixin.upgrade_firmware``.
 
-Known limits: it does not follow values held in local variables, class attributes or
-``+=``. Any use of the action prefix outside the two install methods still fails,
-including the assignment that copies it into a local. It cannot see paths built with
-``str.format``, ``%`` or ``join``.
+Known limits: it does not follow values held in local variables, class attributes, ``+=``
+or values imported from another module, other than the guarded constants. It does not
+cover other literal firmware actions. Any use of the action prefix outside the two install
+methods still fails, including the assignment that copies it into a local. It cannot see
+paths built with ``str.format``, ``%`` or ``join``.
 """
 
 import ast
@@ -48,9 +50,11 @@ GET_HELPERS = frozenset(
         "_safe_list_get",
     }
 )
-# Matches a named endpoint, or the bare prefix and the prefix before an unresolved part.
+# Matches a named endpoint, the update or upgrade action (no endpoint group), or the bare
+# prefix and the prefix before an unresolved part.
 GUARDED_PATH = re.compile(
-    r"/api/core/firmware/(?:(?P<endpoint>info|status|check)(?![\w-])|(?=\0|\Z))",
+    r"/api/core/firmware/"
+    r"(?:(?P<endpoint>info|status|check)(?![\w-])|(?:update|upgrade)(?![\w-])|(?=\0|\Z))",
     re.IGNORECASE,
 )
 UNKNOWN = "\0"
@@ -398,6 +402,7 @@ def test_production_code_follows_firmware_endpoint_rule() -> None:
         ("await self._firmware_request(FIRMWARE_STATUS_ENDPOINT, post=True)", "status"),
         ("await self._firmware_request(FIRMWARE_STATUS_ENDPOINT, post=value)", "status"),
         ("await self._safe_dict_get(path=FIRMWARE_STATUS_ENDPOINT, post=True)", "status"),
+        ("await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT, **value)", "status"),
         ("await self._session.post(FIRMWARE_STATUS_ENDPOINT)", "status"),
         ('await self._post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}status")', "status"),
         ("path = FIRMWARE_STATUS_ENDPOINT", "status"),
@@ -420,6 +425,8 @@ def test_production_code_follows_firmware_endpoint_rule() -> None:
         ),
         ("base = FIRMWARE_ACTION_ENDPOINT_PREFIX", "action"),
         ('await self._do_post("/api/core/firmware/" + value)', "action"),
+        ('await self._do_post("/api/core/firmware/update")', "action"),
+        ('await self._do_post("/api/core/firmware/upgrade")', "action"),
     ],
 )
 def test_guard_rejects_forbidden_firmware_requests(statement: str, endpoint: str) -> None:
@@ -478,6 +485,15 @@ async def request(client):
         ),
         (_dispatching_module("FIRMWARE_CHECK_ENDPOINT", "from .firmware import *"), "check"),
         ('FIRMWARE_ACTION_ENDPOINT_PREFIX = "/api/core/firmware/"\n', "action"),
+        (_dispatching_module('"/api/core/firmware/update"'), "action"),
+        (
+            """
+class FirmwareMixin:
+    async def install_firmware(self, value):
+        await self._do_post("/api/core/firmware/update")
+""",
+            "action",
+        ),
     ],
     ids=[
         "attribute",
@@ -487,6 +503,8 @@ async def request(client):
         "function-local",
         "star",
         "prefix-literal",
+        "update-literal",
+        "install-method-outside-firmware",
     ],
 )
 def test_guard_rejects_firmware_path_from_another_module(other: str, endpoint: str) -> None:
@@ -524,7 +542,10 @@ async def request(client):
     ids=["unguarded-final-value", "guarded-final-value"],
 )
 def test_module_constant_is_replayed_in_source_order(other: str, expected: list[str]) -> None:
-    """Resolve each use of a self-extending constant against the value before it.
+    """Resolve each assignment against earlier values, and uses in function bodies against the final value.
+
+    Assignments resolve in source order, so ``BASE = BASE + "atus"`` sees the value before it.
+    Uses inside function bodies resolve to the module's final value.
 
     Args:
         other (str): Source of a second module that rebuilds a constant from its own value.
@@ -534,24 +555,33 @@ def test_module_constant_is_replayed_in_source_order(other: str, expected: list[
 
 
 @pytest.mark.parametrize(
-    ("dispatch", "found"),
+    ("dispatch", "found", "other_violations"),
     [
-        ("pass", 0),
-        (f"{CHECK_DISPATCH}\n        {CHECK_DISPATCH}", 2),
+        ("pass", 0, []),
+        (f"{CHECK_DISPATCH}\n        {CHECK_DISPATCH}", 2, []),
+        ('await self._do_post("/api/core/firmware/running")', 0, []),
+        (
+            "await self._post(FIRMWARE_CHECK_ENDPOINT)",
+            0,
+            ["aiopnsense/firmware.py:9: /api/core/firmware/check"],
+        ),
     ],
-    ids=["removed", "duplicated"],
+    ids=["removed", "duplicated", "other-path", "other-method"],
 )
-def test_guard_requires_exactly_one_check_dispatch(dispatch: str, found: int) -> None:
-    """Report a firmware module whose check dispatch is removed or duplicated.
+def test_guard_requires_exactly_one_check_dispatch(
+    dispatch: str, found: int, other_violations: list[str]
+) -> None:
+    """Report a firmware module whose check dispatch is removed, duplicated or replaced.
 
     Args:
         dispatch (str): Replacement body for ``_request_firmware_check``.
         found (int): Number of check dispatches the report must state.
+        other_violations (list[str]): Further violations the module must report, in order.
     """
     violations = _source_violations({FIRMWARE_MODULE: _firmware_source(dispatch=dispatch)})
 
     message = "FirmwareMixin._request_firmware_check must contain exactly one check dispatch"
-    assert violations == [f"aiopnsense/firmware.py: {message}, found {found}"]
+    assert violations == [f"aiopnsense/firmware.py: {message}, found {found}", *other_violations]
 
 
 def test_guard_allows_annotated_endpoint_definitions() -> None:
@@ -563,14 +593,21 @@ def test_guard_allows_annotated_endpoint_definitions() -> None:
     assert _source_violations({FIRMWARE_MODULE: source}) == []
 
 
-@pytest.mark.parametrize("method", ["install_firmware", "upgrade_firmware"])
-def test_guard_allows_action_prefix_in_install_methods(method: str) -> None:
-    """Accept the action prefix in the two install methods that validate ``type``.
+@pytest.mark.parametrize(
+    ("method", "statement"),
+    [
+        ("install_firmware", 'await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}")'),
+        ("upgrade_firmware", 'await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}")'),
+        ("install_firmware", 'await self._do_post("/api/core/firmware/update")'),
+    ],
+)
+def test_guard_allows_action_prefix_in_install_methods(method: str, statement: str) -> None:
+    """Accept the action prefix and the update path in the two install methods.
 
     Args:
         method (str): Install method that dispatches the action.
+        statement (str): Statement added to the install method.
     """
-    statement = 'await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}")'
     source = _firmware_source(statement, method=method)
 
     assert _source_violations({FIRMWARE_MODULE: source}) == []
@@ -586,6 +623,7 @@ def test_guard_allows_action_prefix_in_install_methods(method: str) -> None:
         "await self._firmware_request(FIRMWARE_STATUS_ENDPOINT, post=False)",
         "self._endpoint_availability.get(FIRMWARE_STATUS_ENDPOINT)",
         'await self._safe_dict_get("/api/core/firmware/upgradestatus")',
+        'await self._do_post("/api/core/firmware/upgradestatus")',
         'await self._safe_dict_post(f"{FIRMWARE_CHANGELOG_ENDPOINT_PREFIX}{value}")',
         '"""Never call /api/core/firmware/info."""',
     ],
