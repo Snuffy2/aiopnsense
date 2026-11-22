@@ -392,9 +392,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 result when discovery is disabled, or None when the endpoint is unavailable
                 or the response is incomplete or malformed.
         """
-        if not await self._is_post_endpoint_available(HOST_OBSERVATIONS_ENDPOINT):
+        outcome = await self._fetch_post_endpoint_outcome(
+            HOST_OBSERVATIONS_ENDPOINT, {"rowCount": -1}
+        )
+        if not outcome.is_data:
             return None
-        payload = await self._safe_dict_post(HOST_OBSERVATIONS_ENDPOINT, {"rowCount": -1})
+        payload = outcome.mapping()
         rows = payload.get("rows")
         if not isinstance(rows, list) or not rows:
             return None

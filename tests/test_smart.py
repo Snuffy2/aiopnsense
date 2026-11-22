@@ -1,268 +1,162 @@
 """Tests for `aiopnsense.smart`."""
 
 from collections.abc import Callable
-from unittest.mock import AsyncMock
+import logging
+from typing import Any
 
 import pytest
 
-from aiopnsense import OPNsenseClient
-from tests.conftest import FakeResponse, make_mock_session_client
+from aiopnsense import OPNsenseClient, OPNsenseConnectionError, OPNsensePrivilegeMissing
+from tests.conftest import install_fake_router, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
+SMART_SERVICE_LIST_PATH = "/api/smart/service/list"
+SMART_SERVICE_DETAIL_PATH = "/api/smart/service/list/1"
+SMART_SERVICE_INFO_PATH = "/api/smart/service/info"
+SMART_DEVICE = {"ident": "nvme0", "device": "nvme0", "status": "PASSED"}
+SMART_INFO_OUTPUT = {"smart_status": "PASSED", "temperature": 35}
+SMART_INFO_BODY = {"device": "nvme0", "type": "a", "json": True}
+PERMANENT_FAILURES = [
+    pytest.param(404, id="not-found"),
+    pytest.param(403, id="forbidden"),
+    pytest.param(500, id="server-error"),
+    pytest.param(TimeoutError("timed out"), id="timeout"),
+]
+
+
+def _endpoint(operation: str) -> str:
+    """Return the data endpoint a SMART read posts to.
+
+    Args:
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+
+    Returns:
+        str: API path of the POST that carries the read.
+    """
+    return SMART_SERVICE_DETAIL_PATH if operation == "list" else SMART_SERVICE_INFO_PATH
+
+
+def _payload(operation: str) -> Any:
+    """Return the Router response for a successful SMART read.
+
+    Args:
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+
+    Returns:
+        Any: JSON body the Router returns for the read.
+    """
+    return {"devices": [SMART_DEVICE]} if operation == "list" else {"output": SMART_INFO_OUTPUT}
+
+
+def _result(operation: str) -> Any:
+    """Return the public result of a successful SMART read.
+
+    Args:
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+
+    Returns:
+        Any: Value the public method returns for a present endpoint.
+    """
+    return [SMART_DEVICE] if operation == "list" else SMART_INFO_OUTPUT
+
+
+def _empty(operation: str) -> Any:
+    """Return the public result of a SMART read whose plugin is unavailable.
+
+    Args:
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+
+    Returns:
+        Any: Empty list for the device list, empty mapping for device info.
+    """
+    return [] if operation == "list" else {}
+
+
+async def _read(client: OPNsenseClient, operation: str) -> Any:
+    """Run one SMART read through its public client method.
+
+    Args:
+        client (OPNsenseClient): Client under test.
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+
+    Returns:
+        Any: Value returned by the public method.
+    """
+    if operation == "list":
+        return await client.get_smart()
+    return await client.get_smart_info("nvme0")
 
 
 @pytest.mark.asyncio
-async def test_get_smart_returns_device_rows(make_client: ClientType) -> None:
-    """SMART list queries should return detailed device rows unchanged.
+async def test_get_smart_returns_device_rows_from_one_post(make_client: ClientType) -> None:
+    """SMART list queries should return detailed device rows from a single POST.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates SMART list payload handling.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(
+        client, session, routes={("POST", SMART_SERVICE_DETAIL_PATH): _payload("list")}
+    )
     try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(
-            return_value={
-                "devices": [
-                    {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
-                    {"ident": "ada0", "device": "ada0", "status": "FAILED"},
-                ]
-            }
-        )
-
-        smart_devices = await client.get_smart()
-
-        assert smart_devices == [
-            {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
-            {"ident": "ada0", "device": "ada0", "status": "FAILED"},
-        ]
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_smart_skips_devices_with_blank_ident(make_client: ClientType) -> None:
-    """SMART list queries should skip device rows without an identifier.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates filtering of blank SMART identifiers.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(
-            return_value={
-                "devices": [
-                    {"ident": "", "device": "nvme0", "status": "PASSED"},
-                    {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
-                ]
-            }
-        )
-
-        smart_devices = await client.get_smart()
-
-        assert smart_devices == [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_smart_skips_non_mapping_rows(
-    make_client: ClientType,
-) -> None:
-    """SMART list queries should skip non-mapping device rows.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    Returns:
-        None: This test validates handling for non-mapping rows.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(
-            return_value={
-                "devices": [
-                    "unexpected-string-row",
-                    {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
-                ]
-            }
-        )
-
-        smart_devices = await client.get_smart()
-
-        assert smart_devices == [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_smart_returns_empty_list_for_non_list_payload(make_client: ClientType) -> None:
-    """SMART list queries should fail closed when the payload shape is wrong.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates fail-closed SMART list payload handling.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(return_value={"devices": "ignored"})
-
-        smart_devices = await client.get_smart()
-
-        assert smart_devices == []
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
+        assert await client.get_smart() == [SMART_DEVICE]
+        assert router.count() == 1
+        assert router.count("POST", SMART_SERVICE_DETAIL_PATH) == 1
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("operation", "endpoint", "expected"),
+    ("payload", "expected"),
     [
-        ("list", "/api/smart/service/list", []),
-        ("info", "/api/smart/service/info", {}),
+        pytest.param(
+            {"devices": [{"ident": "", "device": "nvme0", "status": "PASSED"}, SMART_DEVICE]},
+            [SMART_DEVICE],
+            id="skips-blank-ident",
+        ),
+        pytest.param(
+            {"devices": ["unexpected-string-row", SMART_DEVICE]},
+            [SMART_DEVICE],
+            id="skips-non-mapping-rows",
+        ),
+        pytest.param({"devices": "ignored"}, [], id="non-list-devices"),
+        pytest.param(["not", "a", "mapping"], [], id="non-mapping-payload"),
     ],
 )
-async def test_smart_fails_closed_when_endpoint_is_unavailable(
-    make_client: ClientType,
-    operation: str,
-    endpoint: str,
-    expected: object,
+async def test_get_smart_discards_malformed_device_rows(
+    make_client: ClientType, payload: Any, expected: list[dict[str, Any]]
 ) -> None:
-    """SMART POST operations should fail closed when endpoint availability checks fail.
+    """SMART list queries should keep valid device rows and fail closed on a wrong shape.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        operation (str): SMART operation under test.
-        endpoint (str): Expected endpoint for availability check.
-        expected (object): Expected fail-closed payload.
-
-    Returns:
-        None: This test validates fail-closed behavior for SMART POST operations.
+        payload (Any): Response the Router returns for the device list.
+        expected (list[dict[str, Any]]): Device rows the public method should return.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, session = make_mock_session_client(make_client)
+    install_fake_router(client, session, routes={("POST", SMART_SERVICE_DETAIL_PATH): payload})
     try:
-        client._is_post_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_post = AsyncMock(return_value={})
-
-        if operation == "list":
-            got = await client.get_smart()
-        else:
-            got = await client.get_smart_info("nvme0")
-
-        assert got == expected
-        client._is_post_endpoint_available.assert_awaited_once_with(endpoint)
-        client._safe_dict_post.assert_not_awaited()
+        assert await client.get_smart() == expected
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("operation", "response", "expected", "preflight_endpoint", "post_args"),
-    [
-        pytest.param(
-            "list",
-            {"devices": [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]},
-            [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}],
-            "/api/smart/service/list",
-            ("/api/smart/service/list/1",),
-            id="list",
-        ),
-        pytest.param(
-            "info",
-            {"output": {"smart_status": "PASSED"}},
-            {"smart_status": "PASSED"},
-            "/api/smart/service/info",
-            ("/api/smart/service/info", {"device": "nvme0", "type": "a", "json": True}),
-            id="info",
-        ),
-    ],
-)
-async def test_smart_does_not_probe_post_only_endpoint(
-    make_client: ClientType,
-    operation: str,
-    response: dict[str, object],
-    expected: object,
-    preflight_endpoint: str,
-    post_args: tuple[object, ...],
-) -> None:
-    """SMART operations should not use GET endpoint probes for POST-only APIs.
+async def test_get_smart_info_posts_device_and_returns_output(make_client: ClientType) -> None:
+    """SMART info queries should post the device selector and return the decoded output.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        operation (str): SMART operation under test.
-        response (dict[str, object]): Mocked response from the POST request.
-        expected (object): Expected result from the SMART operation.
-        preflight_endpoint (str): Expected endpoint for the POST availability check.
-        post_args (tuple[object, ...]): Expected arguments for the SMART POST request.
-
-    Returns:
-        None: This test validates that SMART POST requests do not depend on GET probes.
     """
-    client, _session = make_mock_session_client(make_client)
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(
+        client, session, routes={("POST", SMART_SERVICE_INFO_PATH): _payload("info")}
+    )
     try:
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=AssertionError("GET probe should not run")
-        )
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(return_value=response)
-
-        if operation == "list":
-            got = await client.get_smart()
-        else:
-            got = await client.get_smart_info("nvme0")
-
-        assert got == expected
-        client._is_get_endpoint_available.assert_not_awaited()
-        client._is_post_endpoint_available.assert_awaited_once_with(preflight_endpoint)
-        client._safe_dict_post.assert_awaited_once_with(*post_args)
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_smart_info_returns_json_output(make_client: ClientType) -> None:
-    """SMART info queries should request JSON output and return the decoded payload.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates SMART info payload construction and response handling.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(
-            return_value={"output": {"smart_status": "PASSED", "temperature": 35}}
-        )
-
-        smart_info = await client.get_smart_info("nvme0")
-
-        assert smart_info == {"smart_status": "PASSED", "temperature": 35}
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
-        client._safe_dict_post.assert_awaited_once_with(
-            "/api/smart/service/info",
-            {"device": "nvme0", "type": "a", "json": True},
-        )
+        assert await client.get_smart_info("nvme0") == SMART_INFO_OUTPUT
+        assert router.count("POST", SMART_SERVICE_INFO_PATH) == 1
+        assert router.requests[0][2] == SMART_INFO_BODY
     finally:
         await client.async_close()
 
@@ -273,84 +167,259 @@ async def test_get_smart_info_wraps_non_mapping_output(make_client: ClientType) 
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates fallback handling for non-mapping SMART info payloads.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(return_value={"output": ["line1", "line2"]})
-
-        smart_info = await client.get_smart_info("nvme0", info_type="H")
-
-        assert smart_info == {"output": ["line1", "line2"]}
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
-        client._safe_dict_post.assert_awaited_once_with(
-            "/api/smart/service/info",
-            {"device": "nvme0", "type": "H", "json": True},
-        )
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_smart_fails_closed_when_list_endpoint_unavailable(
-    make_client: ClientType,
-) -> None:
-    """SMART list queries should use the cheap list preflight.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates fail-closed behavior for the SMART list.
-    """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._is_post_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_post = AsyncMock(return_value={})
-
-        assert await client.get_smart() == []
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_not_awaited()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_smart_post_endpoint_availability_caches_missing_plugin(
-    make_client: ClientType,
-) -> None:
-    """Shared POST endpoint availability should cache a 404 SMART probe result.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates quiet missing-plugin caching for SMART polling.
     """
     client, session = make_mock_session_client(make_client)
-    calls = 0
-
-    def _post(*_args: object, **_kwargs: object) -> FakeResponse:
-        """Return a repeated 404 response to emulate a missing plugin probe result.
-
-        Args:
-            _args (object): Positional arguments accepted by `_post`.
-            _kwargs (object): Keyword arguments accepted by `_post`.
-
-        Returns:
-            FakeResponse: A fixed 404 response object used by availability checks.
-        """
-        nonlocal calls
-        calls += 1
-        return FakeResponse(status=404, reason="Not Found", ok=False)
-
-    session.post = _post
+    router = install_fake_router(
+        client,
+        session,
+        routes={("POST", SMART_SERVICE_INFO_PATH): {"output": ["line1", "line2"]}},
+    )
     try:
-        assert await client._is_post_endpoint_available("/api/smart/service/list") is False
-        assert await client._is_post_endpoint_available("/api/smart/service/list") is False
-        assert calls == 1
+        assert await client.get_smart_info("nvme0", info_type="H") == {"output": ["line1", "line2"]}
+        assert router.requests[0][2] == {"device": "nvme0", "type": "H", "json": True}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "info"])
+@pytest.mark.parametrize("failure", PERMANENT_FAILURES)
+async def test_smart_read_returns_empty_value_when_absent_or_transient(
+    make_client: ClientType, operation: str, failure: Any
+) -> None:
+    """SMART reads return their empty value for absent and transient endpoints, one POST each.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+        failure (Any): Router response that models the absent or failing endpoint.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("POST", _endpoint(operation)): failure})
+    try:
+        assert await _read(client, operation) == _empty(operation)
+        assert router.count() == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "info"])
+@pytest.mark.parametrize(
+    ("failure", "expected_error"),
+    [
+        pytest.param(403, OPNsensePrivilegeMissing, id="forbidden"),
+        pytest.param(500, OPNsenseConnectionError, id="server-error"),
+        pytest.param(TimeoutError("timed out"), OPNsenseConnectionError, id="timeout"),
+    ],
+)
+async def test_smart_read_raises_for_forbidden_or_transient_when_throwing(
+    make_client: ClientType, operation: str, failure: Any, expected_error: type[Exception]
+) -> None:
+    """In throw mode a forbidden or transient SMART read raises a public error.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+        failure (Any): Router response that models the failing endpoint.
+        expected_error (type[Exception]): Public exception type expected from the call.
+    """
+    client, session = make_mock_session_client(make_client)
+    install_fake_router(client, session, routes={("POST", _endpoint(operation)): failure})
+    client.toggle_throwing_errors(True)
+    try:
+        with pytest.raises(expected_error):
+            await _read(client, operation)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "info"])
+async def test_smart_missing_plugin_does_not_raise_in_throw_mode(
+    make_client: ClientType, operation: str
+) -> None:
+    """A missing SMART plugin (404) is an empty result, not an error, even in throw mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+    """
+    client, session = make_mock_session_client(make_client)
+    install_fake_router(client, session, routes={("POST", _endpoint(operation)): 404})
+    client.toggle_throwing_errors(True)
+    try:
+        assert await _read(client, operation) == _empty(operation)
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "info"])
+async def test_smart_present_endpoint_costs_one_post_per_read(
+    make_client: ClientType, operation: str
+) -> None:
+    """A present SMART endpoint costs one POST per read, with no payload-less probe.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(
+        client, session, routes={("POST", _endpoint(operation)): _payload(operation)}
+    )
+    try:
+        assert await _read(client, operation) == _result(operation)
+        assert await _read(client, operation) == _result(operation)
+        assert router.count("POST", _endpoint(operation)) == 2
+        assert router.count() == 2
+        assert router.count("POST", SMART_SERVICE_LIST_PATH) == 0
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "info"])
+@pytest.mark.parametrize("status", [404, 403])
+async def test_smart_absent_endpoint_is_cached_until_ttl_expires(
+    make_client: ClientType, operation: str, status: int
+) -> None:
+    """A missing or forbidden SMART endpoint is not requested again until the cache TTL expires.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+        status (int): HTTP status the Router returns while the endpoint is absent.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("POST", _endpoint(operation)): status})
+    try:
+        assert await _read(client, operation) == _empty(operation)
+        assert await _read(client, operation) == _empty(operation)
+        assert router.count() == 1
+
+        client._endpoint_cache_ttl_seconds = 0
+        router.routes[("POST", _endpoint(operation))] = _payload(operation)
+        assert await _read(client, operation) == _result(operation)
+        assert router.count() == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "info"])
+async def test_smart_endpoint_lost_after_success_is_recorded_as_absent(
+    make_client: ClientType, operation: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A 404 on a previously present SMART endpoint is cached as absent and logged quietly.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(
+        client, session, routes={("POST", _endpoint(operation)): _payload(operation)}
+    )
+    try:
+        assert await _read(client, operation) == _result(operation)
+        router.routes[("POST", _endpoint(operation))] = 404
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            assert await _read(client, operation) == _empty(operation)
+            assert await _read(client, operation) == _empty(operation)
+        assert router.count() == 2
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "info"])
+@pytest.mark.parametrize("failure", [500, TimeoutError("timed out")])
+async def test_smart_transient_failure_is_retried_and_warns_once(
+    make_client: ClientType, operation: str, failure: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A transient SMART failure is not cached, is retried, and warns once per outage.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+        failure (Any): Router response that models the transient failure.
+        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("POST", _endpoint(operation)): failure})
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            assert await _read(client, operation) == _empty(operation)
+            assert await _read(client, operation) == _empty(operation)
+            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert len(warnings) == 1
+            assert router.count() == 2
+
+            router.routes[("POST", _endpoint(operation))] = _payload(operation)
+            assert await _read(client, operation) == _result(operation)
+        recovered = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(recovered) == 1
+        assert "recovered" in recovered[0].getMessage()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "info"])
+async def test_smart_cached_404_is_trusted_in_throw_mode(
+    make_client: ClientType, operation: str
+) -> None:
+    """A cached missing SMART endpoint stays an empty result in throw mode without a request.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("POST", _endpoint(operation)): 404})
+    try:
+        assert await _read(client, operation) == _empty(operation)
+        client.toggle_throwing_errors(True)
+        assert await _read(client, operation) == _empty(operation)
+        assert router.count() == 1
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "info"])
+@pytest.mark.parametrize(
+    ("throw_errors", "expected_requests"),
+    [
+        pytest.param(False, 1, id="default-mode-trusts-cached-403"),
+        pytest.param(True, 2, id="throw-mode-rechecks"),
+    ],
+)
+async def test_smart_cached_403_is_rechecked_only_in_throw_mode(
+    make_client: ClientType, operation: str, throw_errors: bool, expected_requests: int
+) -> None:
+    """A cached 403 is trusted in default mode but requested again, and raised, in throw mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        operation (str): ``list`` for the device list or ``info`` for one device's details.
+        throw_errors (bool): Whether the client raises public errors.
+        expected_requests (int): POSTs the Router should see across two reads.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("POST", _endpoint(operation)): 403})
+    try:
+        assert await _read(client, operation) == _empty(operation)
+        client.toggle_throwing_errors(throw_errors)
+        if throw_errors:
+            with pytest.raises(OPNsensePrivilegeMissing):
+                await _read(client, operation)
+        else:
+            assert await _read(client, operation) == _empty(operation)
+        assert router.count() == expected_requests
     finally:
         await client.async_close()

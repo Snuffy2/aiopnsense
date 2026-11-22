@@ -3,7 +3,7 @@
 from collections.abc import MutableMapping
 from datetime import datetime
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from warnings import deprecated
 
 import aiohttp
@@ -224,13 +224,53 @@ class ClientEndpointMixin:
     async def _fetch_endpoint_outcome(self, path: str) -> EndpointOutcome:
         """Fetch a GET endpoint once and report whether it returned data, is absent or failed.
 
-        A single request both checks availability and returns the data. The
-        availability status (never the payload) is cached for the endpoint cache
-        TTL, so a known-absent endpoint is answered without a request.
-
         Args:
             path (str): API endpoint path to request. A query string is sent but
                 excluded from the availability cache key.
+
+        Returns:
+            EndpointOutcome: The outcome described by ``_fetch_gated_outcome``. A 403 or a
+                transient failure raises instead when ``self._throw_errors`` is ``True``.
+        """
+        return await self._fetch_gated_outcome("get", path)
+
+    async def _fetch_post_endpoint_outcome(
+        self,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+    ) -> EndpointOutcome:
+        """Send one POST with its payload and report whether it returned data, is absent or failed.
+
+        The payload is the real request body; no payload-less probe is sent.
+
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None): Request body sent with the POST.
+
+        Returns:
+            EndpointOutcome: The outcome described by ``_fetch_gated_outcome``. A 403 or a
+                transient failure raises instead when ``self._throw_errors`` is ``True``.
+        """
+        return await self._fetch_gated_outcome("post", path, payload)
+
+    async def _fetch_gated_outcome(
+        self,
+        method: Literal["get", "post"],
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+    ) -> EndpointOutcome:
+        """Send one availability-gated request and report whether it returned data, is absent or failed.
+
+        A single request both checks availability and returns the data. The
+        availability status (never the payload) is cached for the endpoint cache
+        TTL, so a known-absent endpoint is answered without a request. GET and
+        POST share this logic; POST availability is cached under a ``post:`` key.
+
+        Args:
+            method (Literal["get", "post"]): HTTP method of the data request.
+            path (str): API endpoint path to request. A query string is sent but
+                excluded from the availability cache key.
+            payload (MutableMapping[str, Any] | None): Request body, sent with POST requests.
 
         Returns:
             EndpointOutcome: ``DATA`` with the decoded payload, ``ABSENT`` when the
@@ -250,6 +290,8 @@ class ClientEndpointMixin:
             mode, a 403 clear the cache entry so the next call requests again.
         """
         cache_key = path.partition("?")[0]
+        if method == "post":
+            cache_key = f"post:{cache_key}"
         now = datetime.now().astimezone()
         cache_is_fresh = (
             cache_key in self._endpoint_checked_at
@@ -263,10 +305,10 @@ class ClientEndpointMixin:
         ):
             return EndpointOutcome.absent()
 
-        outcome: EndpointOutcome = await self._queue_request("get_outcome", path)
+        outcome: EndpointOutcome = await self._queue_request(f"{method}_outcome", path, payload)
 
         if outcome.is_data:
-            _log_request_recovery(self, "get", path, "request")
+            _log_request_recovery(self, method, path, "request")
             self._endpoint_permission_denied.discard(cache_key)
             self._endpoint_availability[cache_key] = True
             self._endpoint_checked_at[cache_key] = now
@@ -283,7 +325,7 @@ class ClientEndpointMixin:
         if outcome.is_absent:
             _log_request_failure(
                 self,
-                "get",
+                method,
                 path,
                 "request",
                 logging.ERROR,
@@ -302,11 +344,12 @@ class ClientEndpointMixin:
         self._clear_endpoint_cache_entry(cache_key)
         _log_request_failure(
             self,
-            "get",
+            method,
             path,
             "request",
             logging.WARNING,
-            "Transient GET failure for %s. %s. Not caching result.",
+            "Transient %s failure for %s. %s. Not caching result.",
+            method.upper(),
             path,
             outcome.detail,
             error=error if self._throw_errors else None,

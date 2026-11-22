@@ -563,6 +563,50 @@ class ClientTransportMixin:
 
         return None
 
+    async def _do_post_outcome(
+        self,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+        caller: str = "Unknown",
+    ) -> EndpointOutcome:
+        """Execute a POST request immediately and classify the response.
+
+        Unlike ``_do_post``, an HTTP or transport failure is returned as an
+        outcome instead of being logged and raised, so the endpoint module can
+        tell a missing endpoint from a transient failure and apply the
+        ``throw_errors`` policy itself. The request always carries the caller's
+        payload; no payload-less probe is sent.
+
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None): Request payload sent to the API endpoint.
+            caller (str): Caller name used for diagnostics.
+
+        Returns:
+            EndpointOutcome: ``DATA`` with the decoded payload for a successful response,
+                ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any other
+                HTTP status, timeout or client error.
+        """
+        self._rest_api_query_count += 1
+        url: str = f"{self._url}{path}"
+        _LOGGER.debug("[post_outcome] url: %s (called by %s)", url, caller)
+        try:
+            async with self._session.post(
+                url,
+                json=payload,
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
+                ssl=self._verify_ssl,
+            ) as response:
+                _LOGGER.debug("[post_outcome] Response %s: %s", response.status, response.reason)
+                if not response.ok:
+                    return EndpointOutcome.from_http_status(response.status, response.reason)
+                return EndpointOutcome.data(await response.json(content_type=None))
+        except (aiohttp.ClientError, TimeoutError) as e:
+            error = _map_opnsense_exception(e)
+            error.__cause__ = e
+            return EndpointOutcome.transient(error, f"{type(e).__name__}: {e}")
+
     async def _safe_dict_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
     ) -> dict[str, Any]:

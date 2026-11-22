@@ -18,9 +18,10 @@ from aiopnsense.exceptions import (
     OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
-from tests.conftest import FakeResponse, make_mock_session_client
+from tests.conftest import FakeResponse, install_fake_router, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
+HOST_OBSERVATIONS_PATH = "/api/hostdiscovery/service/search"
 
 
 @pytest.mark.asyncio
@@ -1664,19 +1665,22 @@ async def test_host_observations_normalizes_packet_sightings(
         family_ip (str): IPv4 or IPv6 address observed by hostwatch.
     """
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(
-        json_payload={
-            "total": 1,
-            "rows": [
-                {
-                    "source": "discovery",
-                    "ether_address": "AA-BB-CC-DD-EE-01",
-                    "ip_address": family_ip,
-                    "last_seen": "2026-01-01T02:00:00+02:00",
-                }
-            ],
-        }
+    router = install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", HOST_OBSERVATIONS_PATH): {
+                "total": 1,
+                "rows": [
+                    {
+                        "source": "discovery",
+                        "ether_address": "AA-BB-CC-DD-EE-01",
+                        "ip_address": family_ip,
+                        "last_seen": "2026-01-01T02:00:00+02:00",
+                    }
+                ],
+            }
+        },
     )
     with pytest.warns(DeprecationWarning, match="Use get_host_observation_entries"):
         result = await client.get_host_observations()  # type: ignore[deprecated]
@@ -1685,10 +1689,7 @@ async def test_host_observations_normalizes_packet_sightings(
     assert result["rows"][0]["mac"] == "aa:bb:cc:dd:ee:01"
     assert result["rows"][0]["last_seen"] == datetime(2026, 1, 1, tzinfo=UTC)
     assert result["rows"][0]["ip"] == family_ip.replace("0db8", "db8")
-    assert all(
-        call.args[0] == "http://localhost/api/hostdiscovery/service/search"
-        for call in session.post.call_args_list
-    )
+    assert router.count("POST", HOST_OBSERVATIONS_PATH) == 1
 
 
 @pytest.mark.asyncio
@@ -1701,20 +1702,22 @@ async def test_host_observation_entries_returns_typed_result_with_one_fetch(
         make_client (ClientType): Factory for a client with a mocked HTTP session.
     """
     client, session = make_mock_session_client(make_client)
-    client._is_post_endpoint_available = AsyncMock(return_value=True)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(
-        json_payload={
-            "total": 1,
-            "rows": [
-                {
-                    "source": "discovery",
-                    "ether_address": "AA-BB-CC-DD-EE-01",
-                    "ip_address": "2001:0db8::1",
-                    "last_seen": "2026-01-01T02:00:00+02:00",
-                }
-            ],
-        }
+    router = install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", HOST_OBSERVATIONS_PATH): {
+                "total": 1,
+                "rows": [
+                    {
+                        "source": "discovery",
+                        "ether_address": "AA-BB-CC-DD-EE-01",
+                        "ip_address": "2001:0db8::1",
+                        "last_seen": "2026-01-01T02:00:00+02:00",
+                    }
+                ],
+            }
+        },
     )
 
     with warnings.catch_warnings(record=True) as emitted_warnings:
@@ -1735,12 +1738,9 @@ async def test_host_observation_entries_returns_typed_result_with_one_fetch(
     )
     with pytest.raises(FrozenInstanceError):
         observations.entries[0].ip = "192.0.2.1"  # type: ignore[misc]
-    assert client._is_post_endpoint_available.await_count == 1
-    assert client._post.await_count == 1
-    assert client._post.await_args.kwargs == {
-        "path": "/api/hostdiscovery/service/search",
-        "payload": {"rowCount": -1},
-    }
+    assert router.requests == [
+        ("POST", "http://localhost/api/hostdiscovery/service/search", {"rowCount": -1})
+    ]
 
 
 @pytest.mark.asyncio
@@ -1753,53 +1753,57 @@ async def test_host_observation_entries_preserves_disabled_source(
         make_client (ClientType): Factory for a client with a mocked HTTP session.
     """
     client, session = make_mock_session_client(make_client)
-    client._is_post_endpoint_available = AsyncMock(return_value=True)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(
-        json_payload={"total": 1, "rows": [{"source": "arp-ndp", "last_seen": ""}]}
+    router = install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", HOST_OBSERVATIONS_PATH): {
+                "total": 1,
+                "rows": [{"source": "arp-ndp", "last_seen": ""}],
+            }
+        },
     )
 
     observations = await client.get_host_observation_entries()
 
     assert observations == OPNsenseClient.HostObservations(source="arp-ndp", entries=())
-    assert client._post.await_count == 1
+    assert router.count("POST", HOST_OBSERVATIONS_PATH) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("throw_errors", "payload", "status", "expected_error"),
+    ("throw_errors", "response", "expected_error"),
     [
-        (False, {"total": 1, "rows": [{}]}, 200, None),
-        (False, None, 404, None),
-        (False, None, 403, None),
-        (True, None, 403, OPNsensePrivilegeMissing),
+        pytest.param(False, {"total": 1, "rows": [{}]}, None, id="malformed-200"),
+        pytest.param(False, 404, None, id="absent"),
+        pytest.param(False, 403, None, id="forbidden"),
+        pytest.param(False, 500, None, id="server-error"),
+        pytest.param(False, TimeoutError("timed out"), None, id="timeout"),
+        pytest.param(True, 404, None, id="absent-throwing"),
+        pytest.param(True, 403, OPNsensePrivilegeMissing, id="forbidden-throwing"),
+        pytest.param(True, 500, OPNsenseConnectionError, id="server-error-throwing"),
+        pytest.param(
+            True, TimeoutError("timed out"), OPNsenseConnectionError, id="timeout-throwing"
+        ),
     ],
 )
 async def test_host_observation_entries_preserves_failure_semantics(
     make_client: ClientType,
     throw_errors: bool,
-    payload: object,
-    status: int,
-    expected_error: type[OPNsensePrivilegeMissing] | None,
+    response: Any,
+    expected_error: type[OPNsenseConnectionError] | None,
 ) -> None:
-    """Keep unavailable and malformed results distinct from throwing-client errors.
+    """Keep absent, transient and malformed results distinct from throwing-client errors.
 
     Args:
         make_client (ClientType): Factory for a client with a mocked HTTP session.
         throw_errors (bool): Whether the client should raise public API failures.
-        payload (object): JSON response for a successful request.
-        status (int): Response status of the endpoint probe.
-        expected_error (type[OPNsensePrivilegeMissing] | None): Expected mapped error.
+        response (Any): Router answer to the discovery request: a JSON body, an HTTP
+            status or a transport failure.
+        expected_error (type[OPNsenseConnectionError] | None): Expected mapped error.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    if status == 200:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._post = AsyncMock(side_effect=client._do_post)
-        session.post.return_value = FakeResponse(status=status, ok=True, json_payload=payload)
-    elif status == 404:
-        client._is_post_endpoint_available = AsyncMock(return_value=False)
-    else:
-        client._is_post_endpoint_available = AsyncMock(side_effect=OPNsensePrivilegeMissing)
+    install_fake_router(client, session, routes={("POST", HOST_OBSERVATIONS_PATH): response})
 
     if expected_error is not None:
         with pytest.raises(expected_error):
@@ -1820,19 +1824,22 @@ async def test_host_observations_rejects_invalid_totals(
         total (object): Invalid count supplied by the search endpoint.
     """
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(
-        json_payload={
-            "total": total,
-            "rows": [
-                {
-                    "source": "discovery",
-                    "ether_address": "aa:bb:cc:dd:ee:01",
-                    "ip_address": "192.0.2.1",
-                    "last_seen": "2026-01-01T00:00:00Z",
-                }
-            ],
-        }
+    install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", HOST_OBSERVATIONS_PATH): {
+                "total": total,
+                "rows": [
+                    {
+                        "source": "discovery",
+                        "ether_address": "aa:bb:cc:dd:ee:01",
+                        "ip_address": "192.0.2.1",
+                        "last_seen": "2026-01-01T00:00:00Z",
+                    }
+                ],
+            }
+        },
     )
 
     assert await client.get_host_observations() is None  # type: ignore[deprecated]
@@ -1848,7 +1855,6 @@ async def test_host_observations_requests_all_rows_through_post_json(
         make_client (ClientType): Factory for a client with a mocked HTTP session.
     """
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
     observation = {
         "source": "discovery",
         "ether_address": "aa:bb:cc:dd:ee:01",
@@ -1856,34 +1862,21 @@ async def test_host_observations_requests_all_rows_through_post_json(
         "last_seen": datetime.now(UTC).isoformat(),
     }
     observations = [observation.copy() for _ in range(10_000)]
-
-    def search_response(*args: object, **kwargs: object) -> FakeResponse:
-        """Model searchRecordsetBase rowCount handling for the host search endpoint.
-
-        Args:
-            args (object): Positional HTTP request arguments, including the URL.
-            kwargs (object): Keyword HTTP request arguments, including JSON payload.
-
-        Returns:
-            FakeResponse: Search results limited by the POST body's rowCount value.
-        """
-        del args
-        request_payload = kwargs.get("json")
-        row_count = (
-            request_payload.get("rowCount", 9999)
-            if isinstance(request_payload, MutableMapping)
-            else 9999
-        )
-        rows = observations if row_count == -1 else observations[:row_count]
-        return FakeResponse(json_payload={"total": len(observations), "rows": rows})
-
-    session.post.side_effect = search_response
-    session.get.side_effect = search_response
+    router = install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", HOST_OBSERVATIONS_PATH): {"total": len(observations), "rows": observations}
+        },
+    )
 
     result = await client.get_host_observations()  # type: ignore[deprecated]
 
     assert result is not None
     assert len(result["rows"]) == 10_000
+    assert router.requests == [
+        ("POST", "http://localhost/api/hostdiscovery/service/search", {"rowCount": -1})
+    ]
 
 
 @pytest.mark.asyncio
@@ -1950,8 +1943,7 @@ async def test_host_observations_rejects_non_authoritative_payloads(
         payload (object): Unusable host-observation response.
     """
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(json_payload=payload)
+    install_fake_router(client, session, routes={("POST", HOST_OBSERVATIONS_PATH): payload})
     assert await client.get_host_observations() is None  # type: ignore[deprecated]
 
 
@@ -1963,12 +1955,15 @@ async def test_host_observations_distinguishes_disabled_service(make_client: Cli
         make_client (ClientType): Factory for a client with a mocked HTTP session.
     """
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(
-        json_payload={
-            "total": 1,
-            "rows": [{"source": "arp-ndp", "last_seen": ""}],
-        }
+    install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", HOST_OBSERVATIONS_PATH): {
+                "total": 1,
+                "rows": [{"source": "arp-ndp", "last_seen": ""}],
+            }
+        },
     )
     assert await client.get_host_observations() == {"source": "arp-ndp", "rows": []}  # type: ignore[deprecated]
 
@@ -1985,7 +1980,7 @@ async def test_host_observations_http_failure_is_unavailable(
         status (int): HTTP failure status of the endpoint probe.
     """
     client, session = make_mock_session_client(make_client)
-    session.post.return_value = FakeResponse(status=status, ok=False)
+    install_fake_router(client, session, routes={("POST", HOST_OBSERVATIONS_PATH): status})
     assert await client.get_host_observations() is None  # type: ignore[deprecated]
 
 
@@ -1995,17 +1990,12 @@ async def test_host_observations_http_failure_is_unavailable(
     [
         ("arp", {"rows": []}, []),
         ("ndp", {"rows": []}, []),
-        (
-            "host_observations",
-            {"total": 1, "rows": [{"source": "arp-ndp", "last_seen": ""}]},
-            {"source": "arp-ndp", "rows": []},
-        ),
     ],
 )
 async def test_neighbor_lookup_logs_failure_once_until_recovery_then_again(
     make_client: ClientType,
     caplog: pytest.LogCaptureFixture,
-    lookup_name: Literal["arp", "ndp", "host_observations"],
+    lookup_name: Literal["arp", "ndp"],
     payload: object,
     expected: object,
 ) -> None:
@@ -2014,7 +2004,7 @@ async def test_neighbor_lookup_logs_failure_once_until_recovery_then_again(
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
         caplog (pytest.LogCaptureFixture): Captured log records for the lookup sequence.
-        lookup_name (Literal["arp", "ndp", "host_observations"]): Public lookup to exercise.
+        lookup_name (Literal["arp", "ndp"]): Public lookup to exercise.
         payload (object): Successful response payload for the final recovery request.
         expected (object): Public lookup result after recovery.
     """
@@ -2029,43 +2019,26 @@ async def test_neighbor_lookup_logs_failure_once_until_recovery_then_again(
         """
         if lookup_name == "arp":
             return await client.get_arp_table()  # type: ignore[deprecated]
-        if lookup_name == "ndp":
-            return await client.get_ndp_table()  # type: ignore[deprecated]
-        return await client.get_host_observations()  # type: ignore[deprecated]
+        return await client.get_ndp_table()  # type: ignore[deprecated]
 
     failed_probe = FakeResponse(status=503, reason="Unavailable", ok=False)
     successful_probe = FakeResponse()
     failed_request = FakeResponse(status=500, reason="Server Error", ok=False)
     successful_request = FakeResponse(json_payload=payload)
 
-    if lookup_name == "host_observations":
-        client._post = AsyncMock(side_effect=client._do_post)
-        session.post.side_effect = [
-            failed_probe,
-            failed_probe,
-            successful_probe,
-            failed_request,
-            successful_probe,
-            failed_request,
-            successful_probe,
-            successful_request,
-            successful_probe,
-            failed_request,
-        ]
-    else:
-        client._get = AsyncMock(side_effect=client._do_get)
-        session.get.side_effect = [
-            failed_probe,
-            failed_probe,
-            successful_probe,
-            failed_request,
-            successful_probe,
-            failed_request,
-            successful_probe,
-            successful_request,
-            successful_probe,
-            failed_request,
-        ]
+    client._get = AsyncMock(side_effect=client._do_get)
+    session.get.side_effect = [
+        failed_probe,
+        failed_probe,
+        successful_probe,
+        failed_request,
+        successful_probe,
+        failed_request,
+        successful_probe,
+        successful_request,
+        successful_probe,
+        failed_request,
+    ]
 
     with caplog.at_level("DEBUG"):
         assert await lookup() is None

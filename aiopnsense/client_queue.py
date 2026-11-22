@@ -73,6 +73,24 @@ class ClientQueueMixin:
             """
             ...
 
+        async def _do_post_outcome(
+            self,
+            path: str,
+            payload: MutableMapping[str, Any] | None = None,
+            caller: str = "Unknown",
+        ) -> EndpointOutcome:
+            """Execute an immediate POST request and classify the response.
+
+            Args:
+                path (str): API endpoint path to request.
+                payload (MutableMapping[str, Any] | None): Request body.
+                caller (str): Calling method name used for diagnostics.
+
+            Returns:
+                EndpointOutcome: Classified transport response.
+            """
+            ...
+
         async def _do_get_from_stream(
             self,
             path: str,
@@ -328,6 +346,10 @@ class ClientQueueMixin:
                         future.set_result(result)
                 elif method == "post":
                     result = await self._do_post(path, payload, caller)
+                    if future is not None and not future.done():
+                        future.set_result(result)
+                elif method == "post_outcome":
+                    result = await self._do_post_outcome(path, payload, caller)
                     if future is not None and not future.done():
                         future.set_result(result)
                 else:

@@ -412,6 +412,8 @@ def install_fake_router(
             return await client._do_get_outcome(path, caller)
         if method == "post":
             return await client._do_post(path, payload, caller)
+        if method == "post_outcome":
+            return await client._do_post_outcome(path, payload, caller)
         return await client._do_get_from_stream(path, caller)
 
     session.get = get
