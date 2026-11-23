@@ -81,6 +81,11 @@ def _payloads(items: list[_SseItem]) -> list[dict[str, object]]:
             [{"a": 1}],
             id="pending-cr-completes-event-at-end-of-stream",
         ),
+        pytest.param(
+            [b'data: {"a"', b": 1}\n\n", b'data: {"b": 2}\n\n'],
+            [{"a": 1}, {"b": 2}],
+            id="partial-chunks-accumulate-into-one-event",
+        ),
         pytest.param([b'data: {"a": 1}\n'], [], id="unterminated-event-dropped"),
     ],
 )

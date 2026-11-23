@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, MutableMapping
+from contextlib import aclosing
 from enum import StrEnum
 import json
 import sys
@@ -231,15 +232,30 @@ class ClientTransportMixin:
     async def _do_get_from_stream(self, path: str, caller: str = "Unknown") -> dict[str, Any]:
         """Execute a streaming GET request immediately.
 
+        The stream is decoded like ``_stream_json_events`` decodes it: UTF-8 across chunks,
+        CRLF, CR and LF line endings, and ``data:`` lines joined into one message per event.
+        Compared with the earlier line-by-line parser, CR line endings now frame events, a
+        multibyte character or JSON value split across chunks or ``data:`` lines decodes, a
+        final event ended by CR at end of stream counts, and messages are counted per event
+        rather than per ``data:`` line. Only one space after ``data:`` is removed, so other
+        leading whitespace is no longer stripped. Malformed JSON and non-mapping JSON still
+        count as messages, and corrupt input before the second message still fails as before.
+
         Args:
             path (str): API endpoint path to request.
             caller (str): Caller name used for diagnostics and logging.
 
         Returns:
-            dict[str, Any]: Decoded payload extracted from the streaming API response,
-                or an empty mapping after a logged failure. When ``throw_errors`` is
-                enabled, an HTTP, client or timeout failure is raised as the mapped
-                public ``OPNsenseError`` instead.
+            dict[str, Any]: The second message of the stream, or an empty mapping when the
+                stream ends first, the second message is valid JSON but not a mapping, or
+                after a logged failure. When ``throw_errors`` is enabled, an HTTP, client or
+                timeout failure is raised as the mapped public ``OPNsenseError`` instead.
+
+        Raises:
+            decode_error: The ``UnicodeDecodeError`` for invalid or truncated UTF-8 before the
+                second message.
+            json_error: The ``json.JSONDecodeError`` for a second message that is not valid
+                JSON.
         """
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[get_from_stream] path: %s", path)
@@ -270,24 +286,25 @@ class ClientTransportMixin:
                     _raise_if_throwing(self, http_error)
                     return {}
 
-                buffer = ""
                 message_count = 0
-                async for chunk in response.content.iter_chunked(1024):
-                    buffer += chunk.decode("utf-8")
-                    while "\n\n" in buffer:
-                        message, buffer = buffer.split("\n\n", 1)
-                        for line in message.splitlines():
-                            if not line.startswith("data:"):
-                                continue
-                            message_count += 1
-                            if message_count != 2:
-                                continue
-                            response_str: str = line[len("data:") :].strip()
-                            response_json = json.loads(response_str)
-                            if not isinstance(response_json, MutableMapping):
+                async with aclosing(_sse_items(response.content.iter_chunked(1024))) as items:
+                    async for item in items:
+                        if isinstance(item, _SseRejection) and isinstance(
+                            item.error, UnicodeDecodeError
+                        ):
+                            decode_error = item.error
+                            raise decode_error
+                        message_count += 1
+                        if message_count != 2:
+                            continue
+                        match item:
+                            case _SseMessage(payload=payload):
+                                _log_request_recovery(self, "get", path, _STREAM_PHASE)
+                                return payload
+                            case _SseRejection(error=json.JSONDecodeError() as json_error):
+                                raise json_error
+                            case _:
                                 return {}
-                            _log_request_recovery(self, "get", path, _STREAM_PHASE)
-                            return dict(response_json)
         except (aiohttp.ClientError, TimeoutError) as e:
             transport_error = _report_transport_failure(
                 self,
@@ -352,38 +369,39 @@ class ClientTransportMixin:
 
                 recovered = False
 
-                async for item in _sse_items(response.content.iter_chunked(1024)):
-                    match item:
-                        case _SseMessage(payload=payload):
-                            if not recovered:
-                                _log_request_recovery(self, "get", path, _STREAM_PHASE)
-                                recovered = True
-                            yield payload
-                        case _SseRejection(reason=_SseRejectionReason.TRUNCATED_UTF8):
-                            _LOGGER.debug(
-                                "Dropping incomplete UTF-8 trailing bytes in "
-                                "_stream_json_events: %s",
-                                item.error,
-                            )
-                        case _SseRejection(reason=_SseRejectionReason.INVALID_UTF8):
-                            _LOGGER.debug(
-                                "Dropping incomplete UTF-8 chunk in _stream_json_events: %s",
-                                item.error,
-                            )
-                            if yield_reset_events:
-                                yield {_STREAM_JSON_EVENT_RESET_KEY: True}
-                        case _SseRejection(reason=_SseRejectionReason.MALFORMED_JSON):
-                            _LOGGER.debug("Skipping malformed stream JSON event: %s", item.text)
-                            if yield_reset_events:
-                                yield {_STREAM_JSON_EVENT_RESET_KEY: True}
-                        case _SseRejection():
-                            _LOGGER.debug(
-                                "Skipping non-mapping stream JSON event: %s (%s)",
-                                item.text,
-                                item.json_type,
-                            )
-                            if yield_reset_events:
-                                yield {_STREAM_JSON_EVENT_RESET_KEY: True}
+                async with aclosing(_sse_items(response.content.iter_chunked(1024))) as items:
+                    async for item in items:
+                        match item:
+                            case _SseMessage(payload=payload):
+                                if not recovered:
+                                    _log_request_recovery(self, "get", path, _STREAM_PHASE)
+                                    recovered = True
+                                yield payload
+                            case _SseRejection(reason=_SseRejectionReason.TRUNCATED_UTF8):
+                                _LOGGER.debug(
+                                    "Dropping incomplete UTF-8 trailing bytes in "
+                                    "_stream_json_events: %s",
+                                    item.error,
+                                )
+                            case _SseRejection(reason=_SseRejectionReason.INVALID_UTF8):
+                                _LOGGER.debug(
+                                    "Dropping incomplete UTF-8 chunk in _stream_json_events: %s",
+                                    item.error,
+                                )
+                                if yield_reset_events:
+                                    yield {_STREAM_JSON_EVENT_RESET_KEY: True}
+                            case _SseRejection(reason=_SseRejectionReason.MALFORMED_JSON):
+                                _LOGGER.debug("Skipping malformed stream JSON event: %s", item.text)
+                                if yield_reset_events:
+                                    yield {_STREAM_JSON_EVENT_RESET_KEY: True}
+                            case _SseRejection():
+                                _LOGGER.debug(
+                                    "Skipping non-mapping stream JSON event: %s (%s)",
+                                    item.text,
+                                    item.json_type,
+                                )
+                                if yield_reset_events:
+                                    yield {_STREAM_JSON_EVENT_RESET_KEY: True}
         except (aiohttp.ClientError, TimeoutError) as err:
             transport_error = _report_transport_failure(
                 self,

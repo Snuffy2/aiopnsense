@@ -322,28 +322,118 @@ async def test_get_from_stream_ignores_first_message(
 
 
 @pytest.mark.asyncio
-async def test_get_from_stream_partial_chunks_accumulates_buffer(
+@pytest.mark.parametrize(
+    ("chunks", "expected"),
+    [
+        pytest.param(
+            [b"data: not-json\n\n", b'data: {"a": 2}\n\n'],
+            {"a": 2},
+            id="first-malformed-is-counted",
+        ),
+        pytest.param(
+            [b"data: [1]\n\n", b'data: {"a": 2}\n\n'],
+            {"a": 2},
+            id="first-non-mapping-is-counted",
+        ),
+        pytest.param(
+            [b'data: {"a": 1}\n\n', b'data: {"a": 2}\n\n', b"\xff"],
+            {"a": 2},
+            id="stops-reading-at-second-message",
+        ),
+        pytest.param(
+            [b'data: {"a": 1}\n\n', b"data: [2]\n\n"], {}, id="second-non-mapping-returns-empty"
+        ),
+        pytest.param([b'data: {"a": 1}\n\n'], {}, id="stream-ends-before-second-message"),
+        pytest.param(
+            [b'data: {"a": 1}\n\n', b"data: nope\n\n"], json.JSONDecodeError, id="second-malformed"
+        ),
+        pytest.param([b"\xff\xfe"], UnicodeDecodeError, id="invalid-utf8"),
+        pytest.param(
+            [b'data: {"a": 1}\n\n', b'data: {"a": "x\xc3'],
+            UnicodeDecodeError,
+            id="truncated-utf8",
+        ),
+    ],
+)
+async def test_do_get_from_stream_keeps_corrupt_input_policy(
     make_client: MakeClientFactory,
     fake_stream_response_factory: FakeStreamResponseFactory,
+    chunks: list[bytes],
+    expected: dict[str, Any] | type[Exception],
 ) -> None:
-    """Verify stream parser accumulates partial chunked payload fragments.
+    """Verify the CPU read counts rejected messages and fails on corrupt second messages.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
         fake_stream_response_factory (FakeStreamResponseFactory): Fixture function building stream
             response stubs.
-
-    Returns:
-        None: This test asserts chunk-buffer accumulation behavior.
+        chunks (list[bytes]): Chunks the Router sends.
+        expected (dict[str, Any] | type[Exception]): Returned mapping, or the exception raised.
     """
     client, session = make_mock_session_client(make_client)
-
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        [b'data: {"a"', b": 1}\n\n", b'data: {"b": 2}\n\n']
-    )
+    session.get = lambda *a, **k: fake_stream_response_factory(chunks)
     try:
-        res = await client._do_get_from_stream("/stream2", caller="tst")
-        assert isinstance(res, MutableMapping)
+        if isinstance(expected, dict):
+            assert await client._do_get_from_stream("/stream", caller="tst") == expected
+        else:
+            with pytest.raises(expected):
+                await client._do_get_from_stream("/stream", caller="tst")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("chunks", "expected"),
+    [
+        pytest.param(
+            [b'data: {"a":1}\r\n\r\ndata: {"a":2}\r\n\r\n'], {"a": 2}, id="crlf-line-endings"
+        ),
+        pytest.param([b'data: {"a":1}\r\rdata: {"a":2}\r\r'], {"a": 2}, id="bare-cr-line-endings"),
+        pytest.param(
+            [b'data: {"a":1}\r', b'\n\r\ndata: {"a":2}\r\n\r\n'],
+            {"a": 2},
+            id="crlf-split-across-chunks",
+        ),
+        pytest.param(
+            [b'data: {"a":1}\n\ndata: {"a":2}\n\r'], {"a": 2}, id="final-event-ended-by-cr"
+        ),
+        pytest.param(
+            [b'data: {"a":"x"}\n\ndata: {"a":"na\xc3', b'\xafve"}\n\n'],
+            {"a": "naïve"},
+            id="multibyte-character-split-across-chunks",
+        ),
+        pytest.param(
+            [b'data: {"a":\ndata: 1}\n\ndata: {"a":2}\n\n'],
+            {"a": 2},
+            id="json-across-two-data-lines",
+        ),
+        pytest.param(
+            [b'data: {"a":1}\ndata: {"a":2}\n\ndata: {"a":3}\n\n'],
+            {"a": 3},
+            id="messages-counted-per-event",
+        ),
+    ],
+)
+async def test_do_get_from_stream_frames_events_like_the_traffic_stream(
+    make_client: MakeClientFactory,
+    fake_stream_response_factory: FakeStreamResponseFactory,
+    chunks: list[bytes],
+    expected: dict[str, Any],
+) -> None:
+    """Verify the CPU read frames and decodes events as the traffic stream does.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        fake_stream_response_factory (FakeStreamResponseFactory): Fixture function building stream
+            response stubs.
+        chunks (list[bytes]): Chunks the Router sends.
+        expected (dict[str, Any]): The second message.
+    """
+    client, session = make_mock_session_client(make_client)
+    session.get = lambda *a, **k: fake_stream_response_factory(chunks)
+    try:
+        assert await client._do_get_from_stream("/stream", caller="tst") == expected
     finally:
         await client.async_close()
 
