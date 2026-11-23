@@ -1,5 +1,6 @@
 """Tests for client transport helpers and HTTP response handling."""
 
+import asyncio
 from collections.abc import Callable, MutableMapping
 import json
 import logging
@@ -8,6 +9,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 import pytest
 
 import aiopnsense.client_transport
@@ -1660,3 +1663,76 @@ async def test_invalid_url_transport_logs_omit_credentials(
             assert "synthetic-secret" not in messages
         finally:
             await client.async_close()
+
+
+async def test_pre_context_validation_failure_frees_connector_slot(
+    make_client: MakeClientFactory,
+) -> None:
+    """A rejected response with an unread body leaves room for the next request.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    finish_body = asyncio.Event()
+    rejected_response: aiohttp.ClientResponse | None = None
+
+    async def stream_body(request: web.Request) -> web.StreamResponse:
+        """Keep the response body incomplete until the follow-up request is done.
+
+        Args:
+            request (web.Request): Incoming loopback request.
+
+        Returns:
+            web.StreamResponse: The prepared response.
+        """
+        response = web.StreamResponse()
+        await response.prepare(request)
+        await response.write(b"incomplete body")
+        await finish_body.wait()
+        return response
+
+    async def success(_request: web.Request) -> web.Response:
+        """Serve a successful follow-up response.
+
+        Args:
+            _request (web.Request): Incoming loopback request.
+
+        Returns:
+            web.Response: The JSON response.
+        """
+        return web.json_response({"ok": True})
+
+    async def validate(response: aiohttp.ClientResponse) -> None:
+        """Reject the streaming response before entering its request context.
+
+        Args:
+            response (aiohttp.ClientResponse): Response delivered by aiohttp.
+
+        Raises:
+            aiohttp.ClientPayloadError: If the response comes from the rejected route.
+        """
+        nonlocal rejected_response
+        if response.url.path == "/reject":
+            # Keep the response alive so its finalizer cannot free the slot.
+            rejected_response = response
+            raise aiohttp.ClientPayloadError("Rejected streaming response")
+
+    app = web.Application()
+    app.router.add_get("/reject", stream_body)
+    app.router.add_get("/ok", success)
+    async with (
+        TestServer(app) as server,
+        aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=1), raise_for_status=validate
+        ) as session,
+    ):
+        client = make_client(session=session, url=str(server.make_url("/")), throw_errors=True)
+        try:
+            with pytest.raises(OPNsenseConnectionError) as error:
+                await client._do_get("/reject", timeout_seconds=2)
+            assert isinstance(error.value.__cause__, aiohttp.ClientPayloadError)
+            assert await client._do_get("/ok", timeout_seconds=2) == {"ok": True}
+        finally:
+            finish_body.set()
+            if rejected_response is not None:
+                rejected_response.close()

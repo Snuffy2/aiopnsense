@@ -2,7 +2,7 @@
 
 import asyncio
 import codecs
-from collections.abc import AsyncGenerator, MutableMapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, MutableMapping
 import json
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -74,6 +74,34 @@ class ClientTransportMixin:
             """
             ...
 
+    def _status_validator(self) -> Callable[[aiohttp.ClientResponse], Awaitable[None]] | None:
+        """Wrap custom session validation to close its response on failure.
+
+        Returns:
+            Callable[[aiohttp.ClientResponse], Awaitable[None]] | None:
+                The wrapped validator, or ``None`` to inherit aiohttp's session default.
+        """
+        validator = getattr(self._session, "raise_for_status", None)
+        if not callable(validator):
+            return None
+
+        async def validate(response: aiohttp.ClientResponse) -> None:
+            """Release the connector slot if the validator rejects the response.
+
+            Args:
+                response (aiohttp.ClientResponse): Response delivered before context entry.
+            """
+            validated = False
+            try:
+                await validator(response)
+                validated = True
+            finally:
+                if not validated:
+                    # aiohttp 3.12.0 can leave this response open before context entry.
+                    response.close()
+
+        return validate
+
     async def _do_get_from_stream(self, path: str, caller: str = "Unknown") -> dict[str, Any]:
         """Execute a streaming GET request immediately.
 
@@ -96,6 +124,7 @@ class ClientTransportMixin:
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
                 ssl=self._verify_ssl,
+                raise_for_status=self._status_validator(),
             ) as response:
                 _LOGGER.debug(
                     "[get_from_stream] Response %s: %s",
@@ -185,6 +214,7 @@ class ClientTransportMixin:
                     sock_read=self._normalize_timeout_seconds(sock_read_timeout_seconds),
                 ),
                 ssl=self._verify_ssl,
+                raise_for_status=self._status_validator(),
             ) as response:
                 if not response.ok:
                     http_error = _report_http_failure(
@@ -348,6 +378,7 @@ class ClientTransportMixin:
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(total=timeout_total),
                 ssl=self._verify_ssl,
+                raise_for_status=self._status_validator(),
             ) as response:
                 _LOGGER.debug("[get] Response %s: %s", response.status, response.reason)
                 if response.ok:
@@ -471,6 +502,7 @@ class ClientTransportMixin:
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
                 ssl=self._verify_ssl,
+                raise_for_status=self._status_validator(),
             ) as response:
                 _LOGGER.debug("[post] Response %s: %s", response.status, response.reason)
                 if response.ok:

@@ -110,3 +110,32 @@ jobs:
           path: .coverage
           include-hidden-files: true
           retention-days: 1
+
+  transport-aiohttp-floor:
+    name: transport tests (aiohttp floor)
+    # Reuse the locked job's Dependabot authorization.
+    needs: tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup uv for the minimum Python
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: "3.14"
+
+      - name: Install the declared aiohttp floor outside the lock
+        # Keep the pin aligned with the lower bound in pyproject.toml.
+        run: |
+          uv venv --python 3.14
+          uv pip install --group pytest --editable . 'aiohttp==3.12.0'
+
+      - name: Run transport tests
+        run: .venv/bin/pytest --no-cov tests/test_client_transport.py
