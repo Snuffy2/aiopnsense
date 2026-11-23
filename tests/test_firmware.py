@@ -966,7 +966,7 @@ async def test_install_firmware_requests_are_counted(
 
     sent = session.get.call_count + session.post.call_count
     assert sent > 1
-    assert await client.get_query_counts() >= sent
+    assert await client.get_query_counts() == sent
 
 
 @pytest.mark.asyncio

@@ -40,20 +40,17 @@ class _RequestKind(StrEnum):
     POST = "post"
     POST_OUTCOME = "post_outcome"
 
-    @property
-    def skipped_when_cancelled(self) -> bool:
-        """Return whether a request of this kind is skipped when cancelled before dispatch.
 
-        Returns:
-            bool: ``True`` for POST and the three outcome kinds. Plain GET and buffered
-                stream reads are still sent.
-        """
-        return self in {
-            _RequestKind.POST,
-            _RequestKind.GET_OUTCOME,
-            _RequestKind.GET_TEXT_OUTCOME,
-            _RequestKind.POST_OUTCOME,
-        }
+# Kinds the queue worker skips when cancelled before dispatch. Plain GET and buffered
+# stream reads are still sent. An unknown kind is not a member, so dispatch reports it.
+_SKIPPED_WHEN_CANCELLED = frozenset(
+    {
+        _RequestKind.POST,
+        _RequestKind.GET_OUTCOME,
+        _RequestKind.GET_TEXT_OUTCOME,
+        _RequestKind.POST_OUTCOME,
+    }
+)
 
 
 def _public_caller_name() -> str:
@@ -172,9 +169,8 @@ class ClientTransportMixin:
                 return await self._do_post(path, payload, caller)
             case _RequestKind.POST_OUTCOME:
                 return await self._do_post_outcome(path, payload, caller)
-        message = f"Unknown method to add to Queue: {kind}"
-        _LOGGER.error(message)
-        error = OPNsenseError(message)
+        _LOGGER.error("Unknown method to add to Queue: %s", kind)
+        error = OPNsenseError(f"Unknown method to add to Queue: {kind}")
         _mark_request_error_logged(error)
         raise error
 
@@ -188,8 +184,8 @@ class ClientTransportMixin:
     ) -> Any:
         """Count and open one HTTP request to the Router.
 
-        This is the only place that supplies the URL, authentication and TLS setting
-        and passes a request through the ADR 0002 guard. The count is taken before the
+        This is the only place that sends a request, supplying its URL, authentication
+        and TLS setting and passing it through the ADR 0002 guard. The count is taken before the
         guard, so a blocked request is counted as an attempted one. Callers open the
         returned context inside their own ``try`` so a blocked request reaches their
         existing error handling.
@@ -198,8 +194,8 @@ class ClientTransportMixin:
             method (Literal["get", "post"]): Lowercase HTTP method.
             path (str): API endpoint path to request.
             timeout (aiohttp.ClientTimeout): Timeout for this request.
-            payload (MutableMapping[str, Any] | None): JSON body. A POST always sends it,
-                even when it is ``None``; a GET never sends one.
+            payload (MutableMapping[str, Any] | None): JSON body for a POST. ``None``
+                sends an empty body. A GET never sends a body.
 
         Returns:
             Any: The session's request context manager. A request the ADR 0002 guard

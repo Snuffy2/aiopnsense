@@ -5,7 +5,7 @@ from collections.abc import MutableMapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
-from .client_transport import _public_caller_name, _RequestKind
+from .client_transport import _SKIPPED_WHEN_CANCELLED, _public_caller_name, _RequestKind
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
 from .helpers import _LOGGER, _is_request_error_logged, _mark_request_error_logged
@@ -29,22 +29,6 @@ class _QueueEntry:
     future: asyncio.Future[Any]
     caller: str
     cancellation_state: _CancellablePostState | None = None
-
-
-def _skips_when_cancelled(kind: str) -> bool:
-    """Return whether a queued request of this kind is skipped once its caller cancelled.
-
-    Args:
-        kind (str): Queued request kind.
-
-    Returns:
-        bool: ``True`` for a known kind that is skipped; unknown kinds are not skipped
-            so that dispatch reports them.
-    """
-    try:
-        return _RequestKind(kind).skipped_when_cancelled
-    except ValueError:
-        return False
 
 
 class ClientQueueMixin:
@@ -237,7 +221,7 @@ class ClientQueueMixin:
                 entry: _QueueEntry = await self._request_queue.get()
                 future = entry.future
                 caller = entry.caller
-                if _skips_when_cancelled(entry.kind) and future.cancelled():
+                if entry.kind in _SKIPPED_WHEN_CANCELLED and future.cancelled():
                     continue
                 cancellation_state = entry.cancellation_state
                 if cancellation_state is not None:
