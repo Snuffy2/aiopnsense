@@ -52,15 +52,11 @@ def test_tests_do_not_read_production_endpoint_constants() -> None:
     """Fail when a test module imports or attribute-reads a production path constant."""
     names = _path_constants()
     assert "FIRMWARE_RUNNING_ENDPOINT" in names
-    violations = [
-        f"{path.relative_to(ROOT)}:{node.lineno}: {name}"
-        for path, module in _parse("tests").items()
-        for node in ast.walk(module)
-        for name in (
-            node.name if isinstance(node, ast.alias) else None,
-            node.attr if isinstance(node, ast.Attribute) else None,
-        )
-        if name in names
-    ]
+    violations: list[str] = []
+    for path, module in _parse("tests").items():
+        for node in ast.walk(module):
+            match node:
+                case ast.alias(name=name) | ast.Attribute(attr=name) if name in names:
+                    violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: {name}")
 
     assert not violations, "Write endpoint paths as string literals:\n" + "\n".join(violations)
