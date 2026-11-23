@@ -3,10 +3,12 @@
 Public behavior runs through ``make_router_client``. Tests that call
 ``_fetch_endpoint_outcome``, ``_check_endpoint_status``, ``_set_use_snake_case`` or
 ``_reset_endpoint_state`` target the endpoint availability layer itself, which has no
-public equivalent for an outcome read, a status-only check or a cache reset.
+public equivalent for an outcome read, a status-only check or a cache reset. Cache state
+is read and set only through the cache interface (``client._endpoint_cache``).
 """
 
 import asyncio
+from datetime import datetime, timedelta
 import logging
 from typing import Any
 from unittest.mock import AsyncMock
@@ -14,7 +16,10 @@ from unittest.mock import AsyncMock
 import aiohttp
 import pytest
 
+from aiopnsense import OPNsenseClient
+from aiopnsense._endpoint_cache import _CachedAnswer
 from aiopnsense._endpoint_outcome import _EndpointOutcome
+from aiopnsense.const import DEFAULT_CACHE_TTL_SECONDS
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
@@ -39,6 +44,19 @@ NUT_PATH = "/api/nut/diagnostics/upsstatus"
 NUT_DATA = {"status": {"ups.status": "OL"}}
 OUTCOME_PATH = "/api/test/outcome"
 POST_PATH = "/api/test/post"
+
+
+def _cached_answer(client: OPNsenseClient, key: str) -> _CachedAnswer | None:
+    """Return the fresh cached availability answer for a key.
+
+    Args:
+        client (OPNsenseClient): Client whose endpoint cache is read.
+        key (str): Method-aware endpoint cache key.
+
+    Returns:
+        _CachedAnswer | None: The fresh answer, or ``None`` when there is none.
+    """
+    return client._endpoint_cache.lookup(key, datetime.now().astimezone())[0]
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):
@@ -97,17 +115,14 @@ async def test_validate_reprobes_cached_403_in_throw_mode(
     try:
         path = FIRMWARE_STATUS_PATH
         assert (await client._check_endpoint_status(path)).is_absent
-        assert client._endpoint_availability[path] is False
-        assert path in client._endpoint_permission_denied
+        assert _cached_answer(client, path) is _CachedAnswer.PERMISSION_DENIED
 
         with pytest.raises(OPNsensePrivilegeMissing):
             await client.validate(require_device_id=False)
 
         assert router.count("GET", path) == 2
         assert client._throw_errors is False
-        assert path not in client._endpoint_availability
-        assert path not in client._endpoint_checked_at
-        assert path not in client._endpoint_permission_denied
+        assert _cached_answer(client, path) is None
     finally:
         await client.async_close()
 
@@ -171,8 +186,7 @@ async def test_validate_maps_endpoint_probe_http_errors_to_public_exceptions(
             await client.validate()
         assert router.count("GET", path) == 1
         assert client._throw_errors is False
-        assert path not in client._endpoint_checked_at
-        assert path not in client._endpoint_availability
+        assert _cached_answer(client, path) is None
     finally:
         await client.async_close()
 
@@ -678,7 +692,12 @@ async def test_absent_endpoint_is_cached_until_ttl_expires(
         assert await client.get_nut_ups_status() == {}
         assert router.count("GET", NUT_PATH) == 1
 
-        client._endpoint_cache_ttl_seconds = 0
+        # Age the cached answer to exactly the TTL, at which it is expired.
+        cache = client._endpoint_cache
+        now = datetime.now().astimezone()
+        answer, ticket = cache.lookup(NUT_PATH, now)
+        assert answer is _CachedAnswer.ABSENT
+        cache.record(NUT_PATH, answer, now - timedelta(seconds=DEFAULT_CACHE_TTL_SECONDS), ticket)
         router.routes[("GET", NUT_PATH)] = NUT_DATA
         assert await client.get_nut_ups_status() == NUT_DATA
         assert router.count("GET", NUT_PATH) == 2
