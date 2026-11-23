@@ -1,8 +1,7 @@
 """Raw HTTP transport and response coercion helpers for OPNsenseClient."""
 
 import asyncio
-import codecs
-from collections.abc import AsyncGenerator, MutableMapping
+from collections.abc import AsyncGenerator, AsyncIterator, MutableMapping
 from enum import StrEnum
 import json
 import sys
@@ -20,11 +19,29 @@ from ._request_failure import (
     _report_http_failure,
     _report_transport_failure,
 )
+from ._sse_decoder import _SseDecoder, _SseItem, _SseMessage, _SseRejection, _SseRejectionReason
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from .exceptions import OPNsenseError
 from .helpers import _LOGGER, _log_request_recovery, _mark_request_error_logged
 
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
+
+
+async def _sse_items(chunks: AsyncIterator[bytes]) -> AsyncGenerator[_SseItem]:
+    """Decode a bytes stream into server-sent-event items.
+
+    Args:
+        chunks (AsyncIterator[bytes]): Bytes chunks of the response body.
+
+    Yields:
+        _SseItem: Each item completed by a chunk, then those from the end-of-stream flush.
+    """
+    decoder = _SseDecoder()
+    async for chunk in chunks:
+        for item in decoder.feed(chunk):
+            yield item
+    for item in decoder.finish():
+        yield item
 
 
 class _RequestKind(StrEnum):
@@ -334,110 +351,39 @@ class ClientTransportMixin:
                     return
 
                 recovered = False
-                decoder = codecs.getincrementaldecoder("utf-8")()
-                buffer = ""
-                pending_cr = False
 
-                def _drain_buffer(
-                    source_buffer: str,
-                ) -> tuple[str, list[dict[str, Any]]]:
-                    """Drain complete JSON SSE events from a text buffer.
-
-                    Args:
-                        source_buffer (str): Buffered stream text to parse.
-
-                    Returns:
-                        tuple[str, list[dict[str, Any]]]: Remaining unparsed buffer
-                            text and decoded JSON events.
-                    """
-                    nonlocal recovered
-                    events: list[dict[str, Any]] = []
-                    drain_buffer = source_buffer
-                    while "\n\n" in drain_buffer:
-                        message, drain_buffer = drain_buffer.split("\n\n", 1)
-                        data_lines: list[str] = []
-                        for line in message.splitlines():
-                            if not line.startswith("data:"):
-                                continue
-                            value = line[len("data:") :]
-                            value = value.removeprefix(" ")
-                            data_lines.append(value)
-
-                        if not data_lines:
-                            continue
-
-                        response_str = "\n".join(data_lines)
-                        try:
-                            response_json = json.loads(response_str)
-                        except json.JSONDecodeError:
-                            _LOGGER.debug("Skipping malformed stream JSON event: %s", response_str)
-                            if yield_reset_events:
-                                events.append({_STREAM_JSON_EVENT_RESET_KEY: True})
-                            continue
-                        if not isinstance(response_json, MutableMapping):
+                async for item in _sse_items(response.content.iter_chunked(1024)):
+                    match item:
+                        case _SseMessage(payload=payload):
+                            if not recovered:
+                                _log_request_recovery(self, "get", path, _STREAM_PHASE)
+                                recovered = True
+                            yield payload
+                        case _SseRejection(reason=_SseRejectionReason.TRUNCATED_UTF8):
                             _LOGGER.debug(
-                                "Skipping non-mapping stream JSON event: %s (%s)",
-                                response_str,
-                                type(response_json).__name__,
+                                "Dropping incomplete UTF-8 trailing bytes in "
+                                "_stream_json_events: %s",
+                                item.error,
+                            )
+                        case _SseRejection(reason=_SseRejectionReason.INVALID_UTF8):
+                            _LOGGER.debug(
+                                "Dropping incomplete UTF-8 chunk in _stream_json_events: %s",
+                                item.error,
                             )
                             if yield_reset_events:
-                                events.append({_STREAM_JSON_EVENT_RESET_KEY: True})
-                            continue
-                        if not recovered:
-                            _log_request_recovery(self, "get", path, _STREAM_PHASE)
-                            recovered = True
-                        events.append(dict(response_json))
-
-                    return drain_buffer, events
-
-                async for chunk in response.content.iter_chunked(1024):
-                    try:
-                        chunk_text = decoder.decode(chunk)
-                    except UnicodeDecodeError as err:
-                        _LOGGER.debug(
-                            "Dropping incomplete UTF-8 chunk in _stream_json_events: %s",
-                            err,
-                        )
-                        if yield_reset_events:
-                            yield {_STREAM_JSON_EVENT_RESET_KEY: True}
-                        decoder = codecs.getincrementaldecoder("utf-8")()
-                        buffer = ""
-                        pending_cr = False
-                        continue
-                    if pending_cr:
-                        chunk_text = f"\r{chunk_text}"
-                        pending_cr = False
-
-                    if chunk_text.endswith("\r"):
-                        chunk_text = chunk_text[:-1]
-                        pending_cr = True
-
-                    buffer += chunk_text.replace("\r\n", "\n").replace("\r", "\n")
-                    buffer, events = _drain_buffer(buffer)
-                    for event in events:
-                        yield event
-                try:
-                    tail_text = decoder.decode(b"", final=True)
-                except UnicodeDecodeError as err:
-                    _LOGGER.debug(
-                        "Dropping incomplete UTF-8 trailing bytes in _stream_json_events: %s",
-                        err,
-                    )
-                    tail_text = ""
-                if pending_cr:
-                    tail_text = f"\r{tail_text}"
-                if tail_text:
-                    if tail_text.endswith("\r"):
-                        tail_text = tail_text[:-1]
-                        pending_cr = True
-                    if tail_text:
-                        buffer += tail_text.replace("\r\n", "\n").replace("\r", "\n")
-                if pending_cr:
-                    buffer += "\n"
-
-                buffer, events = _drain_buffer(buffer)
-                for event in events:
-                    yield event
+                                yield {_STREAM_JSON_EVENT_RESET_KEY: True}
+                        case _SseRejection(reason=_SseRejectionReason.MALFORMED_JSON):
+                            _LOGGER.debug("Skipping malformed stream JSON event: %s", item.text)
+                            if yield_reset_events:
+                                yield {_STREAM_JSON_EVENT_RESET_KEY: True}
+                        case _SseRejection():
+                            _LOGGER.debug(
+                                "Skipping non-mapping stream JSON event: %s (%s)",
+                                item.text,
+                                item.json_type,
+                            )
+                            if yield_reset_events:
+                                yield {_STREAM_JSON_EVENT_RESET_KEY: True}
         except (aiohttp.ClientError, TimeoutError) as err:
             transport_error = _report_transport_failure(
                 self,

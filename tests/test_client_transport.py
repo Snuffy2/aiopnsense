@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-import aiopnsense.client_transport
 from aiopnsense.client_transport import _STREAM_JSON_EVENT_RESET_KEY
 from aiopnsense.const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from aiopnsense.exceptions import (
@@ -552,63 +551,6 @@ async def test_stream_json_events_returns_empty_sequence_for_non_ok_response_whe
 
 
 @pytest.mark.asyncio
-async def test_stream_json_events_skips_non_data_lines_before_valid_data_message(
-    make_client: Callable[..., Any],
-    fake_stream_response_factory: FakeStreamResponseFactory,
-) -> None:
-    """Comment and event metadata lines should be ignored until a data line arrives.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
-        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying metadata and data SSE frames.
-    """
-    session = MagicMock()
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        [
-            b': keep-alive\nevent: update\nid: 7\ndata: {"time": 6, "interfaces": {}}\n\n',
-        ]
-    )
-    client = make_client(session=session)
-    try:
-        events = [
-            event async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1")
-        ]
-
-        assert events == [{"time": 6, "interfaces": {}}]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_json_events_skips_comment_only_frame_before_later_data_message(
-    make_client: Callable[..., Any],
-    fake_stream_response_factory: FakeStreamResponseFactory,
-) -> None:
-    """Frames without any data lines should be skipped without suppressing later events.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
-        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying comment-only and data frames.
-    """
-    session = MagicMock()
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        [
-            b": keep-alive\nevent: ping\n\n",
-            b'data: {"time": 7, "interfaces": {}}\n\n',
-        ]
-    )
-    client = make_client(session=session)
-    try:
-        events = [
-            event async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1")
-        ]
-
-        assert events == [{"time": 7, "interfaces": {}}]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_stream_json_events_sets_connect_and_read_timeouts(
     make_client: Callable[..., Any],
     fake_stream_response_factory: Callable[..., FakeResponse],
@@ -680,436 +622,75 @@ async def test_stream_json_events_allows_read_timeout_override(
 
 
 @pytest.mark.asyncio
-async def test_stream_json_events_skips_malformed_json(
-    make_client: Callable[..., Any],
-    fake_stream_response_factory: Callable[..., FakeResponse],
-) -> None:
-    """Malformed data messages should be skipped while the stream continues.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying malformed and valid JSON frames.
-    """
-    session = MagicMock()
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        chunks=[
-            b"data: not-json\n\n",
-            b'data: {"time": 3, "interfaces": {}}\n\n',
-        ]
-    )
-    client = make_client(session=session)
-    try:
-        events: list[dict[str, Any]] = []
-        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
-            events.append(event)
-            break
-
-        assert events == [{"time": 3, "interfaces": {}}]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_json_events_yields_reset_marker_for_malformed_json_when_requested(
-    make_client: Callable[..., Any],
-    fake_stream_response_factory: Callable[..., FakeResponse],
-) -> None:
-    """Malformed JSON payloads can request an internal reseed marker.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure reset-marker stream handling.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying malformed and valid JSON frames.
-    """
-    session = MagicMock()
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        chunks=[
-            b"data: not-json\n\n",
-            b'data: {"time": 3, "interfaces": {}}\n\n',
-        ]
-    )
-    client = make_client(session=session)
-    try:
-        events: list[dict[str, Any]] = []
-        async for event in client._stream_json_events(
-            "/api/diagnostics/traffic/stream/1", yield_reset_events=True
-        ):
-            events.append(event)
-            if len(events) == 2:
-                break
-
-        assert events == [{_STREAM_JSON_EVENT_RESET_KEY: True}, {"time": 3, "interfaces": {}}]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_json_events_recovers_after_invalid_utf8_chunk(
-    make_client: Callable[..., Any],
-    fake_stream_response_factory: Callable[..., FakeResponse],
-) -> None:
-    """Invalid UTF-8 chunks should be dropped while later events are still emitted.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure the recovering SSE client.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying invalid UTF-8 between valid events.
-    """
-    session = MagicMock()
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        [
-            b'data: {"time": 1}\n\n',
-            b"\xff\xfe\xfd",
-            b'data: {"time": 2}\n\n',
-        ]
-    )
-    client = make_client(session=session)
-    try:
-        events: list[dict[str, Any]] = []
-        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
-            events.append(event)
-            if len(events) == 2:
-                break
-
-        assert events == [{"time": 1}, {"time": 2}]
-        assert all(_STREAM_JSON_EVENT_RESET_KEY not in event for event in events)
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_json_events_yields_reset_marker_when_requested(
-    make_client: Callable[..., Any],
-    fake_stream_response_factory: Callable[..., FakeResponse],
-) -> None:
-    """Opt-in decode reset signaling should emit a private stream reset marker.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure reset-marker stream handling.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying invalid UTF-8 between valid events.
-    """
-    session = MagicMock()
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        [
-            b'data: {"time": 1}\n\n',
-            b"\xff\xfe\xfd",
-            b'data: {"time": 2}\n\n',
-        ]
-    )
-    client = make_client(session=session)
-    try:
-        events: list[dict[str, Any]] = []
-        async for event in client._stream_json_events(
-            "/api/diagnostics/traffic/stream/1", yield_reset_events=True
-        ):
-            events.append(event)
-            if len(events) == 3:
-                break
-
-        assert events == [
-            {"time": 1},
-            {_STREAM_JSON_EVENT_RESET_KEY: True},
-            {"time": 2},
-        ]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_json_events_reassembles_split_multiline_json_event(
+@pytest.mark.parametrize(
+    "bad_chunk",
+    [
+        pytest.param(b"data: not-json\n\n", id="malformed-json"),
+        pytest.param(b"data: [1, 2]\n\n", id="non-mapping-json"),
+        pytest.param(b"\xff\xfe\xfd", id="invalid-utf8"),
+    ],
+)
+@pytest.mark.parametrize("yield_reset_events", [False, True])
+async def test_stream_json_events_reset_events_only_when_requested(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
+    bad_chunk: bytes,
+    yield_reset_events: bool,
 ) -> None:
-    """Split and multiline SSE data lines should reassemble into one JSON object.
+    """Rejected input yields a reset event only on request and never stops the stream.
 
     Args:
         make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
-        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying a split multiline SSE event.
+        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying the SSE chunks.
+        bad_chunk (bytes): A chunk the decoder rejects.
+        yield_reset_events (bool): Whether reset events are requested.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
-        [
-            b'data: {"time": 10,\r\n',
-            b'data: "interfaces": {"wan": {"rx_bytes": 11}}\r\n',
-            b"data: }\r\n\r\n",
-        ]
-    )
-    client = make_client(session=session)
-    try:
-        events: list[dict[str, Any]] = []
-        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
-            events.append(event)
-            break
-        assert events == [{"time": 10, "interfaces": {"wan": {"rx_bytes": 11}}}]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_json_events_reassembles_split_multibyte_utf8_event(
-    make_client: Callable[..., Any],
-    fake_stream_response_factory: FakeStreamResponseFactory,
-) -> None:
-    """Split UTF-8 multibyte sequences across chunks should decode without error.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
-        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying split multibyte UTF-8 event chunks.
-    """
-    event_json = json.dumps(
-        {
-            "time": 11,
-            "interfaces": {
-                "wan": {
-                    "interface": "wlan-é",
-                    "name": None,
-                    "description": "Café",
-                    "bytes received": 120,
-                    "bytes transmitted": 240,
-                }
-            },
-        },
-        ensure_ascii=False,
-    ).encode("utf-8")
-    event_payload = f"data: {event_json.decode('utf-8')}\n\n".encode()
-    accent_index = event_payload.index("é".encode()) + 1
-    chunks = [
-        b'data: {"time": 9, "interfaces": {"wan": {"bytes received": 0, "bytes transmitted": 0}}}\n\n',
-        event_payload[:accent_index],
-        event_payload[accent_index:],
-    ]
-    session = MagicMock()
-    session.get = lambda *a, **k: fake_stream_response_factory(chunks)
-    client = make_client(session=session)
-    try:
-        events: list[dict[str, Any]] = []
-        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
-            events.append(event)
-            if len(events) == 2:
-                break
-
-        assert len(events) == 2
-        assert events[1]["interfaces"] == {
-            "wan": {
-                "interface": "wlan-é",
-                "name": None,
-                "description": "Café",
-                "bytes received": 120,
-                "bytes transmitted": 240,
-            }
-        }
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_json_events_ignores_trailing_incomplete_utf8_chunk(
-    make_client: Callable[..., Any],
-    fake_stream_response_factory: FakeStreamResponseFactory,
-) -> None:
-    """Trailing incomplete UTF-8 bytes should not raise and should drop only partial event.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
-        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying an incomplete final UTF-8 event.
-    """
-    incomplete_event_json = json.dumps(
-        {"time": 12, "interfaces": {"wan": {"description": "Café"}}},
-        ensure_ascii=False,
-    ).encode("utf-8")
-    incomplete_payload = f"data: {incomplete_event_json.decode('utf-8')}\n\n".encode()
-    leading_byte_index = incomplete_payload.index("é".encode())
-    leading_byte_index += 1
-
-    session = MagicMock()
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        [
-            b'data: {"time": 11}\n\n',
-            incomplete_payload[:leading_byte_index],
-        ]
-    )
-    client = make_client(session=session)
-    try:
-        events: list[dict[str, Any]] = []
-        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
-            events.append(event)
-
-        assert events == [{"time": 11}]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_json_events_appends_final_decoder_tail_text_at_eof(
-    make_client: Callable[..., Any],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """EOF tail text from the incremental decoder should complete the final JSON event.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
-        monkeypatch (pytest.MonkeyPatch): Fixture used to install the EOF-tail decoder stub.
-    """
-
-    class _FakeIncrementalDecoder:
-        """Minimal decoder stub that defers completion until EOF."""
-
-        def decode(self, _data: bytes, final: bool = False) -> str:
-            """Return the partial frame on chunk decode and the tail on EOF.
-
-            Args:
-                _data (bytes): Encoded input ignored by this deterministic stub.
-                final (bool): Whether the caller is flushing the decoder at EOF.
-
-            Returns:
-                str: An incomplete event chunk, or its closing tail at EOF.
-            """
-            if final:
-                return "}\n\n"
-            return 'data: {"time": 23'
-
-    def fake_getincrementaldecoder(_encoding: str) -> Callable[[], _FakeIncrementalDecoder]:
-        """Return the fake incremental decoder factory used by this test.
-
-        Args:
-            _encoding (str): Encoding name ignored by the deterministic decoder stub.
-
-        Returns:
-            Callable[[], _FakeIncrementalDecoder]: Factory for the decoder that returns its tail at EOF.
-        """
-        return _FakeIncrementalDecoder
-
-    monkeypatch.setattr(
-        aiopnsense.client_transport.codecs, "getincrementaldecoder", fake_getincrementaldecoder
-    )
-
-    session = MagicMock()
-    session.get = lambda *a, **k: FakeResponse(
-        status=200,
-        reason="OK",
-        ok=True,
-        stream_chunks=[b"ignored chunk payload"],
-        include_request_info=True,
+        [b'data: {"time": 1}\n\n', bad_chunk, b'data: {"time": 2}\n\n']
     )
     client = make_client(session=session)
     try:
         events = [
-            event async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1")
+            event
+            async for event in client._stream_json_events(
+                "/api/diagnostics/traffic/stream/1", yield_reset_events=yield_reset_events
+            )
         ]
-
-        assert events == [{"time": 23}]
+        reset: dict[str, Any] = {_STREAM_JSON_EVENT_RESET_KEY: True}
+        expected_resets = [reset] if yield_reset_events else []
+        assert events == [{"time": 1}, *expected_resets, {"time": 2}]
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_stream_json_events_reassembles_split_crlf_boundary_multiline_json_event(
+@pytest.mark.parametrize("yield_reset_events", [False, True])
+async def test_stream_json_events_truncated_utf8_at_eof_yields_no_reset_event(
     make_client: Callable[..., Any],
     fake_stream_response_factory: FakeStreamResponseFactory,
+    yield_reset_events: bool,
 ) -> None:
-    """Split CRLF frame separators across chunks should still reassemble a valid event.
+    """A UTF-8 sequence cut off at end of stream is dropped without a reset event.
 
     Args:
         make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
-        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying chunks split across CRLF boundaries.
+        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying the SSE chunks.
+        yield_reset_events (bool): Whether reset events are requested.
     """
     session = MagicMock()
     session.get = lambda *a, **k: fake_stream_response_factory(
-        [
-            b'data: {"time": 11,\r',
-            b'\ndata: "interfaces": {"wan": {"rx_bytes": 12}}\r',
-            b"data: }\r",
-            b"\n\r\n",
-        ]
-    )
-    client = make_client(session=session)
-    try:
-        events: list[dict[str, Any]] = []
-        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
-            events.append(event)
-            break
-        assert events == [{"time": 11, "interfaces": {"wan": {"rx_bytes": 12}}}]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_json_events_yields_eof_complete_event(
-    make_client: Callable[..., Any],
-    fake_stream_response_factory: FakeStreamResponseFactory,
-) -> None:
-    """Stream parser should emit a complete SSE event when only EOF terminates it.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
-        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying an event terminated only by EOF.
-    """
-    session = MagicMock()
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        [b'data: {"time": 21, "interfaces": {"wan": {"rx_bytes": 1}}}\n\r']
-    )
-    client = make_client(session=session)
-    try:
-        events: list[dict[str, Any]] = []
-        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
-            events.append(event)
-
-        assert events == [{"time": 21, "interfaces": {"wan": {"rx_bytes": 1}}}]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_json_events_preserves_leading_spaces_in_json_values(
-    make_client: Callable[..., Any],
-    fake_stream_response_factory: Callable[..., FakeResponse],
-) -> None:
-    """SSE payload whitespace should not strip leading spaces from JSON values.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
-        fake_stream_response_factory (Callable[..., FakeResponse]): Factory supplying a data field with leading spaces.
-    """
-    session = MagicMock()
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        [b'data:   {"time": 22, "name": "  leading"}\n\n']
+        [b'data: {"time": 1}\n\n', b'data: {"a": "x\xc3']
     )
     client = make_client(session=session)
     try:
         events = [
-            event async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1")
+            event
+            async for event in client._stream_json_events(
+                "/api/diagnostics/traffic/stream/1", yield_reset_events=yield_reset_events
+            )
         ]
-
-        assert events == [{"time": 22, "name": "  leading"}]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_json_events_skips_non_mapping_json_events(
-    make_client: Callable[..., Any],
-    fake_stream_response_factory: FakeStreamResponseFactory,
-) -> None:
-    """Non-mapping JSON SSE events should be skipped and later mapping events yielded.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to configure the SSE stream client.
-        fake_stream_response_factory (FakeStreamResponseFactory): Factory supplying scalar, list, and mapping JSON events.
-    """
-    session = MagicMock()
-    session.get = lambda *a, **k: fake_stream_response_factory(
-        [
-            b"data: [1, 2, 3]\n\n",
-            b"data: 1\n\n",
-            b'data: {"time": 9, "interfaces": {}}\n\n',
-        ]
-    )
-    client = make_client(session=session)
-    try:
-        events: list[dict[str, Any]] = []
-        async for event in client._stream_json_events("/api/diagnostics/traffic/stream/1"):
-            events.append(event)
-            if len(events) == 1:
-                break
-        assert events == [{"time": 9, "interfaces": {}}]
+        assert events == [{"time": 1}]
     finally:
         await client.async_close()
 
