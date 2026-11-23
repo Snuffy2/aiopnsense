@@ -9,6 +9,7 @@ import aiohttp
 
 from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _raise_if_throwing, _throws_errors
+from ._firmware_request_guard import _send_request
 from ._request_failure import (
     _PROBE_PHASE,
     _REQUEST_PHASE,
@@ -305,8 +306,9 @@ class ClientEndpointMixin:
         cache_generation = self._endpoint_cache_generation
 
         try:
-            request = getattr(self._session, normalized_method)
-            async with request(
+            async with _send_request(
+                self._session,
+                normalized_method,
                 url,
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),

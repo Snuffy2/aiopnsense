@@ -13,6 +13,7 @@ import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._error_policy import _log_errors
+from ._firmware_request_guard import _send_request
 from ._typing import AiopnsenseClientProtocol
 from .const import (
     AMBIGUOUS_TZINFOS,
@@ -459,9 +460,10 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             _opnsense_http_error: Non-successful HTTP response.
         """
         self._rest_api_query_count += 1
-        request = self._session.post if post else self._session.get
         try:
-            async with request(
+            async with _send_request(
+                self._session,
+                "post" if post else "get",
                 f"{self._url}{path}",
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),

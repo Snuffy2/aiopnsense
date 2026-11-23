@@ -12,6 +12,7 @@ import pytest
 
 from aiopnsense import (
     OPNsenseError,
+    OPNsenseInvalidArgument,
     client_queue as aiopnsense_client_queue,
     unbound as aiopnsense_unbound,
     vpn as aiopnsense_vpn,
@@ -2129,5 +2130,35 @@ async def test_malformed_json_outcome_read_follows_public_error_policy(
         else:
             assert await client.get_nut_ups_status() is None
         assert requests == [f"http://localhost{endpoint}"]
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize("action", ["info", "status"])
+@pytest.mark.parametrize("throw_errors", [True, False])
+async def test_queued_public_request_cannot_reach_forbidden_firmware_action(
+    make_client: MakeClientFactory,
+    action: str,
+    throw_errors: bool,
+) -> None:
+    """Block a changelog version that resolves to a forbidden firmware action.
+
+    The block raises when errors are thrown. Otherwise the call returns an empty dict.
+
+    Args:
+        make_client (MakeClientFactory): Client factory.
+        action (str): Forbidden firmware action reached through a dot segment.
+        throw_errors (bool): Whether the client raises public errors.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.toggle_throwing_errors(throw_errors)
+    try:
+        if throw_errors:
+            with pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
+                await asyncio.wait_for(client.firmware_changelog(f"../{action}"), timeout=3)
+        else:
+            result = await asyncio.wait_for(client.firmware_changelog(f"../{action}"), timeout=3)
+            assert result == {}
+        session.post.assert_not_called()
     finally:
         await client.async_close()

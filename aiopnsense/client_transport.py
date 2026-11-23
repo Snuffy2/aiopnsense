@@ -10,6 +10,7 @@ import aiohttp
 
 from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _raise_if_throwing
+from ._firmware_request_guard import _send_request
 from ._request_failure import (
     _REQUEST_PHASE,
     _STREAM_PHASE,
@@ -92,7 +93,9 @@ class ClientTransportMixin:
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[get_from_stream] path: %s", path)
         try:
-            async with self._session.get(
+            async with _send_request(
+                self._session,
+                "get",
                 url,
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
@@ -177,7 +180,9 @@ class ClientTransportMixin:
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[stream_json_events] path: %s", path)
         try:
-            async with self._session.get(
+            async with _send_request(
+                self._session,
+                "get",
                 url,
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(
@@ -344,7 +349,9 @@ class ClientTransportMixin:
         _LOGGER.debug("[get] path: %s", path)
         timeout_total: float = self._normalize_timeout_seconds(timeout_seconds)
         try:
-            async with self._session.get(
+            async with _send_request(
+                self._session,
+                "get",
                 url,
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=aiohttp.ClientTimeout(total=timeout_total),
@@ -433,11 +440,9 @@ class ClientTransportMixin:
             "ssl": self._verify_ssl,
         }
         try:
-            if method == "GET":
-                request = self._session.get(url, **request_kwargs)
-            else:
-                request = self._session.post(url, json=payload, **request_kwargs)
-            async with request as response:
+            if method != "GET":
+                request_kwargs["json"] = payload
+            async with _send_request(self._session, method_name, url, **request_kwargs) as response:
                 _LOGGER.debug("[%s] Response %s: %s", method_name, response.status, response.reason)
                 if response.status == 404:
                     return _EndpointOutcome.absent()
@@ -595,7 +600,9 @@ class ClientTransportMixin:
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[post] path: %s", path)
         try:
-            async with self._session.post(
+            async with _send_request(
+                self._session,
+                "post",
                 url,
                 json=payload,
                 auth=aiohttp.BasicAuth(self._username, self._password),
