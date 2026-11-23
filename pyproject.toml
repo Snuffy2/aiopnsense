@@ -85,7 +85,7 @@ parallel = false
 
 [tool.pytest.ini_options]
 addopts = """
-  --quiet
+  --no-header
   --timeout=20
   --durations=10
   -o console_output_style=progress
@@ -95,6 +95,7 @@ addopts = """
 """
 testpaths = ["tests"]
 asyncio_mode = "auto"
+verbosity_test_cases = -1
 
 [tool.coverage.report]
 show_missing = true

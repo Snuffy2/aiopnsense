@@ -61,3 +61,7 @@ Standards for code in `aiopnsense/` and `tests/`. Rules that `ruff`, `mypy` or `
 - Put tests that need real queue worker tasks in `tests/test_client_base.py` or `tests/test_client_queue.py`. The autouse `_patch_asyncio_create_task` fixture in `tests/conftest.py` replaces worker tasks with stubs in every other test module.
 - Inject errors into a mocked call with `AsyncMock(side_effect=[...])`. A test helper that does `raise exc` on a variable trips `pydoclint` (DOC501 and DOC503) and forces a `Raises` section that cannot match.
 - Add or update tests with every behavior change, and update the documentation it affects.
+
+## Validation
+
+- Run `./.venv/bin/python scripts/check_changed_coverage.py [BASE]` to check changed statement coverage (defaults to `origin/main`; use `--coverage-json PATH` to reuse coverage from the same worktree).
