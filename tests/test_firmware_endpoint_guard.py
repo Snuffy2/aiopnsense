@@ -408,6 +408,7 @@ def test_production_code_follows_firmware_endpoint_rule() -> None:
         ("await self._safe_dict_get(path=FIRMWARE_STATUS_ENDPOINT, post=True)", "status"),
         ("await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT, **value)", "status"),
         ("await self._session.post(FIRMWARE_STATUS_ENDPOINT)", "status"),
+        ("await other._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)", "status"),
         ('await self._post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}status")', "status"),
         ("path = FIRMWARE_STATUS_ENDPOINT", "status"),
         ("await self._do_post(fw.FIRMWARE_STATUS_ENDPOINT)", "status"),
@@ -544,8 +545,35 @@ async def request(client):
                 "aiopnsense/other.py:6: /api/core/firmware/status",
             ],
         ),
+        (
+            """
+BASE: str = "/api/core/firmware/status"
+
+async def request(client):
+    await client._do_post(BASE)
+""",
+            [
+                "aiopnsense/other.py:2: /api/core/firmware/status",
+                "aiopnsense/other.py:5: /api/core/firmware/status",
+            ],
+        ),
+        (
+            """
+BASE = "/api/core/firmware/status"
+BASE = compute()
+
+async def request(client):
+    await client._do_post(BASE)
+""",
+            ["aiopnsense/other.py:2: /api/core/firmware/status"],
+        ),
     ],
-    ids=["unguarded-final-value", "guarded-final-value"],
+    ids=[
+        "unguarded-final-value",
+        "guarded-final-value",
+        "annotated-value-replayed",
+        "unknown-reassignment-forgets",
+    ],
 )
 def test_module_constant_is_replayed_in_source_order(other: str, expected: list[str]) -> None:
     """Resolve each assignment against earlier values, and uses in function bodies against the final value.
@@ -617,6 +645,32 @@ def test_guard_allows_action_prefix_in_install_methods(method: str, statement: s
     source = _firmware_source(statement, method=method)
 
     assert _source_violations({FIRMWARE_MODULE: source}) == []
+
+
+@pytest.mark.parametrize(
+    ("statement", "endpoint"),
+    [
+        ('await self._safe_dict_get("/api/core/firmware/info")', "info"),
+        ("await self._do_post(FIRMWARE_STATUS_ENDPOINT)", "status"),
+        ("await self._do_post(FIRMWARE_CHECK_ENDPOINT)", "check"),
+    ],
+)
+def test_guard_rejects_non_action_paths_in_install_method(statement: str, endpoint: str) -> None:
+    """Report status and other endpoint paths that ``install_firmware`` reaches.
+
+    Only the action prefix is exempt in the install methods, so every other endpoint
+    reached from ``install_firmware`` is reported for its own endpoint.
+
+    Args:
+        statement (str): Statement added to ``install_firmware``.
+        endpoint (str): Firmware endpoint the statement must be reported for.
+    """
+    violations = _source_violations(
+        {FIRMWARE_MODULE: _firmware_source(statement, method="install_firmware")}
+    )
+
+    assert len(violations) == 1
+    assert violations[0].endswith(_violation_label(endpoint))
 
 
 @pytest.mark.parametrize(
