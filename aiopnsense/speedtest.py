@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-from collections.abc import MutableMapping
 from typing import Any
 
 from ._error_policy import _log_errors
@@ -38,20 +37,22 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
                 ``average`` sections for download, upload, and latency. Latest
                 results include server, date, and URL metadata; averages
                 include min, max, sample count, and period bounds. Returns
-                ``{"available": False}`` when the plugin endpoint is missing.
+                ``{"available": False}`` when show-log is absent (404 in either mode),
+                or on 403/transient HTTP or transport failures with ``throw_errors`` off.
+                Those failures raise ``OPNsenseError`` when enabled. Undecodable JSON
+                returns ``None`` when errors are disabled and raises ``OPNsenseError``
+                otherwise.
         """
-        if not await self._is_get_endpoint_available(SPEEDTEST_SHOW_LOG_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(SPEEDTEST_SHOW_LOG_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Speedtest not installed")
             return {"available": False}
 
-        latest_result = self._parse_showlog_latest(
-            await self._safe_list_get(SPEEDTEST_SHOW_LOG_ENDPOINT)
-        )
-        if await self._is_get_endpoint_available(SPEEDTEST_SHOW_STAT_ENDPOINT):
-            show_stat = await self._safe_dict_get(SPEEDTEST_SHOW_STAT_ENDPOINT)
-        else:
+        latest_result = self._parse_showlog_latest(outcome.sequence())
+        stat_outcome = await self._fetch_endpoint_outcome(SPEEDTEST_SHOW_STAT_ENDPOINT)
+        if not stat_outcome.is_data:
             _LOGGER.debug("Speedtest statistics endpoint unavailable")
-            show_stat = {}
+        show_stat = stat_outcome.mapping()
 
         server_id = latest_result.get("server_id")
         server_name = latest_result.get("server")
@@ -130,17 +131,21 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Response mapping from the Speedtest ``run``
-                endpoint, or an empty mapping when the plugin endpoint is
-                unavailable or returns a malformed payload.
+                endpoint, or an empty mapping when the availability check finds the
+                endpoint absent (404 in either mode), or a 403/transient HTTP or
+                transport failure with ``throw_errors`` off. Those failures raise
+                ``OPNsenseError`` when enabled. The run request is ungated, so its
+                HTTP/transport failures, including 404, raise ``OPNsenseError`` when
+                enabled and return an empty mapping otherwise. Non-mapping JSON also
+                returns an empty mapping. Undecodable JSON returns ``None`` when errors
+                are disabled and raises ``OPNsenseError`` otherwise.
         """
-        if not await self._is_get_endpoint_available(SPEEDTEST_SHOW_LOG_ENDPOINT):
+        status = await self._check_endpoint_status(SPEEDTEST_SHOW_LOG_ENDPOINT)
+        if not status.is_data:
             _LOGGER.debug("Speedtest not installed")
             return {}
 
-        response = await self._safe_dict_get_with_timeout(
+        return await self._safe_dict_get_with_timeout(
             SPEEDTEST_RUN_ENDPOINT,
             timeout_seconds=180,
         )
-        if not isinstance(response, MutableMapping):
-            return {}
-        return dict(response)

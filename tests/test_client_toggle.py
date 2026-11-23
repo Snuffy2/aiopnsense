@@ -569,7 +569,7 @@ _ALIAS_RECONFIGURE = "/api/firewall/alias/reconfigure"
 async def test_toggle_alias_unavailable_search_endpoint_returns_false(
     scripted_router: ScriptedRouter,
 ) -> None:
-    """An alias Toggle fails without sending anything when the alias listing is unavailable.
+    """An alias Toggle sends only the listing read when the alias listing is unavailable.
 
     Args:
         scripted_router (ScriptedRouter): Scripted Router fixture.
@@ -577,7 +577,7 @@ async def test_toggle_alias_unavailable_search_endpoint_returns_false(
     client = scripted_router.client()
 
     assert await client.toggle_alias("alias1", "on") is False
-    assert not scripted_router.requests
+    assert [r.path for r in scripted_router.requests] == [_ALIAS_SEARCH]
 
 
 @pytest.mark.parametrize(

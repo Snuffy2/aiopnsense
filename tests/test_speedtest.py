@@ -11,6 +11,7 @@ import pytest
 from aiopnsense import OPNsenseClient
 from aiopnsense._endpoint_outcome import _EndpointOutcome
 from aiopnsense.exceptions import OPNsenseConnectionError
+from aiopnsense.system import SYSTEM_TIME_ENDPOINT
 from tests.conftest import make_mock_session_client, stub_endpoint_outcome
 
 ClientType = Callable[..., OPNsenseClient]
@@ -25,14 +26,12 @@ async def test_get_speedtest_skips_calls_when_endpoint_missing(make_client: Clie
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_list_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
 
         result = await client.get_speedtest()
 
         assert result == {"available": False}
-        client._safe_list_get.assert_not_awaited()
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/speedtest/service/showlog")
+        read.assert_awaited_once_with("/api/speedtest/service/showlog")
     finally:
         await client.async_close()
 
@@ -46,31 +45,33 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client: Cl
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, True])
-        client._safe_list_get = AsyncMock(
-            return_value=[
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
+        read.side_effect = [
+            _EndpointOutcome.data(
                 [
-                    "2026-03-14T03:09:45",
-                    "198.51.100.10",
-                    "72800",
-                    "RippleFiber, Newark, NJ",
-                    "United States",
-                    "836.05",
-                    "832.97",
-                    "4.0",
-                    "https://www.speedtest.net/result/c/abc",
+                    [
+                        "2026-03-14T03:09:45",
+                        "198.51.100.10",
+                        "72800",
+                        "RippleFiber, Newark, NJ",
+                        "United States",
+                        "836.05",
+                        "832.97",
+                        "4.0",
+                        "https://www.speedtest.net/result/c/abc",
+                    ]
                 ]
-            ]
-        )
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "samples": 10717,
-                "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
-                "latency": {"avg": 13.42, "min": 2.35, "max": 1266.74},
-                "download": {"avg": 723.83, "min": 4.18, "max": 942.02},
-                "upload": {"avg": 706.7, "min": 1.54, "max": 890.32},
-            }
-        )
+            ),
+            _EndpointOutcome.data(
+                {
+                    "samples": 10717,
+                    "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
+                    "latency": {"avg": 13.42, "min": 2.35, "max": 1266.74},
+                    "download": {"avg": 723.83, "min": 4.18, "max": 942.02},
+                    "upload": {"avg": 706.7, "min": 1.54, "max": 890.32},
+                }
+            ),
+        ]
         client._get_resolved_opnsense_timezone = AsyncMock(
             return_value=ZoneInfo("America/New_York")
         )
@@ -100,44 +101,43 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client: Cl
     ],
 )
 @pytest.mark.asyncio
-async def test_get_speedtest_conditionally_fetches_optional_showstat_payload(
+async def test_get_speedtest_reads_optional_showstat_payload(
     make_client: ClientType,
     showstat_available: bool,
 ) -> None:
-    """Validate ``get_speedtest`` conditionally fetches the ``showstat`` payload.
+    """Validate ``get_speedtest`` reads the ``showstat`` payload and uses it only when present.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        showstat_available (bool): Whether the ``showstat`` endpoint should be fetched.
+        showstat_available (bool): Whether the ``showstat`` endpoint answers with data.
 
     Returns:
-        None: This test validates endpoint availability and conditional fetches.
+        None: This test validates that a missing showstat endpoint yields empty statistics.
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        endpoint_availability = {
-            "/api/speedtest/service/showlog": True,
-            "/api/speedtest/service/showstat": showstat_available,
-        }
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=lambda endpoint: endpoint_availability[endpoint]
-        )
-        client._safe_list_get = AsyncMock(
-            return_value=[
+        endpoint_outcomes = {
+            "/api/speedtest/service/showlog": _EndpointOutcome.data(
                 [
-                    "2026-03-14T03:09:45",
-                    "198.51.100.10",
-                    "72800",
-                    "Test ISP, New York, NY",
-                    "United States",
-                    "1",
-                    "2",
-                    "3",
-                    "https://www.speedtest.net/result/c/abc",
+                    [
+                        "2026-03-14T03:09:45",
+                        "198.51.100.10",
+                        "72800",
+                        "Test ISP, New York, NY",
+                        "United States",
+                        "1",
+                        "2",
+                        "3",
+                        "https://www.speedtest.net/result/c/abc",
+                    ]
                 ]
-            ]
-        )
-        client._safe_dict_get = AsyncMock(return_value={})
+            ),
+            "/api/speedtest/service/showstat": (
+                _EndpointOutcome.data({}) if showstat_available else _EndpointOutcome.absent()
+            ),
+        }
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
+        read.side_effect = lambda endpoint: endpoint_outcomes[endpoint]
         client._get_resolved_opnsense_timezone = AsyncMock(
             return_value=timezone(timedelta(hours=-4))
         )
@@ -145,16 +145,10 @@ async def test_get_speedtest_conditionally_fetches_optional_showstat_payload(
         result = await client.get_speedtest()
 
         assert result["available"] is True
-        assert client._is_get_endpoint_available.await_count == 2
-        client._is_get_endpoint_available.assert_any_await("/api/speedtest/service/showlog")
-        client._is_get_endpoint_available.assert_any_await("/api/speedtest/service/showstat")
+        assert read.await_count == 2
+        read.assert_any_await("/api/speedtest/service/showlog")
+        read.assert_any_await("/api/speedtest/service/showstat")
         client._get_resolved_opnsense_timezone.assert_awaited_once_with()
-        client._safe_list_get.assert_awaited_once_with("/api/speedtest/service/showlog")
-
-        if showstat_available:
-            client._safe_dict_get.assert_awaited_once_with("/api/speedtest/service/showstat")
-        else:
-            client._safe_dict_get.assert_not_awaited()
         assert result["last"]["download"]["value"] == 1.0
         assert result["last"]["upload"]["value"] == 2.0
         assert result["last"]["latency"]["value"] == 3.0
@@ -171,22 +165,25 @@ async def test_get_speedtest_preserves_timezone_aware_date(make_client: ClientTy
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_list_get = AsyncMock(
-            return_value=[
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
+        read.side_effect = [
+            _EndpointOutcome.data(
                 [
-                    "2026-03-14T03:09:45+01:30",
-                    "198.51.100.10",
-                    "72800",
-                    "Test ISP",
-                    "United States",
-                    "1",
-                    "2",
-                    "3",
-                    "https://www.speedtest.net/result/c/abc",
+                    [
+                        "2026-03-14T03:09:45+01:30",
+                        "198.51.100.10",
+                        "72800",
+                        "Test ISP",
+                        "United States",
+                        "1",
+                        "2",
+                        "3",
+                        "https://www.speedtest.net/result/c/abc",
+                    ]
                 ]
-            ]
-        )
+            ),
+            _EndpointOutcome.absent(),
+        ]
         client._get_resolved_opnsense_timezone = AsyncMock()
 
         result = await client.get_speedtest()
@@ -206,22 +203,25 @@ async def test_get_speedtest_drops_malformed_date(make_client: ClientType) -> No
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_list_get = AsyncMock(
-            return_value=[
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
+        read.side_effect = [
+            _EndpointOutcome.data(
                 [
-                    "not-a-date",
-                    "198.51.100.10",
-                    "72800",
-                    "Test ISP",
-                    "United States",
-                    "1",
-                    "2",
-                    "3",
-                    "https://www.speedtest.net/result/c/abc",
+                    [
+                        "not-a-date",
+                        "198.51.100.10",
+                        "72800",
+                        "Test ISP",
+                        "United States",
+                        "1",
+                        "2",
+                        "3",
+                        "https://www.speedtest.net/result/c/abc",
+                    ]
                 ]
-            ]
-        )
+            ),
+            _EndpointOutcome.absent(),
+        ]
         client._get_resolved_opnsense_timezone = AsyncMock()
 
         result = await client.get_speedtest()
@@ -243,28 +243,25 @@ async def test_get_speedtest_preserves_aware_date_and_drops_naive_periods_when_t
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_list_get = AsyncMock(
-            return_value=[
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
+        read.side_effect = [
+            _EndpointOutcome.data(
                 [
-                    "2026-03-14T03:09:45+01:30",
-                    "198.51.100.10",
-                    "72800",
-                    "Test ISP",
-                    "United States",
-                    "1",
-                    "2",
-                    "3",
-                    "https://www.speedtest.net/result/c/abc",
+                    [
+                        "2026-03-14T03:09:45+01:30",
+                        "198.51.100.10",
+                        "72800",
+                        "Test ISP",
+                        "United States",
+                        "1",
+                        "2",
+                        "3",
+                        "https://www.speedtest.net/result/c/abc",
+                    ]
                 ]
-            ]
-        )
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "samples": 10717,
-                "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
-            }
-        )
+            ),
+            _EndpointOutcome.absent(),
+        ]
         client._get_resolved_opnsense_timezone = AsyncMock(return_value=None)
 
         result = await client.get_speedtest()
@@ -286,31 +283,33 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client: ClientTy
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, True])
-        client._safe_list_get = AsyncMock(
-            return_value=[
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
+        read.side_effect = [
+            _EndpointOutcome.data(
                 [
-                    12345,
-                    "198.51.100.10",
-                    None,
-                    "Regional POP - NYC",
-                    "United States",
-                    "bad-number",
-                    "12.5",
-                    None,
-                    999,
+                    [
+                        12345,
+                        "198.51.100.10",
+                        None,
+                        "Regional POP - NYC",
+                        "United States",
+                        "bad-number",
+                        "12.5",
+                        None,
+                        999,
+                    ]
                 ]
-            ]
-        )
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "samples": "not-an-int",
-                "period": "bad-period-shape",
-                "download": "bad-download-shape",
-                "upload": None,
-                "latency": ["bad-latency-shape"],
-            }
-        )
+            ),
+            _EndpointOutcome.data(
+                {
+                    "samples": "not-an-int",
+                    "period": "bad-period-shape",
+                    "download": "bad-download-shape",
+                    "upload": None,
+                    "latency": ["bad-latency-shape"],
+                }
+            ),
+        ]
         client._get_resolved_opnsense_timezone = AsyncMock(
             return_value=timezone(timedelta(hours=-4))
         )
@@ -444,13 +443,13 @@ async def test_run_speedtest_uses_extended_timeout(make_client: ClientType) -> N
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        status = stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
         client._safe_dict_get_with_timeout = AsyncMock(return_value={"timestamp": "x"})
 
         result = await client.run_speedtest()
 
         assert result == {"timestamp": "x"}
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/speedtest/service/showlog")
+        status.assert_awaited_once_with("/api/speedtest/service/showlog")
         client._safe_dict_get_with_timeout.assert_awaited_once_with(
             "/api/speedtest/service/run", timeout_seconds=180
         )
@@ -467,14 +466,14 @@ async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client: Cl
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
+        status = stub_endpoint_outcome(client, _EndpointOutcome.absent(), read="status")
         client._safe_dict_get_with_timeout = AsyncMock()
 
         result = await client.run_speedtest()
 
         assert result == {}
         client._safe_dict_get_with_timeout.assert_not_awaited()
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/speedtest/service/showlog")
+        status.assert_awaited_once_with("/api/speedtest/service/showlog")
     finally:
         await client.async_close()
 
@@ -490,16 +489,14 @@ async def test_run_speedtest_returns_empty_for_non_mapping_response(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get_with_timeout = AsyncMock(return_value=["not", "a", "mapping"])
+        status = stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
+        client._do_get = AsyncMock(return_value=["not", "a", "mapping"])
 
         result = await client.run_speedtest()
 
         assert result == {}
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/speedtest/service/showlog")
-        client._safe_dict_get_with_timeout.assert_awaited_once_with(
-            "/api/speedtest/service/run", timeout_seconds=180
-        )
+        status.assert_awaited_once_with("/api/speedtest/service/showlog")
+        client._do_get.assert_awaited_once()
     finally:
         await client.async_close()
 
@@ -518,42 +515,47 @@ async def test_get_speedtest_survives_failed_system_time_lookup(
     client, _session = make_mock_session_client(make_client)
     try:
         client._throw_errors = throw_errors
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_list_get = AsyncMock(
-            return_value=[
-                [
-                    "2026-03-14T03:09:45+01:30",
-                    "198.51.100.10",
-                    "72800",
-                    "Test ISP",
-                    "United States",
-                    "1",
-                    "2",
-                    "3",
-                    "https://www.speedtest.net/result/c/abc",
-                ]
-            ]
-        )
 
-        async def fake_get(path: str) -> dict[str, Any]:
-            """Return the canned showstat payload.
+        async def fake_fetch(path: str, *_args: Any, **_kwargs: Any) -> _EndpointOutcome:
+            """Fail the system-time request and serve the show-log and show-stat reads.
 
             Args:
-                path (str): API endpoint requested by the getter.
+                path (str): API endpoint path requested by the getter.
+                _args (Any): Positional arguments accepted by `fake_fetch`.
+                _kwargs (Any): Keyword arguments accepted by `fake_fetch`.
 
             Returns:
-                dict[str, Any]: Canned showstat payload.
+                _EndpointOutcome: Transient failure for the system-time endpoint, otherwise the
+                    canned show-log or show-stat payload.
             """
-            return {
-                "samples": 10717,
-                "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
-            }
+            if path == SYSTEM_TIME_ENDPOINT:
+                return _EndpointOutcome.transient(
+                    OPNsenseConnectionError("system time unavailable")
+                )
+            if path == "/api/speedtest/service/showlog":
+                return _EndpointOutcome.data(
+                    [
+                        [
+                            "2026-03-14T03:09:45+01:30",
+                            "198.51.100.10",
+                            "72800",
+                            "Test ISP",
+                            "United States",
+                            "1",
+                            "2",
+                            "3",
+                            "https://www.speedtest.net/result/c/abc",
+                        ]
+                    ]
+                )
+            return _EndpointOutcome.data(
+                {
+                    "samples": 10717,
+                    "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
+                }
+            )
 
-        client._safe_dict_get = AsyncMock(side_effect=fake_get)
-        stub_endpoint_outcome(
-            client,
-            _EndpointOutcome.transient(OPNsenseConnectionError("system time unavailable")),
-        )
+        client._fetch_endpoint_outcome = AsyncMock(side_effect=fake_fetch)
 
         result = await client.get_speedtest()
 

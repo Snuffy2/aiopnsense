@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import OPNsenseClient
+from aiopnsense._endpoint_outcome import _EndpointOutcome
+from tests.conftest import stub_endpoint_outcome
 
 ClientType = Callable[..., OPNsenseClient]
 AliasRowType = dict[str, str]
@@ -62,15 +64,16 @@ async def test_get_firewall_rules_skips_invalid_rows(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._get_text = AsyncMock(
-            return_value=(
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
                 "@uuid;enabled;description\n"
                 'rule-ok;1;"Allow; DNS"\n'
                 'rule-extra;1;"Has; extra";extra\n'
                 ";1;Missing UUID\n"
                 "lockout-1;1;Lockout\n"
-            )
+            ),
+            read="get_text",
         )
 
         result = await client._get_firewall_rules()
@@ -82,10 +85,7 @@ async def test_get_firewall_rules_skips_invalid_rows(
                 "description": "Allow; DNS",
             },
         }
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/firewall/filter/download_rules"
-        )
-        client._get_text.assert_awaited_once_with("/api/firewall/filter/download_rules")
+        read.assert_awaited_once_with("/api/firewall/filter/download_rules", response_format="text")
     finally:
         await client.async_close()
 
@@ -135,8 +135,7 @@ async def test_get_firewall_rules_supports_opnsense_csv_versions(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._get_text = AsyncMock(return_value=response)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(response), read="get_text")
 
         result = await client._get_firewall_rules()
 
@@ -156,21 +155,23 @@ async def test_get_nat_source_rules_labels_empty_interface_address_target(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client.get_host_firmware_version = AsyncMock(return_value="26.7")
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "uuid": "src-interface-address",
-                        "description": "Interface address target",
-                        "enabled": "1",
-                        "interface": "wan",
-                        "%interface": "WAN",
-                        "target": "",
-                    }
-                ]
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "uuid": "src-interface-address",
+                            "description": "Interface address target",
+                            "enabled": "1",
+                            "interface": "wan",
+                            "%interface": "WAN",
+                            "target": "",
+                        }
+                    ]
+                }
+            ),
         )
 
         result = await client._get_nat_source_rules()
@@ -285,16 +286,14 @@ async def test_nat_rule_helpers_parse_rows(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"rows": rows})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": rows}))
         if firmware_version is not None:
             client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
 
         result = await getattr(client, method_name)()
 
         assert result == expected
-        client._is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
-        client._safe_dict_get.assert_awaited_once_with(api_endpoint)
+        read.assert_awaited_once_with(api_endpoint)
     finally:
         await client.async_close()
 
@@ -326,8 +325,7 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
         firmware_version_mock = AsyncMock(return_value="26.1.4")
         if method_name == "_get_nat_destination_rules":
             client.get_host_firmware_version = firmware_version_mock
@@ -335,8 +333,10 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
         result = await getattr(client, method_name)()
 
         assert result == expected
-        client._is_get_endpoint_available.assert_awaited_once_with(api_endpoint)
-        client._safe_dict_get.assert_not_awaited()
+        if method_name == "_get_firewall_rules":
+            read.assert_awaited_once_with(api_endpoint, response_format="text")
+        else:
+            read.assert_awaited_once_with(api_endpoint)
         if method_name == "_get_nat_destination_rules":
             firmware_version_mock.assert_awaited_once()
     finally:
@@ -413,20 +413,22 @@ async def test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"uuid": "manual-src", "description": "Manual", "enabled": "1"},
-                    {
-                        "uuid": "auto-src",
-                        "description": "Automatic",
-                        "enabled": "1",
-                        "is_automatic": True,
-                    },
-                ]
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {"uuid": "manual-src", "description": "Manual", "enabled": "1"},
+                        {
+                            "uuid": "auto-src",
+                            "description": "Automatic",
+                            "enabled": "1",
+                            "is_automatic": True,
+                        },
+                    ]
+                }
+            ),
         )
 
         assert await client._get_nat_source_rules() == expected
@@ -479,7 +481,9 @@ DNAT_ROWS = {"rows": [{"uuid": "dnat-1", "descr": "Web", "category": "c1", "%cat
     ],
 )
 async def test_get_firewall_source_nat_filters_automatic_rows_by_firmware(
-    firmware_router: tuple[OPNsenseClient, Any], firmware: str | None, automatic_rows_hidden: bool
+    firmware_router: tuple[OPNsenseClient, Any],
+    firmware: str | None,
+    automatic_rows_hidden: bool,
 ) -> None:
     """Source NAT hides generated rows only on known firmware that generates them.
 
