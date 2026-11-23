@@ -1,7 +1,7 @@
 """Enforce the firmware endpoint rule from ADR 0002.
 
 The request boundary in ``aiopnsense/_firmware_request_guard.py`` blocks forbidden requests
-at runtime, however their path was built. The static checks here cover only what the
+at runtime, however their path is spelled. The static checks here cover only what the
 boundary cannot see: that every request goes through it, that one method holds the
 permission to send a firmware check, and where the update and upgrade paths are built.
 """
@@ -17,6 +17,7 @@ import pytest
 
 import aiopnsense
 from aiopnsense import OPNsenseInvalidArgument
+from aiopnsense._firmware_request_guard import _allow_firmware_check
 from tests.conftest import make_mock_session_client
 
 PACKAGE = Path(__file__).resolve().parents[1] / "aiopnsense"
@@ -32,27 +33,8 @@ STATUS_ACTION = "status"
 CHECK_ACTION = "check"
 
 
-def _local_variable_path(action: str) -> str:
-    """Build a firmware path through local variables and ``+=``.
-
-    Args:
-        action (str): Firmware action.
-
-    Returns:
-        str: Firmware path.
-    """
-    path = BASE
-    path += "/"
-    path += action
-    return path
-
-
-PATH_BUILDERS: dict[str, Callable[[str], str]] = {
+PATH_FORMS: dict[str, Callable[[str], str]] = {
     "literal": lambda action: f"/api/core/firmware/{action}",
-    "local-variable": _local_variable_path,
-    "str-format": "/api/core/firmware/{}".format,
-    "percent": lambda action: "/api/core/firmware/%s" % action,  # noqa: UP031
-    "join": lambda action: "/".join([*BASE.split("/"), action]),
     "query": lambda action: f"{BASE}/{action}?force=1",
     "fragment": lambda action: f"{BASE}/{action}#top",
     "trailing-slash": lambda action: f"{BASE}/{action}/",
@@ -99,6 +81,7 @@ def _send_sites(client: aiopnsense.OPNsenseClient) -> dict[str, Callable[[str], 
 
 GET_SITES = ("get", "get-from-stream", "stream-events", "probe-get", "firmware-get")
 POST_SITES = ("post", "probe-post", "firmware-post")
+FIRMWARE_SITES = ("firmware-get", "firmware-post")
 EMPTY_RESULTS: dict[str, Any] = {
     "get": None,
     "post": None,
@@ -164,30 +147,79 @@ async def test_boundary_returns_empty_for_forbidden_request_without_throwing(
     _assert_nothing_sent(session)
 
 
-@pytest.mark.parametrize("builder", PATH_BUILDERS.values(), ids=PATH_BUILDERS)
+@pytest.mark.parametrize(
+    ("site", "action"), [item for item in FORBIDDEN if item[0] in FIRMWARE_SITES]
+)
+async def test_firmware_request_raises_for_forbidden_request_without_throwing(
+    make_client: Callable[..., aiopnsense.OPNsenseClient], site: str, action: str
+) -> None:
+    """Raise the blocked error at firmware request sites even when errors are not thrown.
+
+    Firmware requests have no empty value to return, so they raise whatever ``throw_errors`` is.
+
+    Args:
+        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
+        site (str): Firmware request site under test.
+        action (str): Forbidden firmware action.
+    """
+    client, session = make_mock_session_client(make_client)
+
+    with pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
+        await _send_sites(client)[site](f"{BASE}/{action}")
+
+    _assert_nothing_sent(session)
+
+
+@pytest.mark.parametrize("fail_inside_block", [False, True], ids=["normal-exit", "exception-exit"])
+async def test_firmware_check_permission_ends_with_its_block(
+    make_client: Callable[..., aiopnsense.OPNsenseClient], fail_inside_block: bool
+) -> None:
+    """Block a firmware check sent after the permission block has exited.
+
+    Args:
+        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
+        fail_inside_block (bool): Whether the block exits by raising an exception.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.toggle_throwing_errors(True)
+
+    if fail_inside_block:
+        with pytest.raises(ValueError), _allow_firmware_check():
+            int("not a number")
+    else:
+        with _allow_firmware_check():
+            pass
+
+    with pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
+        await client._do_post(f"{BASE}/{CHECK_ACTION}")
+
+    _assert_nothing_sent(session)
+
+
+@pytest.mark.parametrize("form", PATH_FORMS.values(), ids=PATH_FORMS)
 @pytest.mark.parametrize(
     ("site", "action"),
     [("get", INFO_ACTION), ("post", INFO_ACTION), ("post", STATUS_ACTION), ("post", CHECK_ACTION)],
 )
-async def test_boundary_blocks_path_however_it_was_built(
+async def test_boundary_blocks_every_spelling_of_the_path(
     make_client: Callable[..., aiopnsense.OPNsenseClient],
     site: str,
     action: str,
-    builder: Callable[[str], str],
+    form: Callable[[str], str],
 ) -> None:
-    """Block a forbidden request for every way of building or spelling its path.
+    """Block a forbidden request whatever the spelling of its path.
 
     Args:
         make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
         site (str): Request site under test.
         action (str): Forbidden firmware action.
-        builder (Callable[[str], str]): Builds the path from the action.
+        form (Callable[[str], str]): Spells the path for the action.
     """
     client, session = make_mock_session_client(make_client)
     client.toggle_throwing_errors(True)
 
     with pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
-        await _send_sites(client)[site](builder(action))
+        await _send_sites(client)[site](form(action))
 
     _assert_nothing_sent(session)
 

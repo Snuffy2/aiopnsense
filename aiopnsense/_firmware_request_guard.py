@@ -26,8 +26,9 @@ _CHECK_DISPATCH_ALLOWED: ContextVar[bool] = ContextVar(
 def _allow_firmware_check() -> Iterator[None]:
     """Allow ``POST /api/core/firmware/check`` in the current context.
 
-    Only ``FirmwareMixin._request_firmware_check`` may use this. A request sent through
-    the queue runs in a worker's context and is still blocked.
+    Only ``FirmwareMixin._request_firmware_check`` may use this. A request queued to an
+    already running worker stays blocked. Nothing inside the block may start a task or
+    worker, because it would inherit the permission.
 
     Yields:
         None: Control while the check may be dispatched.

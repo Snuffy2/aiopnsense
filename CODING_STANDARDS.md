@@ -15,6 +15,7 @@ Standards for code in `aiopnsense/` and `tests/`. Rules that `ruff`, `mypy` or `
 - A domain mixin reaches other mixins and shared state only through `AiopnsenseClientProtocol` in `_typing.py`. Add the member there instead of importing another mixin.
 - `_typing.py` holds protocol members as typed signatures ending in `...`, with no per-method docstrings and no `abstractmethod`.
 - Endpoint paths are module-level `UPPER_CASE` constants at the top of the module that uses them. Firmware thresholds and shared tunables live in `const.py`.
+- Every HTTP request must go through `_send_request` in `aiopnsense/_firmware_request_guard.py`, which enforces ADR 0002, instead of calling `_session` directly.
 - Keep imports at the top of the file.
 
 ## Typing
