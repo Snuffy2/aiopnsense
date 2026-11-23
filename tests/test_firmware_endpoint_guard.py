@@ -678,33 +678,39 @@ def test_module_constant_is_replayed_in_source_order(other: str, expected: list[
 
 
 @pytest.mark.parametrize(
-    ("dispatch", "found", "other_violations"),
+    ("dispatch", "found", "other_endpoints"),
     [
         ("pass", 0, []),
         (f"{CHECK_DISPATCH}\n        {CHECK_DISPATCH}", 2, []),
         ('await self._do_post("/api/core/firmware/running")', 0, []),
-        (
-            "await self._post(FIRMWARE_CHECK_ENDPOINT)",
-            0,
-            ["aiopnsense/firmware.py:9: /api/core/firmware/check"],
-        ),
+        ("await self._post(FIRMWARE_CHECK_ENDPOINT)", 0, ["check"]),
     ],
     ids=["removed", "duplicated", "other-path", "other-method"],
 )
 def test_guard_requires_exactly_one_check_dispatch(
-    dispatch: str, found: int, other_violations: list[str]
+    dispatch: str, found: int, other_endpoints: list[str]
 ) -> None:
     """Report a firmware module whose check dispatch is removed, duplicated or replaced.
+
+    The found-count message comes first. Each further violation must be located in the
+    firmware module and must describe the endpoint given in ``other_endpoints``, so the
+    test does not depend on the fixture's line numbers. An empty list proves there are no
+    further violations.
 
     Args:
         dispatch (str): Replacement body for ``_request_firmware_check``.
         found (int): Number of check dispatches the report must state.
-        other_violations (list[str]): Further violations the module must report, in order.
+        other_endpoints (list[str]): Endpoint name of each further violation, in order.
     """
     violations = _source_violations({FIRMWARE_MODULE: _firmware_source(dispatch=dispatch)})
 
     message = "FirmwareMixin._request_firmware_check must contain exactly one check dispatch"
-    assert violations == [f"aiopnsense/firmware.py: {message}, found {found}", *other_violations]
+    assert len(violations) == 1 + len(other_endpoints)
+    assert violations[0] == f"aiopnsense/firmware.py: {message}, found {found}"
+    for violation, endpoint in zip(violations[1:], other_endpoints, strict=True):
+        location, _, text = violation.partition(": ")
+        assert location.startswith("aiopnsense/firmware.py:")
+        assert text == _violation_label(endpoint)
 
 
 def test_guard_allows_annotated_endpoint_definitions() -> None:
@@ -728,15 +734,18 @@ def test_guard_allows_literal_update_path_in_install_firmware() -> None:
 
 
 @pytest.mark.parametrize("method", ["install_firmware", "upgrade_firmware"])
-@pytest.mark.parametrize("values", ['"update", "upgrade"', '"upgrade", "update"'])
-def test_guard_allows_exact_update_upgrade_gate(method: str, values: str) -> None:
-    """Accept the action prefix when ``type`` is compared with exactly update and upgrade.
+def test_guard_ignores_tuple_order_in_update_upgrade_gate(method: str) -> None:
+    """Accept the action prefix when the reversed update and upgrade gate is in place.
+
+    The gate compares the tuple's values as a set, so tuple order does not matter. The
+    ``"update", "upgrade"`` order is covered by the production guard test and the literal
+    update path test.
 
     Args:
         method (str): Action method that dispatches the action.
-        values (str): Tuple contents of the ``type`` comparison, in either order.
     """
-    source = _firmware_source(ACTION_STATEMENT, method=method, gate=_action_gate(method, values))
+    gate = _action_gate(method, '"upgrade", "update"')
+    source = _firmware_source(ACTION_STATEMENT, method=method, gate=gate)
 
     assert _source_violations({FIRMWARE_MODULE: source}) == []
 
