@@ -12,7 +12,8 @@ with exactly ``("update", "upgrade")``, so the action prefix cannot send another
 
 Known limits: it does not follow values held in local variables, class attributes, ``+=``
 or values imported from another module, other than the guarded constants. It does not
-cover other literal firmware actions. Outside the two install methods, the action prefix
+cover other literal firmware actions, and it does not check that the ``type`` comparison
+actually controls the dispatch. Outside the two install methods, the action prefix
 fails when it is bare, followed by a runtime value or another suffix, or copied into a
 local. A prefix-built path that resolves to ``status`` or ``check`` is judged as that
 literal request: ``f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}status"`` is accepted in a GET helper,
@@ -314,8 +315,9 @@ def _type_comparison_values(node: ast.AST) -> list[frozenset[str]]:
 def _action_gate_violations(module: ast.Module) -> list[str]:
     """Report each present action method whose ``type`` comparison is not update and upgrade.
 
-    A method passes only when it holds exactly one such comparison and its values are
-    exactly ``ACTION_TYPES``. A method missing from the module is not checked.
+    A method passes only when its one comparison of ``type`` is an ``in`` or ``not in`` tuple
+    of exactly ``ACTION_TYPES``. An extra comparison, such as ``or type == "check"``, fails
+    it. A method missing from the module is not checked.
 
     Args:
         module (ast.Module): Parsed firmware module.
@@ -335,8 +337,18 @@ def _action_gate_violations(module: ast.Module) -> list[str]:
         ]
         if not methods:
             continue
+        comparisons = [
+            candidate
+            for node in methods
+            for candidate in ast.walk(node)
+            if isinstance(candidate, ast.Compare)
+            and any(
+                isinstance(side, ast.Name) and side.id == "type"
+                for side in (candidate.left, *candidate.comparators)
+            )
+        ]
         values = [value for node in methods for value in _type_comparison_values(node)]
-        if values != [ACTION_TYPES]:
+        if len(comparisons) != 1 or values != [ACTION_TYPES]:
             violations.append(
                 f"aiopnsense/{FIRMWARE_MODULE}: {class_name}.{method} "
                 "must allow only update and upgrade"
@@ -413,13 +425,15 @@ def _source_violations(sources: dict[str, str]) -> list[str]:
     return violations
 
 
-def _action_gate(method: str, values: str | None) -> str:
+def _action_gate(method: str, values: str | None, extra: str = "") -> str:
     """Return the ``type`` comparison that an action method holds in the fixture.
 
     Args:
         method (str): Action method that receives the comparison.
         values (str | None): Tuple contents, such as ``'"update", "upgrade"'``, or ``None``
             for a method without the comparison.
+        extra (str): Text appended after the tuple comparison, such as
+            ``' or type == "check"'``. Empty by default.
 
     Returns:
         str: ``if type not in (...)`` for ``install_firmware`` and ``if type in (...)``
@@ -428,7 +442,7 @@ def _action_gate(method: str, values: str | None) -> str:
     if values is None:
         return ""
     operator = "not in" if method == "install_firmware" else "in"
-    return f"if type {operator} ({values}):\n            pass"
+    return f"if type {operator} ({values}){extra}:\n            pass"
 
 
 def _firmware_source(
@@ -752,16 +766,17 @@ def test_guard_ignores_tuple_order_in_update_upgrade_gate(method: str) -> None:
 
 @pytest.mark.parametrize("method", ["install_firmware", "upgrade_firmware"])
 @pytest.mark.parametrize(
-    "values",
+    ("values", "extra"),
     [
-        pytest.param('"update", "upgrade", "check"', id="check-added"),
-        pytest.param(None, id="comparison-removed"),
+        pytest.param('"update", "upgrade", "check"', "", id="check-added"),
+        pytest.param(None, "", id="comparison-removed"),
+        pytest.param('"update", "upgrade"', ' or type == "check"', id="equality-added"),
     ],
 )
 def test_guard_rejects_action_method_without_exact_update_upgrade_gate(
-    method: str, values: str | None
+    method: str, values: str | None, extra: str
 ) -> None:
-    """Report an action method whose ``type`` comparison adds a value or is missing.
+    """Report an action method whose ``type`` gate adds a value, adds a comparison or is missing.
 
     The action prefix itself stays exempt, so the gate is the only violation reported.
 
@@ -769,8 +784,11 @@ def test_guard_rejects_action_method_without_exact_update_upgrade_gate(
         method (str): Action method that dispatches the action.
         values (str | None): Tuple contents of the ``type`` comparison, or ``None`` when
             the method has no comparison.
+        extra (str): Text appended after the tuple comparison, such as an extra
+            ``or type == "check"`` comparison.
     """
-    source = _firmware_source(ACTION_STATEMENT, method=method, gate=_action_gate(method, values))
+    gate = _action_gate(method, values, extra)
+    source = _firmware_source(ACTION_STATEMENT, method=method, gate=gate)
 
     assert _source_violations({FIRMWARE_MODULE: source}) == [
         f"aiopnsense/firmware.py: FirmwareMixin.{method} must allow only update and upgrade"
