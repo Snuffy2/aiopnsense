@@ -80,6 +80,13 @@ jobs:
       - name: Run pytest with coverage from the lock
         run: uv run --locked --group pytest pytest
 
+      # A second, non-UTC run catches tests that depend on the host timezone or
+      # its daylight-saving offset. Coverage stays with the default run above.
+      - name: Run pytest under America/New_York without coverage
+        env:
+          TZ: America/New_York
+        run: uv run --locked --group pytest pytest --no-cov
+
       - name: 'Generate coverage Comment'
         if: >-
           github.event_name == 'pull_request' &&
