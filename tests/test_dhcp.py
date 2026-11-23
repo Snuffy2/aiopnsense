@@ -7,27 +7,36 @@ from datetime import UTC, datetime, timedelta, timezone
 from functools import partial
 from types import MappingProxyType
 from typing import Any, Literal
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 import warnings
 
 import pytest
 
 from aiopnsense import OPNsenseClient
+from aiopnsense._endpoint_outcome import _EndpointOutcome
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
-from tests.conftest import FakeResponse, make_mock_session_client
+from tests.conftest import (
+    FakeResponse,
+    install_fake_router,
+    make_mock_session_client,
+    stub_endpoint_outcome,
+)
 
 ClientType = Callable[..., OPNsenseClient]
+HOST_OBSERVATIONS_PATH = "/api/hostdiscovery/service/search"
+NDP_TABLE_PATH = "/api/diagnostics/interface/search_ndp"
+ARP_TABLE_RESOLVE_PATH = "/api/diagnostics/interface/search_arp?resolve=yes"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("payload", "status", "failure_stage", "expected"),
+    ("payload", "status", "expected"),
     [
-        ({"rows": []}, 200, None, []),
+        ({"rows": []}, 200, []),
         (
             {
                 "rows": [
@@ -36,28 +45,25 @@ ClientType = Callable[..., OPNsenseClient]
                 ]
             },
             200,
-            None,
             [
                 {"mac": "aa:bb:cc:dd:ee:ff", "ip": "2001:db8::1", "intf": "em0"},
                 {"mac": "aa:bb:cc:dd:ee:ff", "ip": "fe80::1%em0", "intf": "em0"},
             ],
         ),
-        ({}, 200, None, None),
-        ({"rows": None}, 200, None, None),
-        ({"rows": {}}, 200, None, None),
-        ([], 200, None, None),
-        (None, 403, "probe", None),
-        (None, 404, "probe", None),
-        (None, 500, "request", None),
-        (TimeoutError("NDP request timed out"), 200, "request", None),
-        (TimeoutError("NDP probe timed out"), 200, "probe", None),
+        ({}, 200, None),
+        ({"rows": None}, 200, None),
+        ({"rows": {}}, 200, None),
+        ([], 200, None),
+        (None, 403, None),
+        (None, 404, None),
+        (None, 500, None),
+        (TimeoutError("NDP request timed out"), 200, None),
     ],
 )
 async def test_get_ndp_table_http_results(
     make_client: ClientType,
     payload: object,
     status: int,
-    failure_stage: Literal["request", "probe"] | None,
     expected: list[dict[str, str]] | None,
 ) -> None:
     """Preserve IPv6 neighbor rows and distinguish absence from failed discovery.
@@ -65,25 +71,21 @@ async def test_get_ndp_table_http_results(
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
         payload (object): JSON response or simulated transport error.
-        status (int): HTTP status of the table lookup or failed probe.
-        failure_stage (Literal["request", "probe"] | None): Stage that fails.
+        status (int): HTTP status of the table lookup.
         expected (list[dict[str, str]] | None): Public inventory result.
     """
     client, session = make_mock_session_client(make_client)
-    client._get = AsyncMock(side_effect=client._do_get)
     response = FakeResponse(status=status, ok=status == 200, json_payload=payload)
     result = payload if isinstance(payload, TimeoutError) else response
-    session.get.side_effect = [result] if failure_stage == "probe" else [FakeResponse(), result]
+    router = install_fake_router(
+        client, session, routes={("GET", "/api/diagnostics/interface/search_ndp"): result}
+    )
 
     assert await client.get_ndp_table() == expected  # type: ignore[deprecated]
-    assert all(
-        call.args[0] == "http://localhost/api/diagnostics/interface/search_ndp"
-        for call in session.get.call_args_list
-    )
+    assert router.count("GET", "/api/diagnostics/interface/search_ndp") == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_stage", ["probe", "request"])
 @pytest.mark.parametrize(
     ("status", "timeout", "expected_error"),
     [
@@ -95,24 +97,23 @@ async def test_get_ndp_table_http_results(
 )
 async def test_get_ndp_table_propagates_public_errors(
     make_client: ClientType,
-    failure_stage: Literal["probe", "request"],
     status: int,
     timeout: bool,
     expected_error: type[OPNsenseConnectionError],
 ) -> None:
-    """Throwing clients expose public errors from either NDP HTTP stage.
+    """Throwing clients expose public errors from the NDP request.
 
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
-        failure_stage (Literal["probe", "request"]): HTTP stage that fails.
         status (int): Response status for simulated HTTP failures.
         timeout (bool): Whether to simulate a transport timeout instead of a response.
         expected_error (type[OPNsenseConnectionError]): Expected public exception type.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=True))
-    client._get = AsyncMock(side_effect=client._do_get)
     result = TimeoutError("NDP timed out") if timeout else FakeResponse(status=status, ok=False)
-    session.get.side_effect = [result] if failure_stage == "probe" else [FakeResponse(), result]
+    install_fake_router(
+        client, session, routes={("GET", "/api/diagnostics/interface/search_ndp"): result}
+    )
 
     with pytest.raises(expected_error) as raised:
         await client.get_ndp_table()  # type: ignore[deprecated]
@@ -134,32 +135,35 @@ async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client: ClientType) 
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         # _get_kea_interfaces returns mapping and kea leases: one valid
-        client._safe_dict_get = AsyncMock(
+        client._fetch_endpoint_outcome = AsyncMock(
             side_effect=[
-                {
-                    "dhcpv4": {
-                        "general": {
-                            "enabled": "1",
-                            "interfaces": {"em0": {"selected": 1, "value": "desc"}},
+                _EndpointOutcome.data(
+                    {
+                        "dhcpv4": {
+                            "general": {
+                                "enabled": "1",
+                                "interfaces": {"em0": {"selected": 1, "value": "desc"}},
+                            }
                         }
                     }
-                },
-                {
-                    "rows": [
-                        {
-                            "if_name": "em0",
-                            "if_descr": "d",
-                            "state": "0",
-                            "hwaddr": "mac1",
-                            "address": "1.2.3.4",
-                            "hostname": "host.",
-                        }
-                    ]
-                },
-                {"rows": []},
-                {},
+                ),
+                _EndpointOutcome.data(
+                    {
+                        "rows": [
+                            {
+                                "if_name": "em0",
+                                "if_descr": "d",
+                                "state": "0",
+                                "hwaddr": "mac1",
+                                "address": "1.2.3.4",
+                                "hostname": "host.",
+                            }
+                        ]
+                    }
+                ),
+                _EndpointOutcome.data({"rows": []}),
+                _EndpointOutcome.data({}),
             ]
         )
         # monkeypatch internal helpers by calling _get_kea_dhcpv4_leases directly
@@ -176,20 +180,23 @@ async def test_dhcp_leases_and_keep_latest_and_dnsmasq(make_client: ClientType) 
         assert filtered[0]["expire"] == 20
 
         # dnsmasq leases behavior
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "address": "1.2.3.4",
-                        "hostname": "*",
-                        "if_descr": "d",
-                        "if": "em0",
-                        "is_reserved": "1",
-                        "hwaddr": "mac1",
-                        "expire": 9999999999,
-                    }
-                ]
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "address": "1.2.3.4",
+                            "hostname": "*",
+                            "if_descr": "d",
+                            "if": "em0",
+                            "is_reserved": "1",
+                            "hwaddr": "mac1",
+                            "expire": 9999999999,
+                        }
+                    ]
+                }
+            ),
         )
         dns = await client._get_dnsmasq_leases()
         assert isinstance(dns, list)
@@ -214,33 +221,34 @@ async def test_get_kea_leases_accepts_integer_active_state(make_client: ClientTy
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
+        client._fetch_endpoint_outcome = AsyncMock(
             side_effect=[
-                {
-                    "rows": [
-                        {
-                            "address": "192.0.2.10",
-                            "hwaddr": "aa:bb:cc:dd:ee:ff",
-                            "state": 0,
-                            "if_name": "em0",
-                            "if_descr": "LAN",
-                            "hostname": "host.",
-                        },
-                        {
-                            "address": "192.0.2.11",
-                            "hwaddr": "aa:bb:cc:dd:ee:00",
-                            "state": 1,
-                            "if_name": "em0",
-                        },
-                        {
-                            "address": "192.0.2.12",
-                            "hwaddr": "aa:bb:cc:dd:ee:11",
-                            "if_name": "em0",
-                        },
-                    ]
-                },
-                {"rows": []},
+                _EndpointOutcome.data(
+                    {
+                        "rows": [
+                            {
+                                "address": "192.0.2.10",
+                                "hwaddr": "aa:bb:cc:dd:ee:ff",
+                                "state": 0,
+                                "if_name": "em0",
+                                "if_descr": "LAN",
+                                "hostname": "host.",
+                            },
+                            {
+                                "address": "192.0.2.11",
+                                "hwaddr": "aa:bb:cc:dd:ee:00",
+                                "state": 1,
+                                "if_name": "em0",
+                            },
+                            {
+                                "address": "192.0.2.12",
+                                "hwaddr": "aa:bb:cc:dd:ee:11",
+                                "if_name": "em0",
+                            },
+                        ]
+                    }
+                ),
+                _EndpointOutcome.data({"rows": []}),
             ]
         )
 
@@ -273,15 +281,13 @@ async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> No
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": []}))
 
         await client.get_arp_table(resolve_hostnames=True)  # type: ignore[deprecated]
-        client._safe_dict_get.assert_awaited_with(
-            "/api/diagnostics/interface/search_arp?resolve=yes"
-        )
+        read.assert_awaited_with("/api/diagnostics/interface/search_arp?resolve=yes")
 
         await client.get_arp_table(resolve_hostnames=False)  # type: ignore[deprecated]
-        assert client._safe_dict_get.await_args_list[1].args[0] == (
+        assert read.await_args_list[1].args[0] == (
             "/api/diagnostics/interface/search_arp?resolve=no"
         )
     finally:
@@ -290,24 +296,20 @@ async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> No
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("response", "expected", "failure_stage"),
+    ("response", "expected"),
     [
-        ({"rows": []}, [], None),
-        ({"rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}, [{"mac": "aa:bb:cc:dd:ee:ff"}], None),
-        ({}, None, None),
-        ({"rows": None}, None, None),
-        ({"rows": {}}, None, None),
-        pytest.param(TimeoutError("ARP request timed out"), None, "request", id="request-timeout"),
-        pytest.param(
-            TimeoutError("ARP endpoint probe timed out"), None, "probe", id="probe-timeout"
-        ),
+        ({"rows": []}, []),
+        ({"rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}, [{"mac": "aa:bb:cc:dd:ee:ff"}]),
+        ({}, None),
+        ({"rows": None}, None),
+        ({"rows": {}}, None),
+        pytest.param(TimeoutError("ARP request timed out"), None, id="request-timeout"),
     ],
 )
 async def test_get_arp_table_distinguishes_empty_and_failed_lookups(
     make_client: ClientType,
     response: dict[str, Any] | TimeoutError,
     expected: list[dict[str, str]] | None,
-    failure_stage: Literal["request", "probe"] | None,
 ) -> None:
     """Only a successful response with list rows is an authoritative inventory.
 
@@ -315,32 +317,16 @@ async def test_get_arp_table_distinguishes_empty_and_failed_lookups(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         response (dict[str, Any] | TimeoutError): Endpoint payload or transport failure.
         expected (list[dict[str, str]] | None): Public result for the lookup.
-        failure_stage (Literal["request", "probe"] | None): Stage where a timeout occurs.
     """
     client, session = make_mock_session_client(make_client)
-    get_mock: AsyncMock | None = None
+    router = install_fake_router(
+        client,
+        session,
+        routes={("GET", "/api/diagnostics/interface/search_arp?resolve=yes"): response},
+    )
     try:
-        if failure_stage == "request":
-            client._is_get_endpoint_available = AsyncMock(return_value=True)
-            get_mock = AsyncMock(side_effect=client._do_get)
-            client._get = get_mock
-            session.get.side_effect = response
-        elif failure_stage == "probe":
-            session.get.side_effect = response
-        else:
-            client._safe_dict_get = AsyncMock(return_value=response)
-
         assert await client.get_arp_table(resolve_hostnames=True) == expected  # type: ignore[deprecated]
-        if get_mock is not None:
-            get_mock.assert_awaited_once_with(
-                path="/api/diagnostics/interface/search_arp?resolve=yes"
-            )
-            assert session.get.call_args.args[0].endswith(
-                "/api/diagnostics/interface/search_arp?resolve=yes"
-            )
-        elif failure_stage == "probe":
-            session.get.assert_called_once()
-            assert session.get.call_args.args[0].endswith("/api/diagnostics/interface/search_arp")
+        assert router.count("GET", "/api/diagnostics/interface/search_arp?resolve=yes") == 1
     finally:
         await client.async_close()
 
@@ -366,7 +352,7 @@ async def test_dhcp_endpoint_unavailable(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         method_name (str): Lease helper method name to invoke.
-        endpoint (str): Endpoint expected for availability probing.
+        endpoint (str): Endpoint expected for the lease read.
 
     Returns:
         None: This test validates endpoint gating behavior.
@@ -374,12 +360,10 @@ async def test_dhcp_endpoint_unavailable(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
         leases = await getattr(client, method_name)()
         assert leases == []
-        client._is_get_endpoint_available.assert_awaited_once_with(endpoint)
-        client._safe_dict_get.assert_not_awaited()
+        read.assert_awaited_once_with(endpoint)
     finally:
         await client.async_close()
 
@@ -493,49 +477,51 @@ async def test_get_isc_dhcpv4_and_v6_parsing(make_client: ClientType) -> None:
 
         # v4: ends present and in future
         future_dt = (datetime.now(tz=local_tz) + timedelta(hours=1)).strftime("%Y/%m/%d %H:%M:%S")
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
+        client._fetch_endpoint_outcome = AsyncMock(
             side_effect=[
-                {
-                    "rows": [
-                        {
-                            "state": "active",
-                            "mac": "m1",
-                            "address": "10.0.0.1",
-                            "hostname": "h1",
-                            "if": "em0",
-                            "ends": future_dt,
-                        }
-                    ]
-                },
-                {"rows": []},
+                _EndpointOutcome.data(
+                    {
+                        "rows": [
+                            {
+                                "state": "active",
+                                "mac": "m1",
+                                "address": "10.0.0.1",
+                                "hostname": "h1",
+                                "if": "em0",
+                                "ends": future_dt,
+                            }
+                        ]
+                    }
+                ),
+                _EndpointOutcome.data({"rows": []}),
             ]
         )
-        v4_safe_dict_get = client._safe_dict_get
+        v4_read = client._fetch_endpoint_outcome
         v4 = await client._get_isc_dhcpv4_leases()
         assert isinstance(v4, list) and len(v4) == 1
         assert v4[0]["address"] == "10.0.0.1"
         assert v4[0]["mac"] == "m1"
         assert v4[0]["hostname"] == "h1"
         assert isinstance(v4[0].get("expires"), datetime)
-        v4_safe_dict_get.assert_awaited_once_with("/api/dhcpv4/leases/search_lease")
+        v4_read.assert_awaited_once_with("/api/dhcpv4/leases/search_lease")
 
         # v6: ends missing -> field passed through
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "state": "active",
-                        "mac": "m2",
-                        "address": "fe80::1",
-                        "hostname": "h2",
-                        "if": "em1",
-                    }
-                ]
-            }
+        v6_read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "state": "active",
+                            "mac": "m2",
+                            "address": "fe80::1",
+                            "hostname": "h2",
+                            "if": "em1",
+                        }
+                    ]
+                }
+            ),
         )
-        v6_safe_dict_get = client._safe_dict_get
         v6 = await client._get_isc_dhcpv6_leases()
         assert isinstance(v6, list) and len(v6) == 1
         assert v6[0]["address"] == "fe80::1"
@@ -545,7 +531,7 @@ async def test_get_isc_dhcpv4_and_v6_parsing(make_client: ClientType) -> None:
         assert v6[0].get("expires") is None
         assert "ends_at" not in v6[0] or v6[0]["ends_at"] is None
         assert "expiry" not in v6[0] or v6[0]["expiry"] is None
-        v6_safe_dict_get.assert_awaited_once_with("/api/dhcpv6/leases/search_lease")
+        v6_read.assert_awaited_once_with("/api/dhcpv6/leases/search_lease")
     finally:
         await client.async_close()
 
@@ -634,25 +620,27 @@ async def test_get_dhcp_leases_includes_empty_dnsmasq_range_interface(
         client._get_isc_dhcpv6_leases = AsyncMock(return_value=[])
         client._get_dnsmasq_leases = AsyncMock(return_value=[])
         client._get_kea_interfaces = AsyncMock(return_value={})
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "interface": "opt8",
-                        "%interface": "Guest_150",
-                        "start_addr": "10.100.150.100",
-                        "end_addr": "10.100.150.254",
-                    },
-                    {
-                        "interface": "",
-                        "constructor": "opt8",
-                        "%constructor": "Guest_150",
-                        "start_addr": "::1000",
-                        "end_addr": "::2000",
-                    },
-                ]
-            }
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "interface": "opt8",
+                            "%interface": "Guest_150",
+                            "start_addr": "10.100.150.100",
+                            "end_addr": "10.100.150.254",
+                        },
+                        {
+                            "interface": "",
+                            "constructor": "opt8",
+                            "%constructor": "Guest_150",
+                            "start_addr": "::1000",
+                            "end_addr": "::2000",
+                        },
+                    ]
+                }
+            ),
         )
 
         combined = await client.get_dhcp_leases()
@@ -661,7 +649,7 @@ async def test_get_dhcp_leases_includes_empty_dnsmasq_range_interface(
             "lease_interfaces": {"opt8": "Guest_150"},
             "leases": {},
         }
-        client._safe_dict_get.assert_awaited_once_with("/api/dnsmasq/settings/search_range")
+        read.assert_awaited_once_with("/api/dnsmasq/settings/search_range")
     finally:
         await client.async_close()
 
@@ -680,11 +668,10 @@ async def test_get_dnsmasq_interfaces_returns_empty_when_endpoint_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
 
         assert await client._get_dnsmasq_interfaces() == {}
-        client._safe_dict_get.assert_not_awaited()
+        read.assert_awaited_once_with("/api/dnsmasq/settings/search_range")
     finally:
         await client.async_close()
 
@@ -724,8 +711,7 @@ async def test_get_dnsmasq_interfaces_handles_malformed_ranges(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value=response)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(response))
 
         assert await client._get_dnsmasq_interfaces() == expected
     finally:
@@ -744,24 +730,29 @@ async def test_get_kea_interfaces_filters_enabled_and_selected(make_client: Clie
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(return_value={"dhcpv4": {"general": {"enabled": "0"}}})
+        stub_endpoint_outcome(
+            client, _EndpointOutcome.data({"dhcpv4": {"general": {"enabled": "0"}}})
+        )
         assert await client._get_kea_interfaces() == {}
 
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "dhcpv4": {
-                    "general": {
-                        "enabled": "1",
-                        "interfaces": {
-                            "em0": {"selected": 1, "value": "LAN"},
-                            "em1": {"selected": 0, "value": "WAN"},
-                            "em2": {"selected": 1, "value": ""},
-                            "em3": "invalid",
-                            "em4": {"selected": "1", "value": "OPT"},
-                        },
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "dhcpv4": {
+                        "general": {
+                            "enabled": "1",
+                            "interfaces": {
+                                "em0": {"selected": 1, "value": "LAN"},
+                                "em1": {"selected": 0, "value": "WAN"},
+                                "em2": {"selected": 1, "value": ""},
+                                "em3": "invalid",
+                                "em4": {"selected": "1", "value": "OPT"},
+                            },
+                        }
                     }
                 }
-            }
+            ),
         )
 
         assert await client._get_kea_interfaces() == {"em0": "LAN", "em4": "OPT"}
@@ -784,54 +775,57 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         future_ts = int(datetime.now(tz=UTC).timestamp()) + 3600
         past_ts = int(datetime.now(tz=UTC).timestamp()) - 3600
 
-        client._safe_dict_get = AsyncMock(
+        client._fetch_endpoint_outcome = AsyncMock(
             side_effect=[
-                {
-                    "rows": [
-                        None,
-                        {"state": "1", "hwaddr": "skip"},
-                        {"state": "0", "address": "192.0.2.10"},
-                        {
-                            "state": "0",
-                            "address": "192.0.2.11",
-                            "hostname": "dyn.",
-                            "if_name": "em0",
-                            "if_descr": "LAN",
-                            "hwaddr": "bb:cc",
-                            "expire": "never",
-                        },
-                        {
-                            "state": "0",
-                            "address": "192.0.2.12",
-                            "hostname": "expired",
-                            "if_name": "em0",
-                            "hwaddr": "cc:dd",
-                            "expire": past_ts,
-                        },
-                        {
-                            "state": "0",
-                            "address": "192.0.2.13",
-                            "hostname": "stat.",
-                            "if_name": "em1",
-                            "if_descr": "OPT",
-                            "hwaddr": "aa:bb",
-                            "client_id": "01:aa:bb",
-                            "expire": future_ts,
-                            "is_reserved": ["client_id"],
-                        },
-                    ]
-                },
-                {
-                    "rows": [
-                        None,
-                        {"ip_address": "192.0.2.13"},
-                        {"hw_address": "aa:bb", "ip_address": "192.0.2.13"},
-                    ]
-                },
+                _EndpointOutcome.data(
+                    {
+                        "rows": [
+                            None,
+                            {"state": "1", "hwaddr": "skip"},
+                            {"state": "0", "address": "192.0.2.10"},
+                            {
+                                "state": "0",
+                                "address": "192.0.2.11",
+                                "hostname": "dyn.",
+                                "if_name": "em0",
+                                "if_descr": "LAN",
+                                "hwaddr": "bb:cc",
+                                "expire": "never",
+                            },
+                            {
+                                "state": "0",
+                                "address": "192.0.2.12",
+                                "hostname": "expired",
+                                "if_name": "em0",
+                                "hwaddr": "cc:dd",
+                                "expire": past_ts,
+                            },
+                            {
+                                "state": "0",
+                                "address": "192.0.2.13",
+                                "hostname": "stat.",
+                                "if_name": "em1",
+                                "if_descr": "OPT",
+                                "hwaddr": "aa:bb",
+                                "client_id": "01:aa:bb",
+                                "expire": future_ts,
+                                "is_reserved": ["client_id"],
+                            },
+                        ]
+                    }
+                ),
+                _EndpointOutcome.data(
+                    {
+                        "rows": [
+                            None,
+                            {"ip_address": "192.0.2.13"},
+                            {"hw_address": "aa:bb", "ip_address": "192.0.2.13"},
+                        ]
+                    }
+                ),
             ]
         )
 
@@ -849,10 +843,12 @@ async def test_get_kea_dhcpv4_leases_covers_invalid_dynamic_and_reservations(
         )
 
         # Reservation lookup failures should not misclassify entries as dynamic/static.
-        client._safe_dict_get = AsyncMock(
+        client._fetch_endpoint_outcome = AsyncMock(
             side_effect=[
-                {"rows": [{"state": "0", "hwaddr": "aa", "address": "10.0.0.1"}]},
-                {"rows": "bad"},
+                _EndpointOutcome.data(
+                    {"rows": [{"state": "0", "hwaddr": "aa", "address": "10.0.0.1"}]}
+                ),
+                _EndpointOutcome.data({"rows": "bad"}),
             ]
         )
         leases = await client._get_kea_dhcpv4_leases()
@@ -877,36 +873,38 @@ async def test_get_kea_dhcpv4_leases_skips_redundant_reservation_lookup(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "state": "0",
-                        "hwaddr": "aa:bb:cc:dd:ee:01",
-                        "address": "192.0.2.10",
-                        "is_reserved": [],
-                    },
-                    {
-                        "state": "0",
-                        "hwaddr": "aa:bb:cc:dd:ee:02",
-                        "address": "192.0.2.11",
-                        "is_reserved": ["hwaddr"],
-                    },
-                    {
-                        "state": "0",
-                        "hwaddr": "aa:bb:cc:dd:ee:03",
-                        "address": "192.0.2.12",
-                        "is_reserved": False,
-                    },
-                    {
-                        "state": "0",
-                        "hwaddr": "aa:bb:cc:dd:ee:04",
-                        "address": "192.0.2.13",
-                        "is_reserved": True,
-                    },
-                ]
-            }
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:01",
+                            "address": "192.0.2.10",
+                            "is_reserved": [],
+                        },
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:02",
+                            "address": "192.0.2.11",
+                            "is_reserved": ["hwaddr"],
+                        },
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:03",
+                            "address": "192.0.2.12",
+                            "is_reserved": False,
+                        },
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:04",
+                            "address": "192.0.2.13",
+                            "is_reserved": True,
+                        },
+                    ]
+                }
+            ),
         )
 
         leases = await client._get_kea_dhcpv4_leases()
@@ -917,8 +915,7 @@ async def test_get_kea_dhcpv4_leases_skips_redundant_reservation_lookup(
             "dynamic",
             "static",
         ]
-        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/kea/leases4/search")
+        read.assert_awaited_once_with("/api/kea/leases4/search")
     finally:
         await client.async_close()
 
@@ -941,34 +938,38 @@ async def test_get_kea_dhcpv4_leases_falls_back_for_invalid_reservation_metadata
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
+        read = AsyncMock(
             side_effect=[
-                {
-                    "rows": [
-                        {
-                            "state": "0",
-                            "hwaddr": "aa:bb:cc:dd:ee:01",
-                            "address": "192.0.2.10",
-                            "is_reserved": is_reserved,
-                        }
-                    ]
-                },
-                {
-                    "rows": [
-                        {
-                            "hw_address": "aa:bb:cc:dd:ee:01",
-                            "ip_address": "192.0.2.10",
-                        }
-                    ]
-                },
+                _EndpointOutcome.data(
+                    {
+                        "rows": [
+                            {
+                                "state": "0",
+                                "hwaddr": "aa:bb:cc:dd:ee:01",
+                                "address": "192.0.2.10",
+                                "is_reserved": is_reserved,
+                            }
+                        ]
+                    }
+                ),
+                _EndpointOutcome.data(
+                    {
+                        "rows": [
+                            {
+                                "hw_address": "aa:bb:cc:dd:ee:01",
+                                "ip_address": "192.0.2.10",
+                            }
+                        ]
+                    }
+                ),
             ]
         )
+        client._fetch_endpoint_outcome = read
 
         leases = await client._get_kea_dhcpv4_leases()
 
         assert leases[0]["type"] == "static"
-        assert client._safe_dict_get.await_count == 2
+        assert read.await_count == 2
     finally:
         await client.async_close()
 
@@ -997,27 +998,28 @@ async def test_get_kea_dhcpv4_leases_invalid_truthy_metadata_falls_back_to_dynam
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
+        client._fetch_endpoint_outcome = AsyncMock(
             side_effect=[
-                {
-                    "rows": [
-                        {
-                            "state": "0",
-                            "hwaddr": "aa:bb:cc:dd:ee:01",
-                            "address": "192.0.2.10",
-                            "is_reserved": {"unexpected": "truthy"},
-                        }
-                    ]
-                },
-                {"rows": reservation_rows},
+                _EndpointOutcome.data(
+                    {
+                        "rows": [
+                            {
+                                "state": "0",
+                                "hwaddr": "aa:bb:cc:dd:ee:01",
+                                "address": "192.0.2.10",
+                                "is_reserved": {"unexpected": "truthy"},
+                            }
+                        ]
+                    }
+                ),
+                _EndpointOutcome.data({"rows": reservation_rows}),
             ]
         )
 
         leases = await client._get_kea_dhcpv4_leases()
 
         assert leases[0]["type"] == "dynamic"
-        assert client._safe_dict_get.await_count == 2
+        assert client._fetch_endpoint_outcome.await_count == 2
     finally:
         await client.async_close()
 
@@ -1037,37 +1039,38 @@ async def test_get_kea_dhcpv4_leases_ignores_expired_rows_for_reservation_lookup
     client, _session = make_mock_session_client(make_client)
     try:
         past_ts = int(datetime.now(tz=UTC).timestamp()) - 3600
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "state": "0",
-                        "hwaddr": "aa:bb:cc:dd:ee:01",
-                        "address": "192.0.2.10",
-                        "expire": past_ts,
-                    },
-                    {
-                        "state": "0",
-                        "hwaddr": "aa:bb:cc:dd:ee:02",
-                        "address": "192.0.2.11",
-                        "is_reserved": 0,
-                    },
-                    {
-                        "state": "0",
-                        "hwaddr": "aa:bb:cc:dd:ee:03",
-                        "address": "192.0.2.12",
-                        "is_reserved": ["hwaddr"],
-                    },
-                ]
-            }
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:01",
+                            "address": "192.0.2.10",
+                            "expire": past_ts,
+                        },
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:02",
+                            "address": "192.0.2.11",
+                            "is_reserved": 0,
+                        },
+                        {
+                            "state": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:03",
+                            "address": "192.0.2.12",
+                            "is_reserved": ["hwaddr"],
+                        },
+                    ]
+                }
+            ),
         )
 
         leases = await client._get_kea_dhcpv4_leases()
 
         assert [lease["type"] for lease in leases] == ["dynamic", "static"]
-        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/kea/leases4/search")
+        read.assert_awaited_once_with("/api/kea/leases4/search")
     finally:
         await client.async_close()
 
@@ -1084,42 +1087,44 @@ async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientT
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         future_ts = int(datetime.now(tz=UTC).timestamp()) + 3600
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "address": "2001:db8::10",
-                        "duid": "00:01:00:01:aa:bb",
-                        "client_id": "00:01:00:01:aa:bb",
-                        "hwaddr": "",
-                        "state": 0,
-                        "if_name": "em0",
-                        "if_descr": "LAN",
-                        "hostname": "host6.",
-                        "expire": future_ts,
-                        "is_reserved": ["duid"],
-                    },
-                    {
-                        "address": "2001:db8::11",
-                        "duid": "00:01:00:01:cc:dd",
-                        "state": 0,
-                        "if_name": "em0",
-                        "if_descr": "LAN",
-                        "hostname": "skip.",
-                        "is_reserved": [],
-                        "expire": future_ts,
-                    },
-                    {
-                        "address": "2001:db8::12",
-                        "duid": "00:01:00:01:ee:ff",
-                        "state": 0,
-                        "if_name": "em0",
-                        "is_reserved": [],
-                    },
-                ]
-            }
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "address": "2001:db8::10",
+                            "duid": "00:01:00:01:aa:bb",
+                            "client_id": "00:01:00:01:aa:bb",
+                            "hwaddr": "",
+                            "state": 0,
+                            "if_name": "em0",
+                            "if_descr": "LAN",
+                            "hostname": "host6.",
+                            "expire": future_ts,
+                            "is_reserved": ["duid"],
+                        },
+                        {
+                            "address": "2001:db8::11",
+                            "duid": "00:01:00:01:cc:dd",
+                            "state": 0,
+                            "if_name": "em0",
+                            "if_descr": "LAN",
+                            "hostname": "skip.",
+                            "is_reserved": [],
+                            "expire": future_ts,
+                        },
+                        {
+                            "address": "2001:db8::12",
+                            "duid": "00:01:00:01:ee:ff",
+                            "state": 0,
+                            "if_name": "em0",
+                            "is_reserved": [],
+                        },
+                    ]
+                }
+            ),
         )
 
         leases = await client._get_kea_dhcpv6_leases()
@@ -1150,7 +1155,7 @@ async def test_get_kea_dhcpv6_leases_accepts_duid_only_rows(make_client: ClientT
             and lease["mac"] is None
             for lease in leases
         )
-        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases6/search")
+        read.assert_awaited_once_with("/api/kea/leases6/search")
     finally:
         await client.async_close()
 
@@ -1169,31 +1174,33 @@ async def test_get_kea_dhcpv6_leases_preserves_unknown_reservation_metadata(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"address": "2001:db8::10", "duid": "missing", "state": 0},
-                    {
-                        "address": "2001:db8::11",
-                        "duid": "none",
-                        "state": 0,
-                        "is_reserved": None,
-                    },
-                    {
-                        "address": "2001:db8::12",
-                        "duid": "mapping",
-                        "state": 0,
-                        "is_reserved": {"unexpected": "value"},
-                    },
-                    {
-                        "address": "2001:db8::13",
-                        "duid": "false",
-                        "state": 0,
-                        "is_reserved": False,
-                    },
-                ]
-            }
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {"address": "2001:db8::10", "duid": "missing", "state": 0},
+                        {
+                            "address": "2001:db8::11",
+                            "duid": "none",
+                            "state": 0,
+                            "is_reserved": None,
+                        },
+                        {
+                            "address": "2001:db8::12",
+                            "duid": "mapping",
+                            "state": 0,
+                            "is_reserved": {"unexpected": "value"},
+                        },
+                        {
+                            "address": "2001:db8::13",
+                            "duid": "false",
+                            "state": 0,
+                            "is_reserved": False,
+                        },
+                    ]
+                }
+            ),
         )
 
         leases = await client._get_kea_dhcpv6_leases()
@@ -1204,7 +1211,7 @@ async def test_get_kea_dhcpv6_leases_preserves_unknown_reservation_metadata(
             "unknown",
             "dynamic",
         ]
-        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases6/search")
+        read.assert_awaited_once_with("/api/kea/leases6/search")
     finally:
         await client.async_close()
 
@@ -1221,61 +1228,64 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(return_value={"rows": "bad-shape"})
+        stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": "bad-shape"}))
         assert await client._get_dnsmasq_leases() == []
 
         past_ts = int(datetime.now(tz=UTC).timestamp()) - 3600
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    None,
-                    {
-                        "address": "192.0.2.20",
-                        "hostname": "fallback-if-name",
-                        "if": "em0",
-                        "if_name": "",
-                        "is_reserved": "0",
-                        "hwaddr": "aa:bb:cc:dd:ee:ff",
-                        "expire": "never",
-                    },
-                    {
-                        "address": "192.0.2.21",
-                        "hostname": "expired",
-                        "if": "em0",
-                        "is_reserved": "0",
-                        "hwaddr": "aa:aa:aa",
-                        "expire": past_ts,
-                    },
-                    {
-                        "address": "192.0.2.22",
-                        "hostname": "dynamic-host",
-                        "if": "em0",
-                        "if_name": "lan",
-                        "is_reserved": "0",
-                        "client_id": "01:11:22",
-                        "hwaddr": "",
-                        "expire": "never",
-                    },
-                    {
-                        "address": "192.0.2.23",
-                        "hostname": "static-host-list",
-                        "if": "em0",
-                        "if_name": "lan",
-                        "is_reserved": ["hwaddr"],
-                        "client_id": "01:33:44",
-                        "hwaddr": "bb:bb:bb",
-                        "expire": "never",
-                    },
-                    {
-                        "address": "192.0.2.24",
-                        "hostname": "dynamic-host-empty-list",
-                        "if": "em0",
-                        "is_reserved": [],
-                        "hwaddr": "cc:cc:cc",
-                        "expire": "never",
-                    },
-                ]
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        None,
+                        {
+                            "address": "192.0.2.20",
+                            "hostname": "fallback-if-name",
+                            "if": "em0",
+                            "if_name": "",
+                            "is_reserved": "0",
+                            "hwaddr": "aa:bb:cc:dd:ee:ff",
+                            "expire": "never",
+                        },
+                        {
+                            "address": "192.0.2.21",
+                            "hostname": "expired",
+                            "if": "em0",
+                            "is_reserved": "0",
+                            "hwaddr": "aa:aa:aa",
+                            "expire": past_ts,
+                        },
+                        {
+                            "address": "192.0.2.22",
+                            "hostname": "dynamic-host",
+                            "if": "em0",
+                            "if_name": "lan",
+                            "is_reserved": "0",
+                            "client_id": "01:11:22",
+                            "hwaddr": "",
+                            "expire": "never",
+                        },
+                        {
+                            "address": "192.0.2.23",
+                            "hostname": "static-host-list",
+                            "if": "em0",
+                            "if_name": "lan",
+                            "is_reserved": ["hwaddr"],
+                            "client_id": "01:33:44",
+                            "hwaddr": "bb:bb:bb",
+                            "expire": "never",
+                        },
+                        {
+                            "address": "192.0.2.24",
+                            "hostname": "dynamic-host-empty-list",
+                            "if": "em0",
+                            "is_reserved": [],
+                            "hwaddr": "cc:cc:cc",
+                            "expire": "never",
+                        },
+                    ]
+                }
+            ),
         )
 
         leases = await client._get_dnsmasq_leases()
@@ -1314,40 +1324,45 @@ async def test_kea_and_dnsmasq_preserve_overflowing_expiration(
     client, _session = make_mock_session_client(make_client)
     try:
         overflowing_expiration = 10**40
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "address": "192.0.2.30",
-                        "hostname": "kea-overflow",
-                        "hwaddr": "aa:bb:cc:dd:ee:30",
-                        "if_name": "lan",
-                        "is_reserved": "0",
-                        "state": "0",
-                        "expire": overflowing_expiration,
-                    }
-                ]
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "address": "192.0.2.30",
+                            "hostname": "kea-overflow",
+                            "hwaddr": "aa:bb:cc:dd:ee:30",
+                            "if_name": "lan",
+                            "is_reserved": "0",
+                            "state": "0",
+                            "expire": overflowing_expiration,
+                        }
+                    ]
+                }
+            ),
         )
 
         kea_leases = await client._get_kea_dhcpv4_leases()
         assert len(kea_leases) == 1
         assert kea_leases[0]["expires"] == overflowing_expiration
 
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "address": "192.0.2.31",
-                        "hostname": "dnsmasq-overflow",
-                        "hwaddr": "aa:bb:cc:dd:ee:31",
-                        "if_name": "lan",
-                        "is_reserved": "0",
-                        "expire": overflowing_expiration,
-                    }
-                ]
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "address": "192.0.2.31",
+                            "hostname": "dnsmasq-overflow",
+                            "hwaddr": "aa:bb:cc:dd:ee:31",
+                            "if_name": "lan",
+                            "is_reserved": "0",
+                            "expire": overflowing_expiration,
+                        }
+                    ]
+                }
+            ),
         )
 
         dnsmasq_leases = await client._get_dnsmasq_leases()
@@ -1375,21 +1390,22 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
         local_tz = datetime.now().astimezone().tzinfo
         assert local_tz is not None
         client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
 
         past_str = (datetime.now(tz=local_tz) - timedelta(hours=2)).strftime("%Y/%m/%d %H:%M:%S")
 
-        client._safe_dict_get = AsyncMock(
+        client._fetch_endpoint_outcome = AsyncMock(
             side_effect=[
-                {"rows": "bad"},
-                {
-                    "rows": [
-                        {"state": "inactive", "mac": "skip"},
-                        {"state": "active", "mac": "bad-time", "ends": "invalid-date"},
-                        {"state": "active", "mac": "expired", "ends": past_str},
-                        {"state": "active", "mac": "ok", "address": "10.0.0.9", "if": "em0"},
-                    ]
-                },
+                _EndpointOutcome.data({"rows": "bad"}),
+                _EndpointOutcome.data(
+                    {
+                        "rows": [
+                            {"state": "inactive", "mac": "skip"},
+                            {"state": "active", "mac": "bad-time", "ends": "invalid-date"},
+                            {"state": "active", "mac": "expired", "ends": past_str},
+                            {"state": "active", "mac": "ok", "address": "10.0.0.9", "if": "em0"},
+                        ]
+                    }
+                ),
             ]
         )
         assert await client._get_isc_dhcpv4_leases() == []
@@ -1398,17 +1414,24 @@ async def test_get_isc_dhcpv4_and_v6_cover_invalid_and_expired_paths(
         assert v4_leases[0]["mac"] == "ok"
         assert v4_leases[0]["expires"] is None
 
-        client._safe_dict_get = AsyncMock(
+        client._fetch_endpoint_outcome = AsyncMock(
             side_effect=[
-                {"rows": "bad"},
-                {
-                    "rows": [
-                        None,
-                        {"state": "active", "mac": "bad-time-v6", "ends": "invalid-date"},
-                        {"state": "active", "mac": "expired-v6", "ends": past_str},
-                        {"state": "active", "mac": "ok-v6", "address": "2001:db8::10", "if": "em1"},
-                    ]
-                },
+                _EndpointOutcome.data({"rows": "bad"}),
+                _EndpointOutcome.data(
+                    {
+                        "rows": [
+                            None,
+                            {"state": "active", "mac": "bad-time-v6", "ends": "invalid-date"},
+                            {"state": "active", "mac": "expired-v6", "ends": past_str},
+                            {
+                                "state": "active",
+                                "mac": "ok-v6",
+                                "address": "2001:db8::10",
+                                "if": "em1",
+                            },
+                        ]
+                    }
+                ),
             ]
         )
         assert await client._get_isc_dhcpv6_leases() == []
@@ -1435,28 +1458,18 @@ async def test_version_switched_dhcp_endpoints_skip_unneeded_kea_reservations(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": []}))
 
         assert await client._get_kea_dhcpv4_leases() == []
-        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/kea/leases4/search")
+        read.assert_awaited_once_with("/api/kea/leases4/search")
 
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
         assert await client._get_isc_dhcpv4_leases() == []
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/dhcpv4/leases/search_lease"
-        )
-        client._safe_dict_get.assert_not_awaited()
+        read.assert_awaited_once_with("/api/dhcpv4/leases/search_lease")
 
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
         assert await client._get_isc_dhcpv6_leases() == []
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/dhcpv6/leases/search_lease"
-        )
-        client._safe_dict_get.assert_not_awaited()
+        read.assert_awaited_once_with("/api/dhcpv6/leases/search_lease")
     finally:
         await client.async_close()
 
@@ -1476,18 +1489,22 @@ async def test_version_switched_kea_dhcpv4_returns_leases_when_reservation_unava
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
+        client._fetch_endpoint_outcome = AsyncMock(
+            side_effect=[
+                _EndpointOutcome.data(
                     {
-                        "state": "0",
-                        "hwaddr": "aa:bb:cc:dd:ee:ff",
-                        "address": "192.0.2.10",
-                        "hostname": "host-a.",
+                        "rows": [
+                            {
+                                "state": "0",
+                                "hwaddr": "aa:bb:cc:dd:ee:ff",
+                                "address": "192.0.2.10",
+                                "hostname": "host-a.",
+                            }
+                        ]
                     }
-                ]
-            }
+                ),
+                _EndpointOutcome.absent(),
+            ]
         )
 
         leases = await client._get_kea_dhcpv4_leases()
@@ -1495,14 +1512,12 @@ async def test_version_switched_kea_dhcpv4_returns_leases_when_reservation_unava
         assert len(leases) == 1
         assert leases[0].get("mac") == "aa:bb:cc:dd:ee:ff"
         assert leases[0].get("type") == "unknown"
-        client._safe_dict_get.assert_awaited_once_with("/api/kea/leases4/search")
-        assert client._is_get_endpoint_available.await_count == 2
+        assert client._fetch_endpoint_outcome.await_count == 2
         assert (
-            client._is_get_endpoint_available.await_args_list[0].args[0]
-            == "/api/kea/leases4/search"
+            client._fetch_endpoint_outcome.await_args_list[0].args[0] == "/api/kea/leases4/search"
         )
         assert (
-            client._is_get_endpoint_available.await_args_list[1].args[0]
+            client._fetch_endpoint_outcome.await_args_list[1].args[0]
             == "/api/kea/dhcpv4/search_reservation"
         )
     finally:
@@ -1552,32 +1567,33 @@ async def test_dhcp_switched_endpoints_follow_selected_case(
         local_tz = datetime.now().astimezone().tzinfo
         assert local_tz is not None
         client._get_opnsense_timezone = AsyncMock(return_value=local_tz)
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
 
-        client._safe_dict_get = AsyncMock(
+        client._fetch_endpoint_outcome = AsyncMock(
             side_effect=[
-                {
-                    "rows": [
-                        {
-                            "state": "0",
-                            "hwaddr": "aa:bb:cc:dd:ee:ff",
-                            "address": "192.0.2.10",
-                        }
-                    ]
-                },
-                {"rows": []},
+                _EndpointOutcome.data(
+                    {
+                        "rows": [
+                            {
+                                "state": "0",
+                                "hwaddr": "aa:bb:cc:dd:ee:ff",
+                                "address": "192.0.2.10",
+                            }
+                        ]
+                    }
+                ),
+                _EndpointOutcome.data({"rows": []}),
             ]
         )
         await client._get_kea_dhcpv4_leases()
-        assert client._safe_dict_get.await_args_list[1].args[0] == expected_kea
+        assert client._fetch_endpoint_outcome.await_args_list[1].args[0] == expected_kea
 
-        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": []}))
         await client._get_isc_dhcpv4_leases()
-        client._safe_dict_get.assert_awaited_once_with(expected_v4)
+        read.assert_awaited_once_with(expected_v4)
 
-        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": []}))
         await client._get_isc_dhcpv6_leases()
-        client._safe_dict_get.assert_awaited_once_with(expected_v6)
+        read.assert_awaited_once_with(expected_v6)
     finally:
         await client.async_close()
 
@@ -1596,27 +1612,14 @@ async def test_version_switched_get_arp_table_endpoint_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_dict_get = AsyncMock(return_value={"rows": []})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": []}))
 
         assert await client.get_arp_table(resolve_hostnames=True) == []  # type: ignore[deprecated]
-        client._safe_dict_get.assert_awaited_once_with(
-            "/api/diagnostics/interface/search_arp?resolve=yes"
-        )
-        assert client._is_get_endpoint_available.await_count == 1
-        assert (
-            client._is_get_endpoint_available.await_args_list[0].args[0]
-            == "/api/diagnostics/interface/search_arp"
-        )
+        read.assert_awaited_once_with("/api/diagnostics/interface/search_arp?resolve=yes")
 
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
         assert await client.get_arp_table(resolve_hostnames=False) is None  # type: ignore[deprecated]
-        client._safe_dict_get.assert_not_awaited()
-        assert client._is_get_endpoint_available.await_count == 2
-        assert (
-            client._is_get_endpoint_available.await_args_list[1].args[0]
-            == "/api/diagnostics/interface/search_arp"
-        )
+        read.assert_awaited_once_with("/api/diagnostics/interface/search_arp?resolve=no")
     finally:
         await client.async_close()
 
@@ -1635,19 +1638,16 @@ async def test_version_switched_get_kea_interfaces_endpoint_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_dict_get = AsyncMock(return_value={"dhcpv4": {"general": {"enabled": "0"}}})
+        read = stub_endpoint_outcome(
+            client, _EndpointOutcome.data({"dhcpv4": {"general": {"enabled": "0"}}})
+        )
 
         assert await client._get_kea_interfaces() == {}
-        client._safe_dict_get.assert_awaited_once_with("/api/kea/dhcpv4/get")
-        assert client._is_get_endpoint_available.await_count == 1
-        assert client._is_get_endpoint_available.await_args_list[0].args[0] == "/api/kea/dhcpv4/get"
+        read.assert_awaited_once_with("/api/kea/dhcpv4/get")
 
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
         assert await client._get_kea_interfaces() == {}
-        client._safe_dict_get.assert_not_awaited()
-        assert client._is_get_endpoint_available.await_count == 2
-        assert client._is_get_endpoint_available.await_args_list[1].args[0] == "/api/kea/dhcpv4/get"
+        read.assert_awaited_once_with("/api/kea/dhcpv4/get")
     finally:
         await client.async_close()
 
@@ -1664,19 +1664,22 @@ async def test_host_observations_normalizes_packet_sightings(
         family_ip (str): IPv4 or IPv6 address observed by hostwatch.
     """
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(
-        json_payload={
-            "total": 1,
-            "rows": [
-                {
-                    "source": "discovery",
-                    "ether_address": "AA-BB-CC-DD-EE-01",
-                    "ip_address": family_ip,
-                    "last_seen": "2026-01-01T02:00:00+02:00",
-                }
-            ],
-        }
+    router = install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", HOST_OBSERVATIONS_PATH): {
+                "total": 1,
+                "rows": [
+                    {
+                        "source": "discovery",
+                        "ether_address": "AA-BB-CC-DD-EE-01",
+                        "ip_address": family_ip,
+                        "last_seen": "2026-01-01T02:00:00+02:00",
+                    }
+                ],
+            }
+        },
     )
     with pytest.warns(DeprecationWarning, match="Use get_host_observation_entries"):
         result = await client.get_host_observations()  # type: ignore[deprecated]
@@ -1685,10 +1688,7 @@ async def test_host_observations_normalizes_packet_sightings(
     assert result["rows"][0]["mac"] == "aa:bb:cc:dd:ee:01"
     assert result["rows"][0]["last_seen"] == datetime(2026, 1, 1, tzinfo=UTC)
     assert result["rows"][0]["ip"] == family_ip.replace("0db8", "db8")
-    assert all(
-        call.args[0] == "http://localhost/api/hostdiscovery/service/search"
-        for call in session.post.call_args_list
-    )
+    assert router.count("POST", HOST_OBSERVATIONS_PATH) == 1
 
 
 @pytest.mark.asyncio
@@ -1701,20 +1701,22 @@ async def test_host_observation_entries_returns_typed_result_with_one_fetch(
         make_client (ClientType): Factory for a client with a mocked HTTP session.
     """
     client, session = make_mock_session_client(make_client)
-    client._is_post_endpoint_available = AsyncMock(return_value=True)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(
-        json_payload={
-            "total": 1,
-            "rows": [
-                {
-                    "source": "discovery",
-                    "ether_address": "AA-BB-CC-DD-EE-01",
-                    "ip_address": "2001:0db8::1",
-                    "last_seen": "2026-01-01T02:00:00+02:00",
-                }
-            ],
-        }
+    router = install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", HOST_OBSERVATIONS_PATH): {
+                "total": 1,
+                "rows": [
+                    {
+                        "source": "discovery",
+                        "ether_address": "AA-BB-CC-DD-EE-01",
+                        "ip_address": "2001:0db8::1",
+                        "last_seen": "2026-01-01T02:00:00+02:00",
+                    }
+                ],
+            }
+        },
     )
 
     with warnings.catch_warnings(record=True) as emitted_warnings:
@@ -1735,12 +1737,9 @@ async def test_host_observation_entries_returns_typed_result_with_one_fetch(
     )
     with pytest.raises(FrozenInstanceError):
         observations.entries[0].ip = "192.0.2.1"  # type: ignore[misc]
-    assert client._is_post_endpoint_available.await_count == 1
-    assert client._post.await_count == 1
-    assert client._post.await_args.kwargs == {
-        "path": "/api/hostdiscovery/service/search",
-        "payload": {"rowCount": -1},
-    }
+    assert router.requests == [
+        ("POST", f"http://localhost{HOST_OBSERVATIONS_PATH}", {"rowCount": -1})
+    ]
 
 
 @pytest.mark.asyncio
@@ -1753,16 +1752,21 @@ async def test_host_observation_entries_preserves_disabled_source(
         make_client (ClientType): Factory for a client with a mocked HTTP session.
     """
     client, session = make_mock_session_client(make_client)
-    client._is_post_endpoint_available = AsyncMock(return_value=True)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(
-        json_payload={"total": 1, "rows": [{"source": "arp-ndp", "last_seen": ""}]}
+    router = install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", HOST_OBSERVATIONS_PATH): {
+                "total": 1,
+                "rows": [{"source": "arp-ndp", "last_seen": ""}],
+            }
+        },
     )
 
     observations = await client.get_host_observation_entries()
 
     assert observations == OPNsenseClient.HostObservations(source="arp-ndp", entries=())
-    assert client._post.await_count == 1
+    assert router.count("POST", HOST_OBSERVATIONS_PATH) == 1
 
 
 @pytest.mark.asyncio
@@ -1788,18 +1792,15 @@ async def test_host_observation_entries_preserves_failure_semantics(
         make_client (ClientType): Factory for a client with a mocked HTTP session.
         throw_errors (bool): Whether the client should raise public API failures.
         payload (object): JSON response for a successful request.
-        status (int): Response status of the endpoint probe.
+        status (int): Response status of the endpoint request.
         expected_error (type[OPNsensePrivilegeMissing] | None): Expected mapped error.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    if status == 200:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._post = AsyncMock(side_effect=client._do_post)
-        session.post.return_value = FakeResponse(status=status, ok=True, json_payload=payload)
-    elif status == 404:
-        client._is_post_endpoint_available = AsyncMock(return_value=False)
-    else:
-        client._is_post_endpoint_available = AsyncMock(side_effect=OPNsensePrivilegeMissing)
+    install_fake_router(
+        client,
+        session,
+        routes={("POST", HOST_OBSERVATIONS_PATH): payload if status == 200 else status},
+    )
 
     if expected_error is not None:
         with pytest.raises(expected_error):
@@ -1820,19 +1821,22 @@ async def test_host_observations_rejects_invalid_totals(
         total (object): Invalid count supplied by the search endpoint.
     """
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(
-        json_payload={
-            "total": total,
-            "rows": [
-                {
-                    "source": "discovery",
-                    "ether_address": "aa:bb:cc:dd:ee:01",
-                    "ip_address": "192.0.2.1",
-                    "last_seen": "2026-01-01T00:00:00Z",
-                }
-            ],
-        }
+    install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", HOST_OBSERVATIONS_PATH): {
+                "total": total,
+                "rows": [
+                    {
+                        "source": "discovery",
+                        "ether_address": "aa:bb:cc:dd:ee:01",
+                        "ip_address": "192.0.2.1",
+                        "last_seen": "2026-01-01T00:00:00Z",
+                    }
+                ],
+            }
+        },
     )
 
     assert await client.get_host_observations() is None  # type: ignore[deprecated]
@@ -1848,7 +1852,7 @@ async def test_host_observations_requests_all_rows_through_post_json(
         make_client (ClientType): Factory for a client with a mocked HTTP session.
     """
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
+    install_fake_router(client, session)
     observation = {
         "source": "discovery",
         "ether_address": "aa:bb:cc:dd:ee:01",
@@ -1877,8 +1881,7 @@ async def test_host_observations_requests_all_rows_through_post_json(
         rows = observations if row_count == -1 else observations[:row_count]
         return FakeResponse(json_payload={"total": len(observations), "rows": rows})
 
-    session.post.side_effect = search_response
-    session.get.side_effect = search_response
+    session.post = MagicMock(side_effect=search_response)
 
     result = await client.get_host_observations()  # type: ignore[deprecated]
 
@@ -1950,8 +1953,7 @@ async def test_host_observations_rejects_non_authoritative_payloads(
         payload (object): Unusable host-observation response.
     """
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(json_payload=payload)
+    install_fake_router(client, session, routes={("POST", HOST_OBSERVATIONS_PATH): payload})
     assert await client.get_host_observations() is None  # type: ignore[deprecated]
 
 
@@ -1963,12 +1965,15 @@ async def test_host_observations_distinguishes_disabled_service(make_client: Cli
         make_client (ClientType): Factory for a client with a mocked HTTP session.
     """
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.post.return_value = FakeResponse(
-        json_payload={
-            "total": 1,
-            "rows": [{"source": "arp-ndp", "last_seen": ""}],
-        }
+    install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", HOST_OBSERVATIONS_PATH): {
+                "total": 1,
+                "rows": [{"source": "arp-ndp", "last_seen": ""}],
+            }
+        },
     )
     assert await client.get_host_observations() == {"source": "arp-ndp", "rows": []}  # type: ignore[deprecated]
 
@@ -1982,21 +1987,22 @@ async def test_host_observations_http_failure_is_unavailable(
 
     Args:
         make_client (ClientType): Factory for a client with a mocked HTTP session.
-        status (int): HTTP failure status of the endpoint probe.
+        status (int): HTTP failure status of the endpoint request.
     """
     client, session = make_mock_session_client(make_client)
-    session.post.return_value = FakeResponse(status=status, ok=False)
+    install_fake_router(client, session, routes={("POST", HOST_OBSERVATIONS_PATH): status})
     assert await client.get_host_observations() is None  # type: ignore[deprecated]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("lookup_name", "payload", "expected"),
+    ("lookup_name", "route", "payload", "expected"),
     [
-        ("arp", {"rows": []}, []),
-        ("ndp", {"rows": []}, []),
+        ("arp", ("GET", "/api/diagnostics/interface/search_arp?resolve=no"), {"rows": []}, []),
+        ("ndp", ("GET", NDP_TABLE_PATH), {"rows": []}, []),
         (
             "host_observations",
+            ("POST", HOST_OBSERVATIONS_PATH),
             {"total": 1, "rows": [{"source": "arp-ndp", "last_seen": ""}]},
             {"source": "arp-ndp", "rows": []},
         ),
@@ -2006,20 +2012,23 @@ async def test_neighbor_lookup_logs_failure_once_until_recovery_then_again(
     make_client: ClientType,
     caplog: pytest.LogCaptureFixture,
     lookup_name: Literal["arp", "ndp", "host_observations"],
+    route: tuple[str, str],
     payload: object,
     expected: object,
 ) -> None:
-    """Throttle outage logs across probes and real neighbor table requests.
+    """Throttle outage logs to one error per outage and log each recovery once.
 
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
         caplog (pytest.LogCaptureFixture): Captured log records for the lookup sequence.
         lookup_name (Literal["arp", "ndp", "host_observations"]): Public lookup to exercise.
-        payload (object): Successful response payload for the final recovery request.
+        route (tuple[str, str]): HTTP method and path of the one data request.
+        payload (object): Successful response payload for the recovery requests.
         expected (object): Public lookup result after recovery.
     """
     client, session = make_mock_session_client(make_client)
     client._endpoint_cache_ttl_seconds = 0
+    router = install_fake_router(client, session, routes={route: 503})
 
     async def lookup() -> object:
         """Call the selected public neighbor lookup method.
@@ -2033,77 +2042,36 @@ async def test_neighbor_lookup_logs_failure_once_until_recovery_then_again(
             return await client.get_ndp_table()  # type: ignore[deprecated]
         return await client.get_host_observations()  # type: ignore[deprecated]
 
-    failed_probe = FakeResponse(status=503, reason="Unavailable", ok=False)
-    successful_probe = FakeResponse()
-    failed_request = FakeResponse(status=500, reason="Server Error", ok=False)
-    successful_request = FakeResponse(json_payload=payload)
-
-    if lookup_name == "host_observations":
-        client._post = AsyncMock(side_effect=client._do_post)
-        session.post.side_effect = [
-            failed_probe,
-            failed_probe,
-            successful_probe,
-            failed_request,
-            successful_probe,
-            failed_request,
-            successful_probe,
-            successful_request,
-            successful_probe,
-            failed_request,
-        ]
-    else:
-        client._get = AsyncMock(side_effect=client._do_get)
-        session.get.side_effect = [
-            failed_probe,
-            failed_probe,
-            successful_probe,
-            failed_request,
-            successful_probe,
-            failed_request,
-            successful_probe,
-            successful_request,
-            successful_probe,
-            failed_request,
-        ]
-
     with caplog.at_level("DEBUG"):
         assert await lookup() is None
         assert await lookup() is None
-        assert await lookup() is None
-        assert await lookup() is None
+        router.routes[route] = payload
         assert await lookup() == expected
+        router.routes[route] = 500
+        assert await lookup() is None
+        router.routes[route] = payload
+        assert await lookup() == expected
+        router.routes[route] = 500
         assert await lookup() is None
 
-    probe_failures = [
+    failures = [
         record
         for record in caplog.records
-        if record.msg.startswith("Transient ") and "endpoint check failure" in record.msg
+        if record.getMessage().startswith(("Error in do_get_outcome", "Error in do_post_outcome"))
     ]
-    request_failures = [
-        record
-        for record in caplog.records
-        if record.msg.startswith(("Error in do_get", "Error in do_post"))
-    ]
-    probe_recoveries = [
-        record for record in caplog.records if " probe recovered for " in record.getMessage()
-    ]
-    request_recoveries = [
+    recoveries = [
         record for record in caplog.records if " request recovered for " in record.getMessage()
     ]
-
-    assert [record.levelname for record in probe_failures] == ["WARNING", "DEBUG"]
-    assert [record.levelname for record in request_failures] == ["ERROR", "DEBUG", "ERROR"]
-    assert len(probe_recoveries) == 1
-    assert len(request_recoveries) == 1
+    assert [record.levelname for record in failures] == ["ERROR", "DEBUG", "ERROR", "ERROR"]
+    assert [record.levelname for record in recoveries] == ["INFO", "INFO"]
 
 
 @pytest.mark.asyncio
-async def test_neighbor_probe_failure_logging_is_per_client(
+async def test_neighbor_outage_logging_is_per_client(
     make_client: ClientType,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Keep one client's repeated probe failures from muting another client.
+    """Keep one client's repeated outage logs from muting another client.
 
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
@@ -2115,8 +2083,7 @@ async def test_neighbor_probe_failure_logging_is_per_client(
         (first_client, first_session),
         (second_client, second_session),
     ):
-        client._get = AsyncMock(side_effect=client._do_get)
-        session.get.return_value = FakeResponse(status=503, reason="Unavailable", ok=False)
+        install_fake_router(client, session, routes={("GET", NDP_TABLE_PATH): 503})
 
     with caplog.at_level("DEBUG"):
         assert await first_client.get_ndp_table() is None  # type: ignore[deprecated]
@@ -2126,9 +2093,9 @@ async def test_neighbor_probe_failure_logging_is_per_client(
     failures = [
         record
         for record in caplog.records
-        if record.msg.startswith("Transient ") and "endpoint check failure" in record.msg
+        if record.getMessage().startswith("Error in do_get_outcome")
     ]
-    assert [record.levelname for record in failures] == ["WARNING", "WARNING", "DEBUG"]
+    assert [record.levelname for record in failures] == ["ERROR", "ERROR", "DEBUG"]
 
 
 @pytest.mark.asyncio
@@ -2143,11 +2110,11 @@ async def test_throwing_neighbor_lookup_does_not_duplicate_request_failure_log(
         caplog (pytest.LogCaptureFixture): Captured records used to inspect log count.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=True))
-    client._get = AsyncMock(side_effect=client._do_get)
-    session.get.side_effect = [
-        FakeResponse(),
-        FakeResponse(status=500, reason="Server Error", ok=False),
-    ]
+    install_fake_router(
+        client,
+        session,
+        routes={("GET", NDP_TABLE_PATH): FakeResponse(status=500, reason="Server Error", ok=False)},
+    )
 
     with caplog.at_level("DEBUG"), pytest.raises(OPNsenseConnectionError):
         await client.get_ndp_table()  # type: ignore[deprecated]
@@ -2179,11 +2146,10 @@ async def _fetch_entries(
         tuple[OPNsenseClient.ArpNdpTable | None, Any]: Normalized table and the mocked session.
     """
     client, session = make_mock_session_client(partial(make_client, **client_options))
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.get.return_value = FakeResponse()
-    session.post.return_value = FakeResponse(json_payload=payload)
     if family == "arp":
+        install_fake_router(client, session, routes={("POST", ARP_TABLE_RESOLVE_PATH): payload})
         return await client.get_arp_entries(resolve_hostnames=True), session
+    install_fake_router(client, session, routes={("POST", NDP_TABLE_PATH): payload})
     return await client.get_ndp_entries(), session
 
 
@@ -2241,7 +2207,8 @@ async def test_neighbor_entries_unavailable_endpoint_and_empty_table(
     assert table.fetched_at is fetched_at
 
     client, session = make_mock_session_client(make_client)
-    session.get.side_effect = [FakeResponse(status=404, ok=False)]
+    path = "/api/diagnostics/interface/search_arp?resolve=no" if family == "arp" else NDP_TABLE_PATH
+    install_fake_router(client, session, routes={("POST", path): 404})
     fetch = client.get_arp_entries if family == "arp" else client.get_ndp_entries
     assert await fetch() is None
 
@@ -2257,25 +2224,26 @@ async def test_neighbor_entries_fetch_all_rows_with_one_post(
     """
     rows = [{"mac": "aa:bb:cc:dd:ee:ff", "ip": "192.0.2.1"}] * 10_000
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.get.return_value = FakeResponse()
-    session.post.return_value = FakeResponse(
-        json_payload={"total": len(rows), "rowCount": -1, "current": 1, "rows": rows}
+    router = install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", ARP_TABLE_RESOLVE_PATH): {
+                "total": len(rows),
+                "rowCount": -1,
+                "current": 1,
+                "rows": rows,
+            }
+        },
     )
 
     table = await client.get_arp_entries(resolve_hostnames=True)
 
     assert table is not None
     assert len(table.entries) == 10_000
-    assert session.get.call_count == 1
-    assert session.get.call_args.args[0] == "http://localhost/api/diagnostics/interface/search_arp"
-    assert session.post.call_count == 1
-    assert (
-        session.post.call_args.args[0]
-        == "http://localhost/api/diagnostics/interface/search_arp?resolve=yes"
-    )
-    assert session.post.call_args.kwargs["json"] == {"rowCount": -1}
-    assert client._post.await_count == 1
+    assert router.requests == [
+        ("POST", f"http://localhost{ARP_TABLE_RESOLVE_PATH}", {"rowCount": -1})
+    ]
 
 
 @pytest.mark.asyncio
@@ -2287,9 +2255,14 @@ async def test_neighbor_entries_propagate_cancellation(
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
     """
-    client, _session = make_mock_session_client(make_client)
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
-    client._post = AsyncMock(side_effect=asyncio.CancelledError)
+    client, session = make_mock_session_client(make_client)
+    install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", "/api/diagnostics/interface/search_arp?resolve=no"): asyncio.CancelledError()
+        },
+    )
 
     with pytest.raises(asyncio.CancelledError):
         await client.get_arp_entries()
@@ -2307,25 +2280,19 @@ async def test_get_arp_entries_requests_table_once_with_resolve_flag(
         resolve_hostnames (bool): Requested reverse-DNS behavior.
     """
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.get.return_value = FakeResponse()
-    session.post.return_value = FakeResponse(
-        json_payload={"total": 1, "rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}
+    resolve = "yes" if resolve_hostnames else "no"
+    path = f"/api/diagnostics/interface/search_arp?resolve={resolve}"
+    router = install_fake_router(
+        client,
+        session,
+        routes={("POST", path): {"total": 1, "rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}},
     )
 
     table = await client.get_arp_entries(resolve_hostnames=resolve_hostnames)
 
     assert table is not None
     assert len(table.entries) == 1
-    assert session.get.call_count == 1
-    assert session.get.call_args.args[0] == "http://localhost/api/diagnostics/interface/search_arp"
-    assert session.post.call_count == 1
-    assert session.post.call_args.args[0] == (
-        "http://localhost/api/diagnostics/interface/search_arp"
-        f"?resolve={'yes' if resolve_hostnames else 'no'}"
-    )
-    assert session.post.call_args.kwargs["json"] == {"rowCount": -1}
-    assert client._post.await_count == 1
+    assert router.requests == [("POST", f"http://localhost{path}", {"rowCount": -1})]
 
 
 @pytest.mark.asyncio
@@ -2357,10 +2324,13 @@ async def test_neighbor_entries_propagate_public_errors_when_throwing(
     """
     for throw_errors in (True, False):
         client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-        client._post = AsyncMock(side_effect=client._do_post)
-        session.get.return_value = FakeResponse()
         failure = TimeoutError("timed out") if timeout else FakeResponse(status=status, ok=False)
-        session.post.side_effect = [failure]
+        path = (
+            "/api/diagnostics/interface/search_arp?resolve=no"
+            if family == "arp"
+            else NDP_TABLE_PATH
+        )
+        install_fake_router(client, session, routes={("POST", path): failure})
         fetch = client.get_arp_entries if family == "arp" else client.get_ndp_entries
         if throw_errors:
             with pytest.raises(expected_error):
@@ -2484,9 +2454,16 @@ async def test_neighbor_entries_copy_metadata_and_raw_rows_and_are_frozen(
         "type": {"kind": "dynamic"},
     }
     client, session = make_mock_session_client(make_client)
-    client._post = AsyncMock(side_effect=client._do_post)
-    session.get.return_value = FakeResponse()
-    session.post.return_value = FakeResponse(json_payload={"total": 1, "rows": [row]})
+    install_fake_router(
+        client,
+        session,
+        routes={
+            ("POST", "/api/diagnostics/interface/search_arp?resolve=no"): {
+                "total": 1,
+                "rows": [row],
+            }
+        },
+    )
 
     table = await client.get_arp_entries()
     interface["name"].append("changed")
@@ -2699,9 +2676,9 @@ async def test_raw_neighbor_getters_warn_and_preserve_results(
         family (Literal["arp", "ndp"]): Deprecated endpoint to exercise.
     """
     client, session = make_mock_session_client(make_client)
-    client._get = AsyncMock(side_effect=client._do_get)
     rows = [{"ip": "invalid", "future_field": [1]}]
-    session.get.side_effect = [FakeResponse(), FakeResponse(json_payload={"rows": rows})]
+    path = "/api/diagnostics/interface/search_arp?resolve=no" if family == "arp" else NDP_TABLE_PATH
+    install_fake_router(client, session, routes={("GET", path): {"rows": rows}})
     with pytest.warns(DeprecationWarning, match=f"Use get_{family}_entries"):
         result = await getattr(client, f"get_{family}_table")()
     assert result == rows
@@ -2728,7 +2705,7 @@ async def _get_public_leases(make_client: ClientType, routes: dict[str, object])
         dict[str, Any]: The ``get_dhcp_leases`` result.
     """
     client, session = make_mock_session_client(make_client)
-    client._get = AsyncMock(side_effect=client._do_get)
+    install_fake_router(client, session)
     client._use_snake_case = True
 
     def respond(url: str, **_kwargs: object) -> FakeResponse:
@@ -2746,7 +2723,7 @@ async def _get_public_leases(make_client: ClientType, routes: dict[str, object])
             return FakeResponse(json_payload=routes[path])
         return FakeResponse(status=404, ok=False)
 
-    session.get.side_effect = respond
+    session.get = MagicMock(side_effect=respond)
     try:
         return await client.get_dhcp_leases(opnsense_tz=_LEASE_ROUTER_TZ)
     finally:

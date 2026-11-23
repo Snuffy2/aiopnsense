@@ -20,13 +20,17 @@ class SmartMixin(AiopnsenseClientProtocol):
         """Return SMART device data from the OPNsense SMART plugin.
 
         Returns:
-            list[dict[str, Any]]: SMART device rows returned by the detailed API.
+            list[dict[str, Any]]: SMART device rows returned by the detailed API, or an
+                empty list when absent (404 in either mode), or on 403/transient HTTP or
+                transport failures with ``throw_errors`` off. Those failures raise
+                ``OPNsenseError`` when enabled. An undecodable response body raises
+                ``OPNsenseError`` in either mode.
         """
-        if not await self._is_post_endpoint_available(SMART_SERVICE_LIST_ENDPOINT):
+        outcome = await self._fetch_post_endpoint_outcome(SMART_SERVICE_DETAIL_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("SMART plugin unavailable")
             return []
-        smart_info = await self._safe_dict_post(SMART_SERVICE_DETAIL_ENDPOINT)
-        devices = smart_info.get("devices", [])
+        devices = outcome.mapping().get("devices", [])
         if not isinstance(devices, list):
             _LOGGER.debug(
                 "Discarding SMART devices payload because devices is not a list: %r", devices
@@ -65,14 +69,18 @@ class SmartMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Decoded SMART detail payload. Non-mapping outputs
-                are wrapped under ``output`` to preserve a stable mapping API.
+                are wrapped under ``output`` to preserve a stable mapping API. Returns
+                an empty dictionary when absent (404 in either mode), or on 403/transient
+                HTTP or transport failures with ``throw_errors`` off. Those failures raise
+                ``OPNsenseError`` when enabled. An undecodable response body raises
+                ``OPNsenseError`` in either mode.
         """
-        if not await self._is_post_endpoint_available(SMART_SERVICE_INFO_ENDPOINT):
-            _LOGGER.debug("SMART plugin unavailable")
-            return {}
-        response = await self._safe_dict_post(
+        outcome = await self._fetch_post_endpoint_outcome(
             SMART_SERVICE_INFO_ENDPOINT,
             {"device": device, "type": info_type, "json": True},
         )
-        output = response.get("output", {})
+        if not outcome.is_data:
+            _LOGGER.debug("SMART plugin unavailable")
+            return {}
+        output = outcome.mapping().get("output", {})
         return dict(output) if isinstance(output, MutableMapping) else {"output": output}

@@ -260,13 +260,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
         """
         # [{'hostname': '?', 'ip-address': '<ip>', 'mac-address': '<mac>', 'interface': 'em0', 'expires': 1199, 'type': 'ethernet'}, ...]
         resolve_flag = "yes" if resolve_hostnames else "no"
-        if not await self._is_get_endpoint_available(ARP_TABLE_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(f"{ARP_TABLE_ENDPOINT}?resolve={resolve_flag}")
+        if not outcome.is_data:
             _LOGGER.debug("ARP endpoint unavailable")
             return None
 
-        arp_endpoint_resolve = f"{ARP_TABLE_ENDPOINT}?resolve={resolve_flag}"
-        arp_table_info = await self._safe_dict_get(arp_endpoint_resolve)
-        arp_table = arp_table_info.get("rows")
+        arp_table = outcome.mapping().get("rows")
         return arp_table if isinstance(arp_table, list) else None
 
     @_log_errors
@@ -282,31 +281,31 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 a successful lookup found no neighbors. An unavailable endpoint
                 or absent or malformed rows field returns ``None``.
         """
-        if not await self._is_get_endpoint_available(NDP_TABLE_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(NDP_TABLE_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("NDP endpoint unavailable")
             return None
 
-        ndp_table_info = await self._safe_dict_get(NDP_TABLE_ENDPOINT)
-        ndp_table = ndp_table_info.get("rows")
+        ndp_table = outcome.mapping().get("rows")
         return ndp_table if isinstance(ndp_table, list) else None
 
     @_log_errors
-    async def _get_complete_neighbor_rows(self, endpoint: str, request_path: str) -> list | None:
+    async def _get_complete_neighbor_rows(self, request_path: str) -> list | None:
         """Fetch every row for a normalized neighbor table and verify completeness.
 
         Args:
-            endpoint (str): Endpoint path used for the existing availability probe.
-            request_path (str): Data-request path, including any query parameters.
+            request_path (str): Neighbor search path, including any query parameters.
 
         Returns:
             list | None: Complete rows, including a successful empty list, or None when the
                 endpoint is unavailable or the response is missing, malformed, or truncated.
         """
-        if not await self._is_get_endpoint_available(endpoint):
-            _LOGGER.debug("Neighbor endpoint unavailable: %s", endpoint)
+        outcome = await self._fetch_post_endpoint_outcome(request_path, {"rowCount": -1})
+        if not outcome.is_data:
+            _LOGGER.debug("Neighbor endpoint unavailable: %s", request_path)
             return None
 
-        payload = await self._safe_dict_post(request_path, {"rowCount": -1})
+        payload = outcome.mapping()
         rows = payload.get("rows")
         total = payload.get("total")
         if (
@@ -316,7 +315,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             or total < 0
             or total != len(rows)
         ):
-            _LOGGER.debug("Neighbor endpoint returned an incomplete table: %s", endpoint)
+            _LOGGER.debug("Neighbor endpoint returned an incomplete table: %s", request_path)
             return None
         return rows
 
@@ -363,7 +362,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
         resolve_flag = "yes" if resolve_hostnames else "no"
         return self._parse_neighbor_table(
             await self._get_complete_neighbor_rows(
-                ARP_TABLE_ENDPOINT,
                 f"{ARP_TABLE_ENDPOINT}?resolve={resolve_flag}",
             )
         )
@@ -381,7 +379,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 empty table has no entries.
         """
         return self._parse_neighbor_table(
-            await self._get_complete_neighbor_rows(NDP_TABLE_ENDPOINT, NDP_TABLE_ENDPOINT)
+            await self._get_complete_neighbor_rows(NDP_TABLE_ENDPOINT)
         )
 
     async def _fetch_host_observations(self) -> HostObservations | None:
@@ -390,11 +388,15 @@ class DHCPMixin(AiopnsenseClientProtocol):
         Returns:
             HostObservations | None: Validated discovery entries, an empty timestamp-free
                 result when discovery is disabled, or None when the endpoint is unavailable
-                or the response is incomplete or malformed.
+                or the response is incomplete or malformed. At most one POST is sent; a
+                fresh cached absent status can return without sending a request.
         """
-        if not await self._is_post_endpoint_available(HOST_OBSERVATIONS_ENDPOINT):
+        outcome = await self._fetch_post_endpoint_outcome(
+            HOST_OBSERVATIONS_ENDPOINT, {"rowCount": -1}
+        )
+        if not outcome.is_data:
             return None
-        payload = await self._safe_dict_post(HOST_OBSERVATIONS_ENDPOINT, {"rowCount": -1})
+        payload = outcome.mapping()
         rows = payload.get("rows")
         if not isinstance(rows, list) or not rows:
             return None
@@ -473,8 +475,8 @@ class DHCPMixin(AiopnsenseClientProtocol):
         Returns:
             HostObservations | None: Frozen normalized observations, including an empty
                 ``arp-ndp`` result when host discovery is disabled. None means unavailable
-                or malformed data. Each call performs one endpoint availability check and,
-                when available, one observation request.
+                or malformed data. Each call sends at most one observation request; a
+                fresh cached absent status can avoid the request.
         """
         return await self._fetch_host_observations()
 
@@ -545,11 +547,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Mapping of Kea interface identifiers to display
                 names when Kea DHCPv4 is enabled; otherwise an empty mapping.
         """
-        if not await self._is_get_endpoint_available(KEA_DHCPV4_GET_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(KEA_DHCPV4_GET_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Kea DHCP interface endpoint unavailable")
             return {}
 
-        response = await self._safe_dict_get(KEA_DHCPV4_GET_ENDPOINT)
+        response = outcome.mapping()
         lease_interfaces: dict[str, Any] = {}
         general = dict_get(response, "dhcpv4.general", {})
         if not isinstance(general, MutableMapping):
@@ -573,11 +576,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Mapping of Dnsmasq range interface identifiers to
                 display names, including interfaces without active leases.
         """
-        if not await self._is_get_endpoint_available(DNSMASQ_RANGES_SEARCH_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(DNSMASQ_RANGES_SEARCH_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Dnsmasq DHCP range endpoint unavailable")
             return {}
 
-        response = await self._safe_dict_get(DNSMASQ_RANGES_SEARCH_ENDPOINT)
+        response = outcome.mapping()
         ranges = response.get("rows", [])
         if not isinstance(ranges, list):
             _LOGGER.debug("Dnsmasq DHCP range lookup returned invalid rows payload")
@@ -660,10 +664,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
         Returns:
             list: Normalized Kea lease entries for the supplied endpoint.
         """
-        if not await self._is_get_endpoint_available(lease_endpoint):
+        outcome = await self._fetch_endpoint_outcome(lease_endpoint)
+        if not outcome.is_data:
             _LOGGER.debug("%s not installed", service_name)
             return []
-        response = await self._safe_dict_get(lease_endpoint)
+        response = outcome.mapping()
         if not isinstance(response.get("rows", None), list):
             return []
         leases_info: list = response.get("rows", [])
@@ -688,18 +693,19 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 snake_case_path=reservation_endpoint,
                 camel_case_path=reservation_camelcase_endpoint,
             )
-            if not await self._is_get_endpoint_available(selected_reservation_endpoint):
+            res_outcome = await self._fetch_endpoint_outcome(selected_reservation_endpoint)
+            if not res_outcome.is_data:
                 _LOGGER.debug("%s reservation endpoint unavailable", service_name)
                 res_info = None
             else:
-                res_resp = await self._safe_dict_get(selected_reservation_endpoint)
-                if not isinstance(res_resp.get("rows", None), list):
+                res_rows = res_outcome.mapping().get("rows", None)
+                if not isinstance(res_rows, list):
                     _LOGGER.debug(
                         "%s reservation lookup returned invalid rows payload", service_name
                     )
                     res_info = None
                 else:
-                    res_info = res_resp.get("rows", [])
+                    res_info = res_rows
         reservations: dict[str, object] = {}
         if res_info is not None:
             for res in res_info:
@@ -763,10 +769,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 to the latest expiration, expired rows are omitted, and lease
                 ``type`` is derived from dnsmasq reservation metadata.
         """
-        if not await self._is_get_endpoint_available(DNSMASQ_LEASES_SEARCH_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(DNSMASQ_LEASES_SEARCH_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Dnsmasq DHCP not installed")
             return []
-        response = await self._safe_dict_get(DNSMASQ_LEASES_SEARCH_ENDPOINT)
+        response = outcome.mapping()
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
             return []
@@ -835,10 +842,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             snake_case_path=snake_case_path,
             camel_case_path=camel_case_path,
         )
-        if not await self._is_get_endpoint_available(lease_endpoint):
+        outcome = await self._fetch_endpoint_outcome(lease_endpoint)
+        if not outcome.is_data:
             _LOGGER.debug("%s lease endpoint unavailable", service_name)
             return []
-        response = await self._safe_dict_get(lease_endpoint)
+        response = outcome.mapping()
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
             return []
