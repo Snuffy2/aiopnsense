@@ -64,28 +64,10 @@ async def test_zero_pacing_lets_sequential_reads_finish_promptly(
     assert router.count("GET", NUT_PATH) == 20
 
 
-async def test_explicit_routing_records_and_answers_unrouted_request_with_404(
+async def test_unrouted_request_is_recorded_and_answered_with_404(
     make_client: MakeClientFactory,
 ) -> None:
     """An unrouted request is recorded and treated by the client as a missing endpoint.
-
-    Args:
-        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, explicit_routes=True)
-
-    assert await client.get_nut_ups_status() == {}
-    assert await client.get_nut_ups_status() == {}
-
-    # Only a 404 is cached as absent, so the second read sent no request.
-    assert router.count("GET", NUT_PATH) == 1
-
-
-async def test_default_routing_still_answers_unrouted_request_with_200(
-    make_client: MakeClientFactory,
-) -> None:
-    """Without explicit routing an unrouted request keeps its empty 200 reply.
 
     Args:
         make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
@@ -96,7 +78,8 @@ async def test_default_routing_still_answers_unrouted_request_with_200(
     assert await client.get_nut_ups_status() == {}
     assert await client.get_nut_ups_status() == {}
 
-    assert router.count("GET", NUT_PATH) == 2
+    # Only a 404 is cached as absent, so the second read sent no request.
+    assert router.count("GET", NUT_PATH) == 1
 
 
 async def test_unrouted_request_does_not_kill_the_worker(make_client: MakeClientFactory) -> None:
@@ -106,9 +89,7 @@ async def test_unrouted_request_does_not_kill_the_worker(make_client: MakeClient
         make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
     """
     client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client, session, routes={("GET", NUT_PATH): NUT_DATA}, explicit_routes=True
-    )
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): NUT_DATA})
 
     assert await client.get_smart() == []
     async with asyncio.timeout(2):
@@ -131,7 +112,6 @@ async def test_session_error_reaches_caller_instead_of_hanging(
         client,
         session,
         routes={("GET", NUT_PATH): aiohttp.ClientConnectionError("connection reset")},
-        explicit_routes=True,
     )
 
     async with asyncio.timeout(2):

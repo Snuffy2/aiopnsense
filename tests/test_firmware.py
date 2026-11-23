@@ -108,7 +108,7 @@ def _firmware_client(
         tuple[aiopnsense.OPNsenseClient, FakeRouter]: Client and the Router that answers it.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    return client, install_fake_router(client, session, routes=routes, explicit_routes=True)
+    return client, install_fake_router(client, session, routes=routes)
 
 
 def _version_status(version: str | None) -> dict[str, Any]:

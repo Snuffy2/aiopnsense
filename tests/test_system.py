@@ -90,7 +90,7 @@ def _make_router(
     all_routes: dict[tuple[str, str], Any] = dict(routes or {})
     if firmware is not None:
         all_routes[("GET", FIRMWARE_STATUS_PATH)] = {"product": {"product_version": firmware}}
-    return client, install_fake_router(client, session, routes=all_routes, explicit_routes=True)
+    return client, install_fake_router(client, session, routes=all_routes)
 
 
 def _posted_bodies(router: FakeRouter, path: str) -> list[Any]:

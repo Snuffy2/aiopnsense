@@ -175,7 +175,6 @@ def _unbound_client(
         client,
         session,
         routes={**_firmware_routes(firmware), **routes},
-        explicit_routes=True,
     )
     return client, router
 

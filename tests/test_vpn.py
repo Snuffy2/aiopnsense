@@ -105,7 +105,6 @@ def make_vpn_router(
         client,
         session,
         routes={("GET", FIRMWARE_STATUS_PATH): firmware, **(routes or {})},
-        explicit_routes=True,
     )
     if answer is not None:
 

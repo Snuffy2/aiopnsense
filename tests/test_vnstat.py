@@ -92,7 +92,6 @@ async def test_get_vnstat_metrics_yearly_parsing(make_client: ClientType) -> Non
 """
             }
         },
-        explicit_routes=True,
     )
 
     parsed = await client.get_vnstat_metrics("yearly")
@@ -122,7 +121,7 @@ async def test_get_vnstat_metrics_unsupported_period_or_endpoint_missing(
         throw_errors (bool): Whether the client raises instead of returning empty values.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(client, session, explicit_routes=True)
+    router = install_fake_router(client, session)
 
     assert await client.get_vnstat_metrics("hourly") == {}
     assert router.count("GET", VNSTAT_HOURLY_PATH) == 1
@@ -213,7 +212,6 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(
                 ("GET", VNSTAT_MONTHLY_PATH): monthly_payload,
                 ("GET", SYSTEM_TIME_PATH): {"datetime": "2000-01-15 12:00:00 EST"},
             },
-            explicit_routes=True,
         )
         vnstat = await client.get_vnstat()
 
@@ -261,7 +259,6 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: ClientType)
             ("GET", VNSTAT_HOURLY_PATH): {},
             ("GET", SYSTEM_TIME_PATH): {"datetime": "invalid"},
         },
-        explicit_routes=True,
     )
 
     await client.get_vnstat()
@@ -283,7 +280,7 @@ async def test_get_vnstat_skips_calls_when_endpoint_missing(
         throw_errors (bool): Whether the client raises instead of returning empty values.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(client, session, explicit_routes=True)
+    router = install_fake_router(client, session)
 
     vnstat = await client.get_vnstat()
 

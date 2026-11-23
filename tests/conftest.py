@@ -6,7 +6,6 @@ from collections.abc import (
     AsyncIterator,
     Callable,
     Coroutine,
-    Generator,
     Mapping,
     MutableMapping,
 )
@@ -15,8 +14,8 @@ from dataclasses import dataclass
 from functools import partial
 import json
 from types import TracebackType
-from typing import Any, Literal, Never, Self, cast
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Never, Self, cast
+from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
@@ -24,7 +23,6 @@ from yarl import URL
 
 import aiopnsense
 from aiopnsense import client_queue
-from aiopnsense._endpoint_outcome import _EndpointOutcome
 
 MakeClientFactory = Callable[..., aiopnsense.OPNsenseClient]
 
@@ -284,47 +282,27 @@ class FakeRouter:
     else is a 200 JSON body. Tests may change ``routes`` between calls to model
     the Router changing.
 
-    A request with no route is recorded and answered one of two ways. With
-    ``explicit_routes`` it gets a 404, as a real Router answers a missing
-    endpoint. Otherwise it is answered from the ordered ``get_payloads`` and
-    ``post_payloads`` queues, or with a 200 empty JSON object once they run out.
-    The queues and that default reply exist for tests not yet migrated to routes.
+    A request with no route is recorded and answered with 404, as a real Router
+    answers a missing endpoint.
     """
 
     def __init__(
         self,
         client: aiopnsense.OPNsenseClient,
         *,
-        get_payloads: list[Any] | None = None,
-        post_payloads: list[Any] | None = None,
         routes: MutableMapping[tuple[str, str], Any] | None = None,
-        explicit_routes: bool = False,
     ) -> None:
         """Initialize the fake Router.
 
         Args:
             client (aiopnsense.OPNsenseClient): Client whose requests this Router answers.
-            get_payloads (list[Any] | None): Ordered values answering GET requests without a route.
-            post_payloads (list[Any] | None): Ordered values answering POST requests without a route.
             routes (MutableMapping[tuple[str, str], Any] | None): Values keyed by
                 ``(method, path)``.
-            explicit_routes (bool): Answer a request without a route with 404 instead of
-                taking a queued payload or the empty 200 reply.
-
-        Raises:
-            ValueError: ``explicit_routes`` is combined with ordered payloads.
         """
-        if explicit_routes and (get_payloads or post_payloads):
-            raise ValueError("Ordered payloads cannot be combined with explicit routes")
         self._client = client
-        self._explicit_routes = explicit_routes
         self.requests: list[tuple[str, str, Any]] = []
         self.routes: dict[tuple[str, str], Any] = {
             (method.upper(), path): value for (method, path), value in (routes or {}).items()
-        }
-        self._queues: dict[str, list[Any]] = {
-            "GET": list(get_payloads or []),
-            "POST": list(post_payloads or []),
         }
 
     def count(self, method: str | None = None, path: str | None = None) -> int:
@@ -359,14 +337,7 @@ class FakeRouter:
             value: Configured transport error for this request.
         """
         self.requests.append((method, url, kwargs.get("json")))
-        path = url.removeprefix(self._client._url)
-        queue = self._queues[method]
-        if (method, path) in self.routes:
-            value = self.routes[(method, path)]
-        elif self._explicit_routes:
-            value = 404
-        else:
-            value = queue.pop(0) if queue else {}
+        value = self.routes.get((method, url.removeprefix(self._client._url)), 404)
         if isinstance(value, BaseException):
             raise value
         if isinstance(value, FakeResponse):
@@ -382,10 +353,7 @@ def install_fake_router(
     client: aiopnsense.OPNsenseClient,
     session: Any,
     *,
-    get_payloads: list[Any] | None = None,
-    post_payloads: list[Any] | None = None,
     routes: MutableMapping[tuple[str, str], Any] | None = None,
-    explicit_routes: bool = False,
 ) -> FakeRouter:
     """Back a client with a fake Router and run it on the real request queue.
 
@@ -396,213 +364,15 @@ def install_fake_router(
     Args:
         client (aiopnsense.OPNsenseClient): Client to configure.
         session (Any): Mock aiohttp session returned by ``make_mock_session_client``.
-        get_payloads (list[Any] | None): Ordered values answering GET requests without a route.
-        post_payloads (list[Any] | None): Ordered values answering POST requests without a route.
         routes (MutableMapping[tuple[str, str], Any] | None): Values keyed by ``(method, path)``.
-        explicit_routes (bool): Answer a request without a route with 404 and record it.
 
     Returns:
         FakeRouter: Fake Router recording every request the client sends.
     """
-    _use_real_queue_workers()
-    router = FakeRouter(
-        client,
-        get_payloads=get_payloads,
-        post_payloads=post_payloads,
-        routes=routes,
-        explicit_routes=explicit_routes,
-    )
+    router = FakeRouter(client, routes=routes)
     session.get = partial(router.request, "GET")
     session.post = partial(router.request, "POST")
     return router
-
-
-def stub_endpoint_outcome(
-    client: aiopnsense.OPNsenseClient,
-    outcome: _EndpointOutcome,
-    *,
-    read: Literal["get", "get_text", "post", "status"] = "get",
-) -> AsyncMock:
-    """Replace one endpoint outcome read on a client with a stub returning ``outcome``.
-
-    Use this in place of stubbing the probe and the fetch separately. The stub answers
-    the read the public method makes, so ``outcome`` decides the result: ``_EndpointOutcome.data(payload)``
-    for data, ``_EndpointOutcome.absent()`` for a missing endpoint, or
-    ``_EndpointOutcome.transient(error)`` for a transient failure.
-
-    Args:
-        client (aiopnsense.OPNsenseClient): Client whose read is stubbed.
-        outcome (_EndpointOutcome): Outcome that the stubbed read returns.
-        read (Literal["get", "get_text", "post", "status"]): Read to stub. ``get`` and
-            ``get_text`` replace ``_fetch_endpoint_outcome``, ``post`` replaces
-            ``_fetch_post_endpoint_outcome`` and ``status`` replaces ``_check_endpoint_status``.
-
-    Returns:
-        AsyncMock: The stub, so a test can assert the path it was awaited with.
-    """
-    attributes = {
-        "get": "_fetch_endpoint_outcome",
-        "get_text": "_fetch_endpoint_outcome",
-        "post": "_fetch_post_endpoint_outcome",
-        "status": "_check_endpoint_status",
-    }
-    stub = AsyncMock(return_value=outcome)
-    setattr(client, attributes[read], stub)
-    return stub
-
-
-class FirmwareRouter:
-    """Router stand-in that scripts firmware status and endpoint responses for a client.
-
-    Probes go to the mocked session and data requests go to the client's transport
-    methods, so public client methods run unchanged against one scripted Router.
-
-    Attributes:
-        firmware (str | None): Version reported by the firmware status endpoint, or
-            ``None`` for a status payload without a version.
-        firmware_reachable (bool): Whether the firmware status endpoint answers.
-        endpoints (dict[str, Any]): JSON payload served for each path that exists.
-        get_paths (list[str]): Paths requested with GET, in order.
-        post_paths (list[str]): Paths requested with POST, in order.
-        probe_paths (list[str]): Paths probed for availability, in order.
-    """
-
-    def __init__(self, client: aiopnsense.OPNsenseClient, session: MagicMock) -> None:
-        """Wire the client and session to this scripted Router.
-
-        Args:
-            client (aiopnsense.OPNsenseClient): Client whose transport is scripted.
-            session (MagicMock): Mocked aiohttp session used for availability probes.
-        """
-        self._base_url = client._url
-        self.firmware: str | None = None
-        self.firmware_reachable = True
-        self.endpoints: dict[str, Any] = {}
-        self.get_paths: list[str] = []
-        self.post_paths: list[str] = []
-        self.probe_paths: list[str] = []
-        session.get.side_effect = self._probe
-        client._get = self._get  # type: ignore[method-assign]
-        client._post = self._post  # type: ignore[method-assign]
-        client._do_post = self._do_post  # type: ignore[method-assign]
-        client._queue_request = self._queue_outcome_read  # type: ignore[method-assign]
-
-    def _payload(self, path: str) -> Any:
-        """Return the scripted JSON payload for a path.
-
-        Args:
-            path (str): Request path.
-
-        Returns:
-            Any: Firmware status payload, the configured endpoint payload, or ``None``.
-        """
-        if path == FIRMWARE_STATUS_PATH:
-            if not self.firmware_reachable:
-                return None
-            return {"product": {"product_version": self.firmware}} if self.firmware else {}
-        return self.endpoints.get(path)
-
-    def _probe(self, url: str, **_kwargs: Any) -> FakeResponse:
-        """Answer an availability probe.
-
-        Args:
-            url (str): Full probe URL.
-            **_kwargs (Any): Ignored aiohttp request options.
-
-        Returns:
-            FakeResponse: ``200`` when the path exists, otherwise ``404``.
-
-        Raises:
-            aiohttp.ClientConnectionError: The firmware status endpoint is unreachable.
-        """
-        path = url.removeprefix(self._base_url)
-        self.probe_paths.append(path)
-        if path == FIRMWARE_STATUS_PATH and not self.firmware_reachable:
-            raise aiohttp.ClientConnectionError("router unreachable")
-        exists = path == FIRMWARE_STATUS_PATH or path in self.endpoints
-        return FakeResponse(
-            status=200 if exists else 404, reason="OK" if exists else "Not Found", ok=exists
-        )
-
-    async def _get(self, path: str) -> Any:
-        """Serve a GET request.
-
-        Args:
-            path (str): Request path.
-
-        Returns:
-            Any: Scripted payload for the path.
-        """
-        self.get_paths.append(path)
-        return self._payload(path)
-
-    async def _post(self, path: str, payload: MutableMapping[str, Any] | None = None) -> Any:
-        """Serve a POST request.
-
-        Args:
-            path (str): Request path.
-            payload (MutableMapping[str, Any] | None): Ignored request body.
-
-        Returns:
-            Any: Scripted payload for the path.
-        """
-        del payload
-        self.post_paths.append(path)
-        return self._payload(path)
-
-    async def _queue_outcome_read(
-        self, method: str, path: str, payload: MutableMapping[str, Any] | None = None
-    ) -> _EndpointOutcome:
-        """Answer a queued endpoint read from the scripted endpoints.
-
-        Args:
-            method (str): Queue operation requested by the client.
-            path (str): API endpoint path requested.
-            payload (MutableMapping[str, Any] | None): Ignored request body.
-
-        Returns:
-            _EndpointOutcome: Scripted payload for the path, or an absent endpoint.
-
-        Raises:
-            ValueError: The client requests a queued operation other than a GET outcome.
-        """
-        if method not in ("get_outcome", "get_text_outcome"):
-            raise ValueError(f"Unexpected scripted Router operation: {method}")
-        del payload
-        reply = await self._get(path)
-        return _EndpointOutcome.absent() if reply is None else _EndpointOutcome.data(reply)
-
-    async def _do_post(
-        self, path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
-    ) -> Any:
-        """Serve a direct POST request that bypasses the request queue.
-
-        Args:
-            path (str): Request path.
-            payload (MutableMapping[str, Any] | None): Ignored request body.
-            caller (str): Ignored caller label.
-
-        Returns:
-            Any: Scripted payload for the path.
-        """
-        del caller
-        return await self._post(path, payload)
-
-
-@pytest.fixture
-def firmware_router(
-    make_client: Callable[..., aiopnsense.OPNsenseClient],
-) -> tuple[aiopnsense.OPNsenseClient, FirmwareRouter]:
-    """Return a client wired to a scripted Router.
-
-    Args:
-        make_client (Callable[..., aiopnsense.OPNsenseClient]): ``make_client`` fixture factory.
-
-    Returns:
-        tuple[aiopnsense.OPNsenseClient, FirmwareRouter]: Client and the Router that scripts it.
-    """
-    client, session = make_mock_session_client(make_client)
-    return client, FirmwareRouter(client, session)
 
 
 @dataclass(frozen=True, slots=True)
@@ -783,192 +553,16 @@ FIRMWARE_RELEASE_ORDER: tuple[str, ...] = (
 
 
 @pytest.fixture(autouse=True)
-def _patch_asyncio_create_task(
-    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
-) -> None:
-    """Stub background workers and reject requests that would wait for them.
+def _no_queue_pacing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove the production pause between queued requests for every test.
+
+    Clients run on real queue workers, and a test never needs a sleep to wait for the
+    queue. This is the only queue detail the test setup knows.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture used to replace ``asyncio.create_task``.
-        request (pytest.FixtureRequest): Current test request used to select queue-specific tests.
+        monkeypatch (pytest.MonkeyPatch): Fixture used to set and restore the pacing delay.
     """
-
-    if request.node.fspath and request.node.fspath.basename in {
-        "test_client_base.py",
-        "test_client_queue.py",
-    }:
-        return
-
-    original_create_task = asyncio.create_task
-
-    class _DummyTask:
-        def cancel(self) -> bool:
-            """Cancel.
-
-            Returns:
-                bool: True when cancellation succeeds.
-            """
-            return True
-
-        def done(self) -> bool:
-            """Done.
-
-            Returns:
-                bool: Whether the dummy task is complete.
-            """
-            return False
-
-        def __await__(self) -> Generator[None]:
-            """Await.
-
-            Returns:
-                Generator[None]: Iterator used by the await
-                    protocol.
-            """
-            if False:
-                yield
-
-    def _fake_create_task(
-        coro: Coroutine[Any, Any, Any], *args: Any, **kwargs: Any
-    ) -> asyncio.Task[Any] | _DummyTask:
-        """Fake create task.
-
-        Args:
-            coro (Coroutine[Any, Any, Any]): Coroutine wrapped by the logging
-                decorator.
-            args (Any): Positional arguments accepted by `_fake_create_task`.
-            kwargs (Any): Keyword arguments accepted by `_fake_create_task`.
-
-        Returns:
-            asyncio.Task[Any] | _DummyTask: Real task for non-aiopnsense
-                coroutines, otherwise a dummy task.
-        """
-        qualname = getattr(coro, "__qualname__", "")
-        module = getattr(coro, "__module__", "")
-        if "aiopnsense" in module or "_process_queue" in qualname:
-            with contextlib.suppress(Exception):
-                coro.close()
-            return _DummyTask()
-        return original_create_task(coro, *args, **kwargs)
-
-    monkeypatch.setattr(asyncio, "create_task", _fake_create_task)
-
-    queue_request = aiopnsense.OPNsenseClient._queue_request
-    queue_post = aiopnsense.OPNsenseClient._queue_post_with_cancellation
-
-    def workers_are_stubbed(client: aiopnsense.OPNsenseClient) -> bool:
-        """Detect tests that restore task creation or start a real worker explicitly.
-
-        Args:
-            client (aiopnsense.OPNsenseClient): Client sending the request.
-
-        Returns:
-            bool: Whether the fixture prevents the client from getting a worker.
-        """
-        return asyncio.create_task is _fake_create_task and not any(
-            isinstance(worker, asyncio.Task) and not worker.done() for worker in client._workers
-        )
-
-    def fail_unanswered_request(method: str, path: str) -> Never:
-        """Report an unanswered request without invoking production error handling.
-
-        Args:
-            method (str): Queued operation name.
-            path (str): API endpoint path to request.
-
-        Returns:
-            Never: Always fails the test.
-        """
-        http_method = method.partition("_")[0].upper()
-        pytest.fail(
-            f"queued {http_method} {path} was not answered: stub the request or use a fake Router"
-        )
-
-    async def guard_queued_request(
-        self: aiopnsense.OPNsenseClient,
-        method: str,
-        path: str,
-        payload: MutableMapping[str, Any] | None = None,
-    ) -> Any:
-        """Fail a request that reached the queue without a test double.
-
-        Args:
-            self (aiopnsense.OPNsenseClient): Client sending the request.
-            method (str): Queued operation name.
-            path (str): API endpoint path.
-            payload (MutableMapping[str, Any] | None): Request body, if any.
-
-        Returns:
-            Any: The queued response when the test restores real worker tasks.
-        """
-        if not workers_are_stubbed(self):
-            return await queue_request(self, method, path, payload)
-        fail_unanswered_request(method, path)
-
-    async def guard_queued_post(
-        self: aiopnsense.OPNsenseClient,
-        path: str,
-        payload: MutableMapping[str, Any] | None = None,
-    ) -> tuple[MutableMapping[str, Any] | list | None, asyncio.CancelledError | None]:
-        """Apply the same guard to the separate cancellable POST entry point.
-
-        Args:
-            self (aiopnsense.OPNsenseClient): Client sending the request.
-            path (str): API endpoint path.
-            payload (MutableMapping[str, Any] | None): Request body, if any.
-
-        Returns:
-            tuple[MutableMapping[str, Any] | list | None, asyncio.CancelledError | None]:
-                The queued response and cancellation when real workers are restored.
-        """
-        if not workers_are_stubbed(self):
-            return await queue_post(self, path, payload)
-        fail_unanswered_request("post", path)
-
-    monkeypatch.setattr(aiopnsense.OPNsenseClient, "_queue_request", guard_queued_request)
-    monkeypatch.setattr(
-        aiopnsense.OPNsenseClient, "_queue_post_with_cancellation", guard_queued_post
-    )
-
-
-_real_queue_workers_enabler: Callable[[], None] | None = None
-
-
-@pytest.fixture(autouse=True)
-def _real_queue_workers(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    """Let ``install_fake_router`` run the real request queue for the current test.
-
-    This is the one place that restores real worker tasks and sets the queue pacing
-    delay to zero, so a test never needs a sleep to wait for the queue. Both changes
-    are applied only when a test installs a fake Router, and are undone afterwards.
-
-    Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture used to restore task creation and pacing.
-
-    Yields:
-        None: Control to the test.
-    """
-    global _real_queue_workers_enabler
-
-    def enable() -> None:
-        """Restore real worker tasks and remove the pacing delay."""
-        monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
-        monkeypatch.setattr(client_queue, "QUEUE_REQUEST_INTERVAL_SECONDS", 0)
-
-    _real_queue_workers_enabler = enable
-    yield
-    _real_queue_workers_enabler = None
-
-
-def _use_real_queue_workers() -> None:
-    """Run the current test's client on real queue workers with no pacing delay.
-
-    Raises:
-        RuntimeError: Called outside a test that has the ``_real_queue_workers`` fixture.
-    """
-    if _real_queue_workers_enabler is None:
-        raise RuntimeError("Real queue workers need the autouse _real_queue_workers fixture")
-    _real_queue_workers_enabler()
+    monkeypatch.setattr(client_queue, "QUEUE_REQUEST_INTERVAL_SECONDS", 0)
 
 
 @pytest.fixture
@@ -1103,170 +697,6 @@ async def make_client() -> AsyncGenerator[Callable[..., aiopnsense.OPNsenseClien
                 await client.async_close()
 
 
-type RouterReply = MutableMapping[str, Any] | list | BaseException | None
-"""A scripted Router reply: a JSON body, ``None`` for a transport failure, or an error to raise."""
-
-
-@dataclass(frozen=True, slots=True)
-class RouterRequest:
-    """One request the client sent to the scripted Router."""
-
-    method: str
-    path: str
-    payload: MutableMapping[str, Any] | None = None
-
-
-class ScriptedRouter:
-    """Router stand-in that replaces a client's ``_post`` and ``_get`` transport.
-
-    The cancellation-aware queued POST that VPN Toggles use is answered from the same
-    script. Replies are scripted per ``(method, path)``. An unscripted request is recorded and
-    answered with ``None``, which is what the transport returns for a failed request
-    when ``throw_errors`` is off. A scripted exception is raised from the transport, as
-    a failed request does when ``throw_errors`` is on.
-    """
-
-    def __init__(self, make_client: MakeClientFactory) -> None:
-        """Initialize an empty script.
-
-        Args:
-            make_client (MakeClientFactory): Client factory used by :meth:`client`.
-        """
-        self._make_client = make_client
-        self._replies: dict[tuple[str, str], RouterReply] = {}
-        self.requests: list[RouterRequest] = []
-
-    def reply(self, path: str, response: RouterReply, *, method: str = "POST") -> None:
-        """Script the Router's reply to one request.
-
-        Args:
-            path (str): API path the reply answers.
-            response (RouterReply): JSON body, ``None`` for a transport failure, or an
-                exception for the transport to raise.
-            method (str): HTTP method, ``POST`` or ``GET``.
-        """
-        self._replies[(method, path)] = response
-
-    def client(self, **client_kwargs: Any) -> aiopnsense.OPNsenseClient:
-        """Create a client whose transport talks to this Router.
-
-        Args:
-            client_kwargs (Any): Keyword arguments forwarded to ``make_client``.
-
-        Returns:
-            aiopnsense.OPNsenseClient: Client with ``_post`` and ``_get`` scripted.
-        """
-        client = self._make_client(**client_kwargs)
-        client._use_snake_case = True
-        client._post = self._post
-        client._get = self._get
-        client._queue_request = self._queue_outcome_read
-        client._queue_post_with_cancellation = self._post_with_cancellation
-        return client
-
-    async def _queue_outcome_read(
-        self, method: str, path: str, payload: MutableMapping[str, Any] | None = None
-    ) -> _EndpointOutcome:
-        """Answer a queued outcome GET from the script, reporting an unscripted path as absent.
-
-        Args:
-            method (str): Queue operation requested by the client.
-            path (str): API path being read.
-            payload (MutableMapping[str, Any] | None): Unused body for the GET request.
-
-        Returns:
-            _EndpointOutcome: Scripted payload, or an absent endpoint when none is scripted.
-
-        Raises:
-            ValueError: The client requests a queued operation other than a GET outcome.
-        """
-        if method != "get_outcome":
-            raise ValueError(f"Unexpected scripted Router operation: {method}")
-        del payload
-        reply = await self._get(path)
-        return _EndpointOutcome.absent() if reply is None else _EndpointOutcome.data(reply)
-
-    def requested(self, path: str, *, method: str = "POST") -> bool:
-        """Return whether the client sent a request.
-
-        Args:
-            path (str): API path to look for.
-            method (str): HTTP method to look for.
-
-        Returns:
-            bool: ``True`` when at least one matching request was sent.
-        """
-        return any(r.method == method and r.path == path for r in self.requests)
-
-    async def _answer(self, request: RouterRequest) -> MutableMapping[str, Any] | list | None:
-        """Record a request and return or raise its scripted reply.
-
-        Args:
-            request (RouterRequest): Request the client sent.
-
-        Returns:
-            MutableMapping[str, Any] | list | None: Scripted JSON body, or ``None``.
-        """
-        self.requests.append(request)
-        reply = self._replies.get((request.method, request.path))
-        if isinstance(reply, BaseException):
-            return await AsyncMock(side_effect=reply)()
-        return reply
-
-    async def _post(
-        self, path: str, payload: MutableMapping[str, Any] | None = None
-    ) -> MutableMapping[str, Any] | list | None:
-        """Answer a POST from the script.
-
-        Args:
-            path (str): API path.
-            payload (MutableMapping[str, Any] | None): Request body.
-
-        Returns:
-            MutableMapping[str, Any] | list | None: Scripted JSON body, or ``None``.
-        """
-        return await self._answer(RouterRequest("POST", path, payload))
-
-    async def _post_with_cancellation(
-        self, path: str, payload: MutableMapping[str, Any] | None = None
-    ) -> tuple[MutableMapping[str, Any] | list | None, None]:
-        """Answer a cancellation-aware POST (used by VPN Toggles) from the script.
-
-        Args:
-            path (str): API path.
-            payload (MutableMapping[str, Any] | None): Request body.
-
-        Returns:
-            tuple[MutableMapping[str, Any] | list | None, None]: Scripted JSON body, or
-                ``None``, and no caller cancellation.
-        """
-        return await self._post(path, payload), None
-
-    async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
-        """Answer a GET from the script.
-
-        Args:
-            path (str): API path.
-
-        Returns:
-            MutableMapping[str, Any] | list | None: Scripted JSON body, or ``None``.
-        """
-        return await self._answer(RouterRequest("GET", path))
-
-
-@pytest.fixture
-def scripted_router(make_client: MakeClientFactory) -> ScriptedRouter:
-    """Return a Router whose replies the test scripts per request path.
-
-    Args:
-        make_client (MakeClientFactory): Client factory fixture.
-
-    Returns:
-        ScriptedRouter: Empty script; call ``reply`` then ``client``.
-    """
-    return ScriptedRouter(make_client)
-
-
 class VpnQueueTasks:
     """Track tasks started by a VPN queue test for fixture cleanup."""
 
@@ -1307,23 +737,3 @@ async def vpn_queue_tasks(make_client: MakeClientFactory) -> AsyncIterator[VpnQu
         if not task.done():
             task.cancel()
     await asyncio.gather(*tasks.tasks, return_exceptions=True)
-
-
-@pytest.fixture
-async def vpn_toggle_client(
-    make_client: MakeClientFactory, monkeypatch: pytest.MonkeyPatch
-) -> aiopnsense.OPNsenseClient:
-    """Use the real request queue with mocked VPN transport responses.
-
-    Args:
-        make_client (MakeClientFactory): Client factory fixture.
-        monkeypatch (pytest.MonkeyPatch): Fixture for restoring queue task creation.
-
-    Returns:
-        aiopnsense.OPNsenseClient: Client configured for snake_case endpoints by default.
-    """
-    monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
-    monkeypatch.setattr(client_queue, "QUEUE_REQUEST_INTERVAL_SECONDS", 0)
-    client = make_client()
-    client._use_snake_case = True
-    return client

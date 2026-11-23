@@ -76,7 +76,7 @@ def interface_client(
     if firmware is not None:
         served[("GET", FIRMWARE_STATUS_PATH)] = {"product": {"product_version": firmware}}
     served.update(routes or {})
-    return client, install_fake_router(client, session, routes=served, explicit_routes=True)
+    return client, install_fake_router(client, session, routes=served)
 
 
 def interface_requests(router: FakeRouter) -> list[tuple[str, str]]:

@@ -76,7 +76,6 @@ def _dhcp_router(
         session,
         routes={("GET", FIRMWARE_STATUS_PATH): firmware}
         | {("GET", path): response for path, response in (routes or {}).items()},
-        explicit_routes=True,
     )
     return client, router
 
@@ -155,7 +154,6 @@ async def test_get_ndp_table_http_results(
         client,
         session,
         routes={("GET", "/api/diagnostics/interface/search_ndp"): result},
-        explicit_routes=True,
     )
 
     assert await client.get_ndp_table() == expected  # type: ignore[deprecated]
@@ -192,7 +190,6 @@ async def test_get_ndp_table_propagates_public_errors(
         client,
         session,
         routes={("GET", "/api/diagnostics/interface/search_ndp"): result},
-        explicit_routes=True,
     )
 
     with pytest.raises(expected_error) as raised:
@@ -1228,7 +1225,6 @@ async def test_host_observations_normalizes_packet_sightings(
                 ],
             }
         },
-        explicit_routes=True,
     )
     with pytest.warns(DeprecationWarning, match="Use get_host_observation_entries"):
         result = await client.get_host_observations()  # type: ignore[deprecated]
@@ -1266,7 +1262,6 @@ async def test_host_observation_entries_returns_typed_result_with_one_fetch(
                 ],
             }
         },
-        explicit_routes=True,
     )
 
     with warnings.catch_warnings(record=True) as emitted_warnings:
@@ -1311,7 +1306,6 @@ async def test_host_observation_entries_preserves_disabled_source(
                 "rows": [{"source": "arp-ndp", "last_seen": ""}],
             }
         },
-        explicit_routes=True,
     )
 
     observations = await client.get_host_observation_entries()
@@ -1351,7 +1345,6 @@ async def test_host_observation_entries_preserves_failure_semantics(
         client,
         session,
         routes={("POST", HOST_OBSERVATIONS_PATH): payload if status == 200 else status},
-        explicit_routes=True,
     )
 
     if expected_error is not None:
@@ -1389,7 +1382,6 @@ async def test_host_observations_rejects_invalid_totals(
                 ],
             }
         },
-        explicit_routes=True,
     )
 
     assert await client.get_host_observations() is None  # type: ignore[deprecated]
@@ -1418,7 +1410,6 @@ async def test_host_observations_requests_all_rows_through_post_json(
         routes={
             ("POST", HOST_OBSERVATIONS_PATH): {"total": len(observations), "rows": observations}
         },
-        explicit_routes=True,
     )
 
     result = await client.get_host_observations()  # type: ignore[deprecated]
@@ -1494,9 +1485,7 @@ async def test_host_observations_rejects_non_authoritative_payloads(
         payload (object): Unusable host-observation response.
     """
     client, session = make_mock_session_client(make_client)
-    install_fake_router(
-        client, session, routes={("POST", HOST_OBSERVATIONS_PATH): payload}, explicit_routes=True
-    )
+    install_fake_router(client, session, routes={("POST", HOST_OBSERVATIONS_PATH): payload})
     assert await client.get_host_observations() is None  # type: ignore[deprecated]
 
 
@@ -1517,7 +1506,6 @@ async def test_host_observations_distinguishes_disabled_service(make_client: Cli
                 "rows": [{"source": "arp-ndp", "last_seen": ""}],
             }
         },
-        explicit_routes=True,
     )
     assert await client.get_host_observations() == {"source": "arp-ndp", "rows": []}  # type: ignore[deprecated]
 
@@ -1534,9 +1522,7 @@ async def test_host_observations_http_failure_is_unavailable(
         status (int): HTTP failure status of the endpoint request.
     """
     client, session = make_mock_session_client(make_client)
-    install_fake_router(
-        client, session, routes={("POST", HOST_OBSERVATIONS_PATH): status}, explicit_routes=True
-    )
+    install_fake_router(client, session, routes={("POST", HOST_OBSERVATIONS_PATH): status})
     assert await client.get_host_observations() is None  # type: ignore[deprecated]
 
 
@@ -1573,7 +1559,7 @@ async def test_neighbor_lookup_logs_failure_once_until_recovery_then_again(
         expected (object): Public lookup result after recovery.
     """
     client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={route: 503}, explicit_routes=True)
+    router = install_fake_router(client, session, routes={route: 503})
 
     async def lookup() -> object:
         """Call the selected public neighbor lookup method.
@@ -1628,9 +1614,7 @@ async def test_neighbor_outage_logging_is_per_client(
         (first_client, first_session),
         (second_client, second_session),
     ):
-        install_fake_router(
-            client, session, routes={("GET", NDP_TABLE_PATH): 503}, explicit_routes=True
-        )
+        install_fake_router(client, session, routes={("GET", NDP_TABLE_PATH): 503})
 
     with caplog.at_level("DEBUG"):
         assert await first_client.get_ndp_table() is None  # type: ignore[deprecated]
@@ -1661,7 +1645,6 @@ async def test_throwing_neighbor_lookup_does_not_duplicate_request_failure_log(
         client,
         session,
         routes={("GET", NDP_TABLE_PATH): FakeResponse(status=500, reason="Server Error", ok=False)},
-        explicit_routes=True,
     )
 
     with caplog.at_level("DEBUG"), pytest.raises(OPNsenseConnectionError):
@@ -1699,12 +1682,9 @@ async def _fetch_entries(
             client,
             session,
             routes={("POST", ARP_TABLE_RESOLVE_PATH): payload},
-            explicit_routes=True,
         )
         return await client.get_arp_entries(resolve_hostnames=True), session
-    install_fake_router(
-        client, session, routes={("POST", NDP_TABLE_PATH): payload}, explicit_routes=True
-    )
+    install_fake_router(client, session, routes={("POST", NDP_TABLE_PATH): payload})
     return await client.get_ndp_entries(), session
 
 
@@ -1763,7 +1743,7 @@ async def test_neighbor_entries_unavailable_endpoint_and_empty_table(
 
     client, session = make_mock_session_client(make_client)
     path = "/api/diagnostics/interface/search_arp?resolve=no" if family == "arp" else NDP_TABLE_PATH
-    install_fake_router(client, session, routes={("POST", path): 404}, explicit_routes=True)
+    install_fake_router(client, session, routes={("POST", path): 404})
     fetch = client.get_arp_entries if family == "arp" else client.get_ndp_entries
     assert await fetch() is None
 
@@ -1790,7 +1770,6 @@ async def test_neighbor_entries_fetch_all_rows_with_one_post(
                 "rows": rows,
             }
         },
-        explicit_routes=True,
     )
 
     table = await client.get_arp_entries(resolve_hostnames=True)
@@ -1818,7 +1797,6 @@ async def test_neighbor_entries_propagate_cancellation(
         routes={
             ("POST", "/api/diagnostics/interface/search_arp?resolve=no"): asyncio.CancelledError()
         },
-        explicit_routes=True,
     )
 
     with pytest.raises(asyncio.CancelledError):
@@ -1843,7 +1821,6 @@ async def test_get_arp_entries_requests_table_once_with_resolve_flag(
         client,
         session,
         routes={("POST", path): {"total": 1, "rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}},
-        explicit_routes=True,
     )
 
     table = await client.get_arp_entries(resolve_hostnames=resolve_hostnames)
@@ -1888,7 +1865,7 @@ async def test_neighbor_entries_propagate_public_errors_when_throwing(
             if family == "arp"
             else NDP_TABLE_PATH
         )
-        install_fake_router(client, session, routes={("POST", path): failure}, explicit_routes=True)
+        install_fake_router(client, session, routes={("POST", path): failure})
         fetch = client.get_arp_entries if family == "arp" else client.get_ndp_entries
         if throw_errors:
             with pytest.raises(expected_error):
@@ -2021,7 +1998,6 @@ async def test_neighbor_entries_copy_metadata_and_raw_rows_and_are_frozen(
                 "rows": [row],
             }
         },
-        explicit_routes=True,
     )
 
     table = await client.get_arp_entries()
@@ -2235,9 +2211,7 @@ async def test_raw_neighbor_getters_warn_and_preserve_results(
     client, session = make_mock_session_client(make_client)
     rows = [{"ip": "invalid", "future_field": [1]}]
     path = "/api/diagnostics/interface/search_arp?resolve=no" if family == "arp" else NDP_TABLE_PATH
-    install_fake_router(
-        client, session, routes={("GET", path): {"rows": rows}}, explicit_routes=True
-    )
+    install_fake_router(client, session, routes={("GET", path): {"rows": rows}})
     with pytest.warns(DeprecationWarning, match=f"Use get_{family}_entries"):
         result = await getattr(client, f"get_{family}_table")()
     assert result == rows

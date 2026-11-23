@@ -53,7 +53,6 @@ def _voucher_client(
             ("GET", FIRMWARE_STATUS_PATH): {"product": {"product_version": firmware}},
             **routes,
         },
-        explicit_routes=True,
     )
     return client, router
 

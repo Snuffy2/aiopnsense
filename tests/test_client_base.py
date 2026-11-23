@@ -460,7 +460,6 @@ async def test_validate_can_skip_device_unique_id_requirement(
         client,
         session,
         routes={("GET", FIRMWARE_STATUS_PATH): {"product": {"product_version": "0.0"}}},
-        explicit_routes=True,
     )
     assert await client.get_host_firmware_version() == "0.0"
     router.routes[("GET", FIRMWARE_STATUS_PATH)] = {

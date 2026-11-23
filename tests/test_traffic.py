@@ -63,7 +63,7 @@ def _traffic_client(
         tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    return client, install_fake_router(client, session, routes=routes, explicit_routes=True)
+    return client, install_fake_router(client, session, routes=routes)
 
 
 class _TrackedStreamResponse(FakeResponse):
@@ -604,7 +604,6 @@ async def test_stream_interface_traffic_passes_read_timeout_from_clamped_poll_in
                 stream_chunks=[_sse(1710000010, 0, 0), _sse(1710000011, 1000, 2000)]
             )
         },
-        explicit_routes=True,
     )
     timeouts: list[aiohttp.ClientTimeout] = []
     session_get = session.get

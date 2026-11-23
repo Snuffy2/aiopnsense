@@ -34,7 +34,7 @@ def _smart_client(
         tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    return client, install_fake_router(client, session, routes=routes, explicit_routes=True)
+    return client, install_fake_router(client, session, routes=routes)
 
 
 @pytest.mark.parametrize(

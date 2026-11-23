@@ -41,7 +41,6 @@ async def test_get_nut_ups_status_preserves_nested_status_payload(
                 }
             }
         },
-        explicit_routes=True,
     )
 
     nut_status = await client.get_nut_ups_status()
@@ -80,7 +79,6 @@ async def test_get_nut_ups_status_parses_raw_status_response(make_client: Client
                 )
             }
         },
-        explicit_routes=True,
     )
 
     nut_status = await client.get_nut_ups_status()
@@ -125,7 +123,6 @@ async def test_get_nut_ups_status_prefers_mapped_status_when_available(
                 "response": "ups.status: OB",
             }
         },
-        explicit_routes=True,
     )
 
     nut_status = await client.get_nut_ups_status()
@@ -155,7 +152,6 @@ async def test_get_nut_ups_status_uses_raw_response_when_mapped_status_is_empty(
         client,
         session,
         routes={("GET", NUT_PATH): {"status": {}, "response": "ups.status: OL"}},
-        explicit_routes=True,
     )
 
     nut_status = await client.get_nut_ups_status()
@@ -191,7 +187,6 @@ ups.load: 12"""
         client,
         session,
         routes={("GET", NUT_PATH): {"response": raw_response}},
-        explicit_routes=True,
     )
 
     nut_status = await client.get_nut_ups_status()
@@ -244,9 +239,7 @@ async def test_get_nut_ups_status_handles_invalid_payloads(
         None: This test validates defensive handling of malformed responses.
     """
     client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client, session, routes={("GET", NUT_PATH): response_payload}, explicit_routes=True
-    )
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): response_payload})
 
     nut_status = await client.get_nut_ups_status()
 
@@ -292,9 +285,7 @@ async def test_get_nut_ups_status_returns_empty_dict_when_endpoint_unavailable(
         None: This test validates fail-closed behavior for unavailable NUT APIs.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(
-        client, session, routes={("GET", NUT_PATH): route}, explicit_routes=True
-    )
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): route})
 
     if throw_errors and raised is not None:
         with pytest.raises(raised):

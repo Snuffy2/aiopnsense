@@ -88,7 +88,6 @@ def _router(
             **_firmware_route(firmware),
             **{("GET", path): value for path, value in routes.items()},
         },
-        explicit_routes=True,
     )
     return client, router
 

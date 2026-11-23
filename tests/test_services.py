@@ -41,7 +41,6 @@ async def test_service_management_and_get_services(make_client: ClientType) -> N
             ("POST", f"{SERVICE_PATH_PREFIX}/stop/svc1"): {"result": "ok"},
             ("POST", f"{SERVICE_PATH_PREFIX}/restart/svc1"): {"result": "ok"},
         },
-        explicit_routes=True,
     )
 
     services = await client.get_services()
@@ -81,7 +80,6 @@ async def test_manage_service_and_restart_if_running(make_client: ClientType) ->
             ("GET", SERVICE_SEARCH_PATH): {"rows": [{"name": "svc1", "id": "svc1", "running": 1}]},
             ("POST", restart_path): {"result": "ok"},
         },
-        explicit_routes=True,
     )
 
     # An empty service name sends no request.
@@ -129,7 +127,6 @@ async def test_restart_service_if_running_matches_composite_service_identifier(
             },
             ("POST", restart_path): {"result": "ok"},
         },
-        explicit_routes=True,
     )
 
     assert await client.get_service_is_running("openvpn") is True
@@ -157,7 +154,7 @@ async def test_service_unknown_state_fails_closed(
         None: This test validates unknown service-state handling when endpoint probing fails.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(client, session, explicit_routes=True)
+    router = install_fake_router(client, session)
 
     assert await client.get_services() == []
     assert await client.get_service_is_running("svc1") is False
@@ -184,7 +181,6 @@ async def test_get_services_handles_non_list_rows_and_running_coercion(
         client,
         session,
         routes={("GET", SERVICE_SEARCH_PATH): {"rows": "bad-shape"}},
-        explicit_routes=True,
     )
     assert await client.get_services() == []
 

@@ -101,7 +101,6 @@ async def test_validate_maps_endpoint_probe_ssl_to_opnsense_ssl_error(
         client,
         session,
         routes={("GET", FIRMWARE_STATUS_PATH): _TestClientSSLError()},
-        explicit_routes=True,
     )
     try:
         with pytest.raises(OPNsenseSSLError):
@@ -125,9 +124,7 @@ async def test_validate_reprobes_cached_403_in_throw_mode(
         None: This test asserts validation freshly probes cached permission failures.
     """
     client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client, session, routes={("GET", FIRMWARE_STATUS_PATH): 403}, explicit_routes=True
-    )
+    router = install_fake_router(client, session, routes={("GET", FIRMWARE_STATUS_PATH): 403})
     try:
         path = FIRMWARE_STATUS_PATH
         assert (await client._check_endpoint_status(path)).is_absent
@@ -159,9 +156,7 @@ async def test_is_endpoint_available_is_deprecated_get_alias(
         None: This test asserts PEP 702 metadata, runtime warnings, and alias behavior.
     """
     client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client, session, routes={("GET", "/api/test/endpoint"): {}}, explicit_routes=True
-    )
+    router = install_fake_router(client, session, routes={("GET", "/api/test/endpoint"): {}})
     try:
         legacy_alias = client.is_endpoint_available  # type: ignore[deprecated]
         assert "Endpoint availability probing is internal" in legacy_alias.__deprecated__  # type: ignore[attr-defined]
@@ -202,9 +197,7 @@ async def test_validate_maps_endpoint_probe_http_errors_to_public_exceptions(
         None: This test asserts validation-time endpoint probe error mapping.
     """
     client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client, session, routes={("GET", FIRMWARE_STATUS_PATH): status}, explicit_routes=True
-    )
+    router = install_fake_router(client, session, routes={("GET", FIRMWARE_STATUS_PATH): status})
     try:
         path = FIRMWARE_STATUS_PATH
         with pytest.raises(expected_exception):
@@ -376,7 +369,6 @@ async def dismiss_router(
             ("POST", DISMISS_SNAKE_PATH): {"status": "ok"},
             ("POST", DISMISS_CAMEL_PATH): {"status": "ok"},
         },
-        explicit_routes=True,
     )
     return client, router
 
@@ -674,7 +666,6 @@ async def test_old_endpoint_outcome_cannot_restore_cache_after_firmware_change(
             ("GET", FIRMWARE_STATUS_PATH): _firmware_status("26.1.1"),
             ("GET", SYSTEM_INFORMATION_SNAKE_PATH): DelayedNotFoundResponse(status=404, ok=False),
         },
-        explicit_routes=True,
     )
     # Learn the old firmware first so the later validate sees the change and resets the cache.
     assert await client.get_host_firmware_version() == "26.1.1"

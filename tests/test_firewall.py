@@ -75,7 +75,6 @@ def _firewall_client(
         client,
         session,
         routes={("GET", FIRMWARE_STATUS_PATH): firmware_status, **routes},
-        explicit_routes=True,
     )
     return client, router
 

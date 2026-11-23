@@ -64,7 +64,7 @@ def _speedtest_client(
         tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    return client, install_fake_router(client, session, routes=routes, explicit_routes=True)
+    return client, install_fake_router(client, session, routes=routes)
 
 
 @pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
@@ -396,7 +396,6 @@ async def test_run_speedtest_uses_extended_timeout(make_client: ClientType) -> N
         client,
         session,
         routes={("GET", SHOWLOG_PATH): _showlog_row(), ("GET", RUN_PATH): {"timestamp": "x"}},
-        explicit_routes=True,
     )
     send_get = session.get
     timeouts: dict[str, float | None] = {}

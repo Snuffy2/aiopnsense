@@ -116,7 +116,7 @@ def _client_for_router(
     if firmware is not None:
         served[("GET", FIRMWARE_STATUS_PATH)] = {"product": {"product_version": firmware}}
     served.update(routes or {})
-    return client, install_fake_router(client, session, routes=served, explicit_routes=True)
+    return client, install_fake_router(client, session, routes=served)
 
 
 def _posts(router: FakeRouter) -> list[str]:
