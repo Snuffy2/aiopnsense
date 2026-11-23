@@ -58,23 +58,19 @@ def _send_sites(client: aiopnsense.OPNsenseClient) -> dict[str, Callable[[str], 
         "post": client._do_post,
         "get-from-stream": client._do_get_from_stream,
         "stream-events": stream,
-        "probe-get": lambda path: client._is_endpoint_available(path, method="get"),
-        "probe-post": lambda path: client._is_endpoint_available(path, method="post"),
         "firmware-get": client._firmware_request,
         "firmware-post": lambda path: client._firmware_request(path, post=True),
     }
 
 
-GET_SITES = ("get", "get-from-stream", "stream-events", "probe-get", "firmware-get")
-POST_SITES = ("post", "probe-post", "firmware-post")
+GET_SITES = ("get", "get-from-stream", "stream-events", "firmware-get")
+POST_SITES = ("post", "firmware-post")
 FIRMWARE_SITES = ("firmware-get", "firmware-post")
 EMPTY_RESULTS: dict[str, Any] = {
     "get": None,
     "post": None,
     "get-from-stream": {},
     "stream-events": [],
-    "probe-get": False,
-    "probe-post": False,
 }
 FORBIDDEN = [
     *((site, "info") for site in (*GET_SITES, *POST_SITES)),
@@ -141,6 +137,33 @@ async def test_boundary_returns_empty_for_forbidden_request_without_throwing(
 
     assert await _send_sites(client)[site](f"{BASE}/{action}") == EMPTY_RESULTS[site]
 
+    _assert_nothing_sent(session)
+
+
+@pytest.mark.parametrize(
+    ("method", "action"), [("get", "info"), ("post", "info"), ("post", "status")]
+)
+async def test_boundary_returns_blocked_outcome_for_forbidden_request(
+    make_client: Callable[..., aiopnsense.OPNsenseClient], method: str, action: str
+) -> None:
+    """Return a transient outcome carrying the blocked error and send nothing.
+
+    The outcome requests report a failed request as an outcome and leave the
+    ``throw_errors`` decision to the endpoint module, so they never raise here.
+
+    Args:
+        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
+        method (str): HTTP method of the immediate outcome request.
+        action (str): Forbidden firmware action.
+    """
+    client, session = make_mock_session_client(make_client)
+    request = client._do_get_outcome if method == "get" else client._do_post_outcome
+
+    outcome = await request(f"{BASE}/{action}")
+
+    assert outcome.is_transient
+    assert isinstance(outcome.error, OPNsenseInvalidArgument)
+    assert "Blocked" in str(outcome.error)
     _assert_nothing_sent(session)
 
 

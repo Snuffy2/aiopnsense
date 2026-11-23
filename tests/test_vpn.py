@@ -18,13 +18,10 @@ ClientType = Callable[..., OPNsenseClient]
 
 
 @pytest.mark.asyncio
-async def test_get_openvpn_and_fetch_details(
-    monkeypatch: pytest.MonkeyPatch, make_client: ClientType
-) -> None:
+async def test_get_openvpn_and_fetch_details(make_client: ClientType) -> None:
     """Validate openvpn server/client discovery and fetch details flow.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture for replacing client getters.
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
@@ -86,22 +83,8 @@ async def test_get_openvpn_and_fetch_details(
                 }
             return {}
 
-        async def fake_safe_list_get(_path: str) -> list[object]:
-            """Fake safe list get.
-
-            Args:
-                _path (str): API endpoint path ignored by this empty-response stub.
-
-            Returns:
-                list[object]: Empty endpoint response.
-            """
-            return []
-
         read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
         read.side_effect = lambda path: _EndpointOutcome.data(fake_safe_dict_get(path))
-        monkeypatch.setattr(
-            client, "_safe_list_get", AsyncMock(side_effect=fake_safe_list_get), raising=False
-        )
         openvpn = await client.get_openvpn()
         assert "servers" in openvpn and "clients" in openvpn
         # servers should include uuid1
@@ -196,7 +179,6 @@ async def test_toggle_vpn_instance_variants(
     """
     client = vpn_toggle_client
     client._use_snake_case = True
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
 
     if isinstance(post_resp, list):
         post_mock = AsyncMock(side_effect=post_resp)

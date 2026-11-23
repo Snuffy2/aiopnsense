@@ -327,19 +327,16 @@ class ClientTransportMixin:
         path: str,
         caller: str = "Unknown",
         timeout_seconds: float | None = None,
-        *,
-        response_format: Literal["json", "text"] = "json",
-    ) -> MutableMapping[str, Any] | list | str | None:
+    ) -> MutableMapping[str, Any] | list | None:
         """Execute a GET request immediately without queueing.
 
         Args:
             path (str): API endpoint path to request.
             caller (str): Caller name used for diagnostics and logging.
             timeout_seconds (float | None, optional): Request timeout in seconds for this call.
-            response_format (Literal["json", "text"], optional): Response decoding mode.
 
         Returns:
-            MutableMapping[str, Any] | list | str | None: Decoded response payload
+            MutableMapping[str, Any] | list | None: Decoded response payload
                 returned by the GET request, or ``None`` after a logged failure.
                 When ``throw_errors`` is enabled, an HTTP or transport failure is
                 raised as the mapped public ``OPNsenseError`` instead.
@@ -359,10 +356,7 @@ class ClientTransportMixin:
             ) as response:
                 _LOGGER.debug("[get] Response %s: %s", response.status, response.reason)
                 if response.ok:
-                    if response_format == "text":
-                        result = await response.text()
-                    else:
-                        result = await response.json(content_type=None)
+                    result = await response.json(content_type=None)
                     _log_request_recovery(self, "get", path, _REQUEST_PHASE)
                     return result
                 http_error = _report_http_failure(
@@ -567,18 +561,6 @@ class ClientTransportMixin:
             timeout_seconds=timeout_seconds,
         )
         return dict(result) if isinstance(result, MutableMapping) else {}
-
-    async def _safe_list_get(self, path: str) -> list:
-        """Fetch data from the given path, ensuring the result is a list.
-
-        Args:
-            path (str): API endpoint path to request.
-
-        Returns:
-            list: Response payload coerced to a list.
-        """
-        result = await self._get(path=path)
-        return result if isinstance(result, list) else []
 
     async def _do_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"

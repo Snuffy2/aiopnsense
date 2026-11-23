@@ -29,7 +29,7 @@ from tests.conftest import (
 
 
 @pytest.mark.asyncio
-async def test_safe_dict_get_and_list_get(
+async def test_safe_dict_get(
     monkeypatch: pytest.MonkeyPatch,
     make_client: MakeClientFactory,
 ) -> None:
@@ -49,15 +49,9 @@ async def test_safe_dict_get_and_list_get(
         result_dict = await client._safe_dict_get("/fake")
         assert result_dict == {"foo": "bar"}
 
-        monkeypatch.setattr(client, "_get", AsyncMock(return_value=[1, 2, 3]), raising=False)
-        result_list = await client._safe_list_get("/fake")
-        assert result_list == [1, 2, 3]
-
         monkeypatch.setattr(client, "_get", AsyncMock(return_value=None), raising=False)
         result_empty_dict = await client._safe_dict_get("/fake")
         assert result_empty_dict == {}
-        result_empty_list = await client._safe_list_get("/fake")
-        assert result_empty_list == []
     finally:
         await client.async_close()
 
@@ -166,13 +160,6 @@ async def test_normalize_timeout_seconds(
     ("method_name", "session_method", "args", "kwargs", "expected_exception"),
     [
         ("_do_get", "get", ("/api/x",), {"caller": "tst"}, OPNsensePrivilegeMissing),
-        (
-            "_do_get",
-            "get",
-            ("/api/x",),
-            {"caller": "tst", "response_format": "text"},
-            OPNsensePrivilegeMissing,
-        ),
         ("_do_post", "post", ("/api/x",), {"payload": {}}, OPNsenseConnectionError),
     ],
 )
@@ -234,7 +221,6 @@ async def test_do_get_post_error_initial_behavior(
         ("_do_get_from_stream", "get", ("/stream",), {"caller": "tst"}),
         ("_stream_json_events", "get", ("/stream",), {}),
         ("_do_get", "get", ("/api/x",), {"caller": "tst"}),
-        ("_do_get", "get", ("/api/x",), {"caller": "tst", "response_format": "text"}),
         ("_do_post", "post", ("/api/x",), {"payload": {}, "caller": "tst"}),
     ],
 )
@@ -404,10 +390,10 @@ async def test_do_get_from_stream_error_initial_raises(
 
 
 @pytest.mark.asyncio
-async def test_do_get_with_response_format_text_and_post_success_paths(
+async def test_do_get_and_post_success_paths(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify JSON GET, text GET, and POST helpers return successful response bodies.
+    """Verify GET, and POST helpers return successful response bodies.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -432,7 +418,6 @@ async def test_do_get_with_response_format_text_and_post_success_paths(
             reason="OK",
             ok=True,
             json_payload={"a": 1},
-            text_payload="a;b\n1;2\n",
             stream_chunks=[b""],
         )
 
@@ -460,9 +445,6 @@ async def test_do_get_with_response_format_text_and_post_success_paths(
         got = await client._do_get("/api/x", caller="t")
         assert isinstance(got, MutableMapping) and got.get("a") == 1
 
-        text_result = await client._do_get("/api/x", caller="t", response_format="text")
-        assert text_result == "a;b\n1;2\n"
-
         posted = await client._do_post("/api/x", payload={"x": 1}, caller="t")
         assert isinstance(posted, list) and posted[0] == 1
     finally:
@@ -473,7 +455,7 @@ async def test_do_get_with_response_format_text_and_post_success_paths(
 async def test_do_get_post_and_stream_permission_errors(
     make_client: MakeClientFactory,
 ) -> None:
-    """Verify JSON GET, text GET, POST, and stream permission failures do not raise when disabled.
+    """Verify GET, POST, and stream permission failures do not raise when disabled.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -501,7 +483,6 @@ async def test_do_get_post_and_stream_permission_errors(
     try:
         client._throw_errors = False
         assert await client._do_get("/x", caller="t") is None
-        assert await client._do_get("/x", caller="t", response_format="text") is None
         assert await client._do_post("/x", payload={}, caller="t") is None
         assert await client._do_get_from_stream("/x", caller="t") == {}
     finally:
@@ -1221,7 +1202,6 @@ async def test_stream_json_events_raises_when_throw_errors_enabled(
 
 _LADDER_PATHS: dict[str, tuple[str, Any]] = {
     "get_json": ("get", None),
-    "get_text": ("get", None),
     "post": ("post", None),
     "stream_once": ("get", {}),
     "stream_events": ("get", []),
@@ -1242,15 +1222,14 @@ async def _call_ladder_path(client: Any, path_name: str) -> Any:
     """
     if path_name == "get_json":
         return await client._do_get("/api/x", caller="t")
-    if path_name == "get_text":
-        return await client._do_get("/api/x", caller="t", response_format="text")
     if path_name == "post":
         return await client._do_post("/api/x", {}, caller="t")
     if path_name == "stream_once":
         return await client._do_get_from_stream("/api/x", caller="t")
     if path_name == "stream_events":
         return [event async for event in client._stream_json_events("/api/x")]
-    return await client._is_get_endpoint_available("/api/x", force_refresh=True)
+    with pytest.warns(DeprecationWarning, match="Endpoint availability probing is internal"):
+        return await client.is_endpoint_available("/api/x", force_refresh=True)  # type: ignore[deprecated]
 
 
 @pytest.mark.parametrize("path_name", list(_LADDER_PATHS))
@@ -1338,7 +1317,6 @@ async def test_request_failure_ladder_is_identical_across_request_paths(
 
 _SUCCESS_RESPONSES: dict[str, Callable[[], FakeResponse]] = {
     "get_json": lambda: FakeResponse(json_payload={"ok": True}),
-    "get_text": lambda: FakeResponse(text_payload="ok"),
     "post": lambda: FakeResponse(json_payload={"ok": True}),
     "stream_once": lambda: FakeResponse(stream_chunks=[b'data: {"a": 1}\n\ndata: {"a": 2}\n\n']),
     "stream_events": lambda: FakeResponse(stream_chunks=[b'data: {"a": 1}\n\n']),
@@ -1649,7 +1627,9 @@ async def test_invalid_url_transport_logs_omit_credentials(
         )
         try:
             with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
-                assert not await client._is_get_endpoint_available("/api/x", force_refresh=True)
+                assert (
+                    await client._check_endpoint_status("/api/x", force_refresh=True)
+                ).is_transient
                 assert await client._do_get("/api/x", caller="test") is None
 
             failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
