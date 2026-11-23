@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Coroutine
 import contextlib
 import logging
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -460,17 +460,17 @@ async def test_cancelled_outcome_reads_release_queue_workers(
     active_reads = 0
     cancelled_reads = 0
 
-    class BlockingResponse:
+    class BlockingResponse(FakeResponse):
         """Hold NUT requests until released or cancelled by the test.
 
         Cancellation during acquisition propagates after recording the cancelled read.
         """
 
-        async def __aenter__(self) -> FakeResponse:
+        async def __aenter__(self) -> Self:
             """Wait for release, or record and re-raise cancellation.
 
             Returns:
-                FakeResponse: Successful response after ``release_reads`` is set.
+                Self: Successful response after ``release_reads`` is set.
 
             Raises:
                 asyncio.CancelledError: When the test or caller cancels response acquisition.
@@ -487,27 +487,9 @@ async def test_cancelled_outcome_reads_release_queue_workers(
                 if cancelled_reads == 2:
                     two_reads_cancelled.set()
                 raise
-            return FakeResponse(json_payload={"status": {"ups.status": "OL"}})
+            return self
 
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            _tb: object,
-        ) -> bool:
-            """Leave response exceptions unsuppressed.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type from the response body.
-                exc (BaseException | None): Exception raised inside the context.
-                _tb (object): Traceback supplied by the async context manager protocol.
-
-            Returns:
-                bool: Always false, so cancellation and other exceptions propagate.
-            """
-            return False
-
-    def session_get(url: str, **_kwargs: Any) -> BlockingResponse | FakeResponse:
+    def session_get(url: str, **_kwargs: Any) -> FakeResponse:
         """Return a blocking NUT response or a successful service response.
 
         Args:
@@ -515,10 +497,10 @@ async def test_cancelled_outcome_reads_release_queue_workers(
             _kwargs (Any): HTTP options supplied by aiohttp callers.
 
         Returns:
-            BlockingResponse | FakeResponse: Response context for the requested path.
+            FakeResponse: Response context for the requested path.
         """
         if url.endswith("/api/nut/diagnostics/upsstatus"):
-            return BlockingResponse()
+            return BlockingResponse(json_payload={"status": {"ups.status": "OL"}})
         service_read_started.set()
         return FakeResponse(json_payload={"rows": [{"name": "service", "running": "1"}]})
 
@@ -564,17 +546,17 @@ async def test_cancelled_transport_child_does_not_stop_queue_worker(
     active_reads = 0
     service_read_started = asyncio.Event()
 
-    class CancelledResponse:
+    class CancelledResponse(FakeResponse):
         """Raise cancellation from an independently aborted Router request.
 
         The cancellation raised during acquisition propagates to the request caller.
         """
 
-        async def __aenter__(self) -> FakeResponse:
+        async def __aenter__(self) -> Self:
             """Wait for the test release and then raise request cancellation.
 
             Returns:
-                FakeResponse: Not returned because cancellation is raised first.
+                Self: Not returned because cancellation is raised first.
 
             Raises:
                 asyncio.CancelledError: After the test releases the independently cancelled read.
@@ -586,25 +568,7 @@ async def test_cancelled_transport_child_does_not_stop_queue_worker(
             await release_reads.wait()
             raise asyncio.CancelledError("Router request was independently cancelled")
 
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            _tb: object,
-        ) -> bool:
-            """Leave response exceptions unsuppressed.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type from the response body.
-                exc (BaseException | None): Exception raised inside the context.
-                _tb (object): Traceback supplied by the async context manager protocol.
-
-            Returns:
-                bool: Always false, so cancellation and other exceptions propagate.
-            """
-            return False
-
-    def session_get(url: str, **_kwargs: Any) -> CancelledResponse | FakeResponse:
+    def session_get(url: str, **_kwargs: Any) -> FakeResponse:
         """Return a cancelable NUT request or a service listing.
 
         Args:
@@ -612,7 +576,7 @@ async def test_cancelled_transport_child_does_not_stop_queue_worker(
             _kwargs (Any): HTTP options supplied by aiohttp callers.
 
         Returns:
-            CancelledResponse | FakeResponse: Response context for the requested path.
+            FakeResponse: Response context for the requested path.
         """
         if url.endswith("/api/nut/diagnostics/upsstatus"):
             return CancelledResponse()

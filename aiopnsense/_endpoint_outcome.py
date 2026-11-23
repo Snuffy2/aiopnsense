@@ -69,12 +69,16 @@ class _EndpointOutcome:
         return cls(_EndpointStatus.ABSENT, http_status=404)
 
     @classmethod
-    def from_http_status(cls, status: int, reason: str | None) -> _EndpointOutcome:
+    def from_http_status(
+        cls, status: int, reason: str | None, cause: BaseException | None = None
+    ) -> _EndpointOutcome:
         """Classify a non-successful HTTP response.
 
         Args:
             status (int): HTTP response status.
             reason (str | None): HTTP response reason phrase.
+            cause (BaseException | None): Exception that reported the status. When given, it
+                becomes the ``__cause__`` of the outcome's public error.
 
         Returns:
             _EndpointOutcome: ``ABSENT`` for 404 and 403, otherwise ``TRANSIENT``.
@@ -82,6 +86,8 @@ class _EndpointOutcome:
         if status == 404:
             return cls.absent()
         error = _opnsense_http_error(status, reason)
+        if cause is not None:
+            error.__cause__ = cause
         detail = f"Response {status}: {reason}"
         if status == 403:
             return cls(_EndpointStatus.ABSENT, http_status=status, error=error, detail=detail)

@@ -179,7 +179,7 @@ class TrafficMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Normalized diagnostics traffic sample. Returns an
-                empty traffic sample when endpoint probing or response parsing
+                empty traffic sample when the endpoint fetch or response parsing
                 fails. With ``throw_errors`` enabled, a failure is raised as an
                 ``OPNsenseError`` subclass instead.
         """

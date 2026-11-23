@@ -29,10 +29,6 @@ class AiopnsenseClientProtocol(Protocol):
     _rest_api_query_count: int
     _throw_errors: bool
 
-    async def _post(
-        self, path: str, payload: MutableMapping[str, Any] | None = None
-    ) -> MutableMapping[str, Any] | list | None: ...
-
     async def _do_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
     ) -> MutableMapping[str, Any] | list | None: ...
@@ -96,8 +92,6 @@ class AiopnsenseClientProtocol(Protocol):
     async def _check_endpoint_status(
         self, path: str, *, force_refresh: bool = False
     ) -> _EndpointOutcome: ...
-
-    async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool: ...
 
     @staticmethod
     def _parse_toggle_target(toggle_on_off: object) -> ToggleTarget: ...
