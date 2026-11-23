@@ -476,11 +476,12 @@ async def test_get_dhcp_leases_reads_router_timezone_when_omitted(
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
     """
-    ends_at = (datetime.now(tz=_LEASE_ROUTER_TZ) + timedelta(hours=1)).replace(microsecond=0)
+    router_tz = timezone(timedelta(hours=5, minutes=30))
+    ends_at = (datetime.now(tz=router_tz) + timedelta(hours=1)).replace(microsecond=0)
     client, _router = _dhcp_router(
         make_client,
         {
-            _SYSTEM_TIME: {"datetime": "2000-01-15 12:00:00 EST"},
+            _SYSTEM_TIME: {"datetime": "2000-01-15 12:00:00 +0530"},
             _ISC_LEASES4: {
                 "rows": [
                     {

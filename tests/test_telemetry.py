@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from datetime import datetime
 import json
+import time
 from typing import Any
 
 import pytest
@@ -187,7 +188,7 @@ async def test_telemetry_system_with_unparsable_datetime_uses_uptime_and_current
     system = (await client.get_telemetry())["system"]
 
     assert system["uptime"] == 90123
-    assert isinstance(system["boottime"], float)
+    assert system["boottime"] == pytest.approx(time.time() - 90123, abs=60)
     assert system["load_average"] == {
         "one_minute": None,
         "five_minute": None,

@@ -306,7 +306,9 @@ async def test_delayed_firmware_read_cannot_overwrite_verified_install(
         await asyncio.gather(old_read, return_exceptions=True)
 
     assert await client.get_host_firmware_version() == target_version
-    # The delayed read is discarded and read again, rather than recorded as stale.
+    # Two status reads reached the Router (the held pre-install read and the install
+    # verification); the delayed read was answered from the verified cached version without
+    # a new request, so a third read would mean it was re-read.
     assert router.count("GET", STATUS_PATH) == 2
 
 
