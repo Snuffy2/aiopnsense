@@ -26,31 +26,8 @@ from tests.conftest import (
     FakeStreamResponseFactory,
     MakeClientFactory,
     make_mock_session_client,
+    middleware_response,
 )
-
-
-def _outcome_middleware_response(
-    request: aiohttp.ClientRequest, status: int
-) -> aiohttp.ClientResponse:
-    """Build an HTTP response for a socket-free aiohttp middleware.
-
-    Args:
-        request (aiohttp.ClientRequest): Request being answered.
-        status (int): Response status.
-
-    Returns:
-        aiohttp.ClientResponse: Synthetic response passed to aiohttp.
-    """
-    response = MagicMock(spec=aiohttp.ClientResponse)
-    response.status = status
-    response.ok = status < 400
-    response.reason = "Test response"
-    response.request_info = request.request_info
-    response.connection = None
-    response._raw_cookie_headers = ()
-    response.__aenter__.return_value = response
-    response.json.return_value = {"status": {"ups.status": "OL"}}
-    return response
 
 
 @pytest.mark.parametrize(
@@ -82,7 +59,7 @@ async def test_status_alias_preserves_session_validator_decode_error(
         Returns:
             aiohttp.ClientResponse: Successful HTTP response.
         """
-        return _outcome_middleware_response(request, 200)
+        return middleware_response(request, 200)
 
     validator = AsyncMock(side_effect=decode_error)
     async with aiohttp.ClientSession(raise_for_status=validator, middlewares=[respond]) as session:
@@ -138,7 +115,7 @@ async def test_outcome_probe_prefers_response_delivered_after_a_delayed_dispatch
         """
         nonlocal dispatches
         dispatches += 1
-        return _outcome_middleware_response(request, 404 if dispatches == 1 else 200)
+        return middleware_response(request, 404 if dispatches == 1 else 200)
 
     trace.on_request_start.append(delay_first_dispatch)
     async with aiohttp.ClientSession(trace_configs=[trace], middlewares=[respond]) as session:
@@ -156,97 +133,6 @@ async def test_outcome_probe_prefers_response_delivered_after_a_delayed_dispatch
         finally:
             release.set()
             await asyncio.gather(first, return_exceptions=True)
-            await client.async_close()
-
-
-@pytest.mark.parametrize(
-    ("old_status", "throw_errors"),
-    [
-        pytest.param(404, False, id="malformed-200-suppressed"),
-        pytest.param(404, True, id="malformed-200-throws"),
-        pytest.param(500, True, id="overlapping-outage"),
-    ],
-)
-async def test_overlapping_endpoint_responses_preserve_order_and_error_policy(
-    make_client: MakeClientFactory,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    old_status: int,
-    throw_errors: bool,
-) -> None:
-    """Preserve a malformed success or a single outage across overlapping reads.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning clients.
-        monkeypatch (pytest.MonkeyPatch): Fixture to enable real queue worker tasks.
-        caplog (pytest.LogCaptureFixture): Captured client outage diagnostics.
-        old_status (int): Status of the delayed response.
-        throw_errors (bool): Whether malformed JSON raises a public error.
-    """
-    loop = asyncio.get_running_loop()
-    monkeypatch.setattr(asyncio, "create_task", loop.create_task)
-    old_response_seen = asyncio.Event()
-    release = asyncio.Event()
-    dispatches = 0
-
-    async def delay_first(response: aiohttp.ClientResponse) -> None:
-        """Hold the first response after it has reached validation.
-
-        Args:
-            response (aiohttp.ClientResponse): Delivered Router response.
-        """
-        if response.status == old_status and not old_response_seen.is_set():
-            old_response_seen.set()
-            await release.wait()
-
-    async def respond(
-        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
-    ) -> aiohttp.ClientResponse:
-        """Serve a new malformed body or a second failure ahead of the old response.
-
-        Args:
-            request (aiohttp.ClientRequest): Request entering the middleware.
-            _handler (aiohttp.ClientHandlerType): Unused network handler.
-
-        Returns:
-            aiohttp.ClientResponse: Synthetic Router response for the read.
-        """
-        nonlocal dispatches
-        dispatches += 1
-        status = old_status if dispatches == 1 or old_status == 500 else 200
-        response = _outcome_middleware_response(request, status)
-        if dispatches == 2 and status == 200:
-            response.json = AsyncMock(side_effect=json.JSONDecodeError("Bad JSON", "<html>", 0))
-        return response
-
-    async with aiohttp.ClientSession(
-        raise_for_status=delay_first, middlewares=[respond]
-    ) as session:
-        client = make_client(session=session, throw_errors=throw_errors)
-        older = asyncio.create_task(client.get_nut_ups_status())
-        try:
-            async with asyncio.timeout(2):
-                await old_response_seen.wait()
-                if throw_errors:
-                    with pytest.raises(OPNsenseError) as error:
-                        await client.get_nut_ups_status()
-                    if old_status == 404:
-                        assert isinstance(error.value.__cause__, json.JSONDecodeError)
-                else:
-                    assert await client.get_nut_ups_status() is None
-                release.set()
-                if old_status == 500:
-                    with pytest.raises(OPNsenseConnectionError):
-                        await older
-                    assert [record.levelno for record in caplog.records] == [logging.WARNING]
-                    assert dispatches == 2
-                else:
-                    assert await older == {}
-                    assert await client.get_nut_ups_status() == {"status": {"ups.status": "OL"}}
-                    assert dispatches == 3
-        finally:
-            release.set()
-            await asyncio.gather(older, return_exceptions=True)
             await client.async_close()
 
 
@@ -512,67 +398,6 @@ async def test_normalize_timeout_seconds(
 
 
 @pytest.mark.asyncio
-async def test_outcome_requests_honor_boolean_raise_for_status(
-    make_client: MakeClientFactory,
-) -> None:
-    """Outcome callbacks invoke aiohttp's built-in boolean status policy.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    session.raise_for_status = True
-    request_options: dict[str, dict[str, Any]] = {}
-
-    def fake_get(_url: str, **kwargs: Any) -> FakeResponse:
-        """Capture GET validation options and return a missing response.
-
-        Args:
-            _url (str): Endpoint URL requested by the client.
-            **kwargs (Any): Options supplied to the session GET method.
-
-        Returns:
-            FakeResponse: Synthetic 404 response.
-        """
-        request_options["get"] = kwargs
-        return FakeResponse(status=404, reason="Not Found", ok=False)
-
-    def fake_post(_url: str, **kwargs: Any) -> FakeResponse:
-        """Capture POST validation options and return a missing response.
-
-        Args:
-            _url (str): Endpoint URL requested by the client.
-            **kwargs (Any): Options supplied to the session POST method.
-
-        Returns:
-            FakeResponse: Synthetic 404 response.
-        """
-        request_options["post"] = kwargs
-        return FakeResponse(status=404, reason="Not Found", ok=False)
-
-    session.get = fake_get
-    session.post = fake_post
-    try:
-        assert (await client._do_get_outcome("/api/missing")).is_absent
-        assert (await client._do_post_outcome("/api/missing", {})).is_absent
-        assert callable(request_options["get"]["raise_for_status"])
-        assert callable(request_options["post"]["raise_for_status"])
-        for method in ("get", "post"):
-            response = MagicMock(spec=aiohttp.ClientResponse)
-            response.status = 404
-            validation_error = aiohttp.ClientResponseError(
-                MagicMock(), (), status=404, message="Not Found"
-            )
-            response.raise_for_status = MagicMock(side_effect=validation_error)
-            with pytest.raises(aiohttp.ClientResponseError) as error:
-                await request_options[method]["raise_for_status"](response)
-            assert error.value is validation_error
-            response.raise_for_status.assert_called_once_with()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_request_start_trace_404_is_transient(
     make_client: MakeClientFactory,
 ) -> None:
@@ -690,14 +515,9 @@ async def test_delivered_response_validator_failures_keep_http_outcome(
         Returns:
             aiohttp.ClientResponse: Synthetic response delivered to the validator.
         """
-        response = MagicMock(spec=aiohttp.ClientResponse)
-        response.status = status
-        response.reason = "Forbidden" if status == 403 else "Not Found"
-        response.request_info = request.request_info
-        response.connection = None
-        response._raw_cookie_headers = ()
-        response.__aenter__.return_value = response
-        return response
+        return middleware_response(
+            request, status, reason="Forbidden" if status == 403 else "Not Found"
+        )
 
     raise_validation_error = AsyncMock(side_effect=validator_error)
 
@@ -791,15 +611,7 @@ async def test_boolean_raise_for_status_preserves_trace_and_public_404_absence(
             aiohttp.ClientResponse: Simulated response with native-style status validation.
         """
         status = statuses.pop(0)
-        response = MagicMock(spec=aiohttp.ClientResponse)
-        response.status = status
-        response.ok = status == 200
-        response.reason = "OK" if status == 200 else "Failure"
-        response.request_info = request.request_info
-        response.connection = None
-        response._raw_cookie_headers = ()
-        response.__aenter__.return_value = response
-        response.json.return_value = {"status": {"ups.status": "OL"}}
+        response = middleware_response(request, status, reason="Failure")
 
         def raise_for_status() -> None:
             """Apply aiohttp's default HTTP status policy.

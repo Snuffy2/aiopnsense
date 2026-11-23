@@ -229,6 +229,32 @@ class FakeResponse:
         return FakeStreamContent(self._stream_chunks)
 
 
+class GatedResponse(FakeResponse):
+    """Response whose context entry blocks until the test releases it."""
+
+    def __init__(self, entered: asyncio.Event, release: asyncio.Event, **kwargs: Any) -> None:
+        """Initialize a gated response.
+
+        Args:
+            entered (asyncio.Event): Set when the client starts waiting for the response.
+            release (asyncio.Event): Set by the test to let the response complete.
+            kwargs (Any): ``FakeResponse`` options.
+        """
+        super().__init__(**kwargs)
+        self._entered = entered
+        self._release = release
+
+    async def __aenter__(self) -> Self:
+        """Signal entry, then wait for the release.
+
+        Returns:
+            Self: The released response.
+        """
+        self._entered.set()
+        await self._release.wait()
+        return self
+
+
 class MalformedJSONResponse(FakeResponse):
     """Successful response whose body is not valid JSON."""
 
@@ -246,6 +272,36 @@ class MalformedJSONResponse(FakeResponse):
         """
         del content_type
         raise json.JSONDecodeError("Expecting value", "<html>", 0)
+
+
+def middleware_response(
+    request: aiohttp.ClientRequest,
+    status: int,
+    *,
+    reason: str = "Test response",
+    payload: Any = None,
+) -> MagicMock:
+    """Build an HTTP response for a socket-free aiohttp middleware.
+
+    Args:
+        request (aiohttp.ClientRequest): Request being answered.
+        status (int): Response status.
+        reason (str): Response reason phrase.
+        payload (Any): JSON body, defaulting to a NUT status payload.
+
+    Returns:
+        MagicMock: Synthetic response passed to aiohttp.
+    """
+    response = MagicMock(spec=aiohttp.ClientResponse)
+    response.status = status
+    response.ok = status < 400
+    response.reason = reason
+    response.request_info = request.request_info
+    response.connection = None
+    response._raw_cookie_headers = ()
+    response.__aenter__.return_value = response
+    response.json.return_value = {"status": {"ups.status": "OL"}} if payload is None else payload
+    return response
 
 
 FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]

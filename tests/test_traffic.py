@@ -708,49 +708,61 @@ STREAM_PATH = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
 
 
 @pytest.mark.parametrize(
-    "status",
+    "answer",
     [
         pytest.param(404, id="absent-404"),
         pytest.param(403, id="forbidden-403"),
+        pytest.param(TimeoutError("probe timeout"), id="timeout"),
+        pytest.param(OPNsenseError("probe failed"), id="opnsense-error"),
     ],
 )
 @pytest.mark.asyncio
 async def test_stream_interface_traffic_ends_quietly_when_endpoint_unavailable(
-    make_client: Callable[..., Any],
-    status: int,
+    make_client: MakeClientFactory,
+    answer: Any,
 ) -> None:
-    """Stream method should end without yielding when the Router reports the endpoint unavailable.
+    """Stream method ends without yielding after one request when the stream check fails.
 
     Args:
-        make_client (Callable[..., Any]): Client factory backed by a fake Router.
-        status (int): HTTP status the Router returns for the stream endpoint.
+        make_client (MakeClientFactory): Client factory backed by a fake Router.
+        answer (Any): HTTP status or error the Router gives for the stream endpoint.
     """
     client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", STREAM_PATH): status})
+    router = install_fake_router(client, session, routes={("GET", STREAM_PATH): answer})
     try:
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
         assert samples == []
-        assert router.count("GET", STREAM_PATH) == 1
-        assert router.count() == 1
+        assert router.count("GET", STREAM_PATH) == router.count() == 1
     finally:
         await client.async_close()
 
 
+@pytest.mark.parametrize(
+    ("answer", "expected_error"),
+    [
+        pytest.param(403, OPNsensePrivilegeMissing, id="forbidden-403"),
+        pytest.param(TimeoutError("probe timeout"), OPNsenseTimeoutError, id="timeout"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_stream_interface_traffic_raises_permission_error_when_throw_errors_enabled(
+async def test_stream_interface_traffic_raises_when_check_fails_in_throw_mode(
     make_client: Callable[..., Any],
+    answer: Any,
+    expected_error: type[OPNsenseError],
 ) -> None:
-    """A 403 on the stream endpoint should raise in throw mode while a 404 still ends quietly.
+    """A forbidden or timed-out stream check raises a public error when throw_errors is enabled.
 
     Args:
         make_client (Callable[..., Any]): Client factory configured to raise public errors.
+        answer (Any): HTTP status or error the Router gives for the stream endpoint.
+        expected_error (type[OPNsenseError]): Public exception type expected from the stream.
     """
     session = MagicMock()
     client = make_client(session=session, throw_errors=True)
-    router = install_fake_router(client, session, routes={("GET", STREAM_PATH): 403})
+    router = install_fake_router(client, session, routes={("GET", STREAM_PATH): answer})
     try:
-        with pytest.raises(OPNsensePrivilegeMissing):
+        with pytest.raises(expected_error):
             [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
         assert router.count("GET", STREAM_PATH) == router.count() == 1
     finally:
@@ -778,35 +790,6 @@ async def test_stream_interface_traffic_ends_quietly_on_absent_endpoint_in_throw
         await client.async_close()
 
 
-@pytest.mark.parametrize(
-    "probe_error",
-    [
-        pytest.param(TimeoutError("probe timeout"), id="timeout"),
-        pytest.param(OPNsenseError("probe failed"), id="opnsense-error"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_stream_interface_traffic_returns_empty_iteration_on_check_error(
-    make_client: MakeClientFactory,
-    probe_error: Exception,
-) -> None:
-    """Failed stream checks should return an empty stream when throw_errors is disabled.
-
-    Args:
-        make_client (MakeClientFactory): Client factory whose stream check fails.
-        probe_error (Exception): Error raised by the Router for the stream endpoint.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", STREAM_PATH): probe_error})
-    try:
-        samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
-
-        assert samples == []
-        assert router.count("GET", STREAM_PATH) == router.count() == 1
-    finally:
-        await client.async_close()
-
-
 @pytest.mark.asyncio
 async def test_stream_interface_traffic_raises_same_opnsense_error_when_throw_errors_enabled(
     make_client: MakeClientFactory,
@@ -824,27 +807,6 @@ async def test_stream_interface_traffic_raises_same_opnsense_error_when_throw_er
         with pytest.raises(OPNsenseError) as exc:
             [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
         assert exc.value is probe_error
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_stream_interface_traffic_raises_when_probe_timeout_and_throw_errors_enabled(
-    make_client: Callable[..., Any],
-) -> None:
-    """A stream check timeout should propagate when throw_errors is enabled.
-
-    Args:
-        make_client (Callable[..., Any]): Client factory configured to re-raise the stream timeout.
-    """
-    session = MagicMock()
-    client = make_client(session=session, throw_errors=True)
-    install_fake_router(
-        client, session, routes={("GET", STREAM_PATH): TimeoutError("probe timeout")}
-    )
-    try:
-        with pytest.raises(OPNsenseTimeoutError):
-            [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
     finally:
         await client.async_close()
 

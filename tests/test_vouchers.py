@@ -2,7 +2,6 @@
 
 from collections.abc import Callable
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -81,7 +80,7 @@ async def test_generate_vouchers_server_selection_errors(
 async def test_generate_vouchers_with_explicit_server_normalizes_vouchers(
     make_client: ClientType,
 ) -> None:
-    """An explicit voucher server skips the provider lookup and normalizes the result.
+    """An explicit voucher server is URL-quoted, skips the provider lookup and normalizes the result.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -91,7 +90,7 @@ async def test_generate_vouchers_with_explicit_server_normalizes_vouchers(
     """
     client, router = _make_voucher_client(make_client, ["unused"])
     try:
-        generate_path = "/api/captiveportal/voucher/generate_vouchers/srv/"
+        generate_path = "/api/captiveportal/voucher/generate_vouchers/srv%20one/"
         router.routes[("POST", generate_path)] = [
             {
                 "username": "u",
@@ -102,7 +101,7 @@ async def test_generate_vouchers_with_explicit_server_normalizes_vouchers(
                 "validity": 65,
             }
         ]
-        got = await client.generate_vouchers({"voucher_server": "srv"})
+        got = await client.generate_vouchers({"voucher_server": "srv one"})
 
         assert got[0]["username"] == "u"
         assert "expiry_timestamp" in got[0]
@@ -228,31 +227,6 @@ async def test_generate_vouchers_auto_selects_single_provider(make_client: Clien
 
 
 @pytest.mark.asyncio
-async def test_generate_vouchers_posts_provider_qualified_url_without_provider_lookup(
-    make_client: ClientType,
-) -> None:
-    """`generate_vouchers` posts to the given server's URL without listing providers.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates the POST URL and the absence of a provider lookup.
-    """
-    client, router = _make_voucher_client(make_client, ["other"])
-    try:
-        generate_path = "/api/captiveportal/voucher/generate_vouchers/srv%20one/"
-        router.routes[("POST", generate_path)] = []
-
-        assert await client.generate_vouchers({"voucher_server": "srv one"}) == []
-        assert router.count("GET") == 0
-        assert router.count("POST", generate_path) == 1
-        assert [payload for method, _, payload in router.requests if method == "POST"] == [{}]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_generate_vouchers_returns_empty_on_404_generate_endpoint_with_throw_errors(
     make_client: ClientType,
 ) -> None:
@@ -267,18 +241,14 @@ async def test_generate_vouchers_returns_empty_on_404_generate_endpoint_with_thr
     client, router = _make_voucher_client(make_client, [])
     try:
         client._throw_errors = True
-        client._safe_list_post = AsyncMock(
-            side_effect=OPNsenseConnectionError("not found", status=404)
-        )
+        generate_path = "/api/captiveportal/voucher/generate_vouchers/srv/"
+        router.routes[("POST", generate_path)] = 404
 
         got = await client.generate_vouchers({"voucher_server": "srv"})
 
         assert got == []
         assert router.count("GET") == 0
-        client._safe_list_post.assert_awaited_once_with(
-            "/api/captiveportal/voucher/generate_vouchers/srv/",
-            payload={},
-        )
+        assert router.count("POST", generate_path) == 1
     finally:
         await client.async_close()
 
@@ -320,11 +290,11 @@ async def test_voucher_switched_endpoints_follow_selected_case(
         make_client, ["srv"], path=expected_provider, use_snake_case=use_snake_case
     )
     try:
-        client._safe_list_post = AsyncMock(return_value=[])
+        router.routes[("POST", expected_generate)] = []
 
         await client.generate_vouchers({})
 
         assert router.count("GET", expected_provider) == 1
-        client._safe_list_post.assert_awaited_once_with(expected_generate, payload={})
+        assert router.count("POST", expected_generate) == 1
     finally:
         await client.async_close()

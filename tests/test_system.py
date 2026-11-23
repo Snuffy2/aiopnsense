@@ -308,25 +308,6 @@ async def test_get_device_unique_id_returns_none_for_absent_or_failing_overview(
 
 
 @pytest.mark.asyncio
-async def test_get_device_unique_id_raises_missing_identifier_for_absent_overview_in_throw_mode(
-    make_client: ClientType,
-) -> None:
-    """In throw mode an absent interface overview reports the missing device identifier.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, _router = _client_with_router(
-        make_client, {("GET", INTERFACE_OVERVIEW_PATH): 404}, throw_errors=True
-    )
-    try:
-        with pytest.raises(OPNsenseMissingDeviceUniqueID):
-            await client.get_device_unique_id()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("throw_errors", [False, True])
 @pytest.mark.parametrize("missing", ["endpoint-unavailable", "no-physical-mac"])
 async def test_get_device_unique_id_missing_follows_throw_errors_contract(
@@ -433,19 +414,30 @@ async def test_get_opnsense_timezone_fallback_for_mapped_error(make_client: Clie
 
 
 @pytest.mark.asyncio
-async def test_get_resolved_opnsense_timezone_returns_none_on_absent_endpoint(
-    make_client: ClientType,
+@pytest.mark.parametrize(
+    ("answer", "throw_errors"),
+    [
+        pytest.param(404, False, id="absent"),
+        pytest.param(403, True, id="forbidden-in-throw-mode"),
+        pytest.param(aiohttp.ClientError("transient fetch error"), False, id="fetch-error"),
+        pytest.param({"datetime": "not-a-datetime"}, False, id="malformed-datetime"),
+    ],
+)
+async def test_get_resolved_opnsense_timezone_returns_none_when_unresolvable(
+    make_client: ClientType, answer: Any, throw_errors: bool
 ) -> None:
-    """Verify resolved-only timezone lookup returns ``None`` with one request when absent.
+    """Verify resolved-only timezone lookup returns ``None`` after one request on any failure.
 
     Args:
-        make_client (ClientType): Client fixture whose timezone endpoint is absent.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        answer (Any): Router answer for the system-time endpoint.
+        throw_errors (bool): Whether the client raises public errors.
     """
-    client, router = _client_with_router(make_client, {("GET", SYSTEM_TIME_PATH): 404})
+    client, router = _client_with_router(
+        make_client, {("GET", SYSTEM_TIME_PATH): answer}, throw_errors=throw_errors
+    )
     try:
-        resolved_tz = await client._get_resolved_opnsense_timezone()
-
-        assert resolved_tz is None
+        assert await client._get_resolved_opnsense_timezone() is None
         assert router.count("GET", SYSTEM_TIME_PATH) == 1
     finally:
         await client.async_close()
@@ -469,68 +461,6 @@ async def test_successful_timezone_resolution_reads_system_time_once(
 
         assert tz.utcoffset(datetime(2026, 3, 7, 12, tzinfo=UTC)) == timedelta(hours=-5)
         assert router.count("GET", SYSTEM_TIME_PATH) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_resolved_opnsense_timezone_returns_none_on_forbidden_in_throw_mode(
-    make_client: ClientType,
-) -> None:
-    """Verify a permission error on the timezone read does not abort timezone enrichment.
-
-    Args:
-        make_client (ClientType): Client fixture whose timezone read is not permitted.
-    """
-    client, router = _client_with_router(
-        make_client, {("GET", SYSTEM_TIME_PATH): 403}, throw_errors=True
-    )
-    try:
-        resolved_tz = await client._get_resolved_opnsense_timezone()
-
-        assert resolved_tz is None
-        assert router.count("GET", SYSTEM_TIME_PATH) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_resolved_opnsense_timezone_returns_none_on_fetch_error(
-    make_client: ClientType,
-) -> None:
-    """Verify resolved-only timezone lookup returns ``None`` when fetch fails.
-
-    Args:
-        make_client (ClientType): Client fixture whose timezone fetch raises an error.
-    """
-    client, router = _client_with_router(
-        make_client, {("GET", SYSTEM_TIME_PATH): aiohttp.ClientError("transient fetch error")}
-    )
-    try:
-        resolved_tz = await client._get_resolved_opnsense_timezone()
-
-        assert resolved_tz is None
-        assert router.count("GET", SYSTEM_TIME_PATH) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_resolved_opnsense_timezone_returns_none_on_malformed_datetime(
-    make_client: ClientType,
-) -> None:
-    """Verify resolved-only timezone lookup returns ``None`` for malformed data.
-
-    Args:
-        make_client (ClientType): Client fixture returning a malformed timezone datetime.
-    """
-    client, _router = _client_with_router(
-        make_client, {("GET", SYSTEM_TIME_PATH): {"datetime": "not-a-datetime"}}
-    )
-    try:
-        resolved_tz = await client._get_resolved_opnsense_timezone()
-
-        assert resolved_tz is None
     finally:
         await client.async_close()
 

@@ -577,8 +577,9 @@ async def test_toggle_alias_unavailable_search_endpoint_returns_false(
     client = scripted_router.client()
 
     assert await client.toggle_alias("alias1", "on") is False
-    assert [request.method for request in scripted_router.requests] == ["GET"]
-    assert scripted_router.requested(_ALIAS_SEARCH, method="GET")
+    assert [(request.method, request.path) for request in scripted_router.requests] == [
+        ("GET", _ALIAS_SEARCH)
+    ]
 
 
 @pytest.mark.parametrize(

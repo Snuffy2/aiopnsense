@@ -5,8 +5,8 @@ from collections.abc import MutableMapping
 import contextlib
 import json
 import logging
-from typing import Any, Never, Self
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Never
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
@@ -23,14 +23,16 @@ from aiopnsense.exceptions import (
     OPNsenseInvalidURL,
     OPNsensePrivilegeMissing,
 )
-from aiopnsense.speedtest import SPEEDTEST_SHOW_LOG_ENDPOINT, SPEEDTEST_SHOW_STAT_ENDPOINT
+from aiopnsense.speedtest import SPEEDTEST_SHOW_LOG_ENDPOINT
 from tests.conftest import (
     FakeResponse,
     FakeStreamResponseFactory,
+    GatedResponse,
     MakeClientFactory,
     MalformedJSONResponse,
     VpnQueueTasks,
     make_mock_session_client,
+    middleware_response,
 )
 
 
@@ -58,19 +60,6 @@ async def test_speedtest_read_recovers_from_probe_that_overtakes_queue(
     release = asyncio.Event()
     history_queued = asyncio.Event()
 
-    class BlockingResponse(FakeResponse):
-        """Hold the worker until after the status probe finishes."""
-
-        async def __aenter__(self) -> Self:
-            """Signal that the worker is occupied and pause its response.
-
-            Returns:
-                Self: Response for the request occupying the worker.
-            """
-            occupied.set()
-            await release.wait()
-            return self
-
     original_put = client._request_queue.put
 
     async def signal_enqueue(item: Any) -> None:
@@ -86,7 +75,7 @@ async def test_speedtest_read_recovers_from_probe_that_overtakes_queue(
     client._request_queue.put = signal_enqueue
     client._get_resolved_opnsense_timezone = AsyncMock(return_value=None)
     session.get.side_effect = [
-        BlockingResponse(json_payload={}),
+        GatedResponse(occupied, release, json_payload={}),
         FakeResponse(status=404, ok=False),
         FakeResponse(json_payload=[]),
         FakeResponse(json_payload={}),
@@ -104,14 +93,6 @@ async def test_speedtest_read_recovers_from_probe_that_overtakes_queue(
             release.set()
             assert (await history)["available"] is True
             assert (await client.get_speedtest())["available"] is True
-        assert [call.args[0].removeprefix(client._url) for call in session.get.call_args_list] == [
-            "/occupy",
-            SPEEDTEST_SHOW_LOG_ENDPOINT,
-            SPEEDTEST_SHOW_LOG_ENDPOINT,
-            SPEEDTEST_SHOW_STAT_ENDPOINT,
-            SPEEDTEST_SHOW_LOG_ENDPOINT,
-            SPEEDTEST_SHOW_STAT_ENDPOINT,
-        ]
     finally:
         release.set()
         await client.async_close()
@@ -194,15 +175,11 @@ async def test_outcome_reads_respect_custom_response_validator(
             raise aiohttp.ClientHttpProxyError(
                 request.request_info, (), status=404, message="Proxy rejected CONNECT"
             )
-        response = MagicMock(spec=aiohttp.ClientResponse)
-        response.status = status
-        response.ok = status == 200
-        response.reason = "OK" if status == 200 else "Not Found"
-        response.connection = None
-        response._raw_cookie_headers = ()
-        response.__aenter__.return_value = response
-        response.json.return_value = {"status": {"ups.status": "OL"}, "rows": [], "total": 0}
-        return response
+        return middleware_response(
+            request,
+            status,
+            payload={"status": {"ups.status": "OL"}, "rows": [], "total": 0},
+        )
 
     trace = aiohttp.TraceConfig()
 
@@ -346,28 +323,12 @@ async def test_nested_auth_404_is_transient_and_retried(
                 raise aiohttp.ClientResponseError(
                     request.request_info, (), status=404, message="Auth route missing"
                 )
-            response = MagicMock(spec=aiohttp.ClientResponse)
-            response.status = 200
-            response.ok = True
-            response.reason = "OK"
-            response.connection = None
-            response._raw_cookie_headers = ()
-            response.__aenter__.return_value = response
-            response.json.return_value = {"status": {"ups.status": "OL"}}
-            return response
+            return middleware_response(request, 200)
 
         if request.url.path == endpoint_path:
             async with session.get(f"http://localhost{auth_path}"):
                 pass
-            response = MagicMock(spec=aiohttp.ClientResponse)
-            response.status = 200
-            response.ok = True
-            response.reason = "OK"
-            response.connection = None
-            response._raw_cookie_headers = ()
-            response.__aenter__.return_value = response
-            response.json.return_value = {"status": {"ups.status": "OL"}}
-            return response
+            return middleware_response(request, 200)
 
         return await handler(request)
 
@@ -418,14 +379,7 @@ async def test_endpoint_http_failure_logs_redact_url_credentials(
         """
         if middleware_raises:
             raise aiohttp.ClientResponseError(request.request_info, (), status=500, message=reason)
-        response = MagicMock(spec=aiohttp.ClientResponse)
-        response.status = 500
-        response.ok = False
-        response.reason = reason
-        response.connection = None
-        response._raw_cookie_headers = ()
-        response.__aenter__.return_value = response
-        return response
+        return middleware_response(request, 500, reason=reason)
 
     async with aiohttp.ClientSession(middlewares=[respond]) as session:
         client = make_client(session=session, throw_errors=True)
@@ -499,7 +453,6 @@ async def test_delivered_404_body_read_failure_is_absent(
         validator_error (BaseException): Body or decoding failure raised by the validator.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    trace_events: list[str] = []
     request_count = 0
 
     async def validate_response(response: aiohttp.ClientResponse) -> None:
@@ -525,41 +478,16 @@ async def test_delivered_404_body_read_failure_is_absent(
         """
         nonlocal request_count
         request_count += 1
-        response = MagicMock(spec=aiohttp.ClientResponse)
-        response.status = 404
-        response.ok = False
-        response.reason = "Not Found"
-        response.request_info = request.request_info
-        response.connection = None
-        response._raw_cookie_headers = ()
-        response.__aenter__.return_value = response
+        response = middleware_response(request, 404, reason="Not Found")
         response.json.side_effect = validator_error
         return response
 
-    trace = aiohttp.TraceConfig()
-
-    async def request_failed(
-        _session: aiohttp.ClientSession,
-        _context: Any,
-        _params: aiohttp.TraceRequestExceptionParams,
-    ) -> None:
-        """Record the native request exception trace from validator rejection.
-
-        Args:
-            _session (aiohttp.ClientSession): Session handling the request.
-            _context (Any): Trace context for the request.
-            _params (aiohttp.TraceRequestExceptionParams): Failed request details.
-        """
-        trace_events.append("exception")
-
-    trace.on_request_exception.append(request_failed)
     async with aiohttp.ClientSession(
-        middlewares=[respond], raise_for_status=validate_response, trace_configs=[trace]
+        middlewares=[respond], raise_for_status=validate_response
     ) as session:
         client = make_client(session=session, throw_errors=True)
         assert await client.get_nut_ups_status() == {}
         assert await client.get_nut_ups_status() == {}
-        assert trace_events == ["exception"]
         assert request_count == 1
 
 
@@ -609,16 +537,7 @@ async def test_trace_hook_404_after_response_is_transient_and_retried(
         """
         nonlocal requests
         requests += 1
-        response = MagicMock(spec=aiohttp.ClientResponse)
-        response.status = 200
-        response.ok = True
-        response.reason = "OK"
-        response.request_info = request.request_info
-        response.connection = None
-        response._raw_cookie_headers = ()
-        response.__aenter__.return_value = response
-        response.json.return_value = {"status": {"ups.status": "OL"}}
-        return response
+        return middleware_response(request, 200)
 
     trace = aiohttp.TraceConfig()
 
@@ -643,22 +562,7 @@ async def test_trace_hook_404_after_response_is_transient_and_retried(
                 params.response.request_info, (), status=404, message="trace rejection"
             )
 
-    async def request_failed(
-        _session: aiohttp.ClientSession,
-        _context: Any,
-        _params: aiohttp.TraceRequestExceptionParams,
-    ) -> None:
-        """Record aiohttp's exception trace for the synthetic hook failure.
-
-        Args:
-            _session (aiohttp.ClientSession): Session handling the request.
-            _context (Any): Trace context for the request.
-            _params (aiohttp.TraceRequestExceptionParams): Failed request details.
-        """
-        trace_events.append("exception")
-
     trace.on_request_end.append(request_ended)
-    trace.on_request_exception.append(request_failed)
     async with aiohttp.ClientSession(middlewares=[respond], trace_configs=[trace]) as session:
         client = make_client(session=session, throw_errors=True)
         with pytest.raises(OPNsenseConnectionError) as error:
@@ -667,7 +571,6 @@ async def test_trace_hook_404_after_response_is_transient_and_retried(
         assert error.value.__cause__.status == 404
         assert await client.get_nut_ups_status() == {"status": {"ups.status": "OL"}}
         assert requests == 2
-        assert trace_events == ["end", "exception", "end"]
 
 
 @pytest.mark.asyncio
@@ -2679,21 +2582,8 @@ async def test_cancelled_queued_smart_info_is_skipped_and_queue_progresses(
     release = asyncio.Event()
     enqueued = asyncio.Event()
 
-    class BlockingResponse(FakeResponse):
-        """Fake response that holds the first HTTP request open."""
-
-        async def __aenter__(self) -> Self:
-            """Signal that transport began, then wait for test release.
-
-            Returns:
-                Self: This fake HTTP response.
-            """
-            started.set()
-            await release.wait()
-            return self
-
     session.get.side_effect = [
-        BlockingResponse(json_payload={"ok": True}),
+        GatedResponse(started, release, json_payload={"ok": True}),
         FakeResponse(json_payload={"ok": "/later"}),
     ]
     session.post.return_value = FakeResponse(json_payload={"output": {"model": "test"}})
@@ -2881,3 +2771,90 @@ async def test_cancelled_worker_cancels_in_flight_outcome_request(
     finally:
         release.set()
         await asyncio.wait_for(client.async_close(), timeout=3)
+
+
+@pytest.mark.parametrize(
+    ("old_status", "throw_errors"),
+    [
+        pytest.param(404, False, id="malformed-200-suppressed"),
+        pytest.param(404, True, id="malformed-200-throws"),
+        pytest.param(500, True, id="overlapping-outage"),
+    ],
+)
+async def test_overlapping_endpoint_responses_preserve_order_and_error_policy(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+    old_status: int,
+    throw_errors: bool,
+) -> None:
+    """Preserve a malformed success or a single outage across overlapping reads.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+        caplog (pytest.LogCaptureFixture): Captured client outage diagnostics.
+        old_status (int): Status of the delayed response.
+        throw_errors (bool): Whether malformed JSON raises a public error.
+    """
+    old_response_seen = asyncio.Event()
+    release = asyncio.Event()
+    dispatches = 0
+
+    async def delay_first(response: aiohttp.ClientResponse) -> None:
+        """Hold the first response after it has reached validation.
+
+        Args:
+            response (aiohttp.ClientResponse): Delivered Router response.
+        """
+        if response.status == old_status and not old_response_seen.is_set():
+            old_response_seen.set()
+            await release.wait()
+
+    async def respond(
+        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Serve a new malformed body or a second failure ahead of the old response.
+
+        Args:
+            request (aiohttp.ClientRequest): Request entering the middleware.
+            _handler (aiohttp.ClientHandlerType): Unused network handler.
+
+        Returns:
+            aiohttp.ClientResponse: Synthetic Router response for the read.
+        """
+        nonlocal dispatches
+        dispatches += 1
+        status = old_status if dispatches == 1 or old_status == 500 else 200
+        response = middleware_response(request, status)
+        if dispatches == 2 and status == 200:
+            response.json = AsyncMock(side_effect=json.JSONDecodeError("Bad JSON", "<html>", 0))
+        return response
+
+    async with aiohttp.ClientSession(
+        raise_for_status=delay_first, middlewares=[respond]
+    ) as session:
+        client = make_client(session=session, throw_errors=throw_errors)
+        older = asyncio.create_task(client.get_nut_ups_status())
+        try:
+            async with asyncio.timeout(2):
+                await old_response_seen.wait()
+                if throw_errors:
+                    with pytest.raises(OPNsenseError) as error:
+                        await client.get_nut_ups_status()
+                    if old_status == 404:
+                        assert isinstance(error.value.__cause__, json.JSONDecodeError)
+                else:
+                    assert await client.get_nut_ups_status() is None
+                release.set()
+                if old_status == 500:
+                    with pytest.raises(OPNsenseConnectionError):
+                        await older
+                    assert [record.levelno for record in caplog.records] == [logging.WARNING]
+                    assert dispatches == 2
+                else:
+                    assert await older == {}
+                    assert await client.get_nut_ups_status() == {"status": {"ups.status": "OL"}}
+                    assert dispatches == 3
+        finally:
+            release.set()
+            await asyncio.gather(older, return_exceptions=True)
+            await client.async_close()

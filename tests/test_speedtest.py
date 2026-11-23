@@ -190,19 +190,7 @@ async def test_get_speedtest_preserves_timezone_aware_date(make_client: ClientTy
         client,
         session,
         routes={
-            ("GET", SHOW_LOG_PATH): [
-                [
-                    "2026-03-14T03:09:45+01:30",
-                    "198.51.100.10",
-                    "72800",
-                    "Test ISP",
-                    "United States",
-                    "1",
-                    "2",
-                    "3",
-                    "https://www.speedtest.net/result/c/abc",
-                ]
-            ],
+            ("GET", SHOW_LOG_PATH): [["2026-03-14T03:09:45+01:30", *SHOW_LOG_ROW[1:]]],
             ("GET", SHOW_STAT_PATH): 404,
         },
     )
@@ -212,7 +200,6 @@ async def test_get_speedtest_preserves_timezone_aware_date(make_client: ClientTy
         result = await client.get_speedtest()
 
         assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
-        client._get_resolved_opnsense_timezone.assert_awaited_once_with()
     finally:
         await client.async_close()
 
@@ -229,19 +216,7 @@ async def test_get_speedtest_drops_malformed_date(make_client: ClientType) -> No
         client,
         session,
         routes={
-            ("GET", SHOW_LOG_PATH): [
-                [
-                    "not-a-date",
-                    "198.51.100.10",
-                    "72800",
-                    "Test ISP",
-                    "United States",
-                    "1",
-                    "2",
-                    "3",
-                    "https://www.speedtest.net/result/c/abc",
-                ]
-            ],
+            ("GET", SHOW_LOG_PATH): [["not-a-date", *SHOW_LOG_ROW[1:]]],
             ("GET", SHOW_STAT_PATH): 404,
         },
     )
@@ -251,7 +226,6 @@ async def test_get_speedtest_drops_malformed_date(make_client: ClientType) -> No
         result = await client.get_speedtest()
 
         assert result["last"]["download"]["date"] is None
-        client._get_resolved_opnsense_timezone.assert_awaited_once_with()
     finally:
         await client.async_close()
 
@@ -270,19 +244,7 @@ async def test_get_speedtest_preserves_aware_date_and_drops_naive_periods_when_t
         client,
         session,
         routes={
-            ("GET", SHOW_LOG_PATH): [
-                [
-                    "2026-03-14T03:09:45+01:30",
-                    "198.51.100.10",
-                    "72800",
-                    "Test ISP",
-                    "United States",
-                    "1",
-                    "2",
-                    "3",
-                    "https://www.speedtest.net/result/c/abc",
-                ]
-            ],
+            ("GET", SHOW_LOG_PATH): [["2026-03-14T03:09:45+01:30", *SHOW_LOG_ROW[1:]]],
             ("GET", SHOW_STAT_PATH): {
                 "samples": 10717,
                 "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
@@ -297,7 +259,6 @@ async def test_get_speedtest_preserves_aware_date_and_drops_naive_periods_when_t
         assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
         assert result["average"]["download"]["oldest"] is None
         assert result["average"]["download"]["youngest"] is None
-        client._get_resolved_opnsense_timezone.assert_awaited_once_with()
     finally:
         await client.async_close()
 

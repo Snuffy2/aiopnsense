@@ -360,7 +360,7 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: ClientType)
     )
     try:
         assert await client.get_vnstat() == {"interfaces": {}, "interface_count": 0}
-        assert router.count("GET", SYSTEM_TIME_PATH) >= 1
+        assert router.count("GET", SYSTEM_TIME_PATH) == 1
     finally:
         await client.async_close()
 

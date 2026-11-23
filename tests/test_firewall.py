@@ -22,6 +22,13 @@ RULE_HELPER_PATHS = {
     "_get_nat_source_rules": "/api/firewall/source_nat/search_rule",
     "_get_nat_npt_rules": "/api/firewall/npt/search_rule",
 }
+RULE_HELPER_GROUPS = {
+    "_get_firewall_rules": ("rules", None),
+    "_get_nat_destination_rules": ("nat", "d_nat"),
+    "_get_nat_one_to_one_rules": ("nat", "one_to_one"),
+    "_get_nat_source_rules": ("nat", "source_nat"),
+    "_get_nat_npt_rules": ("nat", "npt"),
+}
 FAILURE_CASES = [
     pytest.param(404, id="missing"),
     pytest.param(403, id="permission-denied"),
@@ -341,13 +348,7 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
     )
     client._use_snake_case = True
     client.get_host_firmware_version = AsyncMock(return_value="26.1.4")
-    group = {
-        "_get_firewall_rules": ("rules", None),
-        "_get_nat_destination_rules": ("nat", "d_nat"),
-        "_get_nat_one_to_one_rules": ("nat", "one_to_one"),
-        "_get_nat_source_rules": ("nat", "source_nat"),
-        "_get_nat_npt_rules": ("nat", "npt"),
-    }[method_name]
+    group = RULE_HELPER_GROUPS[method_name]
     try:
         result = await client.get_firewall()
         rules = result[group[0]] if group[1] is None else result[group[0]][group[1]]
@@ -405,13 +406,7 @@ async def test_rule_helpers_missing_endpoint_does_not_raise_in_throw_mode(
     )
     client._use_snake_case = True
     client.get_host_firmware_version = AsyncMock(return_value="26.1.4")
-    group = {
-        "_get_firewall_rules": ("rules", None),
-        "_get_nat_destination_rules": ("nat", "d_nat"),
-        "_get_nat_one_to_one_rules": ("nat", "one_to_one"),
-        "_get_nat_source_rules": ("nat", "source_nat"),
-        "_get_nat_npt_rules": ("nat", "npt"),
-    }[method_name]
+    group = RULE_HELPER_GROUPS[method_name]
     try:
         result = await client.get_firewall()
         rules = result[group[0]] if group[1] is None else result[group[0]][group[1]]
@@ -532,42 +527,25 @@ async def test_kill_states_returns_normalized_result(make_client: ClientType) ->
 
 
 async def _toggle_alias(
-    make_client: ClientType,
-    search_body: Any,
-    *,
-    post_payloads: list[Any] | None = None,
-    use_snake_case: bool = True,
-    throw_errors: bool = False,
-    toggle: str | None = "on",
-    alias: str = "alias1",
+    make_client: ClientType, search_body: Any, *, throw_errors: bool = False
 ) -> tuple[bool, FakeRouter]:
     """Run ``toggle_alias`` against a Router answering the alias search with ``search_body``.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         search_body (Any): Response the Router gives for the alias search endpoint.
-        post_payloads (list[Any] | None): Ordered toggle, save and apply responses.
-        use_snake_case (bool): Whether the client prefers snake_case endpoints.
         throw_errors (bool): Whether the client raises public errors.
-        toggle (str | None): Target state passed to ``toggle_alias``.
-        alias (str): Alias name passed to ``toggle_alias``.
 
     Returns:
         tuple[bool, FakeRouter]: Result and the fake Router.
     """
     client, session = make_mock_session_client(make_client)
-    client._use_snake_case = use_snake_case
-    search_path = ALIAS_SEARCH_PATH if use_snake_case else "/api/firewall/alias/searchItem"
-    router = install_fake_router(
-        client,
-        session,
-        post_payloads=post_payloads,
-        routes={("GET", search_path): search_body},
-    )
+    client._use_snake_case = True
+    router = install_fake_router(client, session, routes={("GET", ALIAS_SEARCH_PATH): search_body})
     if throw_errors:
         client.toggle_throwing_errors(True)
     try:
-        return await client.toggle_alias(alias, toggle), router
+        return await client.toggle_alias("alias1", "on"), router
     finally:
         await client.async_close()
 
@@ -621,77 +599,6 @@ async def test_toggle_alias_missing_lookup_does_not_raise_in_throw_mode(
     assert router.count("POST") == 0
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("search_body", "post_payloads", "expected", "post_count"),
-    [
-        pytest.param({"rows": []}, [], False, 0, id="alias-not-found"),
-        pytest.param({"rows": "bad"}, [], False, 0, id="rows-not-a-list"),
-        pytest.param(
-            {"rows": [{"name": "alias1", "uuid": "aid"}]},
-            [{"result": "failed"}],
-            False,
-            1,
-            id="toggle-failed",
-        ),
-        pytest.param(
-            {"rows": [{"name": "alias1", "uuid": "aid"}]},
-            [{"result": "Disabled"}, {"result": "not-saved"}],
-            False,
-            2,
-            id="save-failed",
-        ),
-        pytest.param(
-            {"rows": [{"name": "alias1", "uuid": "aid"}]},
-            [{"result": "Disabled"}, {"result": "saved"}, {"status": "failed"}],
-            False,
-            3,
-            id="apply-failed",
-        ),
-        pytest.param(
-            {"rows": [{"name": "alias1", "uuid": "aid"}]},
-            [{"result": "Disabled"}, {"result": "saved"}, {"status": "ok"}],
-            True,
-            3,
-            id="success",
-        ),
-    ],
-)
-async def test_toggle_alias_flows(
-    make_client: ClientType,
-    search_body: Any,
-    post_payloads: list[Any],
-    expected: bool,
-    post_count: int,
-) -> None:
-    """`toggle_alias` follows the lookup, toggle, save and apply flow with one lookup request.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        search_body (Any): Alias search response from the Router.
-        post_payloads (list[Any]): Ordered toggle, save and apply responses.
-        expected (bool): Expected final result.
-        post_count (int): Number of POST calls expected.
-    """
-    result, router = await _toggle_alias(
-        make_client, search_body, post_payloads=post_payloads, toggle="off"
-    )
-
-    assert result is expected
-    assert router.count("GET", ALIAS_SEARCH_PATH) == 1
-    post_paths = [
-        path.removeprefix("http://localhost")
-        for method, path, _payload in router.requests
-        if method == "POST"
-    ]
-    expected_prefix = [
-        "/api/firewall/alias/toggle_item/aid/0",
-        "/api/firewall/alias/set",
-        "/api/firewall/alias/reconfigure",
-    ][:post_count]
-    assert post_paths == expected_prefix
-
-
 SOURCE_NAT_PATH = "/api/firewall/source_nat/search_rule"
 DNAT_PATH = "/api/firewall/d_nat/search_rule"
 SOURCE_NAT_ROWS = {
@@ -701,52 +608,6 @@ SOURCE_NAT_ROWS = {
     ]
 }
 DNAT_ROWS = {"rows": [{"uuid": "dnat-1", "descr": "Web", "category": "c1", "%category": "Web"}]}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("use_snake_case", "expected_search", "expected_toggle"),
-    [
-        (
-            True,
-            "/api/firewall/alias/search_item",
-            "/api/firewall/alias/toggle_item/aid/1",
-        ),
-        (
-            False,
-            "/api/firewall/alias/searchItem",
-            "/api/firewall/alias/toggleItem/aid/1",
-        ),
-    ],
-)
-async def test_firewall_switched_endpoints_follow_selected_case(
-    make_client: ClientType,
-    use_snake_case: bool,
-    expected_search: str,
-    expected_toggle: str,
-) -> None:
-    """Verify alias helpers choose snake_case or camelCase endpoints consistently.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        use_snake_case (bool): Whether the client should prefer snake_case endpoints.
-        expected_search (str): Expected alias-search endpoint path.
-        expected_toggle (str): Expected alias-toggle endpoint path.
-    """
-    result, router = await _toggle_alias(
-        make_client,
-        {"rows": [{"name": "alias1", "uuid": "aid"}]},
-        post_payloads=[{"result": "Enabled"}, {"result": "saved"}, {"status": "ok"}],
-        use_snake_case=use_snake_case,
-    )
-
-    assert result is True
-    assert router.count("GET", expected_search) == 1
-    assert [
-        path.removeprefix("http://localhost")
-        for method, path, _payload in router.requests
-        if method == "POST"
-    ] == [expected_toggle, "/api/firewall/alias/set", "/api/firewall/alias/reconfigure"]
 
 
 @pytest.mark.asyncio

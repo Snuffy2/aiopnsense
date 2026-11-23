@@ -3,7 +3,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 import logging
-from typing import Any, Self
+from typing import Any
 from unittest.mock import AsyncMock
 
 import aiohttp
@@ -21,8 +21,8 @@ from aiopnsense.exceptions import (
     OPNsenseUnknownFirmware,
 )
 from tests.conftest import (
-    FakeResponse,
     FirmwareRouter,
+    GatedResponse,
     MakeClientFactory,
     MalformedJSONResponse,
     install_fake_router,
@@ -218,58 +218,33 @@ async def test_endpoint_status_404_is_false_without_raising_in_throw_mode(
 
 
 @pytest.mark.parametrize(
-    "absent_answer",
+    ("answer", "expected"),
     [
-        pytest.param(404, id="absent-404"),
-        pytest.param(403, id="forbidden-403"),
+        pytest.param(200, True, id="present-200"),
+        pytest.param(404, False, id="absent-404"),
+        pytest.param(403, False, id="forbidden-403"),
     ],
 )
 @pytest.mark.asyncio
-async def test_endpoint_status_caches_absent_answer_until_force_refresh(
-    make_client: MakeClientFactory, absent_answer: int
+async def test_endpoint_status_reuses_cached_answer_until_force_refresh(
+    make_client: MakeClientFactory, answer: int, expected: bool
 ) -> None:
-    """A cached absent answer is reused without a request until the caller forces a refresh.
+    """A cached answer is reused without a request until the caller forces a refresh.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-        absent_answer (int): Router answer that marks the endpoint absent.
+        answer (int): Router answer cached by the first check.
+        expected (bool): Whether the answer reports the endpoint present.
     """
     client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", STATUS_PATH): absent_answer})
-    try:
-        for _ in range(2):
-            with pytest.warns(DeprecationWarning):
-                assert await client.is_endpoint_available(STATUS_PATH) is False  # type: ignore[deprecated]
-        assert router.count("GET", STATUS_PATH) == 1
-
-        router.routes[("GET", STATUS_PATH)] = 200
-        with pytest.warns(DeprecationWarning):
-            assert (
-                await client.is_endpoint_available(STATUS_PATH, force_refresh=True)  # type: ignore[deprecated]
-                is True
-            )
-        assert router.count("GET", STATUS_PATH) == 2
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_endpoint_status_reuses_cached_present_answer_until_force_refresh(
-    make_client: MakeClientFactory,
-) -> None:
-    """A cached present answer is reused without a request until the caller forces a refresh.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", STATUS_PATH): 200})
+    router = install_fake_router(client, session, routes={("GET", STATUS_PATH): answer})
     try:
         for _ in range(3):
             with pytest.warns(DeprecationWarning):
-                assert await client.is_endpoint_available(STATUS_PATH) is True  # type: ignore[deprecated]
+                assert await client.is_endpoint_available(STATUS_PATH) is expected  # type: ignore[deprecated]
         assert router.count("GET", STATUS_PATH) == 1
 
+        router.routes[("GET", STATUS_PATH)] = 200
         with pytest.warns(DeprecationWarning):
             assert (
                 await client.is_endpoint_available(STATUS_PATH, force_refresh=True)  # type: ignore[deprecated]
@@ -531,6 +506,48 @@ NUT_PATH = "/api/nut/diagnostics/upsstatus"
 NUT_DATA = {"status": {"ups.status": "OL"}}
 
 
+class _QueueGate:
+    """Hold one completed queued read after the Router answered, until released.
+
+    Attributes:
+        ready (asyncio.Event): Set once a read is held.
+        release (asyncio.Event): Set by the test to let the held read return.
+        armed (bool): Whether the next queued read is held.
+    """
+
+    def __init__(self, client: Any, *, armed: bool = True) -> None:
+        """Wrap the client's queued request seam.
+
+        Args:
+            client (Any): Client whose queued reads are held.
+            armed (bool): Whether the first queued read is held.
+        """
+        self.ready = asyncio.Event()
+        self.release = asyncio.Event()
+        self.armed = armed
+        original = client._queue_request
+
+        async def gated(method: str, path: str, payload: Any = None) -> Any:
+            """Return the queued read's outcome after the gate releases it.
+
+            Args:
+                method (str): Queue method passed to the queued request.
+                path (str): Endpoint path passed to the queued request.
+                payload (Any): Optional request payload.
+
+            Returns:
+                Any: Outcome returned by the original queued request.
+            """
+            outcome = await original(method, path, payload)
+            if self.armed:
+                self.armed = False
+                self.ready.set()
+                await self.release.wait()
+            return outcome
+
+        client._queue_request = gated
+
+
 @pytest.mark.asyncio
 async def test_present_endpoint_costs_one_request_per_read(make_client: MakeClientFactory) -> None:
     """A present endpoint sends exactly one request per read, with no separate probe.
@@ -750,42 +767,18 @@ async def test_older_data_read_cannot_overwrite_newer_status_success(
     """
     client, session = make_mock_session_client(make_client)
     router = install_fake_router(client, session, routes={("GET", NUT_PATH): 404})
-    original_queue = client._queue_request
-    old_response_ready = asyncio.Event()
-    release_old_response = asyncio.Event()
-    delay_first = True
-
-    async def delayed_queue(method: str, path: str, payload: Any = None) -> Any:
-        """Delay the first completed NUT read until ``release_old_response`` is set.
-
-        Args:
-            method (str): HTTP method passed to the queued request.
-            path (str): Endpoint path passed to the queued request.
-            payload (Any): Optional request payload.
-
-        Returns:
-            Any: NUT endpoint outcome returned after the release event.
-        """
-        nonlocal delay_first
-        outcome = await original_queue(method, path, payload)
-        if delay_first:
-            delay_first = False
-            old_response_ready.set()
-            await release_old_response.wait()
-        return outcome
-
-    client._queue_request = delayed_queue
+    gate = _QueueGate(client)
     old_read = asyncio.create_task(client.get_nut_ups_status())
     try:
-        await asyncio.wait_for(old_response_ready.wait(), timeout=1)
+        await asyncio.wait_for(gate.ready.wait(), timeout=1)
         router.routes[("GET", NUT_PATH)] = NUT_DATA
         assert (await client._check_endpoint_status(NUT_PATH, force_refresh=True)).is_data
-        release_old_response.set()
+        gate.release.set()
         assert await old_read == {}
         assert await client.get_nut_ups_status() == NUT_DATA
         assert router.count("GET", NUT_PATH) == 3
     finally:
-        release_old_response.set()
+        gate.release.set()
         await old_read
         await client.async_close()
 
@@ -801,28 +794,9 @@ async def test_older_result_can_publish_when_newer_observation_is_cancelled(
     """
     client, session = make_mock_session_client(make_client)
     router = install_fake_router(client, session, routes={("GET", NUT_PATH): 404})
-    original_queue = client._queue_request
     original_get = client._do_get_outcome
-    old_ready = asyncio.Event()
-    release_old = asyncio.Event()
     new_ready = asyncio.Event()
     release_new = asyncio.Event()
-
-    async def delayed_queue(method: str, path: str, payload: Any = None) -> Any:
-        """Hold the older NUT read until ``release_old`` allows publication.
-
-        Args:
-            method (str): HTTP method passed to the queued request.
-            path (str): Endpoint path passed to the queued request.
-            payload (Any): Optional request payload.
-
-        Returns:
-            Any: NUT endpoint outcome returned after ``release_old``.
-        """
-        outcome = await original_queue(method, path, payload)
-        old_ready.set()
-        await release_old.wait()
-        return outcome
 
     async def delayed_status(*args: Any, **kwargs: Any) -> _EndpointOutcome:
         """Pause the forced NUT status probe until cancelled or ``release_new`` is set.
@@ -840,12 +814,12 @@ async def test_older_result_can_publish_when_newer_observation_is_cancelled(
             await release_new.wait()
         return outcome
 
-    client._queue_request = delayed_queue
+    gate = _QueueGate(client)
     client._do_get_outcome = delayed_status
     old_read = asyncio.create_task(client.get_nut_ups_status())
     newer_check: asyncio.Task[_EndpointOutcome] | None = None
     try:
-        await asyncio.wait_for(old_ready.wait(), timeout=1)
+        await asyncio.wait_for(gate.ready.wait(), timeout=1)
         router.routes[("GET", NUT_PATH)] = NUT_DATA
         newer_check = asyncio.create_task(
             client._check_endpoint_status(NUT_PATH, force_refresh=True)
@@ -854,12 +828,12 @@ async def test_older_result_can_publish_when_newer_observation_is_cancelled(
         newer_check.cancel()
         with pytest.raises(asyncio.CancelledError):
             await newer_check
-        release_old.set()
+        gate.release.set()
         assert await old_read == {}
         assert await client.get_nut_ups_status() == {}
         assert router.count("GET", NUT_PATH) == 2
     finally:
-        release_old.set()
+        gate.release.set()
         release_new.set()
         if newer_check is not None and not newer_check.done():
             newer_check.cancel()
@@ -881,39 +855,15 @@ async def test_old_generation_success_does_not_clear_new_outage(
     """
     client, session = make_mock_session_client(make_client)
     router = install_fake_router(client, session, routes={("GET", NUT_PATH): NUT_DATA})
-    original_queue = client._queue_request
-    old_response_ready = asyncio.Event()
-    release_old_response = asyncio.Event()
-    delay_first = True
-
-    async def delayed_queue(method: str, path: str, payload: Any = None) -> Any:
-        """Hold the first NUT response until ``release_old_response`` is set.
-
-        Args:
-            method (str): HTTP method passed to the queued request.
-            path (str): Endpoint path passed to the queued request.
-            payload (Any): Optional request payload.
-
-        Returns:
-            Any: NUT endpoint outcome from the original queue call after release.
-        """
-        nonlocal delay_first
-        outcome = await original_queue(method, path, payload)
-        if delay_first:
-            delay_first = False
-            old_response_ready.set()
-            await release_old_response.wait()
-        return outcome
-
-    client._queue_request = delayed_queue
+    gate = _QueueGate(client)
     old_read = asyncio.create_task(client.get_nut_ups_status())
     try:
-        await asyncio.wait_for(old_response_ready.wait(), timeout=1)
+        await asyncio.wait_for(gate.ready.wait(), timeout=1)
         client._reset_endpoint_state()
         router.routes[("GET", NUT_PATH)] = 500
         with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
             assert await client.get_nut_ups_status() == {}
-            release_old_response.set()
+            gate.release.set()
             assert await old_read == NUT_DATA
             assert await client.get_nut_ups_status() == {}
         warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
@@ -922,7 +872,7 @@ async def test_old_generation_success_does_not_clear_new_outage(
         assert not recoveries
         assert router.count("GET", NUT_PATH) == 3
     finally:
-        release_old_response.set()
+        gate.release.set()
         await old_read
         await client.async_close()
 
@@ -939,40 +889,16 @@ async def test_probe_success_does_not_suppress_bounded_read_recovery(
     """
     client, session = make_mock_session_client(make_client)
     router = install_fake_router(client, session, routes={("GET", NUT_PATH): 500})
-    original_queue = client._queue_request
-    old_response_ready = asyncio.Event()
-    release_old_response = asyncio.Event()
-    delay_next = False
-
-    async def delayed_queue(method: str, path: str, payload: Any = None) -> Any:
-        """Hold the selected NUT read until ``release_old_response`` is set.
-
-        Args:
-            method (str): HTTP method passed to the queued request.
-            path (str): Endpoint path passed to the queued request.
-            payload (Any): Optional request payload.
-
-        Returns:
-            Any: NUT endpoint outcome from the original queue call after release.
-        """
-        nonlocal delay_next
-        outcome = await original_queue(method, path, payload)
-        if delay_next:
-            delay_next = False
-            old_response_ready.set()
-            await release_old_response.wait()
-        return outcome
-
-    client._queue_request = delayed_queue
+    gate = _QueueGate(client, armed=False)
     try:
         with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
             assert await client.get_nut_ups_status() == {}
             router.routes[("GET", NUT_PATH)] = NUT_DATA
-            delay_next = True
+            gate.armed = True
             old_read = asyncio.create_task(client.get_nut_ups_status())
-            await asyncio.wait_for(old_response_ready.wait(), timeout=1)
+            await asyncio.wait_for(gate.ready.wait(), timeout=1)
             assert (await client._check_endpoint_status(NUT_PATH, force_refresh=True)).is_data
-            release_old_response.set()
+            gate.release.set()
             assert await old_read == NUT_DATA
             router.routes[("GET", NUT_PATH)] = 500
             assert await client.get_nut_ups_status() == {}
@@ -983,7 +909,7 @@ async def test_probe_success_does_not_suppress_bounded_read_recovery(
         assert len(recoveries) == 1
         assert router.count("GET", NUT_PATH) == 4
     finally:
-        release_old_response.set()
+        gate.release.set()
         await client.async_close()
 
 
@@ -1470,41 +1396,11 @@ async def test_old_endpoint_probe_cannot_restore_cache_after_firmware_change(
     client, session = make_mock_session_client(make_client)
     router = FirmwareRouter(client, session)
     router.firmware = "26.1.1"
-    original_probe = session.get.side_effect
     probe_started = asyncio.Event()
     release_probe = asyncio.Event()
-    delayed_probe_pending = True
-
-    class DelayedNotFoundResponse(FakeResponse):
-        """404 response held until the test releases an old firmware probe."""
-
-        async def __aenter__(self) -> Self:
-            """Wait for release after the stale probe reaches its response.
-
-            Returns:
-                Self: This response after the test releases the probe.
-            """
-            probe_started.set()
-            await release_probe.wait()
-            return self
-
-    def _probe(url: str, **kwargs: Any) -> FakeResponse:
-        """Delay the first system-information probe and delegate all others.
-
-        Args:
-            url (str): Full URL requested by the availability check.
-            kwargs (Any): Request options passed to the scripted Router.
-
-        Returns:
-            FakeResponse: Delayed 404 or the scripted Router response.
-        """
-        nonlocal delayed_probe_pending
-        if url.endswith(SYSTEM_INFORMATION_SNAKE_PATH) and delayed_probe_pending:
-            delayed_probe_pending = False
-            return DelayedNotFoundResponse(status=404, ok=False)
-        return original_probe(url, **kwargs)
-
-    session.get.side_effect = _probe
+    router.endpoints[SYSTEM_INFORMATION_SNAKE_PATH] = GatedResponse(
+        probe_started, release_probe, status=404, ok=False
+    )
     old_probe_task = asyncio.create_task(client.get_system_info())
     try:
         await asyncio.wait_for(probe_started.wait(), timeout=1)

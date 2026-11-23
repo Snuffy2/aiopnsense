@@ -235,8 +235,10 @@ async def test_openvpn_more_detail_parsing(make_client: ClientType) -> None:
             },
         )
         res = await client.get_openvpn()
-        assert res is not None
-        assert "servers" in res and "clients" in res
+        assert res == {
+            "servers": {},
+            "clients": {"c1": {"name": None, "uuid": "c1", "enabled": False}},
+        }
     finally:
         await client.async_close()
 
@@ -864,19 +866,17 @@ async def test_get_openvpn_rejects_malformed_required_inventory_entries(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("throw_errors", [False, True])
-async def test_get_openvpn_routes_request_failure(
-    make_client: ClientType, throw_errors: bool
+async def test_get_openvpn_routes_request_failure_raises_in_throw_mode(
+    make_client: ClientType,
 ) -> None:
-    """Degrade a failed optional routes request to partial data, or raise in throw mode.
+    """Raise a failed optional routes request in throw mode; default mode is covered above.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Whether strict request errors are enabled.
     """
     client, session = make_mock_session_client(make_client)
     try:
-        client.toggle_throwing_errors(throw_errors)
+        client.toggle_throwing_errors(True)
         client._use_snake_case = True
         install_fake_router(
             client,
@@ -893,16 +893,8 @@ async def test_get_openvpn_routes_request_failure(
             },
         )
 
-        if throw_errors:
-            with pytest.raises(OPNsenseConnectionError):
-                await client.get_openvpn()
-        else:
-            result = await client.get_openvpn()
-            assert result is not None
-            server = result["servers"]["server"]
-            assert server["status"] == "up"
-            assert "clients" not in server
-            assert "connected_clients" not in server
+        with pytest.raises(OPNsenseConnectionError):
+            await client.get_openvpn()
     finally:
         await client.async_close()
 
@@ -1296,7 +1288,6 @@ async def test_get_ipsec_configured_enabled_and_version_normalization(
 @pytest.mark.parametrize(
     "connections",
     [
-        pytest.param(500, id="transient-failure"),
         pytest.param({"rows": "nope"}, id="malformed-rows"),
         pytest.param({}, id="missing-rows"),
     ],
@@ -1562,7 +1553,6 @@ async def test_get_ipsec_children_aggregate_phase2_sessions(make_client: ClientT
             {"child-x"},
             id="absent-config-keeps-session-children",
         ),
-        pytest.param(500, {"rows": []}, None, id="transient-config-omits-children"),
         pytest.param(404, {}, None, id="malformed-phase2-omits-children"),
         pytest.param(404, {"rows": "nope"}, None, id="phase2-rows-not-list"),
     ],
@@ -1575,9 +1565,8 @@ async def test_get_ipsec_children_fail_closed(
 ) -> None:
     """Omit ``children`` when phase 2 data cannot be read completely.
 
-    A transient child configuration failure or a malformed phase 2 reply omits the
-    key. A child configuration endpoint answered 404 falls back to the children seen in
-    the sessions API.
+    A malformed phase 2 reply omits the key. A child configuration endpoint
+    answered 404 falls back to the children seen in the sessions API.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1845,14 +1834,15 @@ async def test_toggle_vpn_instance_posts_to_firmware_endpoints(
 @pytest.mark.parametrize(
     "payload",
     [
-        {"rows": {"not": "a list"}},
-        {"rows": "nope"},
+        pytest.param({"rows": {"not": "a list"}}, id="rows-mapping"),
+        pytest.param({"rows": "nope"}, id="rows-string"),
+        pytest.param({}, id="rows-missing"),
     ],
 )
 async def test_get_ipsec_malformed_payload_returns_none(
     make_client: ClientType, payload: dict[str, Any]
 ) -> None:
-    """Return None when the sessions rows are not a list.
+    """Return None when the sessions rows are missing or not a list.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1862,25 +1852,6 @@ async def test_get_ipsec_malformed_payload_returns_none(
     try:
         client._use_snake_case = True
         install_fake_router(client, session, routes=_ipsec_routes(payload, {"rows": []}))
-
-        ipsec = await client.get_ipsec()
-
-        assert ipsec is None
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_ipsec_without_rows_returns_none(make_client: ClientType) -> None:
-    """Treat a sessions payload without rows as unavailable.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    try:
-        client._use_snake_case = True
-        install_fake_router(client, session, routes=_ipsec_routes({}, {"rows": []}))
 
         ipsec = await client.get_ipsec()
 

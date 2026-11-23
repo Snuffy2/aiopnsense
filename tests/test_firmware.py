@@ -1640,17 +1640,15 @@ def _configure_firmware_polls(
     states = list(running or ["ready"])
 
     def read(path: str) -> dict[str, Any]:
-        """Return the mocked response for a firmware read.
+        """Return the next mocked lock state for the firmware running read.
 
         Args:
             path (str): Firmware endpoint path.
 
         Returns:
-            dict[str, Any]: Lock state or firmware status.
+            dict[str, Any]: Lock state.
         """
-        if path.endswith("/running"):
-            return {"status": states.pop(0) if len(states) > 1 else states[0]}
-        return status
+        return {"status": states.pop(0) if len(states) > 1 else states[0]}
 
     original_get, original_post = session.get, session.post
     router = install_fake_router(client, session, routes={("GET", STATUS_PATH): status})

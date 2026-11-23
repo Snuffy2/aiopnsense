@@ -353,158 +353,63 @@ async def test_arp_resolve_values_keep_distinct_availability_statuses(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method_name", "endpoint"),
+    "endpoint",
     [
-        ("_get_kea_dhcpv4_leases", "/api/kea/leases4/search"),
-        ("_get_kea_dhcpv6_leases", "/api/kea/leases6/search"),
-        ("_get_dnsmasq_leases", "/api/dnsmasq/leases/search"),
-        ("_get_isc_dhcpv4_leases", "/api/dhcpv4/leases/search_lease"),
-        ("_get_isc_dhcpv6_leases", "/api/dhcpv6/leases/search_lease"),
+        pytest.param(KEA_LEASES4_PATH, id="kea-v4-leases"),
+        pytest.param(KEA_LEASES6_PATH, id="kea-v6-leases"),
+        pytest.param(DNSMASQ_LEASES_PATH, id="dnsmasq-leases"),
+        pytest.param(ISC_DHCPV4_PATH, id="isc-v4-leases"),
+        pytest.param(ISC_DHCPV6_PATH, id="isc-v6-leases"),
+        pytest.param("/api/kea/dhcpv4/get", id="kea-interfaces"),
+        pytest.param("/api/dnsmasq/settings/search_range", id="dnsmasq-interfaces"),
     ],
 )
 @pytest.mark.parametrize(
-    "route",
-    [
-        pytest.param(404, id="absent"),
-        pytest.param(403, id="forbidden"),
-        pytest.param(500, id="server-error"),
-        pytest.param(TimeoutError("DHCP lease request timed out"), id="timeout"),
-    ],
-)
-async def test_dhcp_endpoint_unavailable(
-    make_client: ClientType,
-    method_name: str,
-    endpoint: str,
-    route: Any,
-) -> None:
-    """Verify DHCP lease helpers return empty results when endpoints are absent or fail.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        method_name (str): Lease helper method name to invoke.
-        endpoint (str): Lease endpoint the Router is asked for.
-        route (Any): Router answer: an HTTP status or a transport error.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", endpoint): route})
-    try:
-        client._use_snake_case = True
-        assert await getattr(client, method_name)() == []
-        assert router.count("GET", endpoint) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method_name", "endpoint", "empty_value"),
-    [
-        pytest.param("_get_kea_dhcpv4_leases", KEA_LEASES4_PATH, [], id="kea-v4-leases"),
-        pytest.param("_get_kea_dhcpv6_leases", KEA_LEASES6_PATH, [], id="kea-v6-leases"),
-        pytest.param("_get_dnsmasq_leases", DNSMASQ_LEASES_PATH, [], id="dnsmasq-leases"),
-        pytest.param("_get_isc_dhcpv4_leases", ISC_DHCPV4_PATH, [], id="isc-v4-leases"),
-        pytest.param("_get_isc_dhcpv6_leases", ISC_DHCPV6_PATH, [], id="isc-v6-leases"),
-        pytest.param("_get_kea_interfaces", "/api/kea/dhcpv4/get", {}, id="kea-interfaces"),
-        pytest.param(
-            "_get_dnsmasq_interfaces",
-            "/api/dnsmasq/settings/search_range",
-            {},
-            id="dnsmasq-interfaces",
-        ),
-    ],
+    "throw_errors",
+    [pytest.param(False, id="default"), pytest.param(True, id="throw")],
 )
 @pytest.mark.parametrize(
-    ("route", "expected_error"),
+    ("route", "throw_error"),
     [
-        pytest.param(404, None, id="absent-returns-empty"),
-        pytest.param(403, OPNsensePrivilegeMissing, id="permission-raises"),
-        pytest.param(500, OPNsenseConnectionError, id="server-raises"),
-        pytest.param(
-            TimeoutError("DHCP request timed out"), OPNsenseTimeoutError, id="timeout-raises"
-        ),
-    ],
-)
-async def test_dhcp_reads_follow_throw_mode_contract(
-    make_client: ClientType,
-    method_name: str,
-    endpoint: str,
-    empty_value: list | dict,
-    route: Any,
-    expected_error: type[OPNsenseConnectionError] | None,
-) -> None:
-    """Throwing clients raise for permission and transient failures but return empty for absence.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        method_name (str): DHCP read method to invoke.
-        endpoint (str): Endpoint the read requests.
-        empty_value (list | dict): Public value returned when the endpoint is absent.
-        route (Any): Router answer: an HTTP status or a transport error.
-        expected_error (type[OPNsenseConnectionError] | None): Expected public exception, or
-            None when the read returns its empty value.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=True))
-    router = install_fake_router(client, session, routes={("GET", endpoint): route})
-    try:
-        client._use_snake_case = True
-        if expected_error is None:
-            assert await getattr(client, method_name)() == empty_value
-        else:
-            with pytest.raises(expected_error):
-                await getattr(client, method_name)()
-        assert router.count("GET", endpoint) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("route", "throw_errors", "expected_error"),
-    [
-        pytest.param(404, False, None, id="absent-default"),
-        pytest.param(403, False, None, id="forbidden-default"),
-        pytest.param(500, False, None, id="server-error-default"),
-        pytest.param(
-            TimeoutError("DHCP lease request timed out"), False, None, id="timeout-default"
-        ),
-        pytest.param(404, True, None, id="absent-throw"),
-        pytest.param(403, True, OPNsensePrivilegeMissing, id="forbidden-throw"),
-        pytest.param(500, True, OPNsenseConnectionError, id="server-error-throw"),
-        pytest.param(
-            TimeoutError("DHCP lease request timed out"),
-            True,
-            OPNsenseTimeoutError,
-            id="timeout-throw",
-        ),
+        pytest.param(404, None, id="absent"),
+        pytest.param(403, OPNsensePrivilegeMissing, id="forbidden"),
+        pytest.param(500, OPNsenseConnectionError, id="server-error"),
+        pytest.param(TimeoutError("DHCP request timed out"), OPNsenseTimeoutError, id="timeout"),
     ],
 )
 async def test_get_dhcp_leases_propagates_endpoint_outcomes(
     make_client: ClientType,
-    route: Any,
+    endpoint: str,
     throw_errors: bool,
-    expected_error: type[OPNsenseConnectionError] | None,
+    route: Any,
+    throw_error: type[OPNsenseConnectionError] | None,
 ) -> None:
-    """Exercise lease endpoint failures through the public aggregate method.
+    """Exercise each DHCP read failure through the public aggregate method.
+
+    Absence yields an empty result in both modes. Permission and transient failures yield an
+    empty result by default and raise a public error in throw mode. Each read sends one request.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route (Any): Router answer for the first Kea lease endpoint.
+        endpoint (str): Lease or interface endpoint the Router fails.
         throw_errors (bool): Whether the client should raise for endpoint failures.
-        expected_error (type[OPNsenseConnectionError] | None): Expected error, if any.
+        route (Any): Router answer: an HTTP status or a transport error.
+        throw_error (type[OPNsenseConnectionError] | None): Public exception raised in throw mode,
+            or None when the read returns its empty value in both modes.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(client, session, routes={("GET", KEA_LEASES4_PATH): route})
+    router = install_fake_router(client, session, routes={("GET", endpoint): route})
     try:
         client._use_snake_case = True
-        if expected_error is None:
+        if throw_errors and throw_error is not None:
+            with pytest.raises(throw_error):
+                await client.get_dhcp_leases(opnsense_tz=UTC)
+        else:
             assert await client.get_dhcp_leases(opnsense_tz=UTC) == {
                 "lease_interfaces": {},
                 "leases": {},
             }
-        else:
-            with pytest.raises(expected_error):
-                await client.get_dhcp_leases(opnsense_tz=UTC)
-        assert router.count("GET", KEA_LEASES4_PATH) == 1
+        assert router.count("GET", endpoint) == 1
     finally:
         await client.async_close()
 
@@ -785,66 +690,6 @@ async def test_get_dhcp_leases_includes_empty_dnsmasq_range_interface(
             "leases": {},
         }
         assert router.count("GET", "/api/dnsmasq/settings/search_range") == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "route",
-    [
-        pytest.param(404, id="absent"),
-        pytest.param(403, id="forbidden"),
-        pytest.param(500, id="server-error"),
-        pytest.param(TimeoutError("Dnsmasq range request timed out"), id="timeout"),
-    ],
-)
-async def test_get_dnsmasq_interfaces_returns_empty_when_endpoint_unavailable(
-    make_client: ClientType,
-    route: Any,
-) -> None:
-    """Dnsmasq range discovery should return an empty mapping when absent or failing.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route (Any): Router answer: an HTTP status or a transport error.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client, session, routes={("GET", "/api/dnsmasq/settings/search_range"): route}
-    )
-    try:
-        assert await client._get_dnsmasq_interfaces() == {}
-        assert router.count("GET", "/api/dnsmasq/settings/search_range") == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "route",
-    [
-        pytest.param(404, id="absent"),
-        pytest.param(403, id="forbidden"),
-        pytest.param(500, id="server-error"),
-        pytest.param(TimeoutError("Kea DHCP request timed out"), id="timeout"),
-    ],
-)
-async def test_get_kea_interfaces_returns_empty_when_endpoint_unavailable(
-    make_client: ClientType,
-    route: Any,
-) -> None:
-    """Kea interface discovery should return an empty mapping when absent or failing.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route (Any): Router answer: an HTTP status or a transport error.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", "/api/kea/dhcpv4/get"): route})
-    try:
-        assert await client._get_kea_interfaces() == {}
-        assert router.count("GET", "/api/kea/dhcpv4/get") == 1
     finally:
         await client.async_close()
 

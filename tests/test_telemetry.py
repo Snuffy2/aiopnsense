@@ -24,6 +24,22 @@ DISK_PATH = "/api/diagnostics/system/system_disk"
 GATEWAY_PATH = "/api/routes/gateway/status"
 TEMPERATURE_PATH = "/api/diagnostics/system/system_temperature"
 
+# Memory, time, CPU type, disk and temperature paths for each endpoint style.
+SNAKE_CASE_PATHS = (
+    RESOURCES_PATH,
+    TIME_PATH,
+    CPU_TYPE_PATH,
+    DISK_PATH,
+    TEMPERATURE_PATH,
+)
+CAMEL_CASE_PATHS = (
+    "/api/diagnostics/system/systemResources",
+    "/api/diagnostics/system/systemTime",
+    "/api/diagnostics/cpu_usage/getCPUType",
+    "/api/diagnostics/system/systemDisk",
+    "/api/diagnostics/system/systemTemperature",
+)
+
 MEMORY_EMPTY: dict[str, Any] = {"physmem": None, "used": None, "used_percent": None}
 CPU_TYPE_PAYLOAD = ["Intel(R) Xeon (4 cores, 8 threads)"]
 MEMORY_PAYLOAD: dict[str, Any] = {"memory": {"total": "100", "used": "50"}}
@@ -639,24 +655,12 @@ async def test_telemetry_temps_empty_returns_empty_mapping(make_client: ClientTy
     [
         pytest.param(
             True,
-            (
-                "/api/diagnostics/system/system_resources",
-                "/api/diagnostics/system/system_time",
-                "/api/diagnostics/cpu_usage/get_c_p_u_type",
-                "/api/diagnostics/system/system_disk",
-                "/api/diagnostics/system/system_temperature",
-            ),
+            SNAKE_CASE_PATHS,
             id="snake-case",
         ),
         pytest.param(
             False,
-            (
-                "/api/diagnostics/system/systemResources",
-                "/api/diagnostics/system/systemTime",
-                "/api/diagnostics/cpu_usage/getCPUType",
-                "/api/diagnostics/system/systemDisk",
-                "/api/diagnostics/system/systemTemperature",
-            ),
+            CAMEL_CASE_PATHS,
             id="camel-case",
         ),
     ],
@@ -695,18 +699,7 @@ async def test_telemetry_switched_endpoints_follow_selected_case(
         await client._get_telemetry_temps()
 
         requested = {url.removeprefix(client._url) for _method, url, _body in router.requests}
-        other_style = {
-            "/api/diagnostics/system/system_resources",
-            "/api/diagnostics/system/system_time",
-            "/api/diagnostics/cpu_usage/get_c_p_u_type",
-            "/api/diagnostics/system/system_disk",
-            "/api/diagnostics/system/system_temperature",
-            "/api/diagnostics/system/systemResources",
-            "/api/diagnostics/system/systemTime",
-            "/api/diagnostics/cpu_usage/getCPUType",
-            "/api/diagnostics/system/systemDisk",
-            "/api/diagnostics/system/systemTemperature",
-        } - set(endpoints)
+        other_style = {*SNAKE_CASE_PATHS, *CAMEL_CASE_PATHS} - set(endpoints)
         assert set(endpoints) <= requested
         assert not requested & other_style
     finally:
