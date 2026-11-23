@@ -7,10 +7,56 @@ on:
       - completed
 
 jobs:
+  authorize-coverage-publication:
+    name: authorize coverage publication
+    if: >-
+      github.event.workflow_run.event == 'pull_request' ||
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      authorized: ${{ steps.authorize.outputs.authorized }}
+    steps:
+      - name: Verify source workflow result
+        id: authorize
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${CONCLUSION}" == "success" ]]; then
+            echo "authorized=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [[ "${CONCLUSION}" != "failure" ]]; then
+            echo "authorized=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # workflow_run.conclusion includes every job, including the aiohttp
+          # floor job. Permit coverage only when the locked test job
+          # succeeded in this exact attempt. This read-only check uses trusted
+          # workflow_run metadata and does not check out source code.
+          test -n "${RUN_ATTEMPT}"
+          authorized="$(gh api --paginate --slurp \
+            "repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}/jobs?per_page=100" \
+            | jq '[.[] | .jobs[]? | select(.name == "pytest check and post coverage")]
+              | length == 1 and .[0].status == "completed" and .[0].conclusion == "success"')"
+          echo "authorized=${authorized}" >> "${GITHUB_OUTPUT}"
+
   test:
     name: pytest post coverage
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    needs: authorize-coverage-publication
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      needs.authorize-coverage-publication.outputs.authorized == 'true'
     permissions:
       # Gives the action the necessary permissions for publishing new
       # comments in pull requests.
@@ -36,9 +82,10 @@ jobs:
     name: pytest publish default coverage
     if: >-
       github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.conclusion == 'success' &&
+      needs.authorize-coverage-publication.outputs.authorized == 'true' &&
       github.event.workflow_run.head_branch == github.event.repository.default_branch &&
       github.event.workflow_run.head_repository.full_name == github.repository
+    needs: authorize-coverage-publication
     runs-on: ubuntu-latest
     concurrency:
       group: pytest-default-coverage-${{ github.event.repository.default_branch }}
