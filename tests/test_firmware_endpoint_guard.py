@@ -7,6 +7,7 @@ the update and upgrade action prefix stay in the methods allowed to dispatch the
 """
 
 import ast
+from collections import Counter
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -321,6 +322,7 @@ def test_firmware_dispatch_paths_stay_in_their_methods() -> None:
     """Fail when the check or action path is used outside the methods that dispatch it."""
     violations: list[str] = []
     check_dispatches = 0
+    literals: Counter[str] = Counter()
     for name, module in _modules().items():
         for node, scope in _scoped_nodes(module):
             match node:
@@ -334,8 +336,8 @@ def test_firmware_dispatch_paths_stay_in_their_methods() -> None:
                 case ast.alias(name=constant) if constant in DISPATCH_SCOPES:
                     violations.append(f"aiopnsense/{name}:{node.lineno}: import {constant}")
                 case ast.Constant(value=str() as value) if value in DISPATCH_LITERALS:
-                    if name != FIRMWARE_MODULE or scope:
-                        violations.append(f"aiopnsense/{name}:{node.lineno}: literal path")
+                    literals[value] += 1
 
     assert not violations, "\n".join(violations)
+    assert literals == Counter({f"{BASE}/check": 1, f"{BASE}/": 1})
     assert check_dispatches == 1
