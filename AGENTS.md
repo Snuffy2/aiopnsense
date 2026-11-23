@@ -34,6 +34,12 @@
 
 ## Local tooling note
 
+- In a worktree, the main checkout's virtualenv is `$MAIN_CHECKOUT/.venv`, with `MAIN_CHECKOUT` resolved as below (also works in the main checkout itself):
+
+  ```sh
+  MAIN_CHECKOUT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+  ```
+
 - For test runs without worktree artifacts, use `PYTHONDONTWRITEBYTECODE=1 pytest --no-cov -p no:cacheprovider -o addopts=""`.
 - The main checkout's venv installs `aiopnsense` editable from the main checkout. `pytest` run through it from a worktree imports the worktree's code, but ad-hoc scripts and probes (`python -c`, scratch scripts) import the main checkout. Run them with `PYTHONPATH` set to the worktree root and check `aiopnsense.__file__` before trusting the result.
 - After changing docs, public API docstrings or `docs/source/api`, run `prek run --all-files --hook-stage manual docs-build` (without `--all-files` prek stashes unstaged edits and builds only the staged tree). It builds the docs with warnings as errors, as Read the Docs does, and installs the `docs` extra from `uv.lock` on first use.
@@ -64,10 +70,9 @@
 
 - If `scripts/aiopnsense.env` exists in the main checkout, the live scripts may be used for live tests.
 - The env file is gitignored, so a worktree does not have its own copy. Its absence from a worktree does not mean live access is unavailable. Pass the main checkout's file with `--env-file`, and never copy it into a worktree or print, log, or commit its contents.
-- From a worktree root, run a live script like this. `PYTHONPATH` makes `aiopnsense_dump.py` import the worktree's code:
+- From a worktree root, with `MAIN_CHECKOUT` set as in the [Local tooling note](#local-tooling-note), run a live script like this. `PYTHONPATH` makes `aiopnsense_dump.py` import the worktree's code:
 
   ```sh
-  MAIN_CHECKOUT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
   PYTHONPATH="$PWD" "$MAIN_CHECKOUT/.venv/bin/python" scripts/opnsense_api_call.py \
     --env-file "$MAIN_CHECKOUT/scripts/aiopnsense.env" \
     --method get --endpoint /api/core/firmware/status
