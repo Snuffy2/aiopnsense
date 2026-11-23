@@ -9,9 +9,9 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from aiopnsense import OPNsenseClient
+from aiopnsense._endpoint_outcome import _EndpointOutcome
 from aiopnsense.exceptions import OPNsenseConnectionError
-from aiopnsense.system import SYSTEM_TIME_ENDPOINT
-from tests.conftest import make_mock_session_client
+from tests.conftest import make_mock_session_client, stub_endpoint_outcome
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -536,25 +536,24 @@ async def test_get_speedtest_survives_failed_system_time_lookup(
         )
 
         async def fake_get(path: str) -> dict[str, Any]:
-            """Fail the system-time request and return the stat payload otherwise.
+            """Return the canned showstat payload.
 
             Args:
                 path (str): API endpoint requested by the getter.
 
             Returns:
                 dict[str, Any]: Canned showstat payload.
-
-            Raises:
-                OPNsenseConnectionError: For the system-time endpoint.
             """
-            if path == SYSTEM_TIME_ENDPOINT:
-                raise OPNsenseConnectionError("system time unavailable")
             return {
                 "samples": 10717,
                 "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
             }
 
         client._safe_dict_get = AsyncMock(side_effect=fake_get)
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.transient(OPNsenseConnectionError("system time unavailable")),
+        )
 
         result = await client.get_speedtest()
 
