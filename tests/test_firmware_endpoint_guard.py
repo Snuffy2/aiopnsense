@@ -240,38 +240,52 @@ async def test_public_probe_blocks_info_request(
     _assert_nothing_sent(session)
 
 
+LOCAL_URL = "http://localhost"
+# yarl rejects this port, so the guard cannot judge the path and must pass the request on.
+UNPARSABLE_URL = "http://localhost:notaport"
+
+
 @pytest.mark.parametrize(
-    ("site", "path"),
+    ("url", "site", "path"),
     [
-        ("get", f"{BASE}/status"),
-        ("probe-get", f"{BASE}/status"),
-        ("firmware-get", f"{BASE}/status"),
-        ("get", f"{BASE}/running"),
-        ("get", f"{BASE}/upgradestatus"),
-        ("post", f"{BASE}/upgradestatus"),
-        ("post", f"{BASE}/changelog/26.7.9"),
-        ("post", f"{BASE}/changelog/info"),
-        ("get", f"{BASE}/information"),
-        ("get", "/api/core/service/info"),
-        ("post", "/api/core/service/status"),
-        ("firmware-post", f"{BASE}/update"),
+        (LOCAL_URL, "get", f"{BASE}/status"),
+        (LOCAL_URL, "probe-get", f"{BASE}/status"),
+        (LOCAL_URL, "firmware-get", f"{BASE}/status"),
+        (LOCAL_URL, "get", f"{BASE}/running"),
+        (LOCAL_URL, "get", f"{BASE}/upgradestatus"),
+        (LOCAL_URL, "post", f"{BASE}/upgradestatus"),
+        (LOCAL_URL, "post", f"{BASE}/changelog/26.7.9"),
+        (LOCAL_URL, "post", f"{BASE}/changelog/info"),
+        (LOCAL_URL, "get", f"{BASE}/information"),
+        (LOCAL_URL, "get", "/api/core/service/info"),
+        (LOCAL_URL, "post", "/api/core/service/status"),
+        (LOCAL_URL, "firmware-post", f"{BASE}/update"),
+        (LOCAL_URL, "get", BASE),
+        (LOCAL_URL, "post", BASE),
+        (LOCAL_URL, "get", f"{BASE}/"),
+        (LOCAL_URL, "get", "/api/core"),
+        (LOCAL_URL, "post", "/api/core"),
+        (LOCAL_URL, "get", "/"),
+        (UNPARSABLE_URL, "get", f"{BASE}/{INFO_ACTION}"),
     ],
 )
-async def test_boundary_allows_other_requests(
+async def test_boundary_sends_other_requests_unchanged(
     make_client: Callable[..., aiopnsense.OPNsenseClient],
     fake_response_factory: Callable[..., Any],
+    url: str,
     site: str,
     path: str,
 ) -> None:
-    """Send permitted firmware requests and similarly named paths unchanged.
+    """Send each request the guard permits to the session at the URL the client built.
 
     Args:
         make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
         fake_response_factory (Callable[..., Any]): Builds fake HTTP responses.
+        url (str): Base URL the client is built with.
         site (str): Request site under test.
-        path (str): Permitted path.
+        path (str): Request path that the guard must not block.
     """
-    client, session = make_mock_session_client(make_client)
+    client, session = make_mock_session_client(make_client, url=url)
     client.toggle_throwing_errors(True)
     method = session.post if site in POST_SITES else session.get
     method.return_value = fake_response_factory(json_payload={"status": "ok"})
@@ -279,7 +293,7 @@ async def test_boundary_allows_other_requests(
     await _send_sites(client)[site](path)
 
     method.assert_called_once()
-    assert method.call_args.args == (f"http://localhost{path}",)
+    assert method.call_args.args == (f"{url}{path}",)
 
 
 def _modules() -> dict[str, ast.Module]:
@@ -376,10 +390,22 @@ def test_only_the_check_method_may_allow_a_firmware_check() -> None:
 
 
 def test_update_and_upgrade_paths_stay_in_the_install_methods() -> None:
-    """Fail when the action prefix or a literal update path appears anywhere else."""
+    """Fail when the action prefix or a literal update path appears outside the install methods.
+
+    A literal is allowed only in ``firmware.py`` inside ``ACTION_SCOPES``. Docstrings are
+    ignored everywhere, because they describe a path without requesting it.
+    """
     violations: list[str] = []
     for name, module in _modules().items():
-        for node, scope in _scoped_nodes(module):
+        scoped = list(_scoped_nodes(module))
+        docstrings = {
+            id(node.value)
+            for node, _ in scoped
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        }
+        for node, scope in scoped:
             match node:
                 case (
                     ast.Name(id="FIRMWARE_ACTION_ENDPOINT_PREFIX", ctx=ast.Load())
@@ -387,7 +413,10 @@ def test_update_and_upgrade_paths_stay_in_the_install_methods() -> None:
                 ):
                     if name != FIRMWARE_MODULE or scope not in ACTION_SCOPES:
                         violations.append(f"aiopnsense/{name}:{node.lineno}: action prefix")
-                case ast.Constant(value=str() as value) if ACTION_LITERAL.search(value):
-                    violations.append(f"aiopnsense/{name}:{node.lineno}: literal action path")
+                case ast.Constant(value=str() as value) if (
+                    ACTION_LITERAL.search(value) and id(node) not in docstrings
+                ):
+                    if name != FIRMWARE_MODULE or scope not in ACTION_SCOPES:
+                        violations.append(f"aiopnsense/{name}:{node.lineno}: literal action path")
 
     assert not violations, "\n".join(violations)
