@@ -14,7 +14,6 @@ import pytest
 from aiopnsense import (
     OPNsenseError,
     OPNsenseInvalidArgument,
-    client_queue as aiopnsense_client_queue,
     client_transport as aiopnsense_client_transport,
     unbound as aiopnsense_unbound,
     vpn as aiopnsense_vpn,
