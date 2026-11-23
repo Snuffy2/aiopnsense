@@ -1,6 +1,8 @@
 """Tests for client transport helpers and HTTP response handling."""
 
 from collections.abc import Callable, MutableMapping
+import contextlib
+from dataclasses import dataclass
 import json
 import logging
 from types import TracebackType
@@ -15,15 +17,19 @@ from aiopnsense.const import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
+    OPNsenseInvalidArgument,
     OPNsenseInvalidAuth,
     OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
+from aiopnsense.helpers import _is_request_error_logged
 from tests.conftest import (
     FakeResponse,
     FakeStreamResponseFactory,
     MakeClientFactory,
+    MalformedJSONResponse,
     make_mock_session_client,
+    make_router_client,
 )
 
 
@@ -1361,3 +1367,478 @@ async def test_status_check_does_not_read_a_non_json_success_body(
         assert body_reads == []
     finally:
         await client.async_close()
+
+
+_PATH = "/api/x"
+_BLOCKED_PATH = "/api/core/firmware/info"
+_OK_BODY = {"ok": True}
+_PERMISSION_MESSAGE = (
+    "Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access"
+)
+
+
+@dataclass(frozen=True)
+class _RouterReply:
+    """What the Router does for one request and what each request form does with it.
+
+    Attributes:
+        route (Any): Fake Router route value for the request.
+        path (str): Requested API path.
+        plain_error (type[OPNsenseError] | None): Public error a plain request raises
+            with ``throw_errors`` on, or ``None`` when the request succeeds.
+        status (int | None): HTTP status of the raised connection error, when it has one.
+        outcome (str): Outcome status of an outcome request: ``data``, ``absent`` or
+            ``transient``.
+        outcome_error (type[OPNsenseError] | None): Error the outcome carries.
+        plain_log (str | None): Failure message of a plain request, with ``{op}`` for
+            the operation name, or ``None`` when nothing is logged.
+        outcome_log (str | None): Failure message of an outcome request.
+        has_cause (bool): Whether the original transport error is the ``__cause__``.
+    """
+
+    route: Any
+    path: str = _PATH
+    plain_error: type[OPNsenseError] | None = None
+    status: int | None = None
+    outcome: str = "data"
+    outcome_error: type[OPNsenseError] | None = None
+    plain_log: str | None = None
+    outcome_log: str | None = None
+    has_cause: bool = False
+
+
+_HTTP_LOG = "Error in {op} (called by t). Path: http://localhost/api/x. Response %d: ERR"
+_TRANSPORT_LOG = "Client error in {op} (called by t). Path: /api/x. %s"
+_DOWN = aiohttp.ClientConnectionError("down")
+_SLOW = TimeoutError("slow")
+
+_REPLIES: dict[str, _RouterReply] = {
+    "2xx": _RouterReply(_OK_BODY),
+    "401": _RouterReply(
+        401,
+        plain_error=OPNsenseInvalidAuth,
+        status=401,
+        outcome="transient",
+        outcome_error=OPNsenseInvalidAuth,
+        plain_log=_HTTP_LOG % 401,
+        outcome_log=_HTTP_LOG % 401,
+    ),
+    "403": _RouterReply(
+        403,
+        plain_error=OPNsensePrivilegeMissing,
+        status=403,
+        outcome="absent",
+        outcome_error=OPNsensePrivilegeMissing,
+        plain_log="Permission Error in {op} (called by t). Path: http://localhost/api/x. "
+        + _PERMISSION_MESSAGE,
+        outcome_log="Permission Error in {op} (called by t). Path: http://localhost/api/x. "
+        + _PERMISSION_MESSAGE,
+    ),
+    "404": _RouterReply(
+        404,
+        plain_error=OPNsenseConnectionError,
+        status=404,
+        outcome="absent",
+        plain_log=_HTTP_LOG % 404,
+    ),
+    "500": _RouterReply(
+        500,
+        plain_error=OPNsenseConnectionError,
+        status=500,
+        outcome="transient",
+        outcome_error=OPNsenseConnectionError,
+        plain_log=_HTTP_LOG % 500,
+        outcome_log=_HTTP_LOG % 500,
+    ),
+    "client-error": _RouterReply(
+        _DOWN,
+        plain_error=OPNsenseConnectionError,
+        outcome="transient",
+        outcome_error=OPNsenseConnectionError,
+        plain_log=_TRANSPORT_LOG % "ClientConnectionError: down",
+        outcome_log=_TRANSPORT_LOG % "ClientConnectionError: down",
+        has_cause=True,
+    ),
+    "timeout": _RouterReply(
+        _SLOW,
+        plain_error=OPNsenseTimeoutError,
+        outcome="transient",
+        outcome_error=OPNsenseTimeoutError,
+        plain_log=_TRANSPORT_LOG % "TimeoutError: slow",
+        outcome_log=_TRANSPORT_LOG % "TimeoutError: slow",
+        has_cause=True,
+    ),
+    "adr-0002-guard": _RouterReply(
+        _OK_BODY,
+        path=_BLOCKED_PATH,
+        plain_error=OPNsenseInvalidArgument,
+        outcome="transient",
+        outcome_error=OPNsenseInvalidArgument,
+        plain_log="Client error in {op} (called by t). Path: /api/core/firmware/info. "
+        "_BlockedFirmwareRequest: Blocked ",
+        outcome_log="Client error in {op} (called by t). Path: /api/core/firmware/info. "
+        "_BlockedFirmwareRequest: Blocked ",
+        has_cause=True,
+    ),
+}
+"""Response matrix of the transport spec, keyed by Router behavior."""
+
+
+async def _send(client: Any, form: str, method: str, path: str) -> Any:
+    """Send one immediate request in the plain or outcome form.
+
+    Args:
+        client (Any): Client whose transport method is invoked.
+        form (str): ``plain`` or ``outcome``.
+        method (str): ``get`` or ``post``.
+        path (str): API path to request.
+
+    Returns:
+        Any: Payload of a plain request, or the ``_EndpointOutcome`` of an outcome request.
+    """
+    request = getattr(client, f"_do_{method}" + ("_outcome" if form == "outcome" else ""))
+    if method == "get":
+        return await request(path, "t")
+    return await request(path, {"a": 1}, "t")
+
+
+def _failure_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """Return the warning and error records the client logged.
+
+    Args:
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+
+    Returns:
+        list[logging.LogRecord]: Records at WARNING or above.
+    """
+    return [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["empty", "throw"])
+@pytest.mark.parametrize("method", ["get", "post"])
+@pytest.mark.parametrize("form", ["plain", "outcome"])
+@pytest.mark.parametrize("reply_name", list(_REPLIES))
+async def test_response_matrix_is_the_same_for_every_request_form(
+    reply_name: str,
+    form: str,
+    method: str,
+    throw_errors: bool,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Pin the result, failure log and outage state of each Router response.
+
+    Args:
+        reply_name (str): Key of ``_REPLIES`` selecting the Router behavior.
+        form (str): ``plain`` or ``outcome`` request.
+        method (str): ``get`` or ``post``.
+        throw_errors (bool): Whether the client raises public errors.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    reply = _REPLIES[reply_name]
+    client, router = make_router_client(
+        make_client, {(method.upper(), reply.path): reply.route}, throw_errors=throw_errors
+    )
+    await client.reset_query_counts()
+    expected_log = reply.plain_log if form == "plain" else reply.outcome_log
+    operation = f"do_{method}" + ("_outcome" if form == "outcome" else "")
+
+    with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+        if form == "plain" and throw_errors and reply.plain_error is not None:
+            with pytest.raises(reply.plain_error) as raised:
+                await _send(client, form, method, reply.path)
+            if reply.status is not None:
+                assert getattr(raised.value, "status", None) == reply.status
+            if reply.has_cause:
+                assert raised.value.__cause__ is not None
+                assert type(raised.value.__cause__).__name__ in {
+                    "ClientConnectionError",
+                    "TimeoutError",
+                    "_BlockedFirmwareRequest",
+                }
+            assert _is_request_error_logged(raised.value)
+        else:
+            result = await _send(client, form, method, reply.path)
+            if form == "plain":
+                assert result == (_OK_BODY if reply.plain_error is None else None)
+            else:
+                assert result.status.value == reply.outcome
+                assert (type(result.error) if result.error else None) is reply.outcome_error
+                if reply.outcome == "data":
+                    assert result.payload == _OK_BODY
+                if reply.has_cause:
+                    assert result.error is not None
+                    assert result.error.__cause__ is not None
+
+    failures = _failure_records(caplog)
+    if expected_log is None:
+        assert failures == []
+        assert client._request_outages == {}
+    else:
+        assert [record.levelno for record in failures] == [logging.ERROR]
+        message = failures[0].getMessage()
+        expected = expected_log.format(op=operation)
+        if reply_name == "adr-0002-guard":
+            assert message.startswith(expected)
+            assert router.count() == 0
+        else:
+            assert message == expected
+        assert client._request_outages == {(method.upper(), reply.path, "request"): None}
+    assert await client.get_query_counts() == 1
+
+
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["empty", "throw"])
+@pytest.mark.parametrize("form", ["plain", "outcome"])
+@pytest.mark.parametrize("method", ["get", "post"])
+async def test_undecodable_success_body_propagates_in_every_request_form(
+    method: str,
+    form: str,
+    throw_errors: bool,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A 2xx response with a body that is not JSON raises the decode error and reports nothing.
+
+    Args:
+        method (str): ``get`` or ``post``.
+        form (str): ``plain`` or ``outcome`` request.
+        throw_errors (bool): Whether the client raises public errors.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    client, _router = make_router_client(
+        make_client, {(method.upper(), _PATH): MalformedJSONResponse()}, throw_errors=throw_errors
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="aiopnsense"), pytest.raises(json.JSONDecodeError):
+        await _send(client, form, method, _PATH)
+
+    assert _failure_records(caplog) == []
+    assert client._request_outages == {}
+
+
+def _scripted(*replies: Any) -> Callable[..., Any]:
+    """Build a fake Router route that answers successive requests in turn.
+
+    Args:
+        replies (Any): Route values, used in order. The last one repeats.
+
+    Returns:
+        Callable[..., Any]: Route callable for ``FakeRouter``.
+    """
+    remaining = list(replies)
+
+    def reply(**_kwargs: Any) -> Any:
+        """Return the next scripted reply.
+
+        Args:
+            _kwargs (Any): Request parameters, unused.
+
+        Returns:
+            Any: Next route value.
+        """
+        return remaining.pop(0) if len(remaining) > 1 else remaining[0]
+
+    return reply
+
+
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["empty", "throw"])
+@pytest.mark.parametrize("method", ["get", "post"])
+@pytest.mark.parametrize(
+    ("form", "failure"),
+    [
+        pytest.param("plain", 500, id="plain-500"),
+        pytest.param("outcome", 500, id="outcome-500"),
+        pytest.param("plain", 404, id="plain-404"),
+    ],
+)
+async def test_repeated_failure_logs_at_debug_and_recovery_is_reported(
+    form: str,
+    failure: int,
+    method: str,
+    throw_errors: bool,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A repeated failure is suppressed to DEBUG, then a success reports recovery.
+
+    Args:
+        form (str): ``plain`` or ``outcome`` request.
+        failure (int): HTTP status of the failing replies.
+        method (str): ``get`` or ``post``.
+        throw_errors (bool): Whether the client raises public errors.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    client, _router = make_router_client(
+        make_client,
+        {(method.upper(), _PATH): _scripted(failure, failure, _OK_BODY, failure)},
+        throw_errors=throw_errors,
+    )
+    levels: list[int] = []
+    with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+        for _attempt in range(4):
+            caplog.clear()
+            with contextlib.suppress(OPNsenseError):
+                await _send(client, form, method, _PATH)
+            levels.extend(
+                record.levelno
+                for record in caplog.records
+                if record.getMessage().startswith("Error in")
+                or " recovered for " in record.getMessage()
+            )
+
+    assert levels == [logging.ERROR, logging.DEBUG, logging.INFO, logging.ERROR]
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+@pytest.mark.parametrize(
+    ("steps", "recovered", "outage_remains"),
+    [
+        pytest.param([("plain", 500), ("outcome", _OK_BODY)], True, False, id="plain-then-outcome"),
+        pytest.param([("outcome", 500), ("plain", _OK_BODY)], True, False, id="outcome-then-plain"),
+        pytest.param(
+            [("plain", 500), ("outcome", 404)], False, True, id="outcome-404-keeps-outage"
+        ),
+        pytest.param([("outcome", 404)], False, False, id="outcome-404-sets-no-outage"),
+    ],
+)
+async def test_plain_and_outcome_requests_share_one_outage_per_method_path_and_phase(
+    steps: list[tuple[str, Any]],
+    recovered: bool,
+    outage_remains: bool,
+    method: str,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A plain failure and an outcome success clear each other, and an outcome 404 does not.
+
+    Args:
+        steps (list[tuple[str, Any]]): Request form and Router reply of each request in turn.
+        recovered (bool): Whether a recovery message is logged.
+        outage_remains (bool): Whether an outage is still recorded at the end.
+        method (str): ``get`` or ``post``.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    client, _router = make_router_client(
+        make_client, {(method.upper(), _PATH): _scripted(*(reply for _form, reply in steps))}
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+        for form, _reply in steps:
+            await _send(client, form, method, _PATH)
+
+    assert len([r for r in caplog.records if " recovered for " in r.getMessage()]) == int(recovered)
+    assert bool(client._request_outages) is outage_remains
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+@pytest.mark.parametrize("form", ["plain", "outcome"])
+async def test_request_shape_is_the_same_for_every_request_form(
+    form: str, method: str, make_client: MakeClientFactory
+) -> None:
+    """Each request carries the URL, authentication, TLS setting, default timeout and JSON body.
+
+    Args:
+        form (str): ``plain`` or ``outcome`` request.
+        method (str): ``get`` or ``post``.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    sent: list[dict[str, Any]] = []
+
+    def reply(**kwargs: Any) -> Any:
+        """Record the request parameters and answer successfully.
+
+        Args:
+            kwargs (Any): Request parameters passed to the session.
+
+        Returns:
+            Any: A JSON body.
+        """
+        sent.append(kwargs)
+        return _OK_BODY
+
+    client, router = make_router_client(
+        make_client,
+        {(method.upper(), _PATH): reply},
+        username="user",
+        password="secret",
+        opts={"verify_ssl": False},
+    )
+
+    await _send(client, form, method, _PATH)
+
+    assert router.count(method, _PATH) == 1
+    [kwargs] = sent
+    assert (kwargs["auth"].login, kwargs["auth"].password) == ("user", "secret")
+    assert kwargs["ssl"] is False
+    assert kwargs["timeout"].total == DEFAULT_REQUEST_TIMEOUT_SECONDS
+    if method == "post":
+        assert kwargs["json"] == {"a": 1}
+    else:
+        assert "json" not in kwargs
+
+
+async def test_post_without_payload_sends_an_explicit_empty_json_body(
+    make_client: MakeClientFactory,
+) -> None:
+    """A POST with no payload still passes ``json=None`` to the session.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    sent: list[dict[str, Any]] = []
+
+    def reply(**kwargs: Any) -> Any:
+        """Record the request parameters and answer successfully.
+
+        Args:
+            kwargs (Any): Request parameters passed to the session.
+
+        Returns:
+            Any: A JSON body.
+        """
+        sent.append(kwargs)
+        return _OK_BODY
+
+    client, _router = make_router_client(make_client, {("POST", _PATH): reply})
+
+    await client._do_post(_PATH)
+    await client._do_post_outcome(_PATH)
+
+    assert [kwargs["json"] for kwargs in sent] == [None, None]
+    assert all("json" in kwargs for kwargs in sent)
+
+
+async def test_per_call_timeout_reaches_the_request_and_bypasses_the_queue(
+    make_client: MakeClientFactory,
+) -> None:
+    """The timeout of ``_safe_dict_get_with_timeout`` is the request's total timeout, sent directly.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    timeouts: list[float | None] = []
+
+    def reply(**kwargs: Any) -> Any:
+        """Record the request timeout and answer successfully.
+
+        Args:
+            kwargs (Any): Request parameters passed to the session.
+
+        Returns:
+            Any: A JSON body.
+        """
+        timeouts.append(kwargs["timeout"].total)
+        return _OK_BODY
+
+    client, _router = make_router_client(make_client, {("GET", _PATH): reply})
+
+    assert await client._safe_dict_get_with_timeout(_PATH, 180) == _OK_BODY
+    assert client._workers == []
+    assert await client._safe_dict_get(_PATH) == _OK_BODY
+
+    assert timeouts == [180, DEFAULT_REQUEST_TIMEOUT_SECONDS]
+    assert client._workers != []
