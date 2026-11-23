@@ -9,7 +9,7 @@ import warnings
 
 import aiohttp
 
-from .client_endpoint import ClientEndpointMixin, _EndpointObservation
+from .client_endpoint import ClientEndpointMixin
 from .client_queue import ClientQueueMixin
 from .client_toggle import ClientToggleMixin
 from .client_transport import ClientTransportMixin
@@ -96,8 +96,6 @@ class ClientBaseMixin(
         self._endpoint_checked_at: dict[str, datetime] = {}
         self._endpoint_permission_denied: set[str] = set()
         self._endpoint_cache_generation: int = 0
-        self._endpoint_observation_id: int = 0
-        self._endpoint_observations: dict[str, _EndpointObservation] = {}
         self._request_outages: dict[tuple[str, str, str], int | None] = {}
         self._endpoint_cache_ttl_seconds = DEFAULT_CACHE_TTL_SECONDS
         self._rest_api_query_count = 0

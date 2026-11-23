@@ -1,12 +1,11 @@
 """Tests for `aiopnsense.smart`."""
 
 from collections.abc import Callable
-import logging
 from typing import Any
 
 import pytest
 
-from aiopnsense import OPNsenseClient, OPNsenseConnectionError, OPNsensePrivilegeMissing
+from aiopnsense import OPNsenseClient
 from tests.conftest import install_fake_router, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -58,18 +57,6 @@ def _result(operation: str) -> Any:
         Any: Value the public method returns for a present endpoint.
     """
     return [SMART_DEVICE] if operation == "list" else SMART_INFO_OUTPUT
-
-
-def _empty(operation: str) -> Any:
-    """Return the public result of a SMART read whose plugin is unavailable.
-
-    Args:
-        operation (str): ``list`` for the device list or ``info`` for one device's details.
-
-    Returns:
-        Any: Empty list for the device list, empty mapping for device info.
-    """
-    return [] if operation == "list" else {}
 
 
 async def _read(client: OPNsenseClient, operation: str) -> Any:
@@ -183,79 +170,6 @@ async def test_get_smart_info_wraps_non_mapping_output(make_client: ClientType) 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["list", "info"])
-@pytest.mark.parametrize("failure", PERMANENT_FAILURES)
-async def test_smart_read_returns_empty_value_when_absent_or_transient(
-    make_client: ClientType, operation: str, failure: Any
-) -> None:
-    """SMART reads return their empty value for absent and transient endpoints, one POST each.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        operation (str): ``list`` for the device list or ``info`` for one device's details.
-        failure (Any): Router response that models the absent or failing endpoint.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("POST", _endpoint(operation)): failure})
-    try:
-        assert await _read(client, operation) == _empty(operation)
-        assert router.count() == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["list", "info"])
-@pytest.mark.parametrize(
-    ("failure", "expected_error"),
-    [
-        pytest.param(403, OPNsensePrivilegeMissing, id="forbidden"),
-        pytest.param(500, OPNsenseConnectionError, id="server-error"),
-        pytest.param(TimeoutError("timed out"), OPNsenseConnectionError, id="timeout"),
-    ],
-)
-async def test_smart_read_raises_for_forbidden_or_transient_when_throwing(
-    make_client: ClientType, operation: str, failure: Any, expected_error: type[Exception]
-) -> None:
-    """In throw mode a forbidden or transient SMART read raises a public error.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        operation (str): ``list`` for the device list or ``info`` for one device's details.
-        failure (Any): Router response that models the failing endpoint.
-        expected_error (type[Exception]): Public exception type expected from the call.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("POST", _endpoint(operation)): failure})
-    client.toggle_throwing_errors(True)
-    try:
-        with pytest.raises(expected_error):
-            await _read(client, operation)
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["list", "info"])
-async def test_smart_missing_plugin_does_not_raise_in_throw_mode(
-    make_client: ClientType, operation: str
-) -> None:
-    """A missing SMART plugin (404) is an empty result, not an error, even in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        operation (str): ``list`` for the device list or ``info`` for one device's details.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("POST", _endpoint(operation)): 404})
-    client.toggle_throwing_errors(True)
-    try:
-        assert await _read(client, operation) == _empty(operation)
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["list", "info"])
 async def test_smart_present_endpoint_costs_one_post_per_read(
     make_client: ClientType, operation: str
 ) -> None:
@@ -279,147 +193,35 @@ async def test_smart_present_endpoint_costs_one_post_per_read(
         await client.async_close()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["list", "info"])
-@pytest.mark.parametrize("status", [404, 403])
-async def test_smart_absent_endpoint_is_cached_until_ttl_expires(
-    make_client: ClientType, operation: str, status: int
-) -> None:
-    """A missing or forbidden SMART endpoint is not requested again until the cache TTL expires.
+def _empty(operation: str) -> Any:
+    """Return the public result of a SMART read whose plugin is unavailable.
 
     Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         operation (str): ``list`` for the device list or ``info`` for one device's details.
-        status (int): HTTP status the Router returns while the endpoint is absent.
+
+    Returns:
+        Any: Empty list for the device list, empty mapping for device info.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("POST", _endpoint(operation)): status})
-    try:
-        assert await _read(client, operation) == _empty(operation)
-        assert await _read(client, operation) == _empty(operation)
-        assert router.count() == 1
-
-        client._endpoint_cache_ttl_seconds = 0
-        router.routes[("POST", _endpoint(operation))] = _payload(operation)
-        assert await _read(client, operation) == _result(operation)
-        assert router.count() == 2
-    finally:
-        await client.async_close()
+    return [] if operation == "list" else {}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["list", "info"])
-async def test_smart_endpoint_lost_after_success_is_recorded_as_absent(
-    make_client: ClientType, operation: str, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("failure", PERMANENT_FAILURES)
+async def test_smart_read_returns_empty_value_when_absent_or_transient(
+    make_client: ClientType, operation: str, failure: Any
 ) -> None:
-    """A 404 on a previously present SMART endpoint is cached as absent and logged quietly.
+    """SMART reads return their empty value for absent and transient endpoints, one POST each.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         operation (str): ``list`` for the device list or ``info`` for one device's details.
-        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client, session, routes={("POST", _endpoint(operation)): _payload(operation)}
-    )
-    try:
-        assert await _read(client, operation) == _result(operation)
-        router.routes[("POST", _endpoint(operation))] = 404
-        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
-            assert await _read(client, operation) == _empty(operation)
-            assert await _read(client, operation) == _empty(operation)
-        assert router.count() == 2
-        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["list", "info"])
-@pytest.mark.parametrize("failure", [500, TimeoutError("timed out")])
-async def test_smart_transient_failure_is_retried_and_warns_once(
-    make_client: ClientType, operation: str, failure: Any, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A transient SMART failure is not cached, is retried, and warns once per outage.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        operation (str): ``list`` for the device list or ``info`` for one device's details.
-        failure (Any): Router response that models the transient failure.
-        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
+        failure (Any): Router response that models the absent or failing endpoint.
     """
     client, session = make_mock_session_client(make_client)
     router = install_fake_router(client, session, routes={("POST", _endpoint(operation)): failure})
     try:
-        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
-            assert await _read(client, operation) == _empty(operation)
-            assert await _read(client, operation) == _empty(operation)
-            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-            assert len(warnings) == 1
-            assert router.count() == 2
-
-            router.routes[("POST", _endpoint(operation))] = _payload(operation)
-            assert await _read(client, operation) == _result(operation)
-        recovered = [r for r in caplog.records if r.levelno == logging.INFO]
-        assert len(recovered) == 1
-        assert "recovered" in recovered[0].getMessage()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["list", "info"])
-async def test_smart_cached_404_is_trusted_in_throw_mode(
-    make_client: ClientType, operation: str
-) -> None:
-    """A cached missing SMART endpoint stays an empty result in throw mode without a request.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        operation (str): ``list`` for the device list or ``info`` for one device's details.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("POST", _endpoint(operation)): 404})
-    try:
-        assert await _read(client, operation) == _empty(operation)
-        client.toggle_throwing_errors(True)
         assert await _read(client, operation) == _empty(operation)
         assert router.count() == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["list", "info"])
-@pytest.mark.parametrize(
-    ("throw_errors", "expected_requests"),
-    [
-        pytest.param(False, 1, id="default-mode-trusts-cached-403"),
-        pytest.param(True, 2, id="throw-mode-rechecks"),
-    ],
-)
-async def test_smart_cached_403_is_rechecked_only_in_throw_mode(
-    make_client: ClientType, operation: str, throw_errors: bool, expected_requests: int
-) -> None:
-    """A cached 403 is trusted in default mode but requested again, and raised, in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        operation (str): ``list`` for the device list or ``info`` for one device's details.
-        throw_errors (bool): Whether the client raises public errors.
-        expected_requests (int): POSTs the Router should see across two reads.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("POST", _endpoint(operation)): 403})
-    try:
-        assert await _read(client, operation) == _empty(operation)
-        client.toggle_throwing_errors(throw_errors)
-        if throw_errors:
-            with pytest.raises(OPNsensePrivilegeMissing):
-                await _read(client, operation)
-        else:
-            assert await _read(client, operation) == _empty(operation)
-        assert router.count() == expected_requests
     finally:
         await client.async_close()

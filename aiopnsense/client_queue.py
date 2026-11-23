@@ -1,15 +1,13 @@
 """Request queue helpers for OPNsenseClient."""
 
 import asyncio
-from collections.abc import Callable, Coroutine, MutableMapping
+from collections.abc import MutableMapping
 from dataclasses import dataclass
-from functools import partial
 import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _attempt
-from .client_endpoint import ClientEndpointMixin
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
 from .helpers import (
@@ -18,15 +16,6 @@ from .helpers import (
     _mark_request_error_logged,
     _redacted_exception_message,
 )
-
-_CALLER_WRAPPER_CODES = frozenset(
-    {
-        _attempt.__code__,
-        ClientEndpointMixin._fetch_endpoint_outcome.__code__,
-        ClientEndpointMixin._fetch_post_endpoint_outcome.__code__,
-    }
-)
-"""Code objects of helpers that sit between a public method and the queue."""
 
 
 @dataclass(slots=True)
@@ -174,67 +163,9 @@ class ClientQueueMixin:
             raise OPNsenseError("Event loop is not initialized")
         return self._loop
 
-    async def _run_cancellable_outcome_request(
-        self,
-        request: Callable[[], Coroutine[Any, Any, _EndpointOutcome]],
-        future: asyncio.Future[Any] | None,
-    ) -> _EndpointOutcome | None:
-        """Run an outcome request without retaining a worker after request cancellation.
-
-        Args:
-            request (Callable[[], Coroutine[Any, Any, _EndpointOutcome]]): Transport
-                request to dispatch after confirming its caller is still waiting.
-            future (asyncio.Future[Any] | None): Queue future owned by the requesting
-                caller, or ``None`` for a queue entry without a waiter.
-
-        Returns:
-            _EndpointOutcome | None: Request result, or ``None`` when the caller
-                cancels while it is in flight or the transport child is independently
-                cancelled.
-
-        Raises:
-            asyncio.CancelledError: If the queue worker is cancelled while closing.
-        """
-        if future is None:
-            return await request()
-
-        async def dispatch_if_waiting() -> _EndpointOutcome | None:
-            """Start transport only while its caller still awaits the result.
-
-            Returns:
-                _EndpointOutcome | None: Request result, or ``None`` if its
-                    caller cancelled before transport began.
-            """
-            if future.cancelled():
-                return None
-            return await request()
-
-        request_task = asyncio.create_task(dispatch_if_waiting())
-        try:
-            await asyncio.wait(
-                (request_task, future),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if future.cancelled():
-                request_task.cancel()
-                await asyncio.gather(request_task, return_exceptions=True)
-                return None
-            if request_task.cancelled():
-                future.cancel()
-                return None
-            return await request_task
-        except asyncio.CancelledError:
-            if not request_task.done():
-                request_task.cancel()
-            await asyncio.gather(request_task, return_exceptions=True)
-            raise
-
     @staticmethod
     def _get_caller_name() -> str:
-        """Return the first caller above the queue wrapper that is not a wrapper helper.
-
-        Frames of ``_attempt`` and the endpoint outcome helpers are skipped. The result
-        may be a private helper of the public method that started the request.
+        """Return the public caller above the queue wrapper.
 
         Returns:
             str: Function name used for diagnostics, or ``"Unknown"`` when frame
@@ -242,8 +173,8 @@ class ClientQueueMixin:
         """
         try:
             frame = sys._getframe(3)
-            while frame.f_code in _CALLER_WRAPPER_CODES and frame.f_back is not None:
-                frame = frame.f_back
+            if frame.f_code is _attempt.__code__:
+                frame = frame.f_back or frame
             return frame.f_code.co_name
         except ValueError, AttributeError:
             return "Unknown"
@@ -255,10 +186,6 @@ class ClientQueueMixin:
         payload: MutableMapping[str, Any] | None = None,
     ) -> Any:
         """Queue one API request and return its future result.
-
-        Cancelling the caller before dispatch causes the worker to skip a queued POST
-        or outcome read (``get_outcome``, ``get_text_outcome`` or ``post_outcome``).
-        Cancelling the caller while an outcome read is in flight cancels that read.
 
         Args:
             method (str): Internal request method handled by ``_process_queue``.
@@ -400,22 +327,11 @@ class ClientQueueMixin:
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "get_outcome":
-                    result = await self._run_cancellable_outcome_request(
-                        partial(self._do_get_outcome, path, caller),
-                        future,
-                    )
+                    result = await self._do_get_outcome(path, caller)
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "get_text_outcome":
-                    result = await self._run_cancellable_outcome_request(
-                        partial(
-                            self._do_get_outcome,
-                            path,
-                            caller,
-                            response_format="text",
-                        ),
-                        future,
-                    )
+                    result = await self._do_get_outcome(path, caller, response_format="text")
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "post":
@@ -423,10 +339,7 @@ class ClientQueueMixin:
                     if future is not None and not future.done():
                         future.set_result(result)
                 elif method == "post_outcome":
-                    result = await self._run_cancellable_outcome_request(
-                        partial(self._do_post_outcome, path, payload, caller),
-                        future,
-                    )
+                    result = await self._do_post_outcome(path, payload, caller)
                     if future is not None and not future.done():
                         future.set_result(result)
                 else:

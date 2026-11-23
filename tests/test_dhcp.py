@@ -2030,12 +2030,12 @@ async def test_neighbor_lookup_logs_failure_once_until_recovery_then_again(
     failures = [
         record
         for record in caplog.records
-        if record.getMessage().startswith("Transient GET failure")
+        if record.getMessage().startswith("Error in do_get_outcome")
     ]
     recoveries = [
         record for record in caplog.records if "GET request recovered for" in record.getMessage()
     ]
-    assert [record.levelname for record in failures] == ["WARNING", "DEBUG", "WARNING", "WARNING"]
+    assert [record.levelname for record in failures] == ["ERROR", "DEBUG", "ERROR", "ERROR"]
     assert [record.levelname for record in recoveries] == ["INFO", "INFO"]
 
 
@@ -2066,9 +2066,9 @@ async def test_neighbor_outage_logging_is_per_client(
     failures = [
         record
         for record in caplog.records
-        if record.getMessage().startswith("Transient GET failure")
+        if record.getMessage().startswith("Error in do_get_outcome")
     ]
-    assert [record.levelname for record in failures] == ["WARNING", "WARNING", "DEBUG"]
+    assert [record.levelname for record in failures] == ["ERROR", "ERROR", "DEBUG"]
 
 
 @pytest.mark.asyncio
@@ -2090,7 +2090,7 @@ async def test_throwing_neighbor_lookup_logs_transport_failure_once(
 
     failures = [record for record in caplog.records if record.levelname in ("WARNING", "ERROR")]
     assert len(failures) == 1
-    assert failures[0].getMessage().startswith("Transient GET failure")
+    assert failures[0].getMessage().startswith("Error in do_get_outcome")
 
 
 async def _fetch_entries(

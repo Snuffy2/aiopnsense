@@ -63,33 +63,11 @@ def _redacted_exception_message(error: Exception) -> str:
     """
     if isinstance(error, aiohttp.InvalidURL):
         return _INVALID_URL_ERROR_MESSAGE
-    return _redact_url_credentials(str(error))
-
-
-def _redact_url_credentials(message: str) -> str:
-    """Redact credentials embedded in URLs in a log message.
-
-    Args:
-        message (str): Text that may contain URLs with credentials.
-
-    Returns:
-        str: Text with URL credentials redacted.
-    """
-
-    def redact_authority(match: re.Match[str]) -> str:
-        """Replace URL userinfo while preserving its established placeholder shape.
-
-        Args:
-            match (re.Match[str]): Scheme, URL userinfo and host from the expression.
-
-        Returns:
-            str: URL authority with its userinfo redacted.
-        """
-        userinfo = match.group(2)[:-1]
-        replacement = "<redacted>:<redacted>" if ":" in userinfo else "<redacted>"
-        return f"{match.group(1)}{replacement}@{match.group(3)}"
-
-    return re.sub(r"(://)([^/?#\s]*@)([^@/?#\s]*)", redact_authority, message)
+    return re.sub(
+        r"(://)([^:/@\s]+):([^@\s]+)@",
+        r"\1<redacted>:<redacted>@",
+        str(error),
+    )
 
 
 def _log_request_failure(
@@ -146,7 +124,7 @@ def _log_request_recovery(
     key = (method.upper(), path, phase)
     if key in client._request_outages:
         del client._request_outages[key]
-        _LOGGER.info("%s %s recovered for %s", method.upper(), phase, _redact_url_credentials(path))
+        _LOGGER.info("%s %s recovered for %s", method.upper(), phase, path)
 
 
 def _mark_request_error_logged(error: BaseException) -> None:

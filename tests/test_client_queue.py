@@ -17,13 +17,7 @@ from aiopnsense import (
     unbound as aiopnsense_unbound,
     vpn as aiopnsense_vpn,
 )
-from aiopnsense.exceptions import (
-    OPNsenseConnectionError,
-    OPNsenseInvalidAuth,
-    OPNsenseInvalidURL,
-    OPNsensePrivilegeMissing,
-)
-from aiopnsense.speedtest import SPEEDTEST_SHOW_LOG_ENDPOINT
+from aiopnsense.exceptions import OPNsenseConnectionError, OPNsenseInvalidURL
 from tests.conftest import (
     FakeResponse,
     FakeStreamResponseFactory,
@@ -32,7 +26,6 @@ from tests.conftest import (
     MalformedJSONResponse,
     VpnQueueTasks,
     make_mock_session_client,
-    middleware_response,
 )
 
 
@@ -44,360 +37,6 @@ def no_queue_request_interval(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
     monkeypatch.setattr(aiopnsense_client_queue, "QUEUE_REQUEST_INTERVAL_SECONDS", 0)
-
-
-async def test_speedtest_read_recovers_from_probe_that_overtakes_queue(
-    make_client: MakeClientFactory,
-) -> None:
-    """A queued read dispatched after a 404 probe can clear cached absence.
-
-    Args:
-        make_client (MakeClientFactory): Factory returning OPNsense clients.
-    """
-    client, session = make_mock_session_client(make_client)
-    client._max_workers = 1
-    occupied = asyncio.Event()
-    release = asyncio.Event()
-    history_queued = asyncio.Event()
-
-    original_put = client._request_queue.put
-
-    async def signal_enqueue(item: Any) -> None:
-        """Signal when the history read is waiting in the queue.
-
-        Args:
-            item (Any): Request tuple being queued.
-        """
-        await original_put(item)
-        if item[1] == SPEEDTEST_SHOW_LOG_ENDPOINT:
-            history_queued.set()
-
-    client._request_queue.put = signal_enqueue
-    client._get_resolved_opnsense_timezone = AsyncMock(return_value=None)
-    session.get.side_effect = [
-        GatedResponse(occupied, release, json_payload={}),
-        FakeResponse(status=404, ok=False),
-        FakeResponse(json_payload=[]),
-        FakeResponse(json_payload={}),
-        FakeResponse(json_payload=[]),
-        FakeResponse(json_payload={}),
-    ]
-    occupying = asyncio.create_task(client._get("/occupy"))
-    history = None
-    try:
-        async with asyncio.timeout(3):
-            await occupied.wait()
-            history = asyncio.create_task(client.get_speedtest())
-            await history_queued.wait()
-            assert await client.run_speedtest() == {}
-            release.set()
-            assert (await history)["available"] is True
-            assert (await client.get_speedtest())["available"] is True
-    finally:
-        release.set()
-        await client.async_close()
-        tasks = [occupying] if history is None else [occupying, history]
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-
-@pytest.mark.parametrize(
-    ("method_name", "request_method", "absent"),
-    [("get_nut_ups_status", "GET", {}), ("get_ndp_entries", "POST", None)],
-)
-async def test_outcome_reads_respect_custom_response_validator(
-    method_name: str,
-    request_method: str,
-    absent: dict[str, Any] | None,
-    make_client: MakeClientFactory,
-) -> None:
-    """A session validator can reject a successful read while HTTP 404 remains absence.
-
-    Args:
-        method_name (str): Public read method to invoke.
-        request_method (str): Expected HTTP method for the read.
-        absent (dict[str, Any] | None): Public return value for an absent endpoint.
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    status = 200
-    validator_http_status: int | None = None
-    middleware_raises_404 = False
-    requests: list[str] = []
-    validated_statuses: list[int] = []
-    trace_events: list[str] = []
-
-    async def validate_response(response: aiohttp.ClientResponse) -> None:
-        """Reject the successful response and observe later HTTP statuses.
-
-        Args:
-            response (aiohttp.ClientResponse): Response passed by aiohttp.
-
-        Raises:
-            aiohttp.ClientPayloadError: When the successful response is rejected.
-            aiohttp.ClientResponseError: When the caller rejects an HTTP status.
-        """
-        validated_statuses.append(response.status)
-        if response.status in {200, 404} and validator_http_status is not None:
-            raise aiohttp.ClientResponseError(
-                response.request_info,
-                (),
-                status=validator_http_status,
-                message="synthetic validator rejection",
-            )
-        if response.status == 200:
-            raise aiohttp.ClientPayloadError("response rejected by caller")
-        if response.status == 403:
-            raise aiohttp.ClientResponseError(
-                response.request_info, (), status=403, message="Forbidden"
-            )
-
-    async def respond(
-        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
-    ) -> aiohttp.ClientResponse:
-        """Supply a Router response without opening a socket.
-
-        Args:
-            request (aiohttp.ClientRequest): Request prepared by the real session.
-            _handler (aiohttp.ClientHandlerType): Network handler replaced by this middleware.
-
-        Returns:
-            aiohttp.ClientResponse: Simulated response at the middleware boundary.
-
-        Raises:
-            aiohttp.ClientHttpProxyError: When the proxy rejects its CONNECT request.
-            aiohttp.ClientResponseError: When middleware rejects an HTTP response.
-        """
-        requests.append(request.method)
-        if status == 404 and middleware_raises_404:
-            raise aiohttp.ClientResponseError(
-                request.request_info, (), status=404, message="Not Found"
-            )
-        if status == 407:
-            raise aiohttp.ClientHttpProxyError(
-                request.request_info, (), status=404, message="Proxy rejected CONNECT"
-            )
-        return middleware_response(
-            request,
-            status,
-            payload={"status": {"ups.status": "OL"}, "rows": [], "total": 0},
-        )
-
-    trace = aiohttp.TraceConfig()
-
-    async def request_ended(
-        _session: aiohttp.ClientSession,
-        _context: Any,
-        _params: aiohttp.TraceRequestEndParams,
-    ) -> None:
-        """Record successful aiohttp request completion.
-
-        Args:
-            _session (aiohttp.ClientSession): Session that completed the request.
-            _context (Any): Trace context for the request.
-            _params (aiohttp.TraceRequestEndParams): Completed request details.
-        """
-        trace_events.append("end")
-
-    async def request_failed(
-        _session: aiohttp.ClientSession,
-        _context: Any,
-        _params: aiohttp.TraceRequestExceptionParams,
-    ) -> None:
-        """Record aiohttp request failure.
-
-        Args:
-            _session (aiohttp.ClientSession): Session handling the request.
-            _context (Any): Trace context for the request.
-            _params (aiohttp.TraceRequestExceptionParams): Exception details.
-        """
-        trace_events.append("exception")
-
-    trace.on_request_end.append(request_ended)
-    trace.on_request_exception.append(request_failed)
-
-    async with aiohttp.ClientSession(
-        middlewares=[respond], raise_for_status=validate_response, trace_configs=[trace]
-    ) as session:
-        client = make_client(session=session, throw_errors=True)
-        read = getattr(client, method_name)
-        with pytest.raises(OPNsenseConnectionError) as exc_info:
-            await read()
-        assert isinstance(exc_info.value.__cause__, aiohttp.ClientPayloadError)
-        assert str(exc_info.value.__cause__) == "response rejected by caller"
-        assert validated_statuses == [200]
-        assert trace_events == ["exception"]
-
-        status = 401
-        with pytest.raises(OPNsenseInvalidAuth):
-            await read()
-        assert validated_statuses == [200, 401]
-
-        status = 403
-        with pytest.raises(OPNsensePrivilegeMissing) as exc_info:
-            await read()
-        assert isinstance(exc_info.value.__cause__, aiohttp.ClientResponseError)
-        assert exc_info.value.__cause__.status == 403
-        assert validated_statuses == [200, 401, 403]
-
-        status = 200
-        validator_http_status = 404
-        for _attempt in range(2):
-            with pytest.raises(OPNsenseConnectionError) as synthetic_error:
-                await read()
-            assert synthetic_error.value.status == 404
-            assert isinstance(synthetic_error.value.__cause__, aiohttp.ClientResponseError)
-        assert requests == [request_method] * 5
-        assert validated_statuses == [200, 401, 403, 200, 200]
-        assert trace_events[-2:] == ["exception", "exception"]
-
-        status = 407
-        with pytest.raises(OPNsenseConnectionError) as proxy_error:
-            await read()
-        assert isinstance(proxy_error.value.__cause__, aiohttp.ClientHttpProxyError)
-
-        status = 404
-        validator_http_status = 404
-        assert await read() == absent
-        assert validated_statuses == [200, 401, 403, 200, 200, 404]
-        assert requests == [request_method] * 7
-        assert trace_events[-1] == "exception"
-
-        cache_key = (
-            "/api/nut/diagnostics/upsstatus"
-            if request_method == "GET"
-            else "post:/api/diagnostics/interface/search_ndp"
-        )
-        client._clear_endpoint_cache_entry(cache_key)
-        validator_http_status = None
-        middleware_raises_404 = True
-        assert await read() == absent
-        assert await read() == absent
-        assert requests == [request_method] * 8
-        assert validated_statuses == [200, 401, 403, 200, 200, 404]
-        assert trace_events == [
-            "exception",
-            "end",
-            "exception",
-            "exception",
-            "exception",
-            "exception",
-            "exception",
-            "exception",
-        ]
-
-
-@pytest.mark.asyncio
-async def test_nested_auth_404_is_transient_and_retried(
-    make_client: MakeClientFactory,
-) -> None:
-    """An auth middleware 404 does not mark the endpoint absent or cache it.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    endpoint_path = "/api/nut/diagnostics/upsstatus"
-    auth_path = "/auth/refresh"
-    requests: list[tuple[str, str]] = []
-    auth_requests = 0
-    session: aiohttp.ClientSession
-
-    async def respond(
-        request: aiohttp.ClientRequest, handler: aiohttp.ClientHandlerType
-    ) -> aiohttp.ClientResponse:
-        """Refresh authentication before passing the endpoint request through.
-
-        Args:
-            request (aiohttp.ClientRequest): Request prepared by the real session.
-            handler (aiohttp.ClientHandlerType): Network handler used for non-endpoint requests.
-
-        Returns:
-            aiohttp.ClientResponse: Simulated response for the endpoint or auth refresh.
-
-        Raises:
-            aiohttp.ClientResponseError: The first auth refresh returns an unrelated 404.
-        """
-        nonlocal auth_requests
-        requests.append((request.method, request.url.path))
-        if request.url.path == auth_path:
-            auth_requests += 1
-            if auth_requests == 1:
-                raise aiohttp.ClientResponseError(
-                    request.request_info, (), status=404, message="Auth route missing"
-                )
-            return middleware_response(request, 200)
-
-        if request.url.path == endpoint_path:
-            async with session.get(f"http://localhost{auth_path}"):
-                pass
-            return middleware_response(request, 200)
-
-        return await handler(request)
-
-    async with aiohttp.ClientSession(middlewares=[respond]) as session:
-        client = make_client(session=session, throw_errors=True)
-        with pytest.raises(OPNsenseConnectionError) as error:
-            await client.get_nut_ups_status()
-        assert isinstance(error.value.__cause__, aiohttp.ClientResponseError)
-        assert error.value.__cause__.status == 404
-        assert error.value.__cause__.request_info.url.path == auth_path
-
-        assert await client.get_nut_ups_status() == {"status": {"ups.status": "OL"}}
-        assert requests == [
-            ("GET", endpoint_path),
-            ("GET", auth_path),
-            ("GET", endpoint_path),
-            ("GET", auth_path),
-        ]
-
-
-@pytest.mark.parametrize("middleware_raises", [False, True], ids=["response", "raised"])
-async def test_endpoint_http_failure_logs_redact_url_credentials(
-    middleware_raises: bool, make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Redact URL credentials in endpoint failure logs and retain the HTTP error.
-
-    Args:
-        middleware_raises (bool): Whether middleware raises or returns the HTTP failure.
-        make_client (MakeClientFactory): Fixture factory returning OPNsense clients.
-        caplog (pytest.LogCaptureFixture): Captured request logs.
-    """
-    reason = "Upstream https://test-user:test-password@router.invalid/auth failed"
-
-    async def respond(
-        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
-    ) -> aiohttp.ClientResponse:
-        """Simulate a failed response through a real aiohttp session.
-
-        Args:
-            request (aiohttp.ClientRequest): Request prepared by aiohttp.
-            _handler (aiohttp.ClientHandlerType): Network handler replaced by middleware.
-
-        Returns:
-            aiohttp.ClientResponse: Simulated HTTP failure.
-
-        Raises:
-            aiohttp.ClientResponseError: The HTTP failure raised by middleware.
-        """
-        if middleware_raises:
-            raise aiohttp.ClientResponseError(request.request_info, (), status=500, message=reason)
-        return middleware_response(request, 500, reason=reason)
-
-    async with aiohttp.ClientSession(middlewares=[respond]) as session:
-        client = make_client(session=session, throw_errors=True)
-        try:
-            with (
-                caplog.at_level(logging.DEBUG, logger="aiopnsense"),
-                pytest.raises(OPNsenseConnectionError) as error,
-            ):
-                await client.get_nut_ups_status()
-            assert error.value.status == 500
-            assert reason in str(error.value)
-            if middleware_raises:
-                assert isinstance(error.value.__cause__, aiohttp.ClientResponseError)
-            assert "router.invalid/auth" in caplog.text
-            assert "test-user" not in caplog.text
-            assert "test-password" not in caplog.text
-        finally:
-            await client.async_close()
 
 
 async def test_unexpected_endpoint_error_log_redacts_url_credentials(
@@ -426,71 +65,6 @@ async def test_unexpected_endpoint_error_log_redacts_url_credentials(
         await client.async_close()
 
 
-@pytest.mark.parametrize(
-    "validator_error",
-    [
-        aiohttp.ClientPayloadError("body read failed"),
-        aiohttp.ContentTypeError(
-            aiohttp.RequestInfo(
-                aiohttp.client_reqrep.URL("http://localhost/api/missing"),
-                "GET",
-                None,
-            ),
-            (),
-            message="unexpected content type",
-        ),
-        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
-        json.JSONDecodeError("invalid JSON", "", 0),
-    ],
-)
-async def test_delivered_404_body_read_failure_is_absent(
-    validator_error: BaseException,
-    make_client: MakeClientFactory,
-) -> None:
-    """A validator body-read failure on a delivered 404 remains endpoint absence.
-
-    Args:
-        validator_error (BaseException): Body or decoding failure raised by the validator.
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    request_count = 0
-
-    async def validate_response(response: aiohttp.ClientResponse) -> None:
-        """Read the 404 body and reproduce a caller-side decoding failure.
-
-        Args:
-            response (aiohttp.ClientResponse): Response passed by aiohttp.
-
-        """
-        await response.json()
-
-    async def respond(
-        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
-    ) -> aiohttp.ClientResponse:
-        """Return an endpoint 404 whose body read fails in the validator.
-
-        Args:
-            request (aiohttp.ClientRequest): Request prepared by the real session.
-            _handler (aiohttp.ClientHandlerType): Network handler replaced by middleware.
-
-        Returns:
-            aiohttp.ClientResponse: Simulated 404 response.
-        """
-        nonlocal request_count
-        request_count += 1
-        response = middleware_response(request, 404, reason="Not Found")
-        response.json.side_effect = validator_error
-        return response
-
-    async with aiohttp.ClientSession(
-        middlewares=[respond], raise_for_status=validate_response
-    ) as session:
-        client = make_client(session=session, throw_errors=True)
-        assert await client.get_nut_ups_status() == {}
-        assert await client.get_nut_ups_status() == {}
-        assert request_count == 1
-
-
 @pytest.mark.parametrize("throw_errors", [False, True])
 async def test_invalid_endpoint_url_uses_aiohttp_error_mapping(
     throw_errors: bool,
@@ -510,67 +84,6 @@ async def test_invalid_endpoint_url_uses_aiohttp_error_mapping(
                 await client.is_endpoint_available("/api/status")  # type: ignore[deprecated]
         else:
             assert await client.is_endpoint_available("/api/status") is False  # type: ignore[deprecated]
-
-
-async def test_trace_hook_404_after_response_is_transient_and_retried(
-    make_client: MakeClientFactory,
-) -> None:
-    """A trace hook's synthetic 404 after HTTP 200 does not cache endpoint absence.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    requests = 0
-    trace_events: list[str] = []
-
-    async def respond(
-        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
-    ) -> aiohttp.ClientResponse:
-        """Supply successful endpoint responses through a real session.
-
-        Args:
-            request (aiohttp.ClientRequest): Request prepared by the real session.
-            _handler (aiohttp.ClientHandlerType): Network handler replaced by middleware.
-
-        Returns:
-            aiohttp.ClientResponse: Simulated healthy response.
-        """
-        nonlocal requests
-        requests += 1
-        return middleware_response(request, 200)
-
-    trace = aiohttp.TraceConfig()
-
-    async def request_ended(
-        _session: aiohttp.ClientSession,
-        _context: Any,
-        params: aiohttp.TraceRequestEndParams,
-    ) -> None:
-        """Raise a matching but synthetic 404 after the first healthy response.
-
-        Args:
-            _session (aiohttp.ClientSession): Session completing the request.
-            _context (Any): Trace context for the request.
-            params (aiohttp.TraceRequestEndParams): Completed request details.
-
-        Raises:
-            aiohttp.ClientResponseError: The synthetic completion-hook rejection.
-        """
-        trace_events.append("end")
-        if len(trace_events) == 1:
-            raise aiohttp.ClientResponseError(
-                params.response.request_info, (), status=404, message="trace rejection"
-            )
-
-    trace.on_request_end.append(request_ended)
-    async with aiohttp.ClientSession(middlewares=[respond], trace_configs=[trace]) as session:
-        client = make_client(session=session, throw_errors=True)
-        with pytest.raises(OPNsenseConnectionError) as error:
-            await client.get_nut_ups_status()
-        assert isinstance(error.value.__cause__, aiohttp.ClientResponseError)
-        assert error.value.__cause__.status == 404
-        assert await client.get_nut_ups_status() == {"status": {"ups.status": "OL"}}
-        assert requests == 2
 
 
 @pytest.mark.asyncio
@@ -2624,237 +2137,68 @@ async def test_cancelled_queued_smart_info_is_skipped_and_queue_progresses(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method_name", "request_method", "log_marker"),
-    [
-        ("get_nut_ups_status", "get", "[get_outcome]"),
-        ("get_smart", "post", "[post_outcome]"),
-    ],
-)
-async def test_outcome_read_logs_the_public_method_as_caller(
-    method_name: str,
-    request_method: str,
-    log_marker: str,
+async def test_post_outcome_read_returns_the_queued_post_response(
     make_client: MakeClientFactory,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A queued outcome read names the public method that started it in the request log.
+    """A POST outcome read queued through the worker returns its decoded response.
 
     Args:
-        method_name (str): Public GET or POST endpoint reader.
-        request_method (str): Session request method used by the reader.
-        log_marker (str): Debug log prefix of the transport request.
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
+        make_client (MakeClientFactory): Factory for clients using a mocked HTTP session.
     """
     client, session = make_mock_session_client(make_client)
-    getattr(session, request_method).return_value = FakeResponse(json_payload={})
+    session.post.return_value = FakeResponse(json_payload={"output": {"model": "test"}})
     try:
-        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
-            await getattr(client, method_name)()
-
-        request_logs = [
-            record.getMessage()
-            for record in caplog.records
-            if record.getMessage().startswith(log_marker) and "called by" in record.getMessage()
-        ]
-        assert len(request_logs) == 1
-        assert request_logs[0].endswith(f"(called by {method_name})")
+        outcome = await client._fetch_post_endpoint_outcome("/api/x", {"device": "ada0"})
+        assert outcome.is_data
+        assert outcome.mapping() == {"output": {"model": "test"}}
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
-async def test_cancelled_worker_cancels_in_flight_outcome_request(
-    make_client: MakeClientFactory,
+@pytest.mark.parametrize("method", ["get", "post"])
+async def test_outcome_read_cancelled_in_flight_leaves_worker_serving(
+    make_client: MakeClientFactory, method: str
 ) -> None:
-    """Cancelling a worker mid-outcome-read cancels the request and spares the other worker.
+    """Cancelling an outcome read while it is in flight keeps the queue worker serving.
 
     Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        make_client (MakeClientFactory): Factory for clients using a mocked HTTP session.
+        method (str): ``get`` for a GET outcome read or ``post`` for a POST outcome read.
     """
     client, session = make_mock_session_client(make_client)
-    request_started = asyncio.Event()
-    request_cancelled = asyncio.Event()
+    client._max_workers = 1
+    started = asyncio.Event()
     release = asyncio.Event()
+    session_method = session.get if method == "get" else session.post
+    session_method.side_effect = [
+        GatedResponse(started, release, json_payload={"ok": True}),
+        FakeResponse(json_payload={"ok": "/later"}),
+    ]
 
-    class BlockingResponse:
-        """Hold the NUT request open until the test cancels or releases it."""
-
-        async def __aenter__(self) -> FakeResponse:
-            """Wait for release, recording cancellation of the in-flight request.
-
-            Returns:
-                FakeResponse: Successful response after ``release`` is set.
-
-            Raises:
-                asyncio.CancelledError: When the in-flight request is cancelled.
-            """
-            request_started.set()
-            try:
-                await release.wait()
-            except asyncio.CancelledError:
-                request_cancelled.set()
-                raise
-            return FakeResponse(json_payload={})
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            _tb: object,
-        ) -> bool:
-            """Leave response exceptions unsuppressed.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type from the response body.
-                exc (BaseException | None): Exception raised inside the context.
-                _tb (object): Traceback supplied by the async context manager protocol.
-
-            Returns:
-                bool: Always false, so cancellation propagates.
-            """
-            return False
-
-    def session_get(url: str, **_kwargs: Any) -> BlockingResponse | FakeResponse:
-        """Block the NUT read and answer every other path.
+    def read(path: str) -> Any:
+        """Start one outcome read of the selected method.
 
         Args:
-            url (str): Requested URL.
-            _kwargs (Any): HTTP options supplied by aiohttp callers.
+            path (str): Endpoint path to read.
 
         Returns:
-            BlockingResponse | FakeResponse: Response context for the requested path.
+            Any: Coroutine that performs the outcome read.
         """
-        if url.endswith("/api/nut/diagnostics/upsstatus"):
-            return BlockingResponse()
-        return FakeResponse(json_payload={"ok": True})
+        if method == "get":
+            return client._fetch_endpoint_outcome(path)
+        return client._fetch_post_endpoint_outcome(path, {})
 
-    session.get = session_get
-    busy_workers: list[asyncio.Task[Any]] = []
-    run_outcome_request = client._run_cancellable_outcome_request
-
-    async def record_worker(*args: Any, **kwargs: Any) -> Any:
-        """Record the queue worker that dispatches the outcome request.
-
-        Args:
-            args (Any): Positional arguments for the queue helper.
-            kwargs (Any): Keyword arguments for the queue helper.
-
-        Returns:
-            Any: Result of the wrapped queue helper.
-        """
-        task = asyncio.current_task()
-        assert task is not None
-        busy_workers.append(task)
-        return await run_outcome_request(*args, **kwargs)
-
-    client._run_cancellable_outcome_request = record_worker
     try:
-        read = asyncio.create_task(client.get_nut_ups_status())
-        await asyncio.wait_for(request_started.wait(), timeout=3)
-        (busy_worker,) = busy_workers
-        other_worker = next(worker for worker in client._workers if worker is not busy_worker)
-
-        busy_worker.cancel()
+        occupying = asyncio.create_task(read("/occupy"))
+        await asyncio.wait_for(started.wait(), timeout=3)
+        occupying.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(busy_worker, timeout=3)
-        assert busy_worker.cancelled()
-        await asyncio.wait_for(request_cancelled.wait(), timeout=3)
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(read, timeout=3)
+            await occupying
 
-        served = asyncio.get_running_loop().create_future()
-        await client._request_queue.put(("get", "/other", None, served, "test"))
-        assert await asyncio.wait_for(served, timeout=3) == {"ok": True}
-        assert not other_worker.done()
+        later = asyncio.create_task(read("/later"))
+        release.set()
+        assert (await asyncio.wait_for(later, timeout=3)).mapping() == {"ok": "/later"}
     finally:
         release.set()
         await asyncio.wait_for(client.async_close(), timeout=3)
-
-
-@pytest.mark.parametrize(
-    ("old_status", "throw_errors"),
-    [
-        pytest.param(404, False, id="malformed-200-suppressed"),
-        pytest.param(404, True, id="malformed-200-throws"),
-        pytest.param(500, True, id="overlapping-outage"),
-    ],
-)
-async def test_overlapping_endpoint_responses_preserve_order_and_error_policy(
-    make_client: MakeClientFactory,
-    caplog: pytest.LogCaptureFixture,
-    old_status: int,
-    throw_errors: bool,
-) -> None:
-    """Preserve a malformed success or a single outage across overlapping reads.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning clients.
-        caplog (pytest.LogCaptureFixture): Captured client outage diagnostics.
-        old_status (int): Status of the delayed response.
-        throw_errors (bool): Whether malformed JSON raises a public error.
-    """
-    old_response_seen = asyncio.Event()
-    release = asyncio.Event()
-    dispatches = 0
-
-    async def delay_first(response: aiohttp.ClientResponse) -> None:
-        """Hold the first response after it has reached validation.
-
-        Args:
-            response (aiohttp.ClientResponse): Delivered Router response.
-        """
-        if response.status == old_status and not old_response_seen.is_set():
-            old_response_seen.set()
-            await release.wait()
-
-    async def respond(
-        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
-    ) -> aiohttp.ClientResponse:
-        """Serve a new malformed body or a second failure ahead of the old response.
-
-        Args:
-            request (aiohttp.ClientRequest): Request entering the middleware.
-            _handler (aiohttp.ClientHandlerType): Unused network handler.
-
-        Returns:
-            aiohttp.ClientResponse: Synthetic Router response for the read.
-        """
-        nonlocal dispatches
-        dispatches += 1
-        status = old_status if dispatches == 1 or old_status == 500 else 200
-        response = middleware_response(request, status)
-        if dispatches == 2 and status == 200:
-            response.json = AsyncMock(side_effect=json.JSONDecodeError("Bad JSON", "<html>", 0))
-        return response
-
-    async with aiohttp.ClientSession(
-        raise_for_status=delay_first, middlewares=[respond]
-    ) as session:
-        client = make_client(session=session, throw_errors=throw_errors)
-        older = asyncio.create_task(client.get_nut_ups_status())
-        try:
-            async with asyncio.timeout(2):
-                await old_response_seen.wait()
-                if throw_errors:
-                    with pytest.raises(OPNsenseError) as error:
-                        await client.get_nut_ups_status()
-                    if old_status == 404:
-                        assert isinstance(error.value.__cause__, json.JSONDecodeError)
-                else:
-                    assert await client.get_nut_ups_status() is None
-                release.set()
-                if old_status == 500:
-                    with pytest.raises(OPNsenseConnectionError):
-                        await older
-                    assert [record.levelno for record in caplog.records] == [logging.WARNING]
-                    assert dispatches == 2
-                else:
-                    assert await older == {}
-                    assert await client.get_nut_ups_status() == {"status": {"ups.status": "OL"}}
-                    assert dispatches == 3
-        finally:
-            release.set()
-            await asyncio.gather(older, return_exceptions=True)
-            await client.async_close()

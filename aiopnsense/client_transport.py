@@ -2,14 +2,11 @@
 
 import asyncio
 import codecs
-from collections.abc import AsyncGenerator, Awaitable, Callable, MutableMapping
-from dataclasses import dataclass, replace
+from collections.abc import AsyncGenerator, MutableMapping
 import json
-from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
-from yarl import URL
 
 from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _raise_if_throwing
@@ -20,246 +17,15 @@ from ._request_failure import (
     _report_transport_failure,
 )
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
-from .exceptions import _map_opnsense_exception
-from .helpers import (
-    _LOGGER,
-    _log_request_recovery,
-    _redact_url_credentials,
-    _redacted_exception_message,
-)
+from .helpers import _LOGGER, _log_request_recovery
 
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
-
-type _ResponseStatusValidator = Callable[[aiohttp.ClientResponse], Awaitable[None]]
-type _ValidatorFailure = (
-    aiohttp.ClientError | TimeoutError | UnicodeDecodeError | json.JSONDecodeError
-)
-type _ValidatorErrors = list[tuple[_ValidatorFailure, aiohttp.ClientResponse]]
-
-
-@dataclass(slots=True)
-class _ObservedResponse:
-    """Record the response handed to aiohttp's status validator."""
-
-    response: aiohttp.ClientResponse | None = None
-    observation_id: int = 0
-
-
-def _outcome_raise_for_status(
-    session: aiohttp.ClientSession,
-    next_observation_id: Callable[[], int],
-) -> tuple[_ResponseStatusValidator, _ObservedResponse, _ValidatorErrors]:
-    """Wrap a custom session validator for endpoint outcome requests.
-
-    Args:
-        session (aiohttp.ClientSession): Session whose validator applies to requests.
-        next_observation_id (Callable[[], int]): Assign the response's arrival order.
-
-    Returns:
-        tuple[_ResponseStatusValidator, _ObservedResponse, _ValidatorErrors]:
-            Per-request validator, its observed response, and exceptions it raises.
-    """
-    validator = session.raise_for_status
-    observed = _ObservedResponse()
-    validator_errors: _ValidatorErrors = []
-
-    async def validate_response(response: aiohttp.ClientResponse) -> None:
-        """Run the session validator for every delivered response.
-
-        Args:
-            response (aiohttp.ClientResponse): HTTP response returned by aiohttp.
-
-        Raises:
-            aiohttp.ClientError: Propagated from the session validator or aiohttp response.
-            TimeoutError: Propagated from the session validator.
-            UnicodeDecodeError: Propagated from the session validator.
-            json.JSONDecodeError: Propagated from the session validator.
-        """
-        observed.response = response
-        observed.observation_id = next_observation_id()
-        try:
-            if callable(validator):
-                await validator(response)
-            elif validator:
-                response.raise_for_status()
-        except (
-            aiohttp.ClientError,
-            TimeoutError,
-            UnicodeDecodeError,
-            json.JSONDecodeError,
-        ) as error:
-            validator_errors.append((error, response))
-            raise
-
-    return validate_response, observed, validator_errors
-
-
-def _classify_outcome_response_error(
-    error: aiohttp.ClientResponseError,
-    *,
-    response_entered: bool,
-    observed_response: aiohttp.ClientResponse | None,
-    method: str,
-    url: str,
-    validator_errors: _ValidatorErrors,
-) -> _EndpointOutcome | None:
-    """Classify middleware or validator errors that carry an HTTP status.
-
-    Args:
-        error (aiohttp.ClientResponseError): Raised HTTP response error.
-        response_entered (bool): Whether transport received the response context.
-        observed_response (aiohttp.ClientResponse | None): Response delivered to the validator.
-        method (str): HTTP method of the endpoint request.
-        url (str): Raw endpoint request URL passed to aiohttp.
-        validator_errors (_ValidatorErrors):
-            Errors raised by the session callback and the response being validated.
-
-    Returns:
-        _EndpointOutcome | None: Classified status outcome, or ``None`` when the
-            error came from response processing or does not match its response.
-    """
-    if isinstance(error, aiohttp.ClientHttpProxyError) or not 400 <= error.status <= 599:
-        return None
-
-    for validator_error, response in validator_errors:
-        if validator_error is error:
-            if error.status != response.status or not _request_info_matches_response(
-                error.request_info, response
-            ):
-                return None
-            return _EndpointOutcome.from_http_status(error.status, error.message, cause=error)
-
-    if (
-        response_entered
-        or observed_response is not None
-        or _raised_by_aiohttp_trace(error.__traceback__)
-        or not _response_error_matches_request(error, method, url)
-    ):
-        return None
-
-    return _EndpointOutcome.from_http_status(error.status, error.message, cause=error)
-
-
-def _raised_by_aiohttp_trace(traceback: TracebackType | None) -> bool:
-    """Identify status errors raised by an aiohttp trace callback.
-
-    Trace callbacks can run before dispatch or after a response. A status error
-    raised by a trace callback does not establish that an HTTP response was
-    delivered or that its status is cacheable.
-
-    Args:
-        traceback (TracebackType | None): Traceback attached to the HTTP error.
-
-    Returns:
-        bool: Whether an aiohttp trace dispatch frame raised the error.
-    """
-    while traceback is not None:
-        frame = traceback.tb_frame
-        if frame.f_globals.get("__name__") == "aiohttp.tracing" and frame.f_code.co_name.startswith(
-            "send_"
-        ):
-            return True
-        traceback = traceback.tb_next
-    return False
-
-
-def _classify_outcome_payload_error(
-    error: (
-        aiohttp.ClientPayloadError
-        | aiohttp.ContentTypeError
-        | UnicodeDecodeError
-        | json.JSONDecodeError
-        | TimeoutError
-    ),
-    validator_errors: _ValidatorErrors,
-) -> _EndpointOutcome | None:
-    """Classify validator failures using the response delivered to that validator.
-
-    Args:
-        error (aiohttp.ClientPayloadError | aiohttp.ContentTypeError | UnicodeDecodeError | json.JSONDecodeError | TimeoutError):
-            Raised response-body, decoding or timeout error.
-        validator_errors (_ValidatorErrors): Errors raised while validating a response.
-
-    Returns:
-        _EndpointOutcome | None: The HTTP status outcome for a delivered error
-            response, or None when the failure is unrelated or the response was successful.
-    """
-    for validator_error, response in validator_errors:
-        if validator_error is error:
-            if 400 <= response.status <= 599:
-                return _EndpointOutcome.from_http_status(
-                    response.status, response.reason, cause=error
-                )
-            return None
-    return None
-
-
-def _request_info_matches_request(
-    request_info: aiohttp.RequestInfo | None, method: str, url: str
-) -> bool:
-    """Check whether aiohttp request metadata identifies the endpoint request.
-
-    Args:
-        request_info (aiohttp.RequestInfo | None): Metadata attached to a response error.
-        method (str): Expected HTTP method.
-        url (str): Expected URL, including its query string.
-
-    Returns:
-        bool: Whether both the method and URL match the expected request.
-    """
-    if request_info is None:
-        return False
-    try:
-        expected_url = URL(url).with_fragment(None)
-    except ValueError:
-        return False
-    return request_info.method == method and request_info.url.with_fragment(None) == expected_url
-
-
-def _request_info_matches_response(
-    request_info: aiohttp.RequestInfo | None, response: aiohttp.ClientResponse
-) -> bool:
-    """Check whether validator error metadata identifies its response.
-
-    Args:
-        request_info (aiohttp.RequestInfo | None): Metadata attached to the validator error.
-        response (aiohttp.ClientResponse): Response passed to the session validator.
-
-    Returns:
-        bool: Whether the validator error refers to this response's request.
-    """
-    response_info = response.request_info
-    return (
-        request_info is not None
-        and response_info is not None
-        and request_info.method == response_info.method
-        and request_info.url == response_info.url
-    )
-
-
-def _response_error_matches_request(
-    error: aiohttp.ClientResponseError, method: str, url: str
-) -> bool:
-    """Match an HTTP error to the endpoint request that produced it.
-
-    Args:
-        error (aiohttp.ClientResponseError): Raised HTTP status error.
-        method (str): Expected HTTP method.
-        url (str): Expected URL, including its query string.
-
-    Returns:
-        bool: Whether the error metadata or initial redirect response identifies the request.
-    """
-    if error.history:
-        return _request_info_matches_request(error.history[0].request_info, method, url)
-    return _request_info_matches_request(error.request_info, method, url)
 
 
 class ClientTransportMixin:
     """Immediate request execution and safe response methods for OPNsenseClient."""
 
     if TYPE_CHECKING:
-        _endpoint_observation_id: int
         _password: str
         _request_outages: dict[tuple[str, str, str], int | None]
         _rest_api_query_count: int
@@ -612,15 +378,6 @@ class ClientTransportMixin:
 
         return None
 
-    def _next_endpoint_observation_id(self) -> int:
-        """Assign an ordering number shared by endpoint dispatch and response delivery.
-
-        Returns:
-            int: Next observation ID for this client.
-        """
-        self._endpoint_observation_id += 1
-        return self._endpoint_observation_id
-
     async def _request_outcome(
         self,
         method: Literal["GET", "POST"],
@@ -628,15 +385,16 @@ class ClientTransportMixin:
         caller: str,
         payload: MutableMapping[str, Any] | None = None,
         *,
+        phase: str = _REQUEST_PHASE,
         read_body: bool = True,
         response_format: Literal["json", "text"] = "json",
     ) -> _EndpointOutcome:
         """Execute an endpoint request immediately and classify the response.
 
-        Shared body of ``_do_get_outcome`` and ``_do_post_outcome``. An HTTP or
-        transport failure is returned as an outcome instead of being logged and
-        raised. A callable session validator runs through aiohttp before request
-        completion for each response.
+        Shared body of ``_do_get_outcome`` and ``_do_post_outcome``. A 404 is returned
+        as an absent outcome. Any other failed HTTP response or transport error is
+        logged by the shared request reporter and returned as an outcome instead of
+        being raised. Undecodable response bodies propagate to the queue worker.
 
         Args:
             method (Literal["GET", "POST"]): HTTP method to send.
@@ -644,6 +402,8 @@ class ClientTransportMixin:
             caller (str): Caller name used for diagnostics.
             payload (MutableMapping[str, Any] | None, optional): Request payload sent
                 with a POST request; ignored for GET.
+            phase (str): Request phase for outage logging, ``probe`` for status-only
+                checks or ``request`` for data reads.
             read_body (bool): Whether to decode the body of a successful response.
                 ``False`` makes a status-only check: the body is not read and a
                 successful response carries no payload.
@@ -652,90 +412,62 @@ class ClientTransportMixin:
 
         Returns:
             _EndpointOutcome: ``DATA`` with the decoded payload or body text (``None`` when
-                ``read_body`` is ``False``) for a successful response,
-                ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any
-                other HTTP status, timeout or client error. A successful response
-                that fails decoding carries the original decoding error.
-
-        Raises:
-            UnicodeDecodeError: For invalid text encoding without an attributable response.
-            json.JSONDecodeError: For undecodable JSON without an attributable response.
+                ``read_body`` is ``False``) for a successful response, ``ABSENT`` for a
+                404 or 403 response, and ``TRANSIENT`` for any other HTTP status, timeout
+                or client error.
         """
-        dispatch_id = self._next_endpoint_observation_id()
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        label = f"{method.lower()}_outcome"
-        _LOGGER.debug("[%s] path: %s (called by %s)", label, _redact_url_credentials(path), caller)
-        raise_for_status, observed, validator_errors = _outcome_raise_for_status(
-            self._session, self._next_endpoint_observation_id
-        )
-        response_entered = False
-        successful_response = False
-        outcome: _EndpointOutcome | None
+        method_name = method.lower()
+        operation = f"do_{method_name}_outcome"
+        _LOGGER.debug("[%s] path: %s (called by %s)", method_name, path, caller)
+        request_kwargs: dict[str, Any] = {
+            "auth": aiohttp.BasicAuth(self._username, self._password),
+            "timeout": aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
+            "ssl": self._verify_ssl,
+        }
         try:
-            request_kwargs: dict[str, Any] = {
-                "auth": aiohttp.BasicAuth(self._username, self._password),
-                "timeout": aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
-                "ssl": self._verify_ssl,
-                "raise_for_status": raise_for_status,
-            }
             if method == "GET":
                 request = self._session.get(url, **request_kwargs)
             else:
                 request = self._session.post(url, json=payload, **request_kwargs)
             async with request as response:
-                response_entered = True
-                successful_response = response.ok
-                _LOGGER.debug(
-                    "[%s] Response %s: %s",
-                    label,
-                    response.status,
-                    _redact_url_credentials(str(response.reason)),
-                )
+                _LOGGER.debug("[%s] Response %s: %s", method_name, response.status, response.reason)
+                if response.status == 404:
+                    return _EndpointOutcome.absent()
                 if not response.ok:
-                    outcome = _EndpointOutcome.from_http_status(response.status, response.reason)
-                elif not read_body:
-                    outcome = _EndpointOutcome.data(None)
+                    http_error = _report_http_failure(
+                        self,
+                        method=method_name,
+                        path=path,
+                        phase=phase,
+                        operation=operation,
+                        url=url,
+                        status=response.status,
+                        reason=response.reason,
+                        caller=caller,
+                    )
+                    return _EndpointOutcome.from_http_error(response.status, http_error)
+                if not read_body:
+                    body = None
                 elif response_format == "text":
-                    outcome = _EndpointOutcome.data(await response.text())
+                    body = await response.text()
                 else:
-                    outcome = _EndpointOutcome.data(await response.json(content_type=None))
-        except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            outcome = _classify_outcome_payload_error(e, validator_errors)
-            if outcome is None:
-                if not successful_response and not any(
-                    e is validator_error and response.ok
-                    for validator_error, response in validator_errors
-                ):
-                    raise
-                outcome = replace(_EndpointOutcome.data(None), decode_error=e)
+                    body = await response.json(content_type=None)
+                _log_request_recovery(self, method_name, path, phase)
+                return _EndpointOutcome.data(body)
         except (aiohttp.ClientError, TimeoutError) as e:
-            outcome = None
-            if isinstance(e, aiohttp.ClientResponseError) and not isinstance(
-                e, aiohttp.ContentTypeError
-            ):
-                outcome = _classify_outcome_response_error(
-                    e,
-                    response_entered=response_entered,
-                    observed_response=observed.response,
-                    method=method,
-                    url=url,
-                    validator_errors=validator_errors,
-                )
-            elif isinstance(
-                e, aiohttp.ClientPayloadError | aiohttp.ContentTypeError | TimeoutError
-            ):
-                outcome = _classify_outcome_payload_error(e, validator_errors)
-            if outcome is None:
-                error = _map_opnsense_exception(e)
-                error.__cause__ = e
-                outcome = _EndpointOutcome.transient(
-                    error, f"{type(e).__name__}: {_redacted_exception_message(e)}"
-                )
-        finally:
-            if not response_entered and observed.response is not None:
-                observed.response.close()
-        return replace(outcome, observation_id=observed.observation_id or dispatch_id)
+            transport_error = _report_transport_failure(
+                self,
+                method=method_name,
+                path=path,
+                phase=phase,
+                operation=operation,
+                exc=e,
+                caller=caller,
+            )
+            transport_error.__cause__ = e
+            return _EndpointOutcome.transient(transport_error)
 
     async def _do_get_outcome(
         self,
@@ -744,15 +476,13 @@ class ClientTransportMixin:
         *,
         read_body: bool = True,
         response_format: Literal["json", "text"] = "json",
+        phase: str = _REQUEST_PHASE,
     ) -> _EndpointOutcome:
         """Execute a GET request immediately and classify the response.
 
         Unlike ``_do_get``, an HTTP or transport failure is returned as an
-        outcome instead of being logged and raised, so the endpoint module can
-        tell a missing endpoint from a transient failure and apply the
-        ``throw_errors`` policy itself. A callable session validator runs through
-        aiohttp before request completion for each response. The outcome layer
-        classifies an attributable 404 as absent.
+        outcome instead of being raised, so the endpoint module can tell a missing
+        endpoint from a transient failure and apply the ``throw_errors`` policy itself.
 
         Args:
             path (str): API endpoint path to request.
@@ -762,17 +492,19 @@ class ClientTransportMixin:
                 successful response carries no payload.
             response_format (Literal["json", "text"], optional): Decoding mode for a
                 successful response body.
+            phase (str): Request phase for outage logging, ``probe`` for status-only
+                checks or ``request`` for data reads.
 
         Returns:
-            _EndpointOutcome: ``DATA`` with the decoded payload or body text (``None`` when
-                ``read_body`` is ``False``) for a successful response,
-                ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any
-                other HTTP status, timeout or client error. A successful response
-                that fails decoding carries the original decoding error. Undecodable
-                text or JSON without an attributable response is raised.
+            _EndpointOutcome: The outcome described by ``_request_outcome``.
         """
         return await self._request_outcome(
-            "GET", path, caller, read_body=read_body, response_format=response_format
+            "GET",
+            path,
+            caller,
+            phase=phase,
+            read_body=read_body,
+            response_format=response_format,
         )
 
     def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
@@ -892,12 +624,9 @@ class ClientTransportMixin:
         """Execute a POST request immediately and classify the response.
 
         Unlike ``_do_post``, an HTTP or transport failure is returned as an
-        outcome instead of being logged and raised, so the endpoint module can
-        tell a missing endpoint from a transient failure and apply the
-        ``throw_errors`` policy itself. A callable session validator runs through
-        aiohttp before request completion for each response. The outcome layer
-        classifies an attributable 404 as absent. The request always carries the
-        caller's payload; no payload-less probe is sent.
+        outcome instead of being raised, so the endpoint module can tell a missing
+        endpoint from a transient failure and apply the ``throw_errors`` policy itself.
+        The request always carries the caller's payload.
 
         Args:
             path (str): API endpoint path to request.
@@ -905,11 +634,7 @@ class ClientTransportMixin:
             caller (str): Caller name used for diagnostics.
 
         Returns:
-            _EndpointOutcome: ``DATA`` with the decoded payload for a successful response,
-                ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any other
-                HTTP status, timeout or client error. A successful response that
-                fails decoding carries the original decoding error. Undecodable
-                text or JSON without an attributable response is raised.
+            _EndpointOutcome: The outcome described by ``_request_outcome``.
         """
         return await self._request_outcome("POST", path, caller, payload)
 

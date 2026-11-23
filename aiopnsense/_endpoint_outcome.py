@@ -3,10 +3,9 @@
 from collections.abc import MutableMapping
 from dataclasses import dataclass
 from enum import StrEnum
-from json import JSONDecodeError
 from typing import Any
 
-from .exceptions import OPNsenseError, _opnsense_http_error
+from .exceptions import OPNsenseError
 
 
 class _EndpointStatus(StrEnum):
@@ -29,22 +28,13 @@ class _EndpointOutcome:
             body when ``status`` is ``DATA``: JSON, or the body text for a text read.
         http_status (int | None): HTTP status of a failed response, when known.
         error (OPNsenseError | None): Public exception describing a 403 or a
-            transient failure.
-        decode_error (UnicodeDecodeError | JSONDecodeError | None): Decoding error
-            from a successful HTTP response.
-        detail (str): Short failure description for log messages.
-        observation_id (int): Client-local response order or dispatch order when
-            no response was delivered. Zero for
-            an outcome that did not come from transport.
+            transient failure. Absent 404 outcomes carry none.
     """
 
     status: _EndpointStatus
     payload: MutableMapping[str, Any] | list | str | None = None
     http_status: int | None = None
     error: OPNsenseError | None = None
-    decode_error: UnicodeDecodeError | JSONDecodeError | None = None
-    detail: str = ""
-    observation_id: int = 0
 
     @classmethod
     def data(cls, payload: MutableMapping[str, Any] | list | str | None) -> _EndpointOutcome:
@@ -60,51 +50,43 @@ class _EndpointOutcome:
         return cls(_EndpointStatus.DATA, payload=payload)
 
     @classmethod
-    def absent(cls) -> _EndpointOutcome:
+    def absent(cls, http_status: int = 404) -> _EndpointOutcome:
         """Build the outcome of an endpoint the Router does not provide.
+
+        Args:
+            http_status (int): HTTP status that reported the absence, 404 or a cached 403.
 
         Returns:
             _EndpointOutcome: Outcome with the ``ABSENT`` status.
         """
-        return cls(_EndpointStatus.ABSENT, http_status=404)
+        return cls(_EndpointStatus.ABSENT, http_status=http_status)
 
     @classmethod
-    def from_http_status(
-        cls, status: int, reason: str | None, cause: BaseException | None = None
-    ) -> _EndpointOutcome:
-        """Classify a non-successful HTTP response.
+    def from_http_error(cls, status: int, error: OPNsenseError) -> _EndpointOutcome:
+        """Classify a failed HTTP response that the request already reported.
 
         Args:
-            status (int): HTTP response status.
-            reason (str | None): HTTP response reason phrase.
-            cause (BaseException | None): Exception that reported the status. When given, it
-                becomes the ``__cause__`` of the outcome's public error.
+            status (int): HTTP response status, not 2xx or 404.
+            error (OPNsenseError): Public exception mapped from the response.
 
         Returns:
-            _EndpointOutcome: ``ABSENT`` for 404 and 403, otherwise ``TRANSIENT``.
+            _EndpointOutcome: ``ABSENT`` for 403, otherwise ``TRANSIENT``.
         """
-        if status == 404:
-            return cls.absent()
-        error = _opnsense_http_error(status, reason)
-        if cause is not None:
-            error.__cause__ = cause
-        detail = f"Response {status}: {reason}"
         if status == 403:
-            return cls(_EndpointStatus.ABSENT, http_status=status, error=error, detail=detail)
-        return cls(_EndpointStatus.TRANSIENT, http_status=status, error=error, detail=detail)
+            return cls(_EndpointStatus.ABSENT, http_status=status, error=error)
+        return cls(_EndpointStatus.TRANSIENT, http_status=status, error=error)
 
     @classmethod
-    def transient(cls, error: OPNsenseError, detail: str) -> _EndpointOutcome:
+    def transient(cls, error: OPNsenseError) -> _EndpointOutcome:
         """Build the outcome of a transport failure.
 
         Args:
             error (OPNsenseError): Public exception for the failure.
-            detail (str): Short failure description for log messages.
 
         Returns:
             _EndpointOutcome: Outcome with the ``TRANSIENT`` status.
         """
-        return cls(_EndpointStatus.TRANSIENT, error=error, detail=detail)
+        return cls(_EndpointStatus.TRANSIENT, error=error)
 
     @property
     def is_data(self) -> bool:

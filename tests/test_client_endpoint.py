@@ -10,7 +10,6 @@ import aiohttp
 import pytest
 
 from aiopnsense._endpoint_outcome import _EndpointOutcome
-from aiopnsense._request_failure import _PERMISSION_GUIDANCE
 import aiopnsense.client_endpoint
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
@@ -24,7 +23,6 @@ from tests.conftest import (
     FirmwareRouter,
     GatedResponse,
     MakeClientFactory,
-    MalformedJSONResponse,
     install_fake_router,
     make_mock_session_client,
 )
@@ -506,48 +504,6 @@ NUT_PATH = "/api/nut/diagnostics/upsstatus"
 NUT_DATA = {"status": {"ups.status": "OL"}}
 
 
-class _QueueGate:
-    """Hold one completed queued read after the Router answered, until released.
-
-    Attributes:
-        ready (asyncio.Event): Set once a read is held.
-        release (asyncio.Event): Set by the test to let the held read return.
-        armed (bool): Whether the next queued read is held.
-    """
-
-    def __init__(self, client: Any, *, armed: bool = True) -> None:
-        """Wrap the client's queued request seam.
-
-        Args:
-            client (Any): Client whose queued reads are held.
-            armed (bool): Whether the first queued read is held.
-        """
-        self.ready = asyncio.Event()
-        self.release = asyncio.Event()
-        self.armed = armed
-        original = client._queue_request
-
-        async def gated(method: str, path: str, payload: Any = None) -> Any:
-            """Return the queued read's outcome after the gate releases it.
-
-            Args:
-                method (str): Queue method passed to the queued request.
-                path (str): Endpoint path passed to the queued request.
-                payload (Any): Optional request payload.
-
-            Returns:
-                Any: Outcome returned by the original queued request.
-            """
-            outcome = await original(method, path, payload)
-            if self.armed:
-                self.armed = False
-                self.ready.set()
-                await self.release.wait()
-            return outcome
-
-        client._queue_request = gated
-
-
 @pytest.mark.asyncio
 async def test_present_endpoint_costs_one_request_per_read(make_client: MakeClientFactory) -> None:
     """A present endpoint sends exactly one request per read, with no separate probe.
@@ -676,7 +632,7 @@ async def test_endpoint_lost_after_success_is_recorded_as_absent(
 async def test_transient_failure_is_not_cached_and_logs_once_per_outage(
     make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture, failure: Any
 ) -> None:
-    """A transient failure is retried on the next read and warns once per outage.
+    """A transient failure is retried on the next read and logs once per outage.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
@@ -689,8 +645,8 @@ async def test_transient_failure_is_not_cached_and_logs_once_per_outage(
         with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
             assert await client.get_nut_ups_status() == {}
             assert await client.get_nut_ups_status() == {}
-            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-            assert len(warnings) == 1
+            failures = [r for r in caplog.records if r.levelno == logging.ERROR]
+            assert len(failures) == 1
             assert router.count("GET", NUT_PATH) == 2
 
             router.routes[("GET", NUT_PATH)] = NUT_DATA
@@ -757,192 +713,6 @@ async def test_cached_permission_outcome_preserves_forbidden_status(
 
 
 @pytest.mark.asyncio
-async def test_older_data_read_cannot_overwrite_newer_status_success(
-    make_client: MakeClientFactory,
-) -> None:
-    """A delayed queued read cannot replace a newer successful availability check.
-
-    Args:
-        make_client (MakeClientFactory): Factory returning an OPNsense client.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): 404})
-    gate = _QueueGate(client)
-    old_read = asyncio.create_task(client.get_nut_ups_status())
-    try:
-        await asyncio.wait_for(gate.ready.wait(), timeout=1)
-        router.routes[("GET", NUT_PATH)] = NUT_DATA
-        assert (await client._check_endpoint_status(NUT_PATH, force_refresh=True)).is_data
-        gate.release.set()
-        assert await old_read == {}
-        assert await client.get_nut_ups_status() == NUT_DATA
-        assert router.count("GET", NUT_PATH) == 3
-    finally:
-        gate.release.set()
-        await old_read
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_older_result_can_publish_when_newer_observation_is_cancelled(
-    make_client: MakeClientFactory,
-) -> None:
-    """A started but cancelled newer check does not discard an older completed result.
-
-    Args:
-        make_client (MakeClientFactory): Factory returning an OPNsense client.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): 404})
-    original_get = client._do_get_outcome
-    new_ready = asyncio.Event()
-    release_new = asyncio.Event()
-
-    async def delayed_status(*args: Any, **kwargs: Any) -> _EndpointOutcome:
-        """Pause the forced NUT status probe until cancelled or ``release_new`` is set.
-
-        Args:
-            *args (Any): Arguments passed to the original status request.
-            **kwargs (Any): Keyword arguments passed to the original status request.
-
-        Returns:
-            _EndpointOutcome: Result of the original status request after release.
-        """
-        outcome = await original_get(*args, **kwargs)
-        if len(args) > 1 and args[1] == "_check_endpoint_status":
-            new_ready.set()
-            await release_new.wait()
-        return outcome
-
-    gate = _QueueGate(client)
-    client._do_get_outcome = delayed_status
-    old_read = asyncio.create_task(client.get_nut_ups_status())
-    newer_check: asyncio.Task[_EndpointOutcome] | None = None
-    try:
-        await asyncio.wait_for(gate.ready.wait(), timeout=1)
-        router.routes[("GET", NUT_PATH)] = NUT_DATA
-        newer_check = asyncio.create_task(
-            client._check_endpoint_status(NUT_PATH, force_refresh=True)
-        )
-        await asyncio.wait_for(new_ready.wait(), timeout=1)
-        newer_check.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await newer_check
-        gate.release.set()
-        assert await old_read == {}
-        assert await client.get_nut_ups_status() == {}
-        assert router.count("GET", NUT_PATH) == 2
-    finally:
-        gate.release.set()
-        release_new.set()
-        if newer_check is not None and not newer_check.done():
-            newer_check.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await newer_check
-        await old_read
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_old_generation_success_does_not_clear_new_outage(
-    make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A success started before firmware reset cannot clear the new outage marker.
-
-    Args:
-        make_client (MakeClientFactory): Factory returning an OPNsense client.
-        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): NUT_DATA})
-    gate = _QueueGate(client)
-    old_read = asyncio.create_task(client.get_nut_ups_status())
-    try:
-        await asyncio.wait_for(gate.ready.wait(), timeout=1)
-        client._reset_endpoint_state()
-        router.routes[("GET", NUT_PATH)] = 500
-        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
-            assert await client.get_nut_ups_status() == {}
-            gate.release.set()
-            assert await old_read == NUT_DATA
-            assert await client.get_nut_ups_status() == {}
-        warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
-        recoveries = [record for record in caplog.records if "recovered" in record.getMessage()]
-        assert len(warnings) == 1
-        assert not recoveries
-        assert router.count("GET", NUT_PATH) == 3
-    finally:
-        gate.release.set()
-        await old_read
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_probe_success_does_not_suppress_bounded_read_recovery(
-    make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A probe and bounded request keep independent outage publication order.
-
-    Args:
-        make_client (MakeClientFactory): Factory returning an OPNsense client.
-        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): 500})
-    gate = _QueueGate(client, armed=False)
-    try:
-        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
-            assert await client.get_nut_ups_status() == {}
-            router.routes[("GET", NUT_PATH)] = NUT_DATA
-            gate.armed = True
-            old_read = asyncio.create_task(client.get_nut_ups_status())
-            await asyncio.wait_for(gate.ready.wait(), timeout=1)
-            assert (await client._check_endpoint_status(NUT_PATH, force_refresh=True)).is_data
-            gate.release.set()
-            assert await old_read == NUT_DATA
-            router.routes[("GET", NUT_PATH)] = 500
-            assert await client.get_nut_ups_status() == {}
-
-        warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
-        recoveries = [record for record in caplog.records if "recovered" in record.getMessage()]
-        assert len(warnings) == 2
-        assert len(recoveries) == 1
-        assert router.count("GET", NUT_PATH) == 4
-    finally:
-        gate.release.set()
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_permission_failure_is_logged_separately_from_transient_outage(
-    make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A 403 after a 500 is logged once as an escalation to permission failure.
-
-    Args:
-        make_client (MakeClientFactory): Factory returning an OPNsense client.
-        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): 500})
-    try:
-        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
-            assert await client.get_nut_ups_status() == {}
-            router.routes[("GET", NUT_PATH)] = 403
-            assert await client.get_nut_ups_status() == {}
-            client._endpoint_cache_ttl_seconds = 0
-            assert await client.get_nut_ups_status() == {}
-        warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
-        errors = [record for record in caplog.records if record.levelno == logging.ERROR]
-        assert len(warnings) == 1
-        assert len(errors) == 1
-        assert "Permission Error" in errors[0].getMessage()
-        assert router.count("GET", NUT_PATH) == 3
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_cached_404_is_trusted_in_throw_mode(make_client: MakeClientFactory) -> None:
     """A cached missing endpoint stays an empty result in throw mode without another request.
 
@@ -986,34 +756,6 @@ async def test_transient_failure_clears_cached_present_status(
 
 
 @pytest.mark.asyncio
-async def test_decode_error_clears_cached_absence(make_client: MakeClientFactory) -> None:
-    """A malformed 200 supersedes a cached 404, so the next read asks the Router again.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): 404})
-    try:
-        assert await client.get_nut_ups_status() == {}
-        assert await client.get_nut_ups_status() == {}
-        assert router.count("GET", NUT_PATH) == 1
-
-        # Expire the absence only for the read that meets the malformed response.
-        client._endpoint_cache_ttl_seconds = 0
-        router.routes[("GET", NUT_PATH)] = MalformedJSONResponse()
-        assert await client.get_nut_ups_status() is None
-        assert router.count("GET", NUT_PATH) == 2
-
-        client._endpoint_cache_ttl_seconds = 3600
-        router.routes[("GET", NUT_PATH)] = NUT_DATA
-        assert await client.get_nut_ups_status() == NUT_DATA
-        assert router.count("GET", NUT_PATH) == 3
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_forbidden_in_throw_mode_clears_cached_present_status(
     make_client: MakeClientFactory,
 ) -> None:
@@ -1034,52 +776,6 @@ async def test_forbidden_in_throw_mode_clears_cached_present_status(
         router.routes[("GET", NUT_PATH)] = NUT_DATA
         assert (await client._check_endpoint_status(NUT_PATH)).is_data
         assert router.count("GET", NUT_PATH) == 3
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.parametrize(
-    ("operation", "operation_label"),
-    [
-        pytest.param("status", "check_endpoint_status", id="status-check"),
-        pytest.param("get", "fetch_endpoint_outcome", id="get-read"),
-        pytest.param("post", "fetch_post_endpoint_outcome", id="post-read"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_permission_error_log_names_the_failing_operation(
-    make_client: MakeClientFactory,
-    caplog: pytest.LogCaptureFixture,
-    operation: str,
-    operation_label: str,
-) -> None:
-    """The first 403 logs a permission error labeled with the operation that met it.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
-        operation (str): Endpoint operation that receives the 403.
-        operation_label (str): Operation name expected in the log message.
-    """
-    client, session = make_mock_session_client(make_client)
-    method = "POST" if operation == "post" else "GET"
-    router = install_fake_router(client, session, routes={(method, NUT_PATH): 403})
-    try:
-        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
-            if operation == "status":
-                assert (await client._check_endpoint_status(NUT_PATH)).is_absent
-            elif operation == "get":
-                assert (await client._fetch_endpoint_outcome(NUT_PATH)).is_absent
-            else:
-                assert (await client._fetch_post_endpoint_outcome(NUT_PATH)).is_absent
-
-        errors = [
-            record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR
-        ]
-        assert len(errors) == 1
-        assert errors[0].startswith(f"Permission Error in {operation_label}. Path: ")
-        assert errors[0].endswith(_PERMISSION_GUIDANCE)
-        assert router.count(method, NUT_PATH) == 1
     finally:
         await client.async_close()
 
@@ -1417,3 +1113,44 @@ async def test_old_endpoint_probe_cannot_restore_cache_after_firmware_change(
         release_probe.set()
         if not old_probe_task.done():
             await asyncio.gather(old_probe_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status", [200, 404, 403, 500], ids=["present", "absent", "forbidden", "transient"]
+)
+async def test_reset_during_request_discards_its_cache_answer(
+    make_client: MakeClientFactory, status: int
+) -> None:
+    """An answer that arrives after an endpoint cache reset is not cached.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        status (int): HTTP status the Router answers with.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): status})
+    original_get = session.get
+
+    def get_then_reset(url: str, **kwargs: Any) -> Any:
+        """Answer the request, then reset the endpoint cache before the answer is read.
+
+        Args:
+            url (str): Requested URL.
+            kwargs (Any): Request options passed to the fake session.
+
+        Returns:
+            Any: Fake response for the request.
+        """
+        response = original_get(url, **kwargs)
+        client._reset_endpoint_state()
+        return response
+
+    session.get = get_then_reset
+    try:
+        await client._fetch_endpoint_outcome(NUT_PATH)
+        session.get = original_get
+        await client._fetch_endpoint_outcome(NUT_PATH)
+        assert router.count("GET", NUT_PATH) == 2
+    finally:
+        await client.async_close()

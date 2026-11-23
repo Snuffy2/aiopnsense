@@ -1,34 +1,16 @@
 """Endpoint selection and availability helpers for OPNsenseClient."""
 
 from collections.abc import MutableMapping
-from dataclasses import dataclass, field
 from datetime import datetime
-import logging
 from typing import TYPE_CHECKING, Any, Literal
 from warnings import deprecated
 
 from ._endpoint_outcome import _EndpointOutcome
-from ._error_policy import _error_if_throwing, _throws_errors
-from ._request_failure import _PERMISSION_GUIDANCE, _PROBE_PHASE, _REQUEST_PHASE, _request_log_url
+from ._error_policy import _raise_if_throwing, _throws_errors
+from ._request_failure import _PROBE_PHASE, _REQUEST_PHASE
 from .const import SNAKE_CASE_ENDPOINTS_CAPABILITY, FirmwareCapability
-from .exceptions import OPNsenseUnknownFirmware, _map_opnsense_exception
-from .helpers import (
-    _LOGGER,
-    _log_request_failure,
-    _log_request_recovery,
-    _mark_request_error_logged,
-    _redact_url_credentials,
-)
-
-
-@dataclass
-class _EndpointObservation:
-    """Transient publication state for concurrent requests to one endpoint."""
-
-    generation: int
-    active_count: int = 0
-    cache_publication_id: int = 0
-    phase_publication_ids: dict[str, int] = field(default_factory=dict)
+from .exceptions import OPNsenseUnknownFirmware
+from .helpers import _LOGGER
 
 
 class ClientEndpointMixin:
@@ -40,9 +22,7 @@ class ClientEndpointMixin:
         _endpoint_cache_ttl_seconds: int
         _endpoint_checked_at: dict[str, datetime]
         _endpoint_permission_denied: set[str]
-        _request_outages: dict[tuple[str, str, str], int | None]
         _throw_errors: bool
-        _endpoint_observations: dict[str, _EndpointObservation]
         _url: str
         _use_snake_case: bool | None
 
@@ -64,6 +44,7 @@ class ClientEndpointMixin:
             *,
             read_body: bool = True,
             response_format: Literal["json", "text"] = "json",
+            phase: str = _REQUEST_PHASE,
         ) -> _EndpointOutcome:
             """Execute an immediate GET request and classify the response.
 
@@ -73,6 +54,7 @@ class ClientEndpointMixin:
                 read_body (bool): Whether to decode a successful response body.
                 response_format (Literal["json", "text"], optional): Decoding mode for
                     a successful response body.
+                phase (str): Request phase for outage logging.
 
             Returns:
                 _EndpointOutcome: Classified transport response.
@@ -168,7 +150,6 @@ class ClientEndpointMixin:
         """
         self._endpoint_cache_generation += 1
         self._use_snake_case = None
-        self._endpoint_observations.clear()
         self._endpoint_availability.clear()
         self._endpoint_checked_at.clear()
         self._endpoint_permission_denied.clear()
@@ -182,6 +163,30 @@ class ClientEndpointMixin:
         self._endpoint_permission_denied.discard(cache_key)
         self._endpoint_availability.pop(cache_key, None)
         self._endpoint_checked_at.pop(cache_key, None)
+
+    def _set_endpoint_cache(
+        self,
+        cache_key: str,
+        *,
+        available: bool,
+        checked_at: datetime,
+        permission_denied: bool = False,
+    ) -> None:
+        """Store one availability answer for the endpoint cache TTL.
+
+        Args:
+            cache_key (str): Method-aware endpoint cache key.
+            available (bool): Whether the endpoint answered successfully.
+            checked_at (datetime): Time the request was started, which starts the TTL.
+            permission_denied (bool): Whether the answer is a 403 that is cached outside
+                throw mode.
+        """
+        if permission_denied:
+            self._endpoint_permission_denied.add(cache_key)
+        else:
+            self._endpoint_permission_denied.discard(cache_key)
+        self._endpoint_availability[cache_key] = available
+        self._endpoint_checked_at[cache_key] = checked_at
 
     async def _fetch_endpoint_outcome(
         self,
@@ -293,193 +298,65 @@ class ClientEndpointMixin:
                 raises the mapped ``OPNsenseError`` instead when ``self._throw_errors``
                 is ``True``; a 404 never raises.
 
-        Raises:
-            error: OPNsenseError raised for a 403 or a transient HTTP or transport
-                failure when ``self._throw_errors`` is ``True``.
-            decode_error: A decoding exception on a successful HTTP response.
-                Bounded reads raise its mapped public error; probes propagate the
-                original exception from the session validator.
-
         Side Effects:
-            Updates endpoint availability caches. A 200 without a decoding error
-            caches the endpoint as present and a 404 as absent. A 200 with a decoding
-            error supersedes older responses and clears any cached absence. Outside
-            throw mode a 403 also caches absence with the permission-denied marker.
-            Transient failures and, in throw mode, a 403 clear the cache entry so the
-            next call requests again.
+            Updates endpoint availability caches. A 200 caches the endpoint as present
+            and a 404 as absent. Outside throw mode a 403 also caches absence with the
+            permission-denied marker. Transient failures and, in throw mode, a 403 clear
+            the cache entry so the next call requests again. An undecodable 200 body
+            propagates and leaves the cache unchanged. A reset of the endpoint cache
+            while the request is in flight discards its answer.
         """
-        cache_key = path
-        if method == "post":
-            cache_key = f"post:{cache_key}"
+        cache_key = f"post:{path}" if method == "post" else path
         now = datetime.now().astimezone()
         cache_is_fresh = (
             cache_key in self._endpoint_checked_at
             and (now - self._endpoint_checked_at[cache_key]).total_seconds()
             < self._endpoint_cache_ttl_seconds
         )
-        if (
-            not force_refresh
-            and cache_is_fresh
-            and self._endpoint_availability.get(cache_key) is False
-            and not (_throws_errors(self) and cache_key in self._endpoint_permission_denied)
-        ):
-            if cache_key in self._endpoint_permission_denied:
-                return _EndpointOutcome.from_http_status(403, "Forbidden")
-            return _EndpointOutcome.absent()
-        if (
-            status_only
-            and not force_refresh
-            and cache_is_fresh
-            and self._endpoint_availability.get(cache_key) is True
-        ):
-            return _EndpointOutcome.data(None)
+        if not force_refresh and cache_is_fresh:
+            cached_available = self._endpoint_availability.get(cache_key)
+            if cached_available is False and not (
+                _throws_errors(self) and cache_key in self._endpoint_permission_denied
+            ):
+                denied = cache_key in self._endpoint_permission_denied
+                return _EndpointOutcome.absent(403 if denied else 404)
+            if cached_available is True and status_only:
+                return _EndpointOutcome.data(None)
 
         cache_generation = self._endpoint_cache_generation
-        phase = _PROBE_PHASE if status_only else _REQUEST_PHASE
-        operation = (
-            "check_endpoint_status"
-            if status_only
-            else "fetch_post_endpoint_outcome"
-            if method == "post"
-            else "fetch_endpoint_outcome"
-        )
-        observation = self._endpoint_observations.get(cache_key)
-        if observation is None or observation.generation != cache_generation:
-            observation = _EndpointObservation(generation=cache_generation)
-            self._endpoint_observations[cache_key] = observation
-        observation.active_count += 1
-        try:
-            if status_only:
-                outcome: _EndpointOutcome = await self._do_get_outcome(
-                    path,
-                    "_check_endpoint_status",
-                    read_body=False,
-                )
-            else:
-                queue_method = (
-                    "get_text_outcome"
-                    if method == "get" and response_format == "text"
-                    else f"{method}_outcome"
-                )
-                outcome = await self._queue_request(queue_method, path, payload)
-            observation_id = outcome.observation_id
-            decode_error: Exception | None = outcome.decode_error
-            if decode_error is not None and not status_only:
-                mapped_error = _map_opnsense_exception(decode_error)
-                mapped_error.__cause__ = decode_error
-                decode_error = mapped_error
-            error = _error_if_throwing(self, outcome.error) if outcome.error is not None else None
-            checked_at = datetime.now().astimezone()
-            current_generation = (
-                self._endpoint_cache_generation == cache_generation
-                and self._endpoint_observations.get(cache_key) is observation
+        if status_only:
+            outcome = await self._do_get_outcome(
+                path, "_check_endpoint_status", read_body=False, phase=_PROBE_PHASE
             )
-            cache_can_publish = (
-                current_generation and observation.cache_publication_id < observation_id
+        else:
+            queue_method = (
+                "get_text_outcome"
+                if method == "get" and response_format == "text"
+                else f"{method}_outcome"
             )
-            phase_can_publish = (
-                current_generation
-                and decode_error is None
-                and observation.phase_publication_ids.get(phase, 0) < observation_id
-            )
-            if not cache_can_publish and not phase_can_publish:
-                if decode_error is not None:
-                    raise decode_error
-                if error is not None:
-                    key = (method.upper(), path, phase)
-                    failure_status = 403 if outcome.is_absent else None
-                    if (
-                        current_generation
-                        and key in self._request_outages
-                        and self._request_outages[key] == failure_status
-                    ):
-                        _mark_request_error_logged(error)
-                    raise error
-                return outcome
-            if cache_can_publish:
-                observation.cache_publication_id = observation_id
-            if phase_can_publish:
-                observation.phase_publication_ids[phase] = observation_id
-            if decode_error is not None:
-                if cache_can_publish and self._endpoint_availability.get(cache_key) is False:
-                    self._clear_endpoint_cache_entry(cache_key)
-                raise decode_error
-            if outcome.is_data:
-                if phase_can_publish:
-                    _log_request_recovery(self, method, path, phase)
-                if cache_can_publish:
-                    self._endpoint_permission_denied.discard(cache_key)
-                    self._endpoint_availability[cache_key] = True
-                    self._endpoint_checked_at[cache_key] = checked_at
-                return outcome
+            outcome = await self._queue_request(queue_method, path, payload)
 
-            if outcome.is_absent and outcome.http_status != 403:
-                _LOGGER.debug("Endpoint %s not found", _redact_url_credentials(path))
-                if cache_can_publish:
-                    self._endpoint_permission_denied.discard(cache_key)
-                    self._endpoint_availability[cache_key] = False
-                    self._endpoint_checked_at[cache_key] = checked_at
-                return outcome
-
-            if outcome.is_absent:
-                if phase_can_publish:
-                    _log_request_failure(
-                        self,
-                        method,
-                        path,
-                        phase,
-                        logging.ERROR,
-                        "Permission Error in %s. Path: %s. " + _PERMISSION_GUIDANCE,
-                        operation,
-                        _request_log_url(f"{self._url}{path}"),
-                        error=error,
-                        failure_status=403,
-                    )
-                if error is not None:
-                    if cache_can_publish:
-                        self._clear_endpoint_cache_entry(cache_key)
-                    raise error
-                if cache_can_publish:
-                    self._endpoint_permission_denied.add(cache_key)
-                    self._endpoint_availability[cache_key] = False
-                    self._endpoint_checked_at[cache_key] = checked_at
-                return outcome
-
-            if cache_can_publish:
-                self._clear_endpoint_cache_entry(cache_key)
-            if phase_can_publish:
-                _log_request_failure(
-                    self,
-                    method,
-                    path,
-                    phase,
-                    logging.WARNING,
-                    "Transient %s failure for %s. %s. Not caching result.",
-                    method.upper(),
-                    _redact_url_credentials(path),
-                    _redact_url_credentials(outcome.detail),
-                    error=error,
-                )
-            if error is not None:
-                raise error
+        current = self._endpoint_cache_generation == cache_generation
+        # The TTL starts when the Router answers, so a slow request keeps its full TTL.
+        checked_at = datetime.now().astimezone()
+        if outcome.is_data:
+            if current:
+                self._set_endpoint_cache(cache_key, available=True, checked_at=checked_at)
             return outcome
-        finally:
-            self._finish_endpoint_observation(cache_key, observation)
-
-    def _finish_endpoint_observation(
-        self, cache_key: str, observation: _EndpointObservation
-    ) -> None:
-        """Release one active observation, deleting its transient key when idle.
-
-        Args:
-            cache_key (str): Method-aware endpoint key for the request.
-            observation (_EndpointObservation): State captured when the request started.
-        """
-        if self._endpoint_observations.get(cache_key) is not observation:
-            return
-        observation.active_count -= 1
-        if observation.active_count == 0:
-            self._endpoint_observations.pop(cache_key, None)
+        if outcome.error is None:
+            if current:
+                self._set_endpoint_cache(cache_key, available=False, checked_at=checked_at)
+            return outcome
+        if outcome.is_absent and not _throws_errors(self):
+            if current:
+                self._set_endpoint_cache(
+                    cache_key, available=False, checked_at=checked_at, permission_denied=True
+                )
+            return outcome
+        if current:
+            self._clear_endpoint_cache_entry(cache_key)
+        _raise_if_throwing(self, outcome.error)
+        return outcome
 
     @deprecated("Endpoint availability probing is internal. Direct calls are no longer needed.")
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:

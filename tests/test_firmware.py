@@ -117,48 +117,6 @@ async def test_get_host_firmware_version_is_none_when_status_unavailable(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("route_value", "expected_error"), THROWING_ROUTES)
-async def test_get_host_firmware_version_raises_in_throw_mode(
-    make_client: Callable[..., Any], route_value: Any, expected_error: type[OPNsenseError]
-) -> None:
-    """Permission and transient failures raise in throw mode while a missing endpoint does not.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to create the firmware client.
-        route_value (Any): Response the Router gives for the firmware status endpoint.
-        expected_error (type[OPNsenseError]): Public exception type expected from the call.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", STATUS_PATH): route_value})
-    client.toggle_throwing_errors(True)
-    try:
-        with pytest.raises(expected_error):
-            await client.get_host_firmware_version()
-        assert router.count("GET", STATUS_PATH) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_host_firmware_version_missing_status_does_not_raise_in_throw_mode(
-    make_client: Callable[..., Any],
-) -> None:
-    """A missing firmware status endpoint (404) is an unknown version, not an error.
-
-    Args:
-        make_client (Callable[..., Any]): Factory used to create the firmware client.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", STATUS_PATH): 404})
-    client.toggle_throwing_errors(True)
-    try:
-        assert await client.get_host_firmware_version() is None
-        assert router.count("GET", STATUS_PATH) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("old_response", [{"product": {"product_version": "25.1"}}, 404])
 async def test_delayed_firmware_read_cannot_overwrite_a_newer_observation(
     firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
@@ -931,70 +889,6 @@ async def test_firmware_reads_return_empty_mapping_when_endpoint_unavailable(
         await client.async_close()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "read, path",
-    [
-        pytest.param("get_firmware_update_info", STATUS_PATH, id="update-info"),
-        pytest.param("upgrade_status", UPGRADE_STATUS_PATH, id="upgrade-status"),
-    ],
-)
-@pytest.mark.parametrize(("route_value", "expected_error"), THROWING_ROUTES)
-async def test_firmware_reads_raise_in_throw_mode(
-    make_client: Callable[..., Any],
-    read: str,
-    path: str,
-    route_value: Any,
-    expected_error: type[OPNsenseError],
-) -> None:
-    """Permission and transient failures raise in throw mode for firmware status reads.
-
-    Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-        read (str): Public client method under test.
-        path (str): Endpoint the method reads.
-        route_value (Any): Response the Router gives for that endpoint.
-        expected_error (type[OPNsenseError]): Public exception type expected from the call.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", path): route_value})
-    client.toggle_throwing_errors(True)
-    try:
-        with pytest.raises(expected_error):
-            await getattr(client, read)()
-        assert router.count("GET", path) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "read, path",
-    [
-        pytest.param("get_firmware_update_info", STATUS_PATH, id="update-info"),
-        pytest.param("upgrade_status", UPGRADE_STATUS_PATH, id="upgrade-status"),
-    ],
-)
-async def test_firmware_reads_missing_endpoint_does_not_raise_in_throw_mode(
-    make_client: Callable[..., Any], read: str, path: str
-) -> None:
-    """A missing firmware endpoint (404) is an empty result, not an error, even in throw mode.
-
-    Args:
-        make_client (Callable[..., Any]): Fixture factory used to create client instances.
-        read (str): Public client method under test.
-        path (str): Endpoint the method reads.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", path): 404})
-    client.toggle_throwing_errors(True)
-    try:
-        assert await getattr(client, read)() == {}
-        assert router.count("GET", path) == 1
-    finally:
-        await client.async_close()
-
-
 @pytest.fixture
 def install_client(
     make_client: Callable[..., Any], fake_response_factory: Callable[..., Any]
@@ -1664,7 +1558,7 @@ def _configure_firmware_polls(
         Returns:
             FakeResponse: Poll response or the next scripted install response.
         """
-        if url.endswith(STATUS_PATH) and "raise_for_status" in kwargs:
+        if url.endswith(STATUS_PATH):
             return poll_get(url, **kwargs)
         return original_get(url, **kwargs)
 

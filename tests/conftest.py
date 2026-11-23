@@ -274,36 +274,6 @@ class MalformedJSONResponse(FakeResponse):
         raise json.JSONDecodeError("Expecting value", "<html>", 0)
 
 
-def middleware_response(
-    request: aiohttp.ClientRequest,
-    status: int,
-    *,
-    reason: str = "Test response",
-    payload: Any = None,
-) -> MagicMock:
-    """Build an HTTP response for a socket-free aiohttp middleware.
-
-    Args:
-        request (aiohttp.ClientRequest): Request being answered.
-        status (int): Response status.
-        reason (str): Response reason phrase.
-        payload (Any): JSON body, defaulting to a NUT status payload.
-
-    Returns:
-        MagicMock: Synthetic response passed to aiohttp.
-    """
-    response = MagicMock(spec=aiohttp.ClientResponse)
-    response.status = status
-    response.ok = status < 400
-    response.reason = reason
-    response.request_info = request.request_info
-    response.connection = None
-    response._raw_cookie_headers = ()
-    response.__aenter__.return_value = response
-    response.json.return_value = {"status": {"ups.status": "OL"}} if payload is None else payload
-    return response
-
-
 FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]
 
 
