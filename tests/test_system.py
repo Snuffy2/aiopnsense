@@ -9,8 +9,9 @@ import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient, OPNsenseInvalidURL, OPNsensePrivilegeMissing
+from aiopnsense._endpoint_outcome import _EndpointOutcome
 from aiopnsense.exceptions import OPNsenseMissingDeviceUniqueID
-from tests.conftest import make_mock_session_client
+from tests.conftest import make_mock_session_client, stub_endpoint_outcome
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -28,11 +29,10 @@ async def test_get_system_info(make_client: ClientType) -> None:
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"name": "foo"})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"name": "foo"}))
         info = await client.get_system_info()
         assert info["name"] == "foo"
-        client._safe_dict_get.assert_awaited_once_with("/api/diagnostics/system/system_information")
+        read.assert_awaited_once_with("/api/diagnostics/system/system_information")
     finally:
         await client.async_close()
 
@@ -88,7 +88,7 @@ async def test_get_device_unique_id_variants(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_list_get = AsyncMock(return_value=instances)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(instances))
         assert await client.get_device_unique_id(expected_id=expected_id) == expected
     finally:
         await client.async_close()
@@ -117,8 +117,7 @@ async def test_get_device_unique_id_raises_when_missing(
     client, _session = make_mock_session_client(make_client)
     try:
         client.toggle_throwing_errors(True)
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_list_get = AsyncMock(return_value=instances)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(instances))
         with pytest.raises(OPNsenseMissingDeviceUniqueID):
             await client.get_device_unique_id()
     finally:
@@ -144,10 +143,12 @@ async def test_get_device_unique_id_missing_follows_throw_errors_contract(
     client, _session = make_mock_session_client(make_client)
     try:
         client.toggle_throwing_errors(throw_errors)
-        client._is_get_endpoint_available = AsyncMock(
-            return_value=missing != "endpoint-unavailable"
+        outcome = (
+            _EndpointOutcome.absent()
+            if missing == "endpoint-unavailable"
+            else _EndpointOutcome.data([{"is_physical": False}])
         )
-        client._safe_list_get = AsyncMock(return_value=[{"is_physical": False}])
+        stub_endpoint_outcome(client, outcome)
         if throw_errors:
             with pytest.raises(OPNsenseMissingDeviceUniqueID):
                 await client.get_device_unique_id()
@@ -169,26 +170,31 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client: ClientType)
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"datetime": "2026-03-07 12:00:00 EST"})
+        stub_endpoint_outcome(
+            client, _EndpointOutcome.data({"datetime": "2026-03-07 12:00:00 EST"})
+        )
         parsed_tz = await client._get_opnsense_timezone()
         assert parsed_tz is not None
         parsed_dt = datetime(2026, 3, 7, 12, 0, 0, tzinfo=parsed_tz)
         assert parsed_tz.utcoffset(parsed_dt) == timedelta(hours=-5)
 
-        client._safe_dict_get = AsyncMock(return_value={"datetime": "2026-06-07 12:00:00 EDT"})
+        stub_endpoint_outcome(
+            client, _EndpointOutcome.data({"datetime": "2026-06-07 12:00:00 EDT"})
+        )
         parsed_tz = await client._get_opnsense_timezone()
         assert parsed_tz is not None
         parsed_dt = datetime(2026, 6, 7, 12, 0, 0, tzinfo=parsed_tz)
         assert parsed_tz.utcoffset(parsed_dt) == timedelta(hours=-4)
 
-        client._safe_dict_get = AsyncMock(return_value={"datetime": "Sun Mar 22 21:36:07 EDT 2026"})
+        stub_endpoint_outcome(
+            client, _EndpointOutcome.data({"datetime": "Sun Mar 22 21:36:07 EDT 2026"})
+        )
         parsed_tz = await client._get_opnsense_timezone()
         assert parsed_tz is not None
         parsed_dt = datetime(2026, 3, 22, 21, 36, 7, tzinfo=parsed_tz)
         assert parsed_tz.utcoffset(parsed_dt) == timedelta(hours=-4)
 
-        client._safe_dict_get = AsyncMock(return_value={"datetime": "not-a-datetime"})
+        stub_endpoint_outcome(client, _EndpointOutcome.data({"datetime": "not-a-datetime"}))
         fallback_tz = await client._get_opnsense_timezone()
         assert fallback_tz is not None
         local_tz = datetime.now().astimezone().tzinfo
@@ -198,7 +204,8 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client: ClientType)
             now_local
         )
 
-        client._safe_dict_get = AsyncMock(side_effect=aiohttp.ClientError("transient fetch error"))
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = aiohttp.ClientError("transient fetch error")
         fetch_fallback_tz = await client._get_opnsense_timezone()
         assert fetch_fallback_tz is not None
         assert fetch_fallback_tz == local_tz or fetch_fallback_tz.utcoffset(
@@ -216,15 +223,13 @@ async def test_get_opnsense_timezone_fallback_for_mapped_error(make_client: Clie
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
-        None: This test validates fallback when _safe_dict_get raises an OPNsenseError.
+        None: This test validates fallback when the system-time read raises an OPNsenseError.
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            side_effect=OPNsenseInvalidURL(
-                "https://user:password@api.example/diagnostics/system/system_time"
-            )
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = OPNsenseInvalidURL(
+            "https://user:password@api.example/diagnostics/system/system_time"
         )
 
         parsed_tz = await client._get_opnsense_timezone()
@@ -250,14 +255,12 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_endpoint_unavailab
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
 
         resolved_tz = await client._get_resolved_opnsense_timezone()
 
         assert resolved_tz is None
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/diagnostics/system/system_time"
-        )
+        read.assert_awaited_once_with("/api/diagnostics/system/system_time")
     finally:
         await client.async_close()
 
@@ -274,18 +277,13 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_probe_error(
     client, _session = make_mock_session_client(make_client)
     try:
         client.toggle_throwing_errors(True)
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=OPNsensePrivilegeMissing("Missing privilege for system time")
-        )
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = OPNsensePrivilegeMissing("Missing privilege for system time")
 
         resolved_tz = await client._get_resolved_opnsense_timezone()
 
         assert resolved_tz is None
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/diagnostics/system/system_time"
-        )
-        client._safe_dict_get.assert_not_awaited()
+        read.assert_awaited_once_with("/api/diagnostics/system/system_time")
     finally:
         await client.async_close()
 
@@ -301,13 +299,13 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_fetch_error(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(side_effect=aiohttp.ClientError("transient fetch error"))
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = aiohttp.ClientError("transient fetch error")
 
         resolved_tz = await client._get_resolved_opnsense_timezone()
 
         assert resolved_tz is None
-        client._safe_dict_get.assert_awaited_once_with("/api/diagnostics/system/system_time")
+        read.assert_awaited_once_with("/api/diagnostics/system/system_time")
     finally:
         await client.async_close()
 
@@ -323,8 +321,7 @@ async def test_get_resolved_opnsense_timezone_returns_none_on_malformed_datetime
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"datetime": "not-a-datetime"})
+        stub_endpoint_outcome(client, _EndpointOutcome.data({"datetime": "not-a-datetime"}))
 
         resolved_tz = await client._get_resolved_opnsense_timezone()
 
@@ -399,8 +396,7 @@ async def test_get_opnsense_timezone_supports_known_daylight_abbreviations(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"datetime": datetime_str})
+        stub_endpoint_outcome(client, _EndpointOutcome.data({"datetime": datetime_str}))
         parsed_tz = await client._get_opnsense_timezone()
         assert parsed_tz is not None
         assert parsed_tz.utcoffset(expected_dt.replace(tzinfo=parsed_tz)) == expected_offset
@@ -420,26 +416,29 @@ async def test_carp_summary_and_reboot_and_wol(make_client: ClientType) -> None:
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "interface": "em0",
-                        "subnet": "10.0.0.1",
-                        "status": "MASTER",
-                        "mode": "carp",
-                        "vhid": "1",
-                        "advbase": "1",
-                        "advskew": "0",
-                    }
-                ],
-                "carp": {
-                    "allow": "1",
-                    "demotion": "0",
-                    "maintenancemode": False,
-                    "status_msg": "",
-                },
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "interface": "em0",
+                            "subnet": "10.0.0.1",
+                            "status": "MASTER",
+                            "mode": "carp",
+                            "vhid": "1",
+                            "advbase": "1",
+                            "advskew": "0",
+                        }
+                    ],
+                    "carp": {
+                        "allow": "1",
+                        "demotion": "0",
+                        "maintenancemode": False,
+                        "status_msg": "",
+                    },
+                }
+            ),
         )
         summary = dict((await client.get_carp()).get("status_summary", {}))
         assert summary["state"] == "healthy"
@@ -447,8 +446,9 @@ async def test_carp_summary_and_reboot_and_wol(make_client: ClientType) -> None:
         assert summary["vip_count"] == 1
         assert summary["master_count"] == 1
 
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = [
+            _EndpointOutcome.data(
                 {
                     "rows": [
                         {
@@ -459,10 +459,12 @@ async def test_carp_summary_and_reboot_and_wol(make_client: ClientType) -> None:
                             "status": "MASTER",
                         }
                     ]
-                },
-                {"rows": [{"mode": "carp", "interface": "em0", "subnet": "10.0.0.1", "vhid": "1"}]},
-            ]
-        )
+                }
+            ),
+            _EndpointOutcome.data(
+                {"rows": [{"mode": "carp", "interface": "em0", "subnet": "10.0.0.1", "vhid": "1"}]}
+            ),
+        ]
         carp = (await client.get_carp()).get("interfaces", [])
         assert isinstance(carp, list)
         assert carp[0]["status"] == "MASTER"
@@ -527,33 +529,36 @@ async def test_reload_interface_and_certificates_and_gateways(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"message": "OK reload"})
         ok = await client.reload_interface("em0")
         assert ok is True
 
         # certificates
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "descr": "cert1",
-                        "uuid": "u1",
-                        "caref": "issuer",
-                        "rfc3280_purpose": "purpose",
-                        "in_use": "1",
-                        "valid_from": 0,
-                        "valid_to": 0,
-                    }
-                ]
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "descr": "cert1",
+                            "uuid": "u1",
+                            "caref": "issuer",
+                            "rfc3280_purpose": "purpose",
+                            "in_use": "1",
+                            "valid_from": 0,
+                            "valid_to": 0,
+                        }
+                    ]
+                }
+            ),
         )
         certs = await client.get_certificates()
         assert "cert1" in certs and certs["cert1"]["issuer"] == "issuer"
 
         # gateways
-        client._safe_dict_get = AsyncMock(
-            return_value={"items": [{"name": "gw1", "status_translated": "Online"}]}
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data({"items": [{"name": "gw1", "status_translated": "Online"}]}),
         )
         gws = await client.get_gateways()
         assert "gw1" in gws and gws["gw1"]["status"] == "online"
@@ -574,29 +579,33 @@ async def test_gateways_notices_and_close_notice_all(make_client: ClientType) ->
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={"items": [{"name": "gw1", "status_translated": "OK"}]}
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data({"items": [{"name": "gw1", "status_translated": "OK"}]}),
         )
         gws = await client.get_gateways()
         assert "gw1" in gws and gws["gw1"]["status"] == "ok"
 
         # notices: include a pending notice
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "n1": {
-                    "statusCode": 1,
-                    "message": "m",
-                    "timestamp": int(datetime.now(tz=UTC).timestamp()),
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "n1": {
+                        "statusCode": 1,
+                        "message": "m",
+                        "timestamp": int(datetime.now(tz=UTC).timestamp()),
+                    }
                 }
-            }
+            ),
         )
         notices = await client.get_notices()
         assert notices["pending_notices_present"] is True
 
         # close_notice all: prepare multiple notices and simulate dismiss responses
-        client._safe_dict_get = AsyncMock(
-            return_value={"n1": {"statusCode": 1}, "n2": {"statusCode": 1}}
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data({"n1": {"statusCode": 1}, "n2": {"statusCode": 1}}),
         )
         client._safe_dict_post = AsyncMock(return_value={"status": "ok"})
         assert await client.close_notice("all") is True
@@ -640,31 +649,33 @@ async def test_get_carp_handles_invalid_payloads_and_default_status(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(side_effect=[{"rows": "bad"}, {"rows": "bad"}])
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = [
+            _EndpointOutcome.data({"rows": "bad"}),
+            _EndpointOutcome.data({"rows": "bad"}),
+        ]
         assert (await client.get_carp()).get("interfaces", []) == []
 
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
+        read.side_effect = [
+            _EndpointOutcome.data(
                 {
                     "rows": [
                         {"mode": "other", "interface": "em9"},
                         {"mode": "carp", "interface": "em0", "subnet": "10.0.0.1", "vhid": "11"},
                     ]
-                },
-                {
-                    "rows": [
-                        {"mode": "carp", "interface": "em1", "subnet": "10.0.0.9", "vhid": "12"}
-                    ]
-                },
-            ]
-        )
+                }
+            ),
+            _EndpointOutcome.data(
+                {"rows": [{"mode": "carp", "interface": "em1", "subnet": "10.0.0.9", "vhid": "12"}]}
+            ),
+        ]
         carp = (await client.get_carp()).get("interfaces", [])
         assert len(carp) == 1
         assert carp[0]["interface"] == "em0"
         assert carp[0]["status"] == "DISABLED"
 
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
+        read.side_effect = [
+            _EndpointOutcome.data(
                 {
                     "rows": [
                         {
@@ -675,17 +686,17 @@ async def test_get_carp_handles_invalid_payloads_and_default_status(
                             "status": "BACKUP",
                         }
                     ]
-                },
-                {"rows": "not-a-list"},
-            ]
-        )
+                }
+            ),
+            _EndpointOutcome.data({"rows": "not-a-list"}),
+        ]
         carp = (await client.get_carp()).get("interfaces", [])
         assert len(carp) == 1
         assert carp[0]["interface"] == "wan"
         assert carp[0]["status"] == "BACKUP"
 
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
+        read.side_effect = [
+            _EndpointOutcome.data(
                 {
                     "rows": [
                         {
@@ -695,10 +706,10 @@ async def test_get_carp_handles_invalid_payloads_and_default_status(
                             "status": "MASTER",
                         }
                     ]
-                },
-                {"rows": []},
-            ]
-        )
+                }
+            ),
+            _EndpointOutcome.data({"rows": []}),
+        ]
         assert (await client.get_carp()).get("interfaces", []) == []
     finally:
         await client.async_close()
@@ -718,8 +729,9 @@ async def test_get_carp_matches_multiple_vips_on_same_interface(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = [
+            _EndpointOutcome.data(
                 {
                     "rows": [
                         {
@@ -737,7 +749,9 @@ async def test_get_carp_matches_multiple_vips_on_same_interface(
                             "status": "BACKUP",
                         },
                     ]
-                },
+                }
+            ),
+            _EndpointOutcome.data(
                 {
                     "rows": [
                         {
@@ -755,9 +769,9 @@ async def test_get_carp_matches_multiple_vips_on_same_interface(
                             "descr": "second",
                         },
                     ]
-                },
-            ]
-        )
+                }
+            ),
+        ]
         carp = (await client.get_carp()).get("interfaces", [])
         assert len(carp) == 2
         by_subnet = {entry["subnet"]: entry for entry in carp}
@@ -783,8 +797,9 @@ async def test_get_carp_returns_no_match_for_ambiguous_partial_key_collisions(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = [
+            _EndpointOutcome.data(
                 {
                     "rows": [
                         {
@@ -794,7 +809,9 @@ async def test_get_carp_returns_no_match_for_ambiguous_partial_key_collisions(
                             "status": "MASTER",
                         }
                     ]
-                },
+                }
+            ),
+            _EndpointOutcome.data(
                 {
                     "rows": [
                         {
@@ -812,9 +829,9 @@ async def test_get_carp_returns_no_match_for_ambiguous_partial_key_collisions(
                             "descr": "second-candidate",
                         },
                     ]
-                },
-            ]
-        )
+                }
+            ),
+        ]
         carp = (await client.get_carp()).get("interfaces", [])
         assert carp == []
     finally:
@@ -954,7 +971,7 @@ async def test_get_carp_status_states(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(return_value=payload)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(payload))
         summary = dict((await client.get_carp()).get("status_summary", {}))
         assert summary["state"] == expected_state
         assert "vips" in summary
@@ -982,29 +999,32 @@ async def test_get_carp_skips_whitespace_interface_values(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {
-                        "mode": "carp",
-                        "status": "MASTER",
-                        "interface": "   ",
-                        "subnet": "1.2.3.4",
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {
+                            "mode": "carp",
+                            "status": "MASTER",
+                            "interface": "   ",
+                            "subnet": "1.2.3.4",
+                        },
+                        {
+                            "mode": "carp",
+                            "status": "BACKUP",
+                            "interface": "  wan  ",
+                            "subnet": "5.6.7.8",
+                        },
+                    ],
+                    "carp": {
+                        "allow": "1",
+                        "maintenancemode": False,
+                        "demotion": "0",
+                        "status_msg": "",
                     },
-                    {
-                        "mode": "carp",
-                        "status": "BACKUP",
-                        "interface": "  wan  ",
-                        "subnet": "5.6.7.8",
-                    },
-                ],
-                "carp": {
-                    "allow": "1",
-                    "maintenancemode": False,
-                    "demotion": "0",
-                    "status_msg": "",
-                },
-            }
+                }
+            ),
         )
         snapshot = await client.get_carp()
         assert snapshot["interfaces"] == [
@@ -1035,8 +1055,9 @@ async def test_get_carp_status_uses_settings_merge_for_partial_rows(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = [
+            _EndpointOutcome.data(
                 {
                     "rows": [
                         {
@@ -1052,7 +1073,9 @@ async def test_get_carp_status_uses_settings_merge_for_partial_rows(
                         "demotion": "0",
                         "status_msg": "",
                     },
-                },
+                }
+            ),
+            _EndpointOutcome.data(
                 {
                     "rows": [
                         {
@@ -1062,9 +1085,9 @@ async def test_get_carp_status_uses_settings_merge_for_partial_rows(
                             "vhid": "1",
                         }
                     ]
-                },
-            ]
-        )
+                }
+            ),
+        ]
         summary = dict((await client.get_carp()).get("status_summary", {}))
         assert summary["state"] == "healthy"
         assert summary["vip_count"] == 1
@@ -1088,8 +1111,9 @@ async def test_get_carp_returns_interfaces_and_summary_from_one_fetch(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = [
+            _EndpointOutcome.data(
                 {
                     "rows": [{"mode": "carp", "status": "MASTER", "interface": "wan", "vhid": "1"}],
                     "carp": {
@@ -1098,14 +1122,16 @@ async def test_get_carp_returns_interfaces_and_summary_from_one_fetch(
                         "demotion": "0",
                         "status_msg": "",
                     },
-                },
-                {"rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]},
-            ]
-        )
+                }
+            ),
+            _EndpointOutcome.data(
+                {"rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]}
+            ),
+        ]
         snapshot = await client.get_carp()
         assert snapshot["interfaces"][0]["subnet"] == "1.2.3.4"
         assert snapshot["status_summary"]["state"] == "healthy"
-        assert client._safe_dict_get.await_count == 2
+        assert read.await_count == 2
     finally:
         await client.async_close()
 
@@ -1125,7 +1151,6 @@ async def test_system_actions_and_notice_closing_failure_paths(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client._safe_dict_post = AsyncMock(return_value={"status": "failed"})
         assert await client.system_reboot() is False
         assert await client.system_halt() is None
@@ -1134,13 +1159,16 @@ async def test_system_actions_and_notice_closing_failure_paths(
         client._safe_dict_post = AsyncMock(return_value={"status": "failed"})
         assert await client.close_notice("single-notice") is False
 
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "n1": {"statusCode": 1},
-                "n2": {"statusCode": 2},
-                "n3": {"statusCode": 1},
-                "bad": "invalid",
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "n1": {"statusCode": 1},
+                    "n2": {"statusCode": 2},
+                    "n3": {"statusCode": 1},
+                    "bad": "invalid",
+                }
+            ),
         )
         client._safe_dict_post = AsyncMock(side_effect=[{"status": "ok"}, {"status": "failed"}])
         assert await client.close_notice("all") is False
@@ -1161,9 +1189,7 @@ async def test_version_switched_system_endpoints_fail_closed(make_client: Client
     client, session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
-        client._safe_list_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
 
         assert await client.get_system_info() == {}
         assert await client.get_device_unique_id() is None
@@ -1193,8 +1219,8 @@ async def test_version_switched_system_endpoints_fail_closed(make_client: Client
         now = datetime.now().astimezone()
         assert tz.utcoffset(now) == client._get_local_timezone().utcoffset(now)
         session.post.assert_not_called()
-        client._safe_dict_get.assert_not_awaited()
-        client._safe_list_get.assert_not_awaited()
+        # One request per read, each answered absent; no payload is used.
+        assert read.await_count == 7
     finally:
         await client.async_close()
 
@@ -1213,29 +1239,32 @@ async def test_get_certificates_handles_non_list_and_missing_description(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._safe_dict_get = AsyncMock(return_value={"rows": "bad"})
+        stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": "bad"}))
         assert await client.get_certificates() == {}
 
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"uuid": "skip-no-descr"},
-                    {
-                        "descr": "cert-ok",
-                        "uuid": "u1",
-                        "in_use": "0",
-                        "valid_from": 0,
-                        "valid_to": 0,
-                    },
-                    {
-                        "descr": "cert-used",
-                        "uuid": "u2",
-                        "in_use": 1,
-                        "valid_from": 0,
-                        "valid_to": 0,
-                    },
-                ]
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {"uuid": "skip-no-descr"},
+                        {
+                            "descr": "cert-ok",
+                            "uuid": "u1",
+                            "in_use": "0",
+                            "valid_from": 0,
+                            "valid_to": 0,
+                        },
+                        {
+                            "descr": "cert-used",
+                            "uuid": "u2",
+                            "in_use": 1,
+                            "valid_from": 0,
+                            "valid_to": 0,
+                        },
+                    ]
+                }
+            ),
         )
         certs = await client.get_certificates()
         assert list(certs) == ["cert-ok", "cert-used"]
@@ -1285,15 +1314,14 @@ async def test_system_switched_endpoints_follow_selected_case(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = use_snake_case
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"name": "fw"})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"name": "fw"}))
         client._safe_dict_post = AsyncMock(side_effect=[{"status": "ok"}, {"message": "OK reload"}])
 
         await client.get_system_info()
         await client.close_notice("notice-1")
         await client.reload_interface("em0")
 
-        client._safe_dict_get.assert_awaited_once_with(expected_info)
+        read.assert_awaited_once_with(expected_info)
         assert client._safe_dict_post.await_args_list[0].args[0] == expected_dismiss
         assert client._safe_dict_post.await_args_list[1].args[0] == expected_reload
     finally:
@@ -1333,37 +1361,44 @@ async def test_system_branches_for_carp_candidate_and_notice_paths(make_client: 
             is not None
         )
 
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
+        stub_endpoint_outcome(client, _EndpointOutcome.absent())
         vip_status_raw, merged = await client._fetch_and_merge_carp_vips()
         assert vip_status_raw == {}
         assert merged == []
 
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, False])
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]
-            }
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {"rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]}
+            ),
         )
+        read.side_effect = [
+            _EndpointOutcome.data(
+                {"rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]}
+            ),
+            _EndpointOutcome.absent(),
+        ]
         vip_status_raw, merged = await client._fetch_and_merge_carp_vips()
         assert isinstance(vip_status_raw, dict)
         assert len(merged) == 1
 
-        client._is_get_endpoint_available = AsyncMock(side_effect=[True, True])
-        client._safe_dict_get = AsyncMock(
-            side_effect=[
-                {"rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]},
-                ["bad-settings-payload"],
-            ]
-        )
+        read.side_effect = [
+            _EndpointOutcome.data(
+                {"rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]}
+            ),
+            _EndpointOutcome.data(["bad-settings-payload"]),
+        ]
         _vip_status_raw, merged = await client._fetch_and_merge_carp_vips()
         assert len(merged) == 1
 
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "n1": {"statusCode": 2, "message": "resolved"},
-                "n2": {"statusCode": 1, "message": "pending"},
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "n1": {"statusCode": 2, "message": "resolved"},
+                    "n2": {"statusCode": 1, "message": "pending"},
+                }
+            ),
         )
         notices = await client.get_notices()
         assert notices["pending_notices_present"] is True
