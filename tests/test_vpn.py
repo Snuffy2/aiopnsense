@@ -10,8 +10,9 @@ import pytest
 
 import aiopnsense as aiopnsense_module
 from aiopnsense import OPNsenseClient, vpn as aiopnsense_vpn
+from aiopnsense._endpoint_outcome import _EndpointOutcome
 from aiopnsense.exceptions import OPNsenseConnectionError
-from tests.conftest import make_mock_session_client
+from tests.conftest import make_mock_session_client, stub_endpoint_outcome
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -29,7 +30,6 @@ async def test_get_openvpn_and_fetch_details(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         # Prepare fake responses for safe_gets
         sessions_info = {
             "rows": [
@@ -60,7 +60,7 @@ async def test_get_openvpn_and_fetch_details(
             ]
         }
 
-        async def fake_safe_dict_get(path: str) -> dict[str, Any]:
+        def fake_safe_dict_get(path: str) -> dict[str, Any]:
             """Fake safe dict get.
 
             Args:
@@ -97,10 +97,8 @@ async def test_get_openvpn_and_fetch_details(
             """
             return []
 
-        client._get = AsyncMock(side_effect=fake_safe_dict_get)
-        monkeypatch.setattr(
-            client, "_safe_dict_get", AsyncMock(side_effect=fake_safe_dict_get), raising=False
-        )
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(fake_safe_dict_get(path))
         monkeypatch.setattr(
             client, "_safe_list_get", AsyncMock(side_effect=fake_safe_list_get), raising=False
         )
@@ -212,18 +210,14 @@ async def test_toggle_vpn_instance_variants(
 
 
 @pytest.mark.asyncio
-async def test_openvpn_more_detail_parsing(
-    monkeypatch: pytest.MonkeyPatch, make_client: ClientType
-) -> None:
+async def test_openvpn_more_detail_parsing(make_client: ClientType) -> None:
     """Exercise additional OpenVPN parsing branches (no sessions, missing fields).
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture for replacing the client getter.
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, _session = make_mock_session_client(make_client)
     client._use_snake_case = True
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
 
     # prepare responses that exercise missing/partial fields
     sessions_info: dict[str, list[dict]] = {"rows": []}
@@ -231,7 +225,7 @@ async def test_openvpn_more_detail_parsing(
     providers_info: dict[str, dict] = {}
     instances_info = {"rows": [{"role": "client", "uuid": "c1", "enabled": "0"}]}
 
-    async def fake_safe_dict_get(path: str) -> dict[str, Any]:
+    def fake_safe_dict_get(path: str) -> dict[str, Any]:
         """Fake safe dict get.
 
         Args:
@@ -252,10 +246,8 @@ async def test_openvpn_more_detail_parsing(
             return {"instance": {}}  # missing details
         return {}
 
-    client._get = AsyncMock(side_effect=fake_safe_dict_get)
-    monkeypatch.setattr(
-        client, "_safe_dict_get", AsyncMock(side_effect=fake_safe_dict_get), raising=False
-    )
+    read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+    read.side_effect = lambda path: _EndpointOutcome.data(fake_safe_dict_get(path))
     res = await client.get_openvpn()
     assert "servers" in res and "clients" in res
     await client.async_close()
@@ -271,9 +263,8 @@ async def test_openvpn_processing_and_fetch_details(make_client: ClientType) -> 
     client, _ = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
 
-        # prepare fake responses for _safe_dict_get based on path
+        # prepare fake responses based on path
         def fake_safe_dict_get(path: str) -> dict[str, Any]:
             """Fake safe dict get.
 
@@ -349,8 +340,8 @@ async def test_openvpn_processing_and_fetch_details(make_client: ClientType) -> 
                 }
             return {}
 
-        client._safe_dict_get = AsyncMock(side_effect=fake_safe_dict_get)
-        client._get = AsyncMock(side_effect=fake_safe_dict_get)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(fake_safe_dict_get(path))
 
         openvpn = await client.get_openvpn()
         assert set(openvpn["servers"]) == {"srv1", "srv2"}
@@ -418,10 +409,9 @@ async def test_fetch_openvpn_server_details_missing_server_field(
     """
     client, _ = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         openvpn: dict[str, Any] = {"servers": {"srv1": {"uuid": "srv1"}}}
 
-        async def fake_safe_dict_get(path: str) -> dict[str, Any]:
+        def fake_safe_dict_get(path: str) -> dict[str, Any]:
             # return instance details with no 'server' key
             """Fake safe dict get.
 
@@ -435,7 +425,8 @@ async def test_fetch_openvpn_server_details_missing_server_field(
                 return {"instance": {}}
             return {}
 
-        client._safe_dict_get = AsyncMock(side_effect=fake_safe_dict_get)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(fake_safe_dict_get(path))
         await client._fetch_openvpn_server_details(openvpn)
         ta = openvpn["servers"]["srv1"].get("tunnel_addresses")
         assert "tunnel_addresses" not in openvpn["servers"]["srv1"] or (
@@ -459,8 +450,7 @@ async def test_fetch_openvpn_server_details_skips_unavailable_endpoint(
     """
     client, _ = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
         openvpn: dict[str, Any] = {"servers": {"srv1": {"uuid": "srv1"}}}
 
         await client._fetch_openvpn_server_details(openvpn)
@@ -468,7 +458,9 @@ async def test_fetch_openvpn_server_details_skips_unavailable_endpoint(
         assert openvpn["servers"]["srv1"]["connected_clients"] == 0
         assert openvpn["servers"]["srv1"]["total_bytes_sent"] == 0
         assert openvpn["servers"]["srv1"]["total_bytes_recv"] == 0
-        client._safe_dict_get.assert_not_awaited()
+        read.assert_awaited_once_with(
+            aiopnsense_vpn.OPENVPN_INSTANCE_DETAILS_ENDPOINT_PREFIX + "srv1"
+        )
     finally:
         await client.async_close()
 
@@ -598,14 +590,19 @@ async def test_get_wireguard_success_and_invalid(make_client: ClientType) -> Non
     }
 
     # side_effect order matches comprehension iteration order in get_wireguard
-    client._safe_dict_get = AsyncMock(side_effect=[summary_resp, clients_resp, servers_resp])
+    read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+    read.side_effect = [
+        _EndpointOutcome.data(summary_resp),
+        _EndpointOutcome.data(clients_resp),
+        _EndpointOutcome.data(servers_resp),
+    ]
     wg = await client.get_wireguard()
     assert "servers" in wg and "clients" in wg and wg["servers"]["s1"]["uuid"] == "s1"
     # client peer should reflect disconnected (old handshake)
     assert wg["clients"]["c1"].get("connected_servers") == 0
 
     # Invalid summary must not report configured peers as disconnected.
-    client._safe_dict_get = AsyncMock(return_value={"rows": {}})
+    stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": {}}))
     assert await client.get_wireguard() is None
     await client.async_close()
 
@@ -628,7 +625,6 @@ async def test_get_wireguard_rejects_malformed_inventory_entries(
     client, _session = make_mock_session_client(make_client)
     try:
         client._throw_errors = throw_errors
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         client_summ: dict[str, Any] = {
             "client-disabled": {
                 "name": "disabled client",
@@ -665,7 +661,8 @@ async def test_get_wireguard_rejects_malformed_inventory_entries(
                 "server": {"servers": {"server": server_summ}}
             },
         }
-        client._safe_dict_get = AsyncMock(side_effect=lambda path: response_by_path[path])
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(response_by_path[path])
 
         assert await client.get_wireguard() is None
     finally:
@@ -696,17 +693,22 @@ async def test_get_wireguard_empty_or_known_missing_inventory(
             "servers": aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT,
         }
         unavailable_path = path_by_inventory.get(unavailable_inventory)
-        if unavailable_path is not None and known_unavailable:
-            client._endpoint_availability[unavailable_path] = False
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=lambda path: path != unavailable_path
+        unavailable_outcome = (
+            _EndpointOutcome.absent()
+            if known_unavailable
+            else _EndpointOutcome.transient(OPNsenseConnectionError("unavailable"))
         )
         response_by_path = {
             aiopnsense_vpn.WIREGUARD_SUMMARY_ENDPOINT: {"rows": []},
             aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT: {"client": {"clients": {"client": {}}}},
             aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT: {"server": {"servers": {"server": {}}}},
         }
-        client._safe_dict_get = AsyncMock(side_effect=lambda path: response_by_path[path])
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: (
+            unavailable_outcome
+            if path == unavailable_path
+            else _EndpointOutcome.data(response_by_path[path])
+        )
 
         result = await client.get_wireguard()
 
@@ -714,6 +716,22 @@ async def test_get_wireguard_empty_or_known_missing_inventory(
             assert result is None
         else:
             assert result == {"servers": {}, "clients": {}}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_get_wireguard_known_missing_summary_returns_none(make_client: ClientType) -> None:
+    """Return None when the WireGuard summary is known missing, since it has no empty fallback.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        stub_endpoint_outcome(client, _EndpointOutcome.absent())
+
+        assert await client.get_wireguard() is None
     finally:
         await client.async_close()
 
@@ -731,13 +749,13 @@ async def test_version_switched_vpn_endpoints_fail_closed(make_client: ClientTyp
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(
+            client, _EndpointOutcome.transient(OPNsenseConnectionError("unavailable"))
+        )
 
         openvpn = await client.get_openvpn()
         assert openvpn is None
-        client._is_get_endpoint_available.assert_awaited()
-        client._safe_dict_get.assert_not_awaited()
+        read.assert_awaited_once_with(aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT)
     finally:
         await client.async_close()
 
@@ -802,9 +820,8 @@ async def test_get_openvpn_rejects_malformed_required_inventory_entries(
     try:
         client._throw_errors = throw_errors
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
 
-        async def fake_get(path: str) -> dict[str, Any]:
+        def fake_get(path: str) -> dict[str, Any]:
             """Return the fixture payload for the requested OpenVPN endpoint.
 
             Args:
@@ -819,10 +836,12 @@ async def test_get_openvpn_rejects_malformed_required_inventory_entries(
                 return {"rows": []}
             if path == aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT:
                 return {"rows": []}
+            if path == aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT:
+                return providers
             return {"instance": {}}
 
-        client._safe_dict_get = AsyncMock(side_effect=fake_get)
-        client._get = AsyncMock(return_value=providers)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(fake_get(path))
 
         assert await client.get_openvpn() is None
     finally:
@@ -844,9 +863,8 @@ async def test_get_openvpn_routes_request_failure(
     try:
         client._throw_errors = throw_errors
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
 
-        async def fake_get(path: str) -> dict[str, Any]:
+        def fake_get(path: str) -> dict[str, Any]:
             """Fail routes and return a connected server's inventory otherwise.
 
             Args:
@@ -864,10 +882,12 @@ async def test_get_openvpn_routes_request_failure(
                 return {"rows": [{"type": "server", "id": "server", "status": "connected"}]}
             if path == aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT:
                 return {"rows": [{"role": "server", "uuid": "server", "enabled": "1"}]}
+            if path == aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT:
+                return {}
             return {"rows": []}
 
-        client._safe_dict_get = AsyncMock(side_effect=fake_get)
-        client._get = AsyncMock(return_value={})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(fake_get(path))
 
         if throw_errors:
             with pytest.raises(OPNsenseConnectionError):
@@ -893,9 +913,8 @@ async def test_get_openvpn_routes_cancellation_propagates(make_client: ClientTyp
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
 
-        async def fake_get(path: str) -> dict[str, Any]:
+        def fake_get(path: str) -> dict[str, Any]:
             """Cancel the routes request and return empty payloads otherwise.
 
             Args:
@@ -911,8 +930,8 @@ async def test_get_openvpn_routes_cancellation_propagates(make_client: ClientTyp
                 raise asyncio.CancelledError
             return {"rows": []}
 
-        client._safe_dict_get = AsyncMock(side_effect=fake_get)
-        client._get = AsyncMock(return_value={})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(fake_get(path))
 
         with pytest.raises(asyncio.CancelledError):
             await client.get_openvpn()
@@ -930,9 +949,8 @@ async def test_get_openvpn_ignores_explicit_unsupported_role(make_client: Client
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
 
-        async def fake_get(path: str) -> dict[str, Any]:
+        def fake_get(path: str) -> dict[str, Any]:
             """Return empty auxiliary data and one unsupported instance record.
 
             Args:
@@ -943,10 +961,12 @@ async def test_get_openvpn_ignores_explicit_unsupported_role(make_client: Client
             """
             if path == aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT:
                 return {"rows": [{"role": "other"}]}
+            if path == aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT:
+                return {}
             return {"rows": []}
 
-        client._safe_dict_get = AsyncMock(side_effect=fake_get)
-        client._get = AsyncMock(return_value={})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(fake_get(path))
 
         assert await client.get_openvpn() == {"servers": {}, "clients": {}}
     finally:
@@ -983,13 +1003,19 @@ async def test_get_openvpn_empty_or_known_missing_inventory(
             "providers": aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT,
             "instances": aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT,
         }.get(unavailable_inventory)
-        if unavailable_path is not None and known_unavailable:
-            client._endpoint_availability[unavailable_path] = False
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=lambda path: path != unavailable_path
+        unavailable_outcome = (
+            _EndpointOutcome.absent()
+            if known_unavailable
+            else _EndpointOutcome.transient(OPNsenseConnectionError("unavailable"))
         )
-        client._safe_dict_get = AsyncMock(return_value={"rows": []})
-        client._get = AsyncMock(return_value={})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": []}))
+        read.side_effect = lambda path: (
+            unavailable_outcome
+            if path == unavailable_path
+            else _EndpointOutcome.data(
+                {} if path == aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT else {"rows": []}
+            )
+        )
 
         result = await client.get_openvpn()
 
@@ -1041,17 +1067,18 @@ async def test_vpn_switched_endpoints_follow_selected_case(
     client = vpn_toggle_client
     try:
         client._use_snake_case = use_snake_case
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"rows": []})
-        client._get = AsyncMock(return_value={})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": []}))
+        read.side_effect = lambda path: _EndpointOutcome.data(
+            {} if "providers" in path else {"rows": []}
+        )
         post_mock = AsyncMock(side_effect=[{"changed": True}, {"result": "ok"}])
         client._do_post = post_mock
 
         await client.get_openvpn()
         await client.toggle_vpn_instance("wireguard", "clients", "uuid")
 
-        client._safe_dict_get.assert_any_await(expected_sessions)
-        client._safe_dict_get.assert_any_await(expected_routes)
+        read.assert_any_await(expected_sessions)
+        read.assert_any_await(expected_routes)
         assert post_mock.await_args_list[0].args[0] == expected_client_toggle
     finally:
         await client.async_close()
@@ -1138,7 +1165,6 @@ async def test_get_ipsec_success_normalizes_rows(make_client: ClientType) -> Non
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         sessions = {
             "rows": [
                 {
@@ -1172,8 +1198,9 @@ async def test_get_ipsec_success_normalizes_rows(make_client: ClientType) -> Non
             ]
         }
         configured = {"rows": [{"uuid": "uuid-up", "description": "Site A", "enabled": "1"}]}
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: _ipsec_get_response(path, sessions, configured)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(
+            _ipsec_get_response(path, sessions, configured)
         )
         client._safe_dict_post = AsyncMock(return_value={"rows": []})
 
@@ -1209,12 +1236,8 @@ async def test_get_ipsec_success_normalizes_rows(make_client: ClientType) -> Non
         assert down["total_bytes_recv"] == 0
         assert down["total_packets_sent"] == 0
         assert down["enabled"] is None
-        client._is_get_endpoint_available.assert_any_await(
-            aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT
-        )
-        client._is_get_endpoint_available.assert_any_await(
-            aiopnsense_vpn.IPSEC_CONNECTIONS_SNAKE_ENDPOINT
-        )
+        read.assert_any_await(aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT)
+        read.assert_any_await(aiopnsense_vpn.IPSEC_CONNECTIONS_SNAKE_ENDPOINT)
     finally:
         await client.async_close()
 
@@ -1231,7 +1254,6 @@ async def test_get_ipsec_reports_configured_connections_without_session(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         sessions = {"rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]}
         configured = {
             "rows": [
@@ -1246,8 +1268,9 @@ async def test_get_ipsec_reports_configured_connections_without_session(
                 },
             ]
         }
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: _ipsec_get_response(path, sessions, configured)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(
+            _ipsec_get_response(path, sessions, configured)
         )
         client._safe_dict_post = AsyncMock(return_value={"rows": []})
 
@@ -1309,7 +1332,6 @@ async def test_get_ipsec_configured_enabled_and_version_normalization(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         sessions = {"rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]}
         configured = {
             "rows": [
@@ -1317,8 +1339,9 @@ async def test_get_ipsec_configured_enabled_and_version_normalization(
                 {"uuid": "uuid-off", "enabled": enabled, "version": version},
             ]
         }
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: _ipsec_get_response(path, sessions, configured)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(
+            _ipsec_get_response(path, sessions, configured)
         )
         client._safe_dict_post = AsyncMock(return_value={"rows": []})
 
@@ -1359,12 +1382,15 @@ async def test_get_ipsec_without_connection_inventory_returns_none(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=lambda path: connections_available or "connection" not in path
-        )
         sessions = {"rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]}
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: configured if "connection" in path else sessions
+        connections_outcome = (
+            _EndpointOutcome.data(configured)
+            if connections_available
+            else _EndpointOutcome.transient(OPNsenseConnectionError("unavailable"))
+        )
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data(sessions))
+        read.side_effect = lambda path: (
+            connections_outcome if "connection" in path else _EndpointOutcome.data(sessions)
         )
 
         ipsec = await client.get_ipsec()
@@ -1396,7 +1422,6 @@ async def test_get_ipsec_rejects_malformed_connection_rows(
     try:
         client._throw_errors = throw_errors
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         sessions = {"rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]}
         configured = {
             "rows": [
@@ -1404,8 +1429,9 @@ async def test_get_ipsec_rejects_malformed_connection_rows(
                 malformed_row,
             ]
         }
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: _ipsec_get_response(path, sessions, configured)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(
+            _ipsec_get_response(path, sessions, configured)
         )
         client._safe_dict_post = AsyncMock(return_value={"rows": []})
 
@@ -1426,20 +1452,18 @@ async def test_get_ipsec_known_unavailable_connection_inventory_reports_no_toggl
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._endpoint_availability[aiopnsense_vpn.IPSEC_CONNECTIONS_SNAKE_ENDPOINT] = False
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=lambda path: "connection" not in path
-        )
         sessions = {"rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]}
-        client._safe_dict_get = AsyncMock(return_value=sessions)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data(sessions))
+        read.side_effect = lambda path: (
+            _EndpointOutcome.absent() if "connection" in path else _EndpointOutcome.data(sessions)
+        )
+        client._safe_dict_post = AsyncMock(return_value={"rows": []})
 
         ipsec = await client.get_ipsec()
 
         assert set(ipsec["connections"]) == {"uuid-up"}
         assert ipsec["connections"]["uuid-up"]["enabled"] is None
-        client._safe_dict_get.assert_awaited_once_with(
-            aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT
-        )
+        read.assert_any_await(aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT)
     finally:
         await client.async_close()
 
@@ -1454,7 +1478,6 @@ async def test_get_ipsec_children_aggregate_phase2_sessions(make_client: ClientT
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         sessions = {
             "rows": [
                 {"ikeid": "ike-1", "name": "ike-1", "connected": True},
@@ -1544,10 +1567,9 @@ async def test_get_ipsec_children_aggregate_phase2_sessions(make_client: ClientT
             assert path == aiopnsense_vpn.IPSEC_PHASE2_SESSIONS_SNAKE_ENDPOINT
             return phase2[payload["id"]]
 
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: _ipsec_get_response(
-                path, sessions, {"rows": []}, children_config
-            )
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(
+            _ipsec_get_response(path, sessions, {"rows": []}, children_config)
         )
         client._safe_dict_post = AsyncMock(side_effect=fake_post)
 
@@ -1624,14 +1646,17 @@ async def test_get_ipsec_children_fail_closed(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        if children_cached_unavailable:
-            client._endpoint_availability[aiopnsense_vpn.IPSEC_CHILDREN_SNAKE_ENDPOINT] = False
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=lambda path: "search_child" not in path
-        )
         sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": True}]}
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: _ipsec_get_response(path, sessions, {"rows": []})
+        children_outcome = (
+            _EndpointOutcome.absent()
+            if children_cached_unavailable
+            else _EndpointOutcome.transient(OPNsenseConnectionError("unavailable"))
+        )
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: (
+            children_outcome
+            if "search_child" in path
+            else _EndpointOutcome.data(_ipsec_get_response(path, sessions, {"rows": []}))
         )
         client._safe_dict_post = AsyncMock(return_value=phase2_payload)
 
@@ -1662,10 +1687,10 @@ async def test_get_ipsec_phase2_request_failure(
     try:
         client._throw_errors = throw_errors
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": True}]}
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: _ipsec_get_response(path, sessions, {"rows": []})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(
+            _ipsec_get_response(path, sessions, {"rows": []})
         )
         client._safe_dict_post = AsyncMock(side_effect=OPNsenseConnectionError("phase 2 failed"))
 
@@ -1690,10 +1715,10 @@ async def test_get_ipsec_phase2_cancellation_propagates(make_client: ClientType)
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": True}]}
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: _ipsec_get_response(path, sessions, {"rows": []})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(
+            _ipsec_get_response(path, sessions, {"rows": []})
         )
         client._safe_dict_post = AsyncMock(side_effect=asyncio.CancelledError)
 
@@ -1725,7 +1750,6 @@ async def test_get_ipsec_malformed_child_config_omits_only_children(
     try:
         client._throw_errors = throw_errors
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": True}]}
         connections: dict[str, Any] = {"rows": []}
         children = {
@@ -1734,8 +1758,9 @@ async def test_get_ipsec_malformed_child_config_omits_only_children(
                 malformed_row,
             ]
         }
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: _ipsec_get_response(path, sessions, connections, children)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(
+            _ipsec_get_response(path, sessions, connections, children)
         )
         client._safe_dict_post = AsyncMock(return_value={"rows": []})
 
@@ -1759,13 +1784,11 @@ async def test_get_ipsec_children_skip_phase2_without_connected_sessions(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": False}]}
         children_config = {"rows": [{"uuid": "child-a", "enabled": "1", "connection": "ike-1"}]}
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: _ipsec_get_response(
-                path, sessions, {"rows": []}, children_config
-            )
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(
+            _ipsec_get_response(path, sessions, {"rows": []}, children_config)
         )
         client._safe_dict_post = AsyncMock()
 
@@ -1869,8 +1892,7 @@ async def test_get_ipsec_malformed_payload_returns_none(
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value=payload)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(payload))
 
         ipsec = await client.get_ipsec()
 
@@ -1889,8 +1911,7 @@ async def test_get_ipsec_without_rows_returns_none(make_client: ClientType) -> N
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = True
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={})
+        stub_endpoint_outcome(client, _EndpointOutcome.data({}))
 
         ipsec = await client.get_ipsec()
 
@@ -1909,14 +1930,12 @@ async def test_get_ipsec_endpoint_unavailable_fails_closed(make_client: ClientTy
     client, _session = make_mock_session_client(make_client)
     try:
         client._use_snake_case = False
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(
+            client, _EndpointOutcome.transient(OPNsenseConnectionError("unavailable"))
+        )
 
         assert await client.get_ipsec() is None
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT
-        )
-        client._safe_dict_get.assert_not_awaited()
+        read.assert_awaited_once_with(aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT)
     finally:
         await client.async_close()
 
@@ -1959,16 +1978,18 @@ async def test_openvpn_unavailable_routes_omit_client_counts(
     """
     client, _session = make_mock_session_client(make_client)
     client._use_snake_case = True
-    client._is_get_endpoint_available = AsyncMock(
-        side_effect=lambda path: (
-            routes is not None or path != aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT
-        )
+    routes_outcome = (
+        _EndpointOutcome.data(routes)
+        if routes is not None
+        else _EndpointOutcome.transient(OPNsenseConnectionError("routes unavailable"))
     )
-    client._get = AsyncMock(return_value={})
-    client._safe_dict_get = AsyncMock(
-        side_effect=lambda path: (
-            routes
-            if path == aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT
+    read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+    read.side_effect = lambda path: (
+        routes_outcome
+        if path == aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT
+        else _EndpointOutcome.data(
+            {}
+            if path == aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT
             else {"rows": [{"role": "server", "uuid": "server", "enabled": "1"}]}
             if path == aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT
             else {"rows": [{"type": "server", "id": "server", "status": "connected"}]}
