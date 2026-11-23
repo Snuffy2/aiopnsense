@@ -7,8 +7,9 @@ import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient
-from aiopnsense.system import SYSTEM_TIME_ENDPOINT
 from tests.conftest import make_mock_session_client, make_router_client
+
+SYSTEM_TIME_PATH = "/api/diagnostics/system/system_time"
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -79,7 +80,7 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client: Cl
                 "download": {"avg": 723.83, "min": 4.18, "max": 942.02},
                 "upload": {"avg": 706.7, "min": 1.54, "max": 890.32},
             },
-            ("GET", SYSTEM_TIME_ENDPOINT): NEW_YORK_TIME,
+            ("GET", SYSTEM_TIME_PATH): NEW_YORK_TIME,
         },
     )
 
@@ -120,7 +121,7 @@ async def test_get_speedtest_reads_optional_showstat_payload(
         {
             ("GET", SHOWLOG_PATH): _showlog_row(server="Test ISP, New York, NY"),
             ("GET", SHOWSTAT_PATH): {"samples": 5} if showstat_available else 404,
-            ("GET", SYSTEM_TIME_ENDPOINT): MINUS_FOUR_TIME,
+            ("GET", SYSTEM_TIME_PATH): MINUS_FOUR_TIME,
         },
     )
 
@@ -129,7 +130,7 @@ async def test_get_speedtest_reads_optional_showstat_payload(
     assert result["available"] is True
     assert router.count("GET", SHOWLOG_PATH) == 1
     assert router.count("GET", SHOWSTAT_PATH) == 1
-    assert router.count("GET", SYSTEM_TIME_ENDPOINT) == 1
+    assert router.count("GET", SYSTEM_TIME_PATH) == 1
     assert result["average"]["download"]["samples"] == (5 if showstat_available else None)
     assert result["last"]["download"]["value"] == 1.0
     assert result["last"]["upload"]["value"] == 2.0
@@ -147,14 +148,14 @@ async def test_get_speedtest_preserves_timezone_aware_date(make_client: ClientTy
         {
             ("GET", SHOWLOG_PATH): _showlog_row(date="2026-03-14T03:09:45+01:30"),
             ("GET", SHOWSTAT_PATH): 404,
-            ("GET", SYSTEM_TIME_ENDPOINT): NEW_YORK_TIME,
+            ("GET", SYSTEM_TIME_PATH): NEW_YORK_TIME,
         },
     )
 
     result = await client.get_speedtest()
 
     assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
-    assert router.count("GET", SYSTEM_TIME_ENDPOINT) == 1
+    assert router.count("GET", SYSTEM_TIME_PATH) == 1
 
 
 async def test_get_speedtest_drops_malformed_date(make_client: ClientType) -> None:
@@ -168,14 +169,14 @@ async def test_get_speedtest_drops_malformed_date(make_client: ClientType) -> No
         {
             ("GET", SHOWLOG_PATH): _showlog_row(date="not-a-date"),
             ("GET", SHOWSTAT_PATH): 404,
-            ("GET", SYSTEM_TIME_ENDPOINT): NEW_YORK_TIME,
+            ("GET", SYSTEM_TIME_PATH): NEW_YORK_TIME,
         },
     )
 
     result = await client.get_speedtest()
 
     assert result["last"]["download"]["date"] is None
-    assert router.count("GET", SYSTEM_TIME_ENDPOINT) == 1
+    assert router.count("GET", SYSTEM_TIME_PATH) == 1
 
 
 async def test_get_speedtest_preserves_aware_date_and_drops_naive_periods_when_timezone_unresolved(
@@ -194,7 +195,7 @@ async def test_get_speedtest_preserves_aware_date_and_drops_naive_periods_when_t
                 "samples": 10717,
                 "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
             },
-            ("GET", SYSTEM_TIME_ENDPOINT): 404,
+            ("GET", SYSTEM_TIME_PATH): 404,
         },
     )
 
@@ -203,7 +204,7 @@ async def test_get_speedtest_preserves_aware_date_and_drops_naive_periods_when_t
     assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
     assert result["average"]["download"]["oldest"] is None
     assert result["average"]["download"]["youngest"] is None
-    assert router.count("GET", SYSTEM_TIME_ENDPOINT) == 1
+    assert router.count("GET", SYSTEM_TIME_PATH) == 1
 
 
 async def test_get_speedtest_normalizes_malformed_payloads(make_client: ClientType) -> None:
@@ -235,7 +236,7 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client: ClientTy
                 "upload": None,
                 "latency": ["bad-latency-shape"],
             },
-            ("GET", SYSTEM_TIME_ENDPOINT): MINUS_FOUR_TIME,
+            ("GET", SYSTEM_TIME_PATH): MINUS_FOUR_TIME,
         },
     )
 
@@ -439,7 +440,7 @@ async def test_get_speedtest_survives_failed_system_time_lookup(
                 "samples": 10717,
                 "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
             },
-            ("GET", SYSTEM_TIME_ENDPOINT): 503,
+            ("GET", SYSTEM_TIME_PATH): 503,
         },
         throw_errors=throw_errors,
     )
@@ -449,4 +450,4 @@ async def test_get_speedtest_survives_failed_system_time_lookup(
     assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
     assert result["average"]["download"]["oldest"] is None
     assert result["average"]["download"]["youngest"] is None
-    assert router.count("GET", SYSTEM_TIME_ENDPOINT) == 1
+    assert router.count("GET", SYSTEM_TIME_PATH) == 1

@@ -14,6 +14,14 @@ from aiopnsense import OPNsenseClient, vpn as aiopnsense_vpn
 from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import FIRMWARE_STATUS_PATH, FakeRouter, HeldResponse, make_router_client
 
+IPSEC_CONNECTIONS_SNAKE_PATH = "/api/ipsec/connections/search_connection"
+IPSEC_PHASE1_SESSIONS_CAMELCASE_PATH = "/api/ipsec/sessions/searchPhase1"
+IPSEC_PHASE1_SESSIONS_SNAKE_PATH = "/api/ipsec/sessions/search_phase1"
+IPSEC_PHASE2_SESSIONS_SNAKE_PATH = "/api/ipsec/sessions/search_phase2"
+OPENVPN_INSTANCE_DETAILS_PATH_PREFIX = "/api/openvpn/instances/get/"
+OPENVPN_SESSIONS_SNAKE_PATH = "/api/openvpn/service/search_sessions"
+WIREGUARD_SUMMARY_PATH = "/api/wireguard/service/show"
+
 ClientType = Callable[..., OPNsenseClient]
 
 SNAKE_CASE_FIRMWARE = "26.1.1"
@@ -100,25 +108,21 @@ def openvpn_routes(
         dict[tuple[str, str], Any]: Routes keyed by ``(method, path)``.
     """
     sessions_path = (
-        aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT
-        if snake_case
-        else aiopnsense_vpn.OPENVPN_SESSIONS_CAMELCASE_ENDPOINT
+        OPENVPN_SESSIONS_SNAKE_PATH if snake_case else "/api/openvpn/service/searchSessions"
     )
     routes_path = (
-        aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT
-        if snake_case
-        else aiopnsense_vpn.OPENVPN_ROUTES_CAMELCASE_ENDPOINT
+        "/api/openvpn/service/search_routes" if snake_case else "/api/openvpn/service/searchRoutes"
     )
     routes: dict[tuple[str, str], Any] = {
         ("GET", sessions_path): {"rows": []} if sessions is None else sessions,
         ("GET", routes_path): {"rows": []} if vpn_routes is None else vpn_routes,
-        ("GET", aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT): {} if providers is None else providers,
-        ("GET", aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT): (
+        ("GET", "/api/openvpn/export/providers"): {} if providers is None else providers,
+        ("GET", "/api/openvpn/instances/search"): (
             {"rows": []} if instances is None else instances
         ),
     }
     for uuid, reply in (details or {}).items():
-        routes[("GET", f"{aiopnsense_vpn.OPENVPN_INSTANCE_DETAILS_ENDPOINT_PREFIX}{uuid}")] = reply
+        routes[("GET", f"{OPENVPN_INSTANCE_DETAILS_PATH_PREFIX}{uuid}")] = reply
     return routes
 
 
@@ -136,13 +140,11 @@ def wireguard_routes(
         dict[tuple[str, str], Any]: Routes keyed by ``(method, path)``.
     """
     return {
-        ("GET", aiopnsense_vpn.WIREGUARD_SUMMARY_ENDPOINT): (
-            {"rows": []} if summary is None else summary
-        ),
-        ("GET", aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT): (
+        ("GET", WIREGUARD_SUMMARY_PATH): ({"rows": []} if summary is None else summary),
+        ("GET", "/api/wireguard/client/get"): (
             {"client": {"clients": {"client": {}}}} if clients is None else clients
         ),
-        ("GET", aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT): (
+        ("GET", "/api/wireguard/server/get"): (
             {"server": {"servers": {"server": {}}}} if servers is None else servers
         ),
     }
@@ -170,17 +172,17 @@ def ipsec_routes(
     """
     names = (
         (
-            aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT,
-            aiopnsense_vpn.IPSEC_CONNECTIONS_SNAKE_ENDPOINT,
-            aiopnsense_vpn.IPSEC_CHILDREN_SNAKE_ENDPOINT,
-            aiopnsense_vpn.IPSEC_PHASE2_SESSIONS_SNAKE_ENDPOINT,
+            IPSEC_PHASE1_SESSIONS_SNAKE_PATH,
+            IPSEC_CONNECTIONS_SNAKE_PATH,
+            "/api/ipsec/connections/search_child",
+            IPSEC_PHASE2_SESSIONS_SNAKE_PATH,
         )
         if snake_case
         else (
-            aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT,
-            aiopnsense_vpn.IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT,
-            aiopnsense_vpn.IPSEC_CHILDREN_CAMELCASE_ENDPOINT,
-            aiopnsense_vpn.IPSEC_PHASE2_SESSIONS_CAMELCASE_ENDPOINT,
+            IPSEC_PHASE1_SESSIONS_CAMELCASE_PATH,
+            "/api/ipsec/connections/searchConnection",
+            "/api/ipsec/connections/searchChild",
+            "/api/ipsec/sessions/searchPhase2",
         )
     )
     sessions_path, connections_path, children_path, phase2_path = names
@@ -350,7 +352,7 @@ async def test_get_openvpn_and_fetch_details(make_client: ClientType) -> None:
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    details_path = f"{aiopnsense_vpn.OPENVPN_INSTANCE_DETAILS_ENDPOINT_PREFIX}uuid1"
+    details_path = f"{OPENVPN_INSTANCE_DETAILS_PATH_PREFIX}uuid1"
     client, router = make_vpn_router(
         make_client,
         openvpn_routes(
@@ -548,7 +550,7 @@ async def test_openvpn_server_details_skip_unavailable_endpoint(make_client: Cli
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    details_path = f"{aiopnsense_vpn.OPENVPN_INSTANCE_DETAILS_ENDPOINT_PREFIX}srv1"
+    details_path = f"{OPENVPN_INSTANCE_DETAILS_PATH_PREFIX}srv1"
     client, router = make_vpn_router(
         make_client,
         openvpn_routes(
@@ -634,7 +636,7 @@ async def test_get_wireguard_success_and_invalid(make_client: ClientType) -> Non
     assert wg["clients"]["c1"].get("connected_servers") == 0
 
     # Invalid summary must not report configured peers as disconnected.
-    router.routes[("GET", aiopnsense_vpn.WIREGUARD_SUMMARY_ENDPOINT)] = {"rows": {}}
+    router.routes[("GET", WIREGUARD_SUMMARY_PATH)] = {"rows": {}}
     assert await client.get_wireguard() is None
 
 
@@ -783,7 +785,7 @@ async def test_openvpn_sessions_failure_stops_the_read(make_client: ClientType) 
     client, router = make_vpn_router(make_client, openvpn_routes(sessions=UNAVAILABLE))
 
     assert await client.get_openvpn() is None
-    assert sent(router) == [("GET", aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT)]
+    assert sent(router) == [("GET", OPENVPN_SESSIONS_SNAKE_PATH)]
 
 
 @pytest.mark.parametrize(
@@ -1003,7 +1005,7 @@ async def test_vpn_switched_endpoints_follow_selected_case(
         {
             **openvpn_routes(snake_case=snake_case),
             ("POST", expected_client_toggle): {"changed": True},
-            ("POST", aiopnsense_vpn.WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT): {"result": "ok"},
+            ("POST", "/api/wireguard/service/reconfigure"): {"result": "ok"},
         },
         firmware=SNAKE_CASE_FIRMWARE if snake_case else CAMEL_CASE_FIRMWARE,
     )
@@ -1136,8 +1138,8 @@ async def test_get_ipsec_success_normalizes_rows(make_client: ClientType) -> Non
     assert down["total_bytes_recv"] == 0
     assert down["total_packets_sent"] == 0
     assert down["enabled"] is None
-    assert router.count("GET", aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT) == 1
-    assert router.count("GET", aiopnsense_vpn.IPSEC_CONNECTIONS_SNAKE_ENDPOINT) == 1
+    assert router.count("GET", IPSEC_PHASE1_SESSIONS_SNAKE_PATH) == 1
+    assert router.count("GET", IPSEC_CONNECTIONS_SNAKE_PATH) == 1
 
 
 async def test_get_ipsec_reports_configured_connections_without_session(
@@ -1303,7 +1305,7 @@ async def test_get_ipsec_known_unavailable_connection_inventory_reports_no_toggl
     assert ipsec is not None
     assert set(ipsec["connections"]) == {"uuid-up"}
     assert ipsec["connections"]["uuid-up"]["enabled"] is None
-    assert router.count("GET", aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT) == 1
+    assert router.count("GET", IPSEC_PHASE1_SESSIONS_SNAKE_PATH) == 1
 
 
 async def test_get_ipsec_children_aggregate_phase2_sessions(make_client: ClientType) -> None:
@@ -1408,8 +1410,7 @@ async def test_get_ipsec_children_aggregate_phase2_sessions(make_client: ClientT
 
     assert ipsec is not None
     assert sorted(
-        body["id"]
-        for body in router.bodies("POST", aiopnsense_vpn.IPSEC_PHASE2_SESSIONS_SNAKE_ENDPOINT)
+        body["id"] for body in router.bodies("POST", IPSEC_PHASE2_SESSIONS_SNAKE_PATH)
     ) == ["con1", "ike-1"]
     children = ipsec["children"]
     assert set(children) == {"child-a", "child-off", "con1-legacy"}
@@ -1574,7 +1575,7 @@ async def test_get_ipsec_children_skip_phase2_without_connected_sessions(
     assert ipsec is not None
     assert ipsec["children"]["child-a"]["status"] == "disconnected"
     assert ipsec["children"]["child-a"]["name"] == "child-a"
-    assert router.count("POST", aiopnsense_vpn.IPSEC_PHASE2_SESSIONS_SNAKE_ENDPOINT) == 0
+    assert router.count("POST", IPSEC_PHASE2_SESSIONS_SNAKE_PATH) == 0
 
 
 @pytest.mark.parametrize(
@@ -1598,7 +1599,7 @@ async def test_get_ipsec_malformed_sessions_payload_returns_none(
     client, router = make_vpn_router(make_client, ipsec_routes(payload))
 
     assert await client.get_ipsec() is None
-    assert sent(router) == [("GET", aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT)]
+    assert sent(router) == [("GET", IPSEC_PHASE1_SESSIONS_SNAKE_PATH)]
 
 
 async def test_get_ipsec_endpoint_unavailable_fails_closed(make_client: ClientType) -> None:
@@ -1612,7 +1613,7 @@ async def test_get_ipsec_endpoint_unavailable_fails_closed(make_client: ClientTy
     )
 
     assert await client.get_ipsec() is None
-    assert sent(router) == [("GET", aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT)]
+    assert sent(router) == [("GET", IPSEC_PHASE1_SESSIONS_CAMELCASE_PATH)]
 
 
 @pytest.mark.parametrize("routes", [None, {}, {"rows": None}, {"rows": []}])

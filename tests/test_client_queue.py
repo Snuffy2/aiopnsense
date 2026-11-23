@@ -14,8 +14,6 @@ from aiopnsense import (
     OPNsenseError,
     OPNsenseInvalidArgument,
     client_queue as aiopnsense_client_queue,
-    unbound as aiopnsense_unbound,
-    vpn as aiopnsense_vpn,
 )
 from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import (
@@ -26,6 +24,15 @@ from tests.conftest import (
     VpnQueueTasks,
     make_mock_session_client,
 )
+
+IPSEC_PHASE1_SESSIONS_SNAKE_PATH = "/api/ipsec/sessions/search_phase1"
+OPENVPN_PROVIDERS_PATH = "/api/openvpn/export/providers"
+OPENVPN_INSTANCES_SEARCH_PATH = "/api/openvpn/instances/search"
+OPENVPN_ROUTES_SNAKE_PATH = "/api/openvpn/service/search_routes"
+OPENVPN_SESSIONS_SNAKE_PATH = "/api/openvpn/service/search_sessions"
+UNBOUND_SERVICE_DNSBL_PATH = "/api/unbound/service/dnsbl"
+WIREGUARD_CLIENTS_PATH = "/api/wireguard/client/get"
+WIREGUARD_SERVERS_PATH = "/api/wireguard/server/get"
 
 
 @pytest.mark.asyncio
@@ -744,7 +751,7 @@ async def test_legacy_unbound_apply_http_failure_through_queue(
     )
     client.toggle_throwing_errors(throw_errors)
     client._firmware_version = "25.7.7"
-    apply_url = f"{base_url}{aiopnsense_unbound.UNBOUND_SERVICE_DNSBL_ENDPOINT}"
+    apply_url = f"{base_url}{UNBOUND_SERVICE_DNSBL_PATH}"
     session.get.side_effect = [
         FakeResponse(json_payload=legacy_dnsbl_payload),
         FakeResponse(status=503, reason="Service Unavailable", ok=False),
@@ -763,11 +770,11 @@ async def test_legacy_unbound_apply_http_failure_through_queue(
                 assert await client.enable_unbound_blocklist() is False
 
         assert [call.args[0] for call in session.get.call_args_list] == [
-            f"{configured_url}{aiopnsense_unbound.UNBOUND_SETTINGS_GET_ENDPOINT}",
-            f"{configured_url}{aiopnsense_unbound.UNBOUND_SERVICE_DNSBL_ENDPOINT}",
+            f"{configured_url}/api/unbound/settings/get",
+            f"{configured_url}{UNBOUND_SERVICE_DNSBL_PATH}",
         ]
         assert [call.args[0] for call in session.post.call_args_list] == [
-            f"{configured_url}{aiopnsense_unbound.UNBOUND_SETTINGS_SET_ENDPOINT}"
+            f"{configured_url}/api/unbound/settings/set"
         ]
         http_failures = [
             record.getMessage()
@@ -864,8 +871,8 @@ async def test_get_openvpn_malformed_routes_json_through_queue(
         None: This test asserts partial-result and strict-error behavior.
     """
     client, session = make_mock_session_client(make_client)
-    sessions_endpoint = aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT
-    routes_endpoint = aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT
+    sessions_endpoint = OPENVPN_SESSIONS_SNAKE_PATH
+    routes_endpoint = OPENVPN_ROUTES_SNAKE_PATH
 
     def fake_get(url: str, **kwargs: Any) -> FakeResponse:
         """Return a connected session and malformed routes at the HTTP boundary.
@@ -886,8 +893,8 @@ async def test_get_openvpn_malformed_routes_json_through_queue(
             )
         if url.endswith(
             (
-                aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT,
-                aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT,
+                OPENVPN_PROVIDERS_PATH,
+                OPENVPN_INSTANCES_SEARCH_PATH,
             )
         ):
             # Providers and instances are not provided by this Router.
@@ -927,21 +934,15 @@ async def test_get_openvpn_keeps_connected_session_when_inventory_probe_returns_
     client, session = make_mock_session_client(make_client, url=base_url)
     client.toggle_throwing_errors(throw_errors)
     client._use_snake_case = True
-    providers_url = f"{base_url}{aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT}"
+    providers_url = f"{base_url}{OPENVPN_PROVIDERS_PATH}"
     responses = {
-        f"{base_url}{aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT}": FakeResponse(
+        f"{base_url}{OPENVPN_SESSIONS_SNAKE_PATH}": FakeResponse(
             json_payload={"rows": [{"id": "vpn-1_1", "type": "server", "status": "connected"}]}
         ),
-        f"{base_url}{aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT}": FakeResponse(
-            json_payload={"rows": []}
-        ),
+        f"{base_url}{OPENVPN_ROUTES_SNAKE_PATH}": FakeResponse(json_payload={"rows": []}),
         providers_url: FakeResponse(status=404, reason="Not Found", ok=False),
-        f"{base_url}{aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT}": FakeResponse(
-            json_payload={"rows": []}
-        ),
-        f"{base_url}{aiopnsense_vpn.OPENVPN_INSTANCE_DETAILS_ENDPOINT_PREFIX}vpn-1": FakeResponse(
-            json_payload={"instance": {}}
-        ),
+        f"{base_url}{OPENVPN_INSTANCES_SEARCH_PATH}": FakeResponse(json_payload={"rows": []}),
+        f"{base_url}/api/openvpn/instances/get/vpn-1": FakeResponse(json_payload={"instance": {}}),
     }
     session.get.side_effect = lambda url, **kwargs: responses[url]
 
@@ -975,9 +976,9 @@ async def test_vpn_status_unavailable_vs_empty(
     client, session = make_mock_session_client(make_client)
     client._use_snake_case = True
     endpoints = {
-        "openvpn": aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT,
-        "wireguard": aiopnsense_vpn.WIREGUARD_SUMMARY_ENDPOINT,
-        "ipsec": aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT,
+        "openvpn": OPENVPN_SESSIONS_SNAKE_PATH,
+        "wireguard": "/api/wireguard/service/show",
+        "ipsec": IPSEC_PHASE1_SESSIONS_SNAKE_PATH,
     }
     status_endpoint = endpoints[vpn]
     config = {
@@ -1018,9 +1019,9 @@ async def test_vpn_status_unavailable_vs_empty(
             if reply == "decode":
                 response.json = AsyncMock(side_effect=json.JSONDecodeError("invalid", "", 0))
             return response
-        if url.endswith(aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT):
+        if url.endswith(OPENVPN_PROVIDERS_PATH):
             return FakeResponse(json_payload={"configured": {"name": "configured"}})
-        if url.endswith(aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT):
+        if url.endswith(OPENVPN_ROUTES_SNAKE_PATH):
             return FakeResponse(json_payload={"rows": []})
         return FakeResponse(
             json_payload={
@@ -1091,7 +1092,7 @@ async def test_ipsec_connection_inventory_failure_and_recovery(
         Raises:
             TimeoutError: Simulated connections configuration timeout.
         """
-        if url.endswith(aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT):
+        if url.endswith(IPSEC_PHASE1_SESSIONS_SNAKE_PATH):
             return FakeResponse(
                 json_payload={
                     "rows": [{"ikeid": "active", "name": "active", "connected": True}]
@@ -1099,7 +1100,7 @@ async def test_ipsec_connection_inventory_failure_and_recovery(
                     else []
                 }
             )
-        if url.endswith(aiopnsense_vpn.IPSEC_CONNECTIONS_SNAKE_ENDPOINT):
+        if url.endswith("/api/ipsec/connections/search_connection"):
             if recovered:
                 return FakeResponse(json_payload={"rows": [{"uuid": "disabled", "enabled": "0"}]})
             if reply == "timeout":
@@ -1179,8 +1180,8 @@ async def test_vpn_status_propagates_errors(
             id=f"openvpn_{source}_{reply}_{'with' if has_session else 'without'}_session",
         )
         for source, endpoint in (
-            ("instances", aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT),
-            ("providers", aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT),
+            ("instances", OPENVPN_INSTANCES_SEARCH_PATH),
+            ("providers", OPENVPN_PROVIDERS_PATH),
         )
         for has_session, reply in (
             (False, "empty"),
@@ -1205,8 +1206,8 @@ async def test_vpn_status_propagates_errors(
             id=f"wireguard_{source}_{reply}",
         )
         for source, endpoint, collection in (
-            ("clients", aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT, "clients"),
-            ("servers", aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT, "servers"),
+            ("clients", WIREGUARD_CLIENTS_PATH, "clients"),
+            ("servers", WIREGUARD_SERVERS_PATH, "servers"),
         )
         for reply in ("http", "timeout", "decode", "missing", "malformed", "empty")
     ],
@@ -1234,20 +1235,16 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
     recovered = False
     config = {"uuid": "disabled", "role": "server", "enabled": "0", "name": "disabled"}
     populated = {
-        aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT: {"rows": [config]},
-        aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT: {"disabled": {"name": "disabled"}},
-        aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT: {
-            "client": {"clients": {"client": {"disabled": config}}}
-        },
-        aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT: {
-            "server": {"servers": {"server": {"disabled": config}}}
-        },
+        OPENVPN_INSTANCES_SEARCH_PATH: {"rows": [config]},
+        OPENVPN_PROVIDERS_PATH: {"disabled": {"name": "disabled"}},
+        WIREGUARD_CLIENTS_PATH: {"client": {"clients": {"client": {"disabled": config}}}},
+        WIREGUARD_SERVERS_PATH: {"server": {"servers": {"server": {"disabled": config}}}},
     }
     empty: dict[str, Any] = {
-        aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT: {"rows": []},
-        aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT: [],
-        aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT: {"client": {"clients": {"client": {}}}},
-        aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT: {"server": {"servers": {"server": {}}}},
+        OPENVPN_INSTANCES_SEARCH_PATH: {"rows": []},
+        OPENVPN_PROVIDERS_PATH: [],
+        WIREGUARD_CLIENTS_PATH: {"client": {"clients": {"client": {}}}},
+        WIREGUARD_SERVERS_PATH: {"server": {"servers": {"server": {}}}},
     }
 
     def fake_get(url: str, **kwargs: Any) -> FakeResponse:
@@ -1273,10 +1270,10 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
             payload: Any = empty[endpoint] if reply == "empty" else None
             if reply == "missing":
                 # An empty providers mapping is valid; other inventories require their container.
-                payload = None if endpoint == aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT else {}
+                payload = None if endpoint == OPENVPN_PROVIDERS_PATH else {}
             if reply == "malformed":
                 payload = {"rows": None} if vpn == "openvpn" else {"client": None, "server": None}
-                if endpoint == aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT:
+                if endpoint == OPENVPN_PROVIDERS_PATH:
                     payload = ["invalid"]
             response = FakeResponse(
                 status=503 if reply == "http" else 200,
@@ -1313,7 +1310,7 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
         result = await getattr(client, f"get_{vpn}")()
         assert result is not None
         assert "disabled" in result[collection]
-        if endpoint != aiopnsense_vpn.OPENVPN_PROVIDERS_ENDPOINT:
+        if endpoint != OPENVPN_PROVIDERS_PATH:
             assert result[collection]["disabled"]["enabled"] is False
     finally:
         await client.async_close()
