@@ -137,7 +137,7 @@ class ClientTransportMixin:
 
     async def _dispatch_request(
         self,
-        kind: str,
+        kind: _RequestKind,
         path: str,
         payload: MutableMapping[str, Any] | None,
         caller: str,
@@ -145,7 +145,7 @@ class ClientTransportMixin:
         """Send one dequeued request through the transport method for its kind.
 
         Args:
-            kind (str): Request kind; a ``_RequestKind`` value.
+            kind (_RequestKind): Request kind.
             path (str): API endpoint path to request.
             payload (MutableMapping[str, Any] | None): Request body for POST kinds.
             caller (str): Calling method name used for diagnostics.

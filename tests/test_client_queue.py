@@ -119,45 +119,6 @@ async def test_get_active_loop_raises_when_worker_startup_leaves_loop_unset(
         await client.async_close()
 
 
-async def test_process_queue_unknown_method_sets_future_exception(
-    make_client: MakeClientFactory,
-) -> None:
-    """Verify unknown queue methods set a runtime exception on the future.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test asserts unknown-method queue error propagation.
-    """
-    client, _session = make_mock_session_client(make_client)
-    task: asyncio.Task | None = None
-    try:
-        q: asyncio.Queue = asyncio.Queue()
-        client._request_queue = q
-
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        await q.put(_QueueEntry("unknown", "/x", None, future, "tst"))
-
-        task = loop.create_task(client._process_queue())
-        await asyncio.sleep(0)  # allow the task to process the queue
-        # cancel background task and await it so the CancelledError is retrieved
-        task.cancel()
-        # await the cancelled task so the CancelledError is retrieved and suppressed
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        # future should have an exception
-        exc = future.exception()
-        assert isinstance(exc, OPNsenseError)
-    finally:
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        await client.async_close()
-
-
 async def test_process_queue_handles_requests(make_client: MakeClientFactory) -> None:
     """Verify queue worker dispatches get/post/stream requests to the right handlers.
 

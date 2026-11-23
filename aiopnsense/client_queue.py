@@ -23,7 +23,7 @@ class _CancellablePostState:
 class _QueueEntry:
     """One queued request awaiting dispatch by a worker."""
 
-    kind: str
+    kind: _RequestKind
     path: str
     payload: MutableMapping[str, Any] | None
     future: asyncio.Future[Any]
@@ -47,7 +47,7 @@ class ClientQueueMixin:
 
         async def _dispatch_request(
             self,
-            kind: str,
+            kind: _RequestKind,
             path: str,
             payload: MutableMapping[str, Any] | None,
             caller: str,
@@ -55,7 +55,7 @@ class ClientQueueMixin:
             """Send one dequeued request through the transport method for its kind.
 
             Args:
-                kind (str): Request kind; a ``_RequestKind`` value.
+                kind (_RequestKind): Request kind.
                 path (str): API endpoint path to request.
                 payload (MutableMapping[str, Any] | None): Request body for POST kinds.
                 caller (str): Calling method name used for diagnostics.
@@ -97,7 +97,7 @@ class ClientQueueMixin:
 
     async def _queue_request(
         self,
-        kind: _RequestKind | str,
+        kind: _RequestKind,
         path: str,
         payload: MutableMapping[str, Any] | None = None,
     ) -> Any:
@@ -106,7 +106,7 @@ class ClientQueueMixin:
         Cancelling the caller before dispatch causes the worker to skip a queued POST.
 
         Args:
-            kind (_RequestKind | str): Request kind sent by ``_dispatch_request``.
+            kind (_RequestKind): Request kind sent by ``_dispatch_request``.
             path (str): API endpoint path to request.
             payload (MutableMapping[str, Any] | None, optional): Request payload
                 sent with POST requests.

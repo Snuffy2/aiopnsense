@@ -54,7 +54,7 @@ class ClientEndpointMixin:
 
         async def _queue_request(
             self,
-            kind: _RequestKind | str,
+            kind: _RequestKind,
             /,
             path: str,
             payload: MutableMapping[str, Any] | None = None,
@@ -62,7 +62,7 @@ class ClientEndpointMixin:
             """Queue one API request and return its result.
 
             Args:
-                kind (_RequestKind | str): Request kind sent by ``_dispatch_request``.
+                kind (_RequestKind): Request kind sent by ``_dispatch_request``.
                 path (str): API endpoint path to request.
                 payload (MutableMapping[str, Any] | None): Request body for POST requests.
 
