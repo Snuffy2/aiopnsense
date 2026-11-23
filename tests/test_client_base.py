@@ -10,6 +10,7 @@ import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient, client as aiopnsense_client
+from aiopnsense.client_queue import _QueueEntry
 from aiopnsense.const import OPNSENSE_MIN_FIRMWARE, OPNSENSE_RECOMMENDED_FIRMWARE
 from aiopnsense.exceptions import (
     OPNsenseBelowMinFirmware,
@@ -838,7 +839,7 @@ async def test_outcome_read_cancelled_before_dispatch_sends_no_request(
         loop = await client._get_active_loop()
         cancelled = loop.create_future()
         cancelled.cancel()
-        await client._request_queue.put(("get_outcome", "/api/x", None, cancelled, "t"))
+        await client._request_queue.put(_QueueEntry("get_outcome", "/api/x", None, cancelled, "t"))
         while not client._request_queue.empty():
             await asyncio.sleep(0)
         session.get.assert_not_called()

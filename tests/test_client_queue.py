@@ -6,7 +6,7 @@ import contextlib
 import json
 import logging
 import re
-from typing import Any, Literal, Never
+from typing import Any, Literal, Never, Self
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,10 +15,11 @@ from aiopnsense import (
     OPNsenseError,
     OPNsenseInvalidArgument,
     client_queue as aiopnsense_client_queue,
-    helpers as aiopnsense_helpers,
+    client_transport as aiopnsense_client_transport,
     unbound as aiopnsense_unbound,
     vpn as aiopnsense_vpn,
 )
+from aiopnsense.client_queue import _QueueEntry
 from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import (
     FakeResponse,
@@ -48,7 +49,7 @@ async def test_opnsenseclient_async_close(make_client: MakeClientFactory) -> Non
         client._workers = [worker1, worker2]
         client._request_queue = asyncio.Queue()
         future = loop.create_future()
-        await client._request_queue.put(("get", "/api/test", None, future, "test"))
+        await client._request_queue.put(_QueueEntry("get", "/api/test", None, future, "test"))
         await client.async_close()
         assert worker1.cancelled()
         assert worker2.cancelled()
@@ -78,7 +79,7 @@ async def test_opnsenseclient_async_context_manager_closes_background_tasks(
         client._workers = [worker]
         client._request_queue = asyncio.Queue()
         future = loop.create_future()
-        await client._request_queue.put(("get", "/api/test", None, future, "test"))
+        await client._request_queue.put(_QueueEntry("get", "/api/test", None, future, "test"))
 
         async with client as managed_client:
             assert managed_client is client
@@ -137,7 +138,7 @@ async def test_process_queue_unknown_method_sets_future_exception(
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        await q.put(("unknown", "/x", None, future, "tst"))
+        await q.put(_QueueEntry("unknown", "/x", None, future, "tst"))
 
         task = loop.create_task(client._process_queue())
         await asyncio.sleep(0)  # allow the task to process the queue
@@ -186,9 +187,9 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
         fut_post = loop.create_future()
         fut_stream = loop.create_future()
 
-        await q.put(("get", "/g", None, fut_get, "t"))
-        await q.put(("post", "/p", {"x": 1}, fut_post, "t"))
-        await q.put(("get_from_stream", "/s", None, fut_stream, "t"))
+        await q.put(_QueueEntry("get", "/g", None, fut_get, "t"))
+        await q.put(_QueueEntry("post", "/p", {"x": 1}, fut_post, "t"))
+        await q.put(_QueueEntry("get_from_stream", "/s", None, fut_stream, "t"))
 
         res1 = await asyncio.wait_for(fut_get, timeout=2)
         res2 = await asyncio.wait_for(fut_post, timeout=2)
@@ -387,7 +388,7 @@ async def test_get_uses_unknown_when_caller_frame_is_unavailable(
                 """
                 raise error_type("no frame")
 
-        monkeypatch.setattr(aiopnsense_helpers, "sys", _BadSys)
+        monkeypatch.setattr(aiopnsense_client_transport, "sys", _BadSys)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
@@ -497,7 +498,7 @@ async def test_post_uses_unknown_when_caller_frame_is_unavailable(
                 """
                 raise error_type("no frame")
 
-        monkeypatch.setattr(aiopnsense_helpers, "sys", _BadSys)
+        monkeypatch.setattr(aiopnsense_client_transport, "sys", _BadSys)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
@@ -571,7 +572,7 @@ async def test_process_queue_exception_sets_future_exception(
         task = loop.create_task(client._process_queue())
 
         fut = loop.create_future()
-        await q.put(("get", "/g", None, fut, "t"))
+        await q.put(_QueueEntry("get", "/g", None, fut, "t"))
 
         with pytest.raises(OPNsenseError, match="boom") as exc_info:
             await asyncio.wait_for(fut, timeout=2)
@@ -640,7 +641,7 @@ async def test_process_queue_cancelled_sets_future_cancelled_error(
         task = loop.create_task(client._process_queue())
 
         fut = loop.create_future()
-        await q.put(("get", "/g", None, fut, "t"))
+        await q.put(_QueueEntry("get", "/g", None, fut, "t"))
 
         await asyncio.wait_for(started.wait(), timeout=2)
         task.cancel()
@@ -2229,3 +2230,109 @@ async def test_failure_logs_name_the_public_client_method(
         )
     finally:
         await asyncio.wait_for(client.async_close(), timeout=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "is_post", "is_sent"),
+    [
+        ("get", False, True),
+        ("get_from_stream", False, True),
+        ("get_outcome", False, False),
+        ("get_text_outcome", False, False),
+        ("post", True, False),
+        ("post_outcome", True, False),
+    ],
+)
+async def test_request_cancelled_before_dispatch_is_skipped_by_kind(
+    make_client: MakeClientFactory,
+    vpn_queue_tasks: VpnQueueTasks,
+    kind: str,
+    is_post: bool,
+    is_sent: bool,
+) -> None:
+    """Skip POST and outcome requests cancelled while queued; still send plain GET and streams.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
+        kind (str): Queued request kind.
+        is_post (bool): Whether the kind goes out through the session's POST method.
+        is_sent (bool): Whether the cancelled request is still sent.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._max_workers = 1
+    block_started = asyncio.Event()
+    release_block = asyncio.Event()
+
+    class BlockingResponse(FakeResponse):
+        """Hold the worker until the test queues and cancels the target request."""
+
+        async def __aenter__(self) -> Self:
+            """Signal that the worker is busy and wait for release.
+
+            Returns:
+                Self: This response once released.
+            """
+            block_started.set()
+            await release_block.wait()
+            return self
+
+    def answer(url: str, **_kwargs: Any) -> FakeResponse:
+        """Answer the blocking request slowly and every other request immediately.
+
+        Args:
+            url (str): Requested URL.
+            **_kwargs (Any): Ignored request options.
+
+        Returns:
+            FakeResponse: Response for the requested URL.
+        """
+        if url.endswith("/block"):
+            return BlockingResponse(json_payload={})
+        return FakeResponse(json_payload={}, text_payload="", stream_chunks=[b"data: {}\n\n"])
+
+    session.get.side_effect = answer
+    session.post.side_effect = answer
+    try:
+        blocker = vpn_queue_tasks.start(client._get("/block"))
+        await asyncio.wait_for(block_started.wait(), timeout=3)
+        target = vpn_queue_tasks.start(
+            client._queue_request(kind, "/target", {"x": 1} if is_post else None),
+            eager_start=True,
+        )
+        assert client._request_queue.qsize() == 1
+        target.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(target, timeout=3)
+        release_block.set()
+        await asyncio.wait_for(blocker, timeout=3)
+        # A later request confirms the worker has passed the cancelled one.
+        await asyncio.wait_for(client._get("/barrier"), timeout=3)
+        sent = [call.args[0] for call in (session.post if is_post else session.get).call_args_list]
+        assert any(url.endswith("/target") for url in sent) is is_sent
+    finally:
+        release_block.set()
+
+
+@pytest.mark.asyncio
+async def test_unknown_request_kind_logs_once_and_fails_the_waiting_caller(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Report an unknown queued request kind once and raise it to the waiting caller.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        caplog (pytest.LogCaptureFixture): Captures the logged error.
+    """
+    client, session = make_mock_session_client(make_client)
+    try:
+        with caplog.at_level("ERROR"), pytest.raises(OPNsenseError) as raised:
+            await asyncio.wait_for(client._queue_request("bogus", "/x"), timeout=3)
+        assert str(raised.value) == "Unknown method to add to Queue: bogus"
+        assert [r.getMessage() for r in caplog.records] == ["Unknown method to add to Queue: bogus"]
+        session.get.assert_not_called()
+        session.post.assert_not_called()
+    finally:
+        await client.async_close()

@@ -14,6 +14,7 @@ from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
+from .client_transport import _public_caller_name
 from .const import (
     AMBIGUOUS_TZINFOS,
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
@@ -32,7 +33,6 @@ from .exceptions import (
 from .helpers import (
     _BETA_BASE_VERSION,
     _LOGGER,
-    _public_caller_name,
     dict_get,
     firmware_is_at_least,
     firmware_is_newer,

@@ -3,17 +3,12 @@
 import asyncio
 from collections.abc import MutableMapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from ._endpoint_outcome import _EndpointOutcome
+from .client_transport import _public_caller_name, _RequestKind
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
-from .helpers import (
-    _LOGGER,
-    _is_request_error_logged,
-    _mark_request_error_logged,
-    _public_caller_name,
-)
+from .helpers import _LOGGER, _is_request_error_logged, _mark_request_error_logged
 
 
 @dataclass(slots=True)
@@ -22,6 +17,34 @@ class _CancellablePostState:
 
     waiter: asyncio.Future[Any]
     started: bool = False
+
+
+@dataclass(slots=True)
+class _QueueEntry:
+    """One queued request awaiting dispatch by a worker."""
+
+    kind: str
+    path: str
+    payload: MutableMapping[str, Any] | None
+    future: asyncio.Future[Any]
+    caller: str
+    cancellation_state: _CancellablePostState | None = None
+
+
+def _skips_when_cancelled(kind: str) -> bool:
+    """Return whether a queued request of this kind is skipped once its caller cancelled.
+
+    Args:
+        kind (str): Queued request kind.
+
+    Returns:
+        bool: ``True`` for a known kind that is skipped; unknown kinds are not skipped
+            so that dispatch reports them.
+    """
+    try:
+        return _RequestKind(kind).skipped_when_cancelled
+    except ValueError:
+        return False
 
 
 class ClientQueueMixin:
@@ -38,97 +61,23 @@ class ClientQueueMixin:
             """Invalidate in-flight VPN Toggles because the client is closing."""
             ...
 
-        async def _do_get(
+        async def _dispatch_request(
             self,
+            kind: str,
             path: str,
-            caller: str = "Unknown",
-            timeout_seconds: float | None = None,
-        ) -> MutableMapping[str, Any] | list | None:
-            """Execute an immediate GET transport request after it is dequeued.
+            payload: MutableMapping[str, Any] | None,
+            caller: str,
+        ) -> Any:
+            """Send one dequeued request through the transport method for its kind.
 
             Args:
+                kind (str): Request kind; a ``_RequestKind`` value.
                 path (str): API endpoint path to request.
-                caller (str): Calling method name used for diagnostics.
-                timeout_seconds (float | None): Optional transport request timeout.
-
-            Returns:
-                MutableMapping[str, Any] | list | None: Decoded transport
-                    response, if available.
-            """
-            ...
-
-        async def _do_get_from_stream(
-            self,
-            path: str,
-            caller: str = "Unknown",
-        ) -> dict[str, Any]:
-            """Execute an immediate streaming GET transport request after dequeuing it.
-
-            Args:
-                path (str): Streaming API endpoint path to request.
+                payload (MutableMapping[str, Any] | None): Request body for POST kinds.
                 caller (str): Calling method name used for diagnostics.
 
             Returns:
-                dict[str, Any]: Decoded payload extracted from the stream response.
-            """
-            ...
-
-        async def _do_get_outcome(
-            self,
-            path: str,
-            caller: str = "Unknown",
-            *,
-            read_body: bool = True,
-            response_format: Literal["json", "text"] = "json",
-        ) -> _EndpointOutcome:
-            """Execute an immediate GET request and classify the response.
-
-            Args:
-                path (str): API endpoint path to request.
-                caller (str): Calling method name used for diagnostics.
-                read_body (bool): Whether to decode a successful response body.
-                response_format (Literal["json", "text"], optional): Decoding mode for
-                    a successful response body.
-
-            Returns:
-                _EndpointOutcome: Classified transport response.
-            """
-            ...
-
-        async def _do_post_outcome(
-            self,
-            path: str,
-            payload: MutableMapping[str, Any] | None = None,
-            caller: str = "Unknown",
-        ) -> _EndpointOutcome:
-            """Execute an immediate POST request and classify the response.
-
-            Args:
-                path (str): API endpoint path to request.
-                payload (MutableMapping[str, Any] | None): Request body.
-                caller (str): Calling method name used for diagnostics.
-
-            Returns:
-                _EndpointOutcome: Classified transport response.
-            """
-            ...
-
-        async def _do_post(
-            self,
-            path: str,
-            payload: MutableMapping[str, Any] | None = None,
-            caller: str = "Unknown",
-        ) -> MutableMapping[str, Any] | list | None:
-            """Execute an immediate POST transport request after it is dequeued.
-
-            Args:
-                path (str): API endpoint path to request.
-                payload (MutableMapping[str, Any] | None): Optional request body.
-                caller (str): Calling method name used for diagnostics.
-
-            Returns:
-                MutableMapping[str, Any] | list | None: Decoded transport response,
-                    if available.
+                Any: Result of the matching transport method.
             """
             ...
 
@@ -164,7 +113,7 @@ class ClientQueueMixin:
 
     async def _queue_request(
         self,
-        method: str,
+        kind: _RequestKind | str,
         path: str,
         payload: MutableMapping[str, Any] | None = None,
     ) -> Any:
@@ -173,7 +122,7 @@ class ClientQueueMixin:
         Cancelling the caller before dispatch causes the worker to skip a queued POST.
 
         Args:
-            method (str): Internal request method handled by ``_process_queue``.
+            kind (_RequestKind | str): Request kind sent by ``_dispatch_request``.
             path (str): API endpoint path to request.
             payload (MutableMapping[str, Any] | None, optional): Request payload
                 sent with POST requests.
@@ -183,7 +132,9 @@ class ClientQueueMixin:
         """
         loop = await self._get_active_loop()
         future = loop.create_future()
-        await self._request_queue.put((method, path, payload, future, _public_caller_name()))
+        await self._request_queue.put(
+            _QueueEntry(kind, path, payload, future, _public_caller_name())
+        )
         return await future
 
     async def _queue_post_with_cancellation(
@@ -213,8 +164,8 @@ class ClientQueueMixin:
         waiter = asyncio.shield(future)
         cancellation_state = _CancellablePostState(waiter)
         await self._request_queue.put(
-            (
-                "post",
+            _QueueEntry(
+                _RequestKind.POST,
                 path,
                 payload,
                 future,
@@ -246,7 +197,7 @@ class ClientQueueMixin:
         Returns:
             dict[str, Any]: Decoded payload extracted from the streaming API response.
         """
-        return cast(dict[str, Any], await self._queue_request("get_from_stream", path))
+        return cast(dict[str, Any], await self._queue_request(_RequestKind.GET_FROM_STREAM, path))
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
         """Queue a GET request and return the result.
@@ -257,7 +208,7 @@ class ClientQueueMixin:
         Returns:
             MutableMapping[str, Any] | list | None: Decoded response payload returned by the GET request.
         """
-        return await self._queue_request("get", path)
+        return await self._queue_request(_RequestKind.GET, path)
 
     async def _post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
@@ -271,7 +222,7 @@ class ClientQueueMixin:
         Returns:
             MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request.
         """
-        return await self._queue_request("post", path, payload)
+        return await self._queue_request(_RequestKind.POST, path, payload)
 
     async def _process_queue(self) -> None:
         """Continuously process queued API requests and resolve waiting futures.
@@ -280,59 +231,24 @@ class ClientQueueMixin:
             asyncio.CancelledError: Raised when the queue processor is cancelled.
         """
         while True:
-            method: str | None = None
-            path: str | None = None
-            payload: dict[str, Any] | None = None
             future: asyncio.Future[Any] | None = None
-            cancellation_state: _CancellablePostState | None = None
             caller = "Unknown"
             try:
-                entry = await self._request_queue.get()
-                if len(entry) == 6:
-                    method, path, payload, future, caller, cancellation_state = entry
-                else:
-                    method, path, payload, future, caller = entry
-                if method in {"post", "get_outcome", "get_text_outcome", "post_outcome"} and (
-                    future is not None and future.cancelled()
-                ):
+                entry: _QueueEntry = await self._request_queue.get()
+                future = entry.future
+                caller = entry.caller
+                if _skips_when_cancelled(entry.kind) and future.cancelled():
                     continue
+                cancellation_state = entry.cancellation_state
                 if cancellation_state is not None:
-                    waiter = cancellation_state.waiter
-                    if future is not None and waiter.cancelled():
+                    if cancellation_state.waiter.cancelled():
                         if not future.done():
                             future.cancel()
                         continue
                     cancellation_state.started = True
-                if method == "get_from_stream":
-                    result: Any = await self._do_get_from_stream(path, caller)
-                    if future is not None and not future.done():
-                        future.set_result(result)
-                elif method == "get":
-                    result = await self._do_get(path, caller)
-                    if future is not None and not future.done():
-                        future.set_result(result)
-                elif method == "get_outcome":
-                    result = await self._do_get_outcome(path, caller)
-                    if future is not None and not future.done():
-                        future.set_result(result)
-                elif method == "get_text_outcome":
-                    result = await self._do_get_outcome(path, caller, response_format="text")
-                    if future is not None and not future.done():
-                        future.set_result(result)
-                elif method == "post":
-                    result = await self._do_post(path, payload, caller)
-                    if future is not None and not future.done():
-                        future.set_result(result)
-                elif method == "post_outcome":
-                    result = await self._do_post_outcome(path, payload, caller)
-                    if future is not None and not future.done():
-                        future.set_result(result)
-                else:
-                    _LOGGER.error("Unknown method to add to Queue: %s", method)
-                    if future is not None and not future.done():
-                        future.set_exception(
-                            OPNsenseError(f"Unknown method to add to Queue: {method}")
-                        )
+                result = await self._dispatch_request(entry.kind, entry.path, entry.payload, caller)
+                if not future.done():
+                    future.set_result(result)
             except asyncio.CancelledError:
                 _LOGGER.debug("Request queue processor cancelled (called by %s)", caller)
                 if future is not None and not future.done():
@@ -387,8 +303,8 @@ class ClientQueueMixin:
                 while not self._request_queue.empty():
                     try:
                         entry = self._request_queue.get_nowait()
-                        future = entry[3]
-                        if future is not None and not future.done():
+                        future = entry.future
+                        if not future.done():
                             future.set_exception(
                                 asyncio.CancelledError("OPNsenseClient is closing")
                             )

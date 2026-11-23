@@ -9,9 +9,10 @@ from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _raise_if_throwing, _throws_errors
 from ._request_failure import _PROBE_PHASE, _REQUEST_PHASE
 from ._typing import AiopnsenseClientProtocol
+from .client_transport import _public_caller_name, _RequestKind
 from .const import SNAKE_CASE_ENDPOINTS_CAPABILITY
 from .exceptions import OPNsenseUnknownFirmware
-from .helpers import _LOGGER, _public_caller_name
+from .helpers import _LOGGER
 
 
 class ClientEndpointMixin:
@@ -323,9 +324,9 @@ class ClientEndpointMixin:
             )
         else:
             queue_method = (
-                "get_text_outcome"
+                _RequestKind.GET_TEXT_OUTCOME
                 if method == "get" and response_format == "text"
-                else f"{method}_outcome"
+                else _RequestKind(f"{method}_outcome")
             )
             outcome = await self._queue_request(queue_method, path, payload)
 

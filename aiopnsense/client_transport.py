@@ -3,7 +3,10 @@
 import asyncio
 import codecs
 from collections.abc import AsyncGenerator, MutableMapping
+from enum import StrEnum
 import json
+import sys
+from types import FrameType
 from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
@@ -18,9 +21,68 @@ from ._request_failure import (
     _report_transport_failure,
 )
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
-from .helpers import _LOGGER, _log_request_recovery, _public_caller_name
+from .exceptions import OPNsenseError
+from .helpers import _LOGGER, _log_request_recovery, _mark_request_error_logged
 
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
+
+
+class _RequestKind(StrEnum):
+    """Kinds of request the queue worker dispatches through the transport.
+
+    The values are the strings queued requests have always carried.
+    """
+
+    GET = "get"
+    GET_FROM_STREAM = "get_from_stream"
+    GET_OUTCOME = "get_outcome"
+    GET_TEXT_OUTCOME = "get_text_outcome"
+    POST = "post"
+    POST_OUTCOME = "post_outcome"
+
+    @property
+    def skipped_when_cancelled(self) -> bool:
+        """Return whether a request of this kind is skipped when cancelled before dispatch.
+
+        Returns:
+            bool: ``True`` for POST and the three outcome kinds. Plain GET and buffered
+                stream reads are still sent.
+        """
+        return self in {
+            _RequestKind.POST,
+            _RequestKind.GET_OUTCOME,
+            _RequestKind.GET_TEXT_OUTCOME,
+            _RequestKind.POST_OUTCOME,
+        }
+
+
+def _public_caller_name() -> str:
+    """Return the public client method that triggered the current request.
+
+    Walks up the call stack from the caller of this function while the frames
+    belong to the aiopnsense package, and returns the nearest frame that is a
+    public method: its name has no leading underscore and its qualified name has
+    no ``<locals>``. That skips private helpers and the error-policy wrappers, and
+    when a public method calls another public method the nearest one is named. It
+    does not depend on call depth. The walk ends without a name when the stack
+    leaves the package.
+
+    Returns:
+        str: Name of the nearest public method, or ``"Unknown"`` when the call
+            stack leaves the package without reaching one, or frame inspection is
+            unavailable.
+    """
+    package = __name__.partition(".")[0]
+    try:
+        frame: FrameType | None = sys._getframe(1)
+    except ValueError, AttributeError:
+        return "Unknown"
+    while frame is not None and frame.f_globals.get("__name__", "").partition(".")[0] == package:
+        code = frame.f_code
+        if not code.co_name.startswith("_") and "<locals>" not in code.co_qualname:
+            return code.co_name
+        frame = frame.f_back
+    return "Unknown"
 
 
 class ClientTransportMixin:
@@ -75,6 +137,46 @@ class ClientTransportMixin:
                     Response and any cancellation received after dispatch began.
             """
             ...
+
+    async def _dispatch_request(
+        self,
+        kind: str,
+        path: str,
+        payload: MutableMapping[str, Any] | None,
+        caller: str,
+    ) -> Any:
+        """Send one dequeued request through the transport method for its kind.
+
+        Args:
+            kind (str): Request kind; a ``_RequestKind`` value.
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None): Request body for POST kinds.
+            caller (str): Calling method name used for diagnostics.
+
+        Returns:
+            Any: Result of the matching transport method.
+
+        Raises:
+            error: An ``OPNsenseError``, already logged, if ``kind`` is not a known request kind.
+        """
+        match kind:
+            case _RequestKind.GET_FROM_STREAM:
+                return await self._do_get_from_stream(path, caller)
+            case _RequestKind.GET:
+                return await self._do_get(path, caller)
+            case _RequestKind.GET_OUTCOME:
+                return await self._do_get_outcome(path, caller)
+            case _RequestKind.GET_TEXT_OUTCOME:
+                return await self._do_get_outcome(path, caller, response_format="text")
+            case _RequestKind.POST:
+                return await self._do_post(path, payload, caller)
+            case _RequestKind.POST_OUTCOME:
+                return await self._do_post_outcome(path, payload, caller)
+        message = f"Unknown method to add to Queue: {kind}"
+        _LOGGER.error(message)
+        error = OPNsenseError(message)
+        _mark_request_error_logged(error)
+        raise error
 
     def _open_request(
         self,
