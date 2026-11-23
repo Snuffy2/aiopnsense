@@ -109,11 +109,13 @@ class VnstatMixin(AiopnsenseClientProtocol):
                 interface name and ``interface_count``. Each interface contains
                 parsed ``hourly``, ``daily``, and ``monthly`` rows plus
                 convenience byte counters for today, this month, yesterday,
-                last month, and the last complete hour.
+                last month, and the last complete hour. With errors disabled,
+                a transient hourly failure leaves hourly data empty and the
+                daily and monthly reads still run.
         """
         hourly_outcome = await self._fetch_endpoint_outcome(VNSTAT_HOURLY_ENDPOINT)
-        if not hourly_outcome.is_data:
-            _LOGGER.debug("vnStat not installed")
+        if hourly_outcome.is_absent:
+            _LOGGER.debug("[get_vnstat] Hourly endpoint unavailable")
             return {"interfaces": {}, "interface_count": 0}
 
         opnsense_tz = await self._get_opnsense_timezone()

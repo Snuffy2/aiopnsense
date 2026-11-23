@@ -113,6 +113,31 @@ async def test_generate_vouchers_returns_empty_when_version_switched_endpoints_u
 
 
 @pytest.mark.asyncio
+async def test_generate_vouchers_reports_transient_provider_failure(
+    make_client: ClientType,
+) -> None:
+    """A transient provider read fails voucher generation before issuing a POST.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _ = make_mock_session_client(make_client)
+    try:
+        client._use_snake_case = True
+        failure = OPNsenseConnectionError("Provider lookup failed")
+        stub_endpoint_outcome(client, _EndpointOutcome.transient(failure))
+        client._safe_list_post = AsyncMock()
+
+        with pytest.raises(aiopnsense_module.OPNsenseVoucherServerError) as caught:
+            await client.generate_vouchers({})
+
+        assert caught.value.__cause__ is failure
+        client._safe_list_post.assert_not_awaited()
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_generate_vouchers_auto_selects_single_provider(make_client: ClientType) -> None:
     """`generate_vouchers` should auto-select a single provider when none is specified.
 

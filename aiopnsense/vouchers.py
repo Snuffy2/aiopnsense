@@ -34,8 +34,9 @@ class VouchersMixin(AiopnsenseClientProtocol):
         Raises:
             OPNsenseConnectionError: Re-raised when voucher generation fails for
                 a reason other than an unavailable endpoint.
-            OPNsenseVoucherServerError: No voucher servers are available, or the
-                request omits a server while multiple servers are available.
+            OPNsenseVoucherServerError: The provider lookup fails transiently with
+                errors disabled, the provider list is empty, or the request omits
+                a server while multiple servers are available.
         """
         list_providers_endpoint = await self._get_endpoint_path(
             snake_case_path=VOUCHER_LIST_PROVIDERS_ENDPOINT,
@@ -49,8 +50,12 @@ class VouchersMixin(AiopnsenseClientProtocol):
             server = data.get("voucher_server")
         else:
             providers_outcome = await self._fetch_endpoint_outcome(list_providers_endpoint)
-            if not providers_outcome.is_data:
-                _LOGGER.debug("Voucher provider endpoint unavailable")
+            if providers_outcome.is_transient:
+                raise OPNsenseVoucherServerError(
+                    "Could not retrieve voucher servers"
+                ) from providers_outcome.error
+            if providers_outcome.is_absent:
+                _LOGGER.debug("[generate_vouchers] Voucher provider endpoint unavailable")
                 return []
             servers = providers_outcome.sequence()
             if len(servers) == 0:

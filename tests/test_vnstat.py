@@ -8,6 +8,7 @@ import pytest
 
 from aiopnsense import OPNsenseClient
 from aiopnsense._endpoint_outcome import _EndpointOutcome
+from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import make_mock_session_client, stub_endpoint_outcome
 
 ClientType = Callable[..., OPNsenseClient]
@@ -127,11 +128,15 @@ async def test_get_vnstat_metrics_unsupported_period_or_endpoint_missing(
 
 
 @pytest.mark.asyncio
-async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientType) -> None:
-    """get_vnstat should produce per-interface summary fields used by sensors.
+@pytest.mark.parametrize("hourly_unavailable", [False, True])
+async def test_get_vnstat_summary_from_hourly_daily_monthly(
+    make_client: ClientType, hourly_unavailable: bool
+) -> None:
+    """Daily and monthly summaries survive a transient hourly read failure.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        hourly_unavailable (bool): Whether the hourly request fails transiently.
     """
     client, _session = make_mock_session_client(make_client)
     try:
@@ -202,6 +207,8 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
             Returns:
                 _EndpointOutcome: Mocked payload outcome for the endpoint path.
             """
+            if hourly_unavailable and path == "/api/vnstat/service/hourly":
+                return _EndpointOutcome.transient(OPNsenseConnectionError("Hourly read failed"))
             payloads = {
                 "/api/vnstat/service/hourly": hourly_payload,
                 "/api/vnstat/service/daily": daily_payload,
@@ -222,7 +229,9 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
         assert igc0_metrics["vnstat_this_month"]["total_bytes"] == 8 * gib
         assert igc0_metrics["vnstat_yesterday"]["total_bytes"] == 2 * gib
         assert igc0_metrics["vnstat_last_month"]["total_bytes"] == 6 * gib
-        assert igc0_metrics["vnstat_last_hour"]["total_bytes"] == 3 * gib
+        assert igc0_metrics["vnstat_last_hour"]["total_bytes"] == (
+            None if hourly_unavailable else 3 * gib
+        )
 
         igc1_metrics = vnstat["interfaces"]["igc1"]["metrics"]
         assert igc1_metrics["vnstat_today"]["total_bytes"] == int(1.5 * gib)
@@ -231,7 +240,9 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
         assert igc1_metrics["vnstat_this_month"]["total_bytes"] == 3 * gib
         assert igc1_metrics["vnstat_yesterday"]["total_bytes"] == 1 * gib
         assert igc1_metrics["vnstat_last_month"]["total_bytes"] == 2 * gib
-        assert igc1_metrics["vnstat_last_hour"]["total_bytes"] == int(1.5 * gib)
+        assert igc1_metrics["vnstat_last_hour"]["total_bytes"] == (
+            None if hourly_unavailable else int(1.5 * gib)
+        )
     finally:
         await client.async_close()
 
