@@ -801,7 +801,7 @@ FIRMWARE_RELEASE_ORDER: tuple[str, ...] = (
 def _patch_asyncio_create_task(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
-    """Prevent background worker tasks from running in tests.
+    """Stub background workers and reject requests that would wait for them.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture used to replace ``asyncio.create_task``.
@@ -867,6 +867,83 @@ def _patch_asyncio_create_task(
         return original_create_task(coro, *args, **kwargs)
 
     monkeypatch.setattr(asyncio, "create_task", _fake_create_task)
+
+    queue_request = aiopnsense.OPNsenseClient._queue_request
+    queue_post = aiopnsense.OPNsenseClient._queue_post_with_cancellation
+
+    def workers_are_stubbed(client: aiopnsense.OPNsenseClient) -> bool:
+        """Detect tests that restore task creation or start a real worker explicitly.
+
+        Args:
+            client (aiopnsense.OPNsenseClient): Client sending the request.
+
+        Returns:
+            bool: Whether the fixture prevents the client from getting a worker.
+        """
+        return asyncio.create_task is _fake_create_task and not any(
+            isinstance(worker, asyncio.Task) and not worker.done() for worker in client._workers
+        )
+
+    def fail_unanswered_request(method: str, path: str) -> Never:
+        """Report an unanswered request without invoking production error handling.
+
+        Args:
+            method (str): Queued operation name.
+            path (str): API endpoint path to request.
+
+        Returns:
+            Never: Always fails the test.
+        """
+        http_method = method.partition("_")[0].upper()
+        pytest.fail(
+            f"queued {http_method} {path} was not answered: stub the request or use a fake Router"
+        )
+
+    async def guard_queued_request(
+        self: aiopnsense.OPNsenseClient,
+        method: str,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+    ) -> Any:
+        """Fail a request that reached the queue without a test double.
+
+        Args:
+            self (aiopnsense.OPNsenseClient): Client sending the request.
+            method (str): Queued operation name.
+            path (str): API endpoint path.
+            payload (MutableMapping[str, Any] | None): Request body, if any.
+
+        Returns:
+            Any: The queued response when the test restores real worker tasks.
+        """
+        if not workers_are_stubbed(self):
+            return await queue_request(self, method, path, payload)
+        fail_unanswered_request(method, path)
+
+    async def guard_queued_post(
+        self: aiopnsense.OPNsenseClient,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+    ) -> tuple[MutableMapping[str, Any] | list | None, asyncio.CancelledError | None]:
+        """Apply the same guard to the separate cancellable POST entry point.
+
+        Args:
+            self (aiopnsense.OPNsenseClient): Client sending the request.
+            path (str): API endpoint path.
+            payload (MutableMapping[str, Any] | None): Request body, if any.
+
+        Returns:
+            tuple[MutableMapping[str, Any] | list | None, asyncio.CancelledError | None]:
+                The queued response and cancellation when real workers are restored.
+        """
+        if not workers_are_stubbed(self):
+            return await queue_post(self, path, payload)
+        fail_unanswered_request("post", path)
+
+    monkeypatch.setattr(aiopnsense.OPNsenseClient, "_queue_request", guard_queued_request)
+    monkeypatch.setattr(
+        aiopnsense.OPNsenseClient, "_queue_post_with_cancellation", guard_queued_post
+    )
 
 
 @pytest.fixture
