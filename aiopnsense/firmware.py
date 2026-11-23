@@ -30,6 +30,7 @@ from .exceptions import (
     _opnsense_http_error,
 )
 from .helpers import (
+    _BETA_BASE_VERSION,
     _LOGGER,
     dict_get,
     firmware_is_at_least,
@@ -44,6 +45,7 @@ FIRMWARE_CHECK_ENDPOINT = "/api/core/firmware/check"
 FIRMWARE_UPGRADE_STATUS_ENDPOINT = "/api/core/firmware/upgradestatus"
 FIRMWARE_ACTION_ENDPOINT_PREFIX = "/api/core/firmware/"
 FIRMWARE_CHANGELOG_ENDPOINT_PREFIX = "/api/core/firmware/changelog/"
+_DEVEL_PACKAGE_NAME = "opnsense-devel"
 
 
 class FirmwareMixin(AiopnsenseClientProtocol):
@@ -263,6 +265,10 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         upgrade, through ``install_firmware`` or the deprecated ``upgrade_firmware``,
         ends the cooldown so the next call can refresh the installed state.
 
+        OPNsense removes the build number from ``product_latest``. When an
+        ``opnsense-devel`` update is available, ``product_latest`` is replaced with
+        that package's new version so callers receive the exact build.
+
         Args:
             check_for_updates (bool): Allow automatic refresh checks when idle.
                 Disable for strictly read-only firmware status requests.
@@ -279,6 +285,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             return {}
 
         status = outcome.mapping()
+        self._use_devel_package_latest(status)
 
         # if error or too old trigger check (only if check is not already in progress)
         # {'status_msg': 'Firmware status check was aborted internally. Please try again.', 'status': 'error'}
@@ -337,6 +344,34 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             await self._request_firmware_check(status)
 
         return status
+
+    @staticmethod
+    def _use_devel_package_latest(status: MutableMapping[str, Any]) -> None:
+        """Set the latest version to the available ``opnsense-devel`` package build.
+
+        Args:
+            status (MutableMapping[str, Any]): Firmware status payload, updated in place.
+        """
+        product = status.get("product")
+        if not isinstance(product, MutableMapping):
+            return
+        product_check = product.get("product_check")
+        if not isinstance(product_check, MutableMapping):
+            return
+        packages = product_check.get("upgrade_packages")
+        if not isinstance(packages, list):
+            return
+        for package in packages:
+            if not isinstance(package, MutableMapping):
+                continue
+            new_version = package.get("new_version")
+            if (
+                package.get("name") == _DEVEL_PACKAGE_NAME
+                and isinstance(new_version, str)
+                and new_version.strip()
+            ):
+                product["product_latest"] = new_version.strip()
+                return
 
     async def _request_firmware_check(self, status: MutableMapping[str, Any]) -> None:
         """Dispatch an automatic firmware check when the cooldown and install state allow it.
@@ -457,6 +492,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         Args:
             type (str): ``update`` for a minor update or ``upgrade`` for a major one.
             target_version (str): Expected firmware version (including hotfix revision).
+                A beta target must include its build number.
             timeout (float): Overall deadline in seconds, including waiting for idle.
             poll_interval (float): Delay in seconds between status observations.
 
@@ -475,6 +511,8 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             or firmware_is_newer(target_version, target_version) is None
         ):
             raise OPNsenseInvalidArgument("A comparable target_version is required")
+        if _BETA_BASE_VERSION.fullmatch(target_version.strip()):
+            raise OPNsenseInvalidArgument("A beta target_version must include its build number")
         for name, value in (("timeout", timeout), ("poll_interval", poll_interval)):
             if (
                 isinstance(value, bool)

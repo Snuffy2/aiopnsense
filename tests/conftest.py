@@ -7,6 +7,7 @@ from collections.abc import (
     Callable,
     Coroutine,
     Generator,
+    Mapping,
     MutableMapping,
 )
 import contextlib
@@ -498,6 +499,183 @@ def firmware_router(
     """
     client, session = make_mock_session_client(make_client)
     return client, FirmwareRouter(client, session)
+
+
+@dataclass(frozen=True, slots=True)
+class FirmwareVersionShape:
+    """A firmware version as a Router reports it, with its expected handling.
+
+    Expected values are written by hand so that they do not depend on the code under test.
+
+    Attributes:
+        id (str): Readable pytest case name.
+        product_version (str | None): ``product.product_version`` in the status payload.
+        product_series (str | None): ``product.product_series`` in the status payload.
+        trimmed (str | None): Version left after removing the hotfix suffix.
+        at_least (Mapping[str, bool | None]): Expected ``firmware_is_at_least`` result
+            for ``product_version`` against each minimum, ``None`` when not comparable.
+        lookup_version (str | None): Version returned by the firmware lookup.
+        cached (bool): Whether the lookup keeps that version for later calls.
+    """
+
+    id: str
+    product_version: str | None
+    product_series: str | None
+    trimmed: str | None
+    at_least: Mapping[str, bool | None]
+    lookup_version: str | None
+    cached: bool
+
+    @property
+    def version_is_comparable(self) -> bool:
+        """Return whether the reported product version itself can be compared.
+
+        Returns:
+            bool: ``True`` when no expected minimum comparison is ``None``.
+        """
+        return all(result is not None for result in self.at_least.values())
+
+
+def _minimums(
+    at_least_26_1_11: bool | None,
+    at_least_26_7: bool | None,
+    at_least_26_7_6: bool | None,
+    at_least_27_1: bool | None,
+) -> dict[str, bool | None]:
+    """Label expected results with the minimum versions they were written against.
+
+    Args:
+        at_least_26_1_11 (bool | None): Expected result against ``26.1.11``.
+        at_least_26_7 (bool | None): Expected result against ``26.7``.
+        at_least_26_7_6 (bool | None): Expected result against ``26.7.6``.
+        at_least_27_1 (bool | None): Expected result against ``27.1``.
+
+    Returns:
+        dict[str, bool | None]: Expected result for each minimum version.
+    """
+    return {
+        "26.1.11": at_least_26_1_11,
+        "26.7": at_least_26_7,
+        "26.7.6": at_least_26_7_6,
+        "27.1": at_least_27_1,
+    }
+
+
+_NOT_COMPARABLE = _minimums(None, None, None, None)
+
+# Release and hotfix forms come from a live Router and its OPNsense changelogs. The beta is
+# the `opnsense-devel` package version, and its series is inferred from that version. A beta
+# cannot be compared with a release, so the lookup uses its product series. A release
+# candidate compares as older than its final release. The last entry is the error status
+# OPNsense returns without product data.
+FIRMWARE_VERSION_SHAPES: tuple[FirmwareVersionShape, ...] = (
+    FirmwareVersionShape(
+        id="series-release",
+        product_version="26.7",
+        product_series="26.7",
+        trimmed="26.7",
+        at_least=_minimums(True, True, False, False),
+        lookup_version="26.7",
+        cached=True,
+    ),
+    FirmwareVersionShape(
+        id="patch-release",
+        product_version="26.7.6",
+        product_series="26.7",
+        trimmed="26.7.6",
+        at_least=_minimums(True, True, True, False),
+        lookup_version="26.7.6",
+        cached=True,
+    ),
+    FirmwareVersionShape(
+        id="series-release-hotfix",
+        product_version="26.1_4",
+        product_series="26.1",
+        trimmed="26.1",
+        at_least=_minimums(False, False, False, False),
+        lookup_version="26.1_4",
+        cached=True,
+    ),
+    FirmwareVersionShape(
+        id="patch-hotfix",
+        product_version="26.7.6_3",
+        product_series="26.7",
+        trimmed="26.7.6",
+        at_least=_minimums(True, True, True, False),
+        lookup_version="26.7.6_3",
+        cached=True,
+    ),
+    FirmwareVersionShape(
+        id="double-digit-hotfix",
+        product_version="26.1.11_10",
+        product_series="26.1",
+        trimmed="26.1.11",
+        at_least=_minimums(True, False, False, False),
+        lookup_version="26.1.11_10",
+        cached=True,
+    ),
+    FirmwareVersionShape(
+        id="release-candidate",
+        product_version="26.7.r1",
+        product_series="26.7",
+        trimmed="26.7.r1",
+        at_least=_minimums(True, False, False, False),
+        lookup_version="26.7.r1",
+        cached=True,
+    ),
+    FirmwareVersionShape(
+        id="release-candidate-hotfix",
+        product_version="26.7.r2_3",
+        product_series="26.7",
+        trimmed="26.7.r2",
+        at_least=_minimums(True, False, False, False),
+        lookup_version="26.7.r2_3",
+        cached=True,
+    ),
+    FirmwareVersionShape(
+        id="beta-build",
+        product_version="27.1.b_21",
+        product_series="27.1",
+        trimmed="27.1.b",
+        at_least=_NOT_COMPARABLE,
+        lookup_version="27.1",
+        cached=True,
+    ),
+    FirmwareVersionShape(
+        id="missing-product",
+        product_version=None,
+        product_series=None,
+        trimmed=None,
+        at_least=_NOT_COMPARABLE,
+        lookup_version=None,
+        cached=False,
+    ),
+)
+
+# Comparable versions from oldest to newest, so every later entry is newer than every
+# earlier one. Hotfixes 2, 8 and 11 check that revisions sort as numbers.
+FIRMWARE_RELEASE_ORDER: tuple[str, ...] = (
+    "26.1.r2",
+    "26.1.r2_2",
+    "26.1",
+    "26.1_4",
+    "26.1.1",
+    "26.1.11",
+    "26.1.11_10",
+    "26.7.r1",
+    "26.7.r2",
+    "26.7.r2_3",
+    "26.7",
+    "26.7.1_1",
+    "26.7.3_2",
+    "26.7.3_8",
+    "26.7.3_11",
+    "26.7.4_1",
+    "26.7.6",
+    "26.7.6_3",
+    "26.7.7",
+    "26.7.9_3",
+)
 
 
 @pytest.fixture(autouse=True)
