@@ -2070,7 +2070,6 @@ async def _enable_blocklist_with_unknown_firmware(client: Any) -> bool:
 
 
 _CALLER_NAMES_PATHS = {
-    "gateways": "/api/routes/gateway/status",
     "alias_search": "/api/firewall/alias/search_item",
     "speedtest_show": "/api/speedtest/service/showlog",
     "firmware_status": "/api/core/firmware/status",
