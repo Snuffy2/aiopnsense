@@ -13,14 +13,13 @@ import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseError, OPNsenseTimeoutError
-from aiopnsense.traffic import (
-    DIAGNOSTICS_TRAFFIC_ENDPOINT,
-    DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX,
-    normalize_traffic_payload,
-)
+from aiopnsense.traffic import normalize_traffic_payload
 from tests.conftest import FakeResponse, MakeClientFactory, make_router_client
 
-STREAM_PATH = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
+DIAGNOSTICS_TRAFFIC_PATH = "/api/diagnostics/traffic/interface"
+DIAGNOSTICS_TRAFFIC_STREAM_PATH_PREFIX = "/api/diagnostics/traffic/stream"
+
+STREAM_PATH = f"{DIAGNOSTICS_TRAFFIC_STREAM_PATH_PREFIX}/1"
 EMPTY_SAMPLE: dict[str, Any] = {"time": None, "interfaces": {}}
 
 
@@ -78,16 +77,6 @@ class _TrackedStreamResponse(FakeResponse):
         """
         self.open_requests -= 1
         return False
-
-
-def test_diagnostics_traffic_stream_endpoint_prefix() -> None:
-    """Stream endpoint prefix constant is present and points to the expected path."""
-    assert DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX == "/api/diagnostics/traffic/stream"
-
-
-def test_diagnostics_traffic_endpoint_points_to_interface() -> None:
-    """Snapshot endpoint constant should target interface-scoped diagnostics traffic."""
-    assert DIAGNOSTICS_TRAFFIC_ENDPOINT == "/api/diagnostics/traffic/interface"
 
 
 def test_normalize_traffic_payload_from_interfaces_mapping() -> None:
@@ -215,7 +204,7 @@ async def test_get_interface_traffic_probes_and_normalizes(
     client, router = make_router_client(
         make_client,
         {
-            ("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): {
+            ("GET", DIAGNOSTICS_TRAFFIC_PATH): {
                 "time": 1710000001,
                 "interfaces": {
                     "wan": {"name": "WAN", "bytes received": 120, "bytes transmitted": 240}
@@ -231,7 +220,7 @@ async def test_get_interface_traffic_probes_and_normalizes(
     assert traffic["interfaces"]["wan"]["name"] == "WAN"
     assert traffic["interfaces"]["wan"]["rx_bytes"] == 120
     assert "tx_bits_per_second" not in traffic["interfaces"]["wan"]
-    assert router.count("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT) == 1
+    assert router.count("GET", DIAGNOSTICS_TRAFFIC_PATH) == 1
 
 
 def test_normalize_traffic_payload_without_rates_for_snapshots() -> None:
@@ -264,10 +253,10 @@ async def test_get_interface_traffic_handles_unavailable_endpoint(
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    client, router = make_router_client(make_client, {("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): 404})
+    client, router = make_router_client(make_client, {("GET", DIAGNOSTICS_TRAFFIC_PATH): 404})
 
     assert await client.get_interface_traffic() == EMPTY_SAMPLE
-    assert router.count("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT) == 1
+    assert router.count("GET", DIAGNOSTICS_TRAFFIC_PATH) == 1
 
 
 @pytest.mark.parametrize(
@@ -289,11 +278,11 @@ async def test_get_interface_traffic_returns_empty_sample_on_probe_error(
         probe_error (Exception): Error raised by the Router session for the snapshot request.
     """
     client, router = make_router_client(
-        make_client, {("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): probe_error}
+        make_client, {("GET", DIAGNOSTICS_TRAFFIC_PATH): probe_error}
     )
 
     assert await client.get_interface_traffic() == EMPTY_SAMPLE
-    assert router.count("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT) == 1
+    assert router.count("GET", DIAGNOSTICS_TRAFFIC_PATH) == 1
 
 
 @pytest.mark.asyncio
@@ -307,7 +296,7 @@ async def test_get_interface_traffic_raises_when_throw_errors_is_enabled(
     """
     client, _router = make_router_client(
         make_client,
-        {("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): TimeoutError("probe timeout")},
+        {("GET", DIAGNOSTICS_TRAFFIC_PATH): TimeoutError("probe timeout")},
         throw_errors=True,
     )
 
@@ -326,7 +315,7 @@ async def test_get_interface_traffic_raises_same_opnsense_error_when_throw_error
     """
     probe_error = OPNsenseError("probe failed")
     client, _router = make_router_client(
-        make_client, {("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): probe_error}, throw_errors=True
+        make_client, {("GET", DIAGNOSTICS_TRAFFIC_PATH): probe_error}, throw_errors=True
     )
 
     with pytest.raises(OPNsenseError) as exc:
@@ -580,7 +569,7 @@ async def test_stream_interface_traffic_passes_read_timeout_from_clamped_poll_in
 
     client, _router = make_router_client(
         make_client,
-        routes={("GET", f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/120"): stream},
+        routes={("GET", f"{DIAGNOSTICS_TRAFFIC_STREAM_PATH_PREFIX}/120"): stream},
     )
 
     samples = [sample async for sample in client.stream_interface_traffic(poll_interval=120)]
@@ -599,7 +588,7 @@ async def test_stream_interface_traffic_reseeds_interval_after_malformed_json_ev
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    stream_path = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/10"
+    stream_path = f"{DIAGNOSTICS_TRAFFIC_STREAM_PATH_PREFIX}/10"
     client, _router = make_router_client(
         make_client,
         {
@@ -628,7 +617,7 @@ async def test_stream_interface_traffic_reseeds_interval_after_non_mapping_json_
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    stream_path = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/10"
+    stream_path = f"{DIAGNOSTICS_TRAFFIC_STREAM_PATH_PREFIX}/10"
     client, _router = make_router_client(
         make_client,
         {
@@ -799,7 +788,7 @@ async def test_get_interface_traffic_failure_follows_throw_errors_contract(
     """
     client, _router = make_router_client(
         make_client,
-        {("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): make_error()},
+        {("GET", DIAGNOSTICS_TRAFFIC_PATH): make_error()},
         throw_errors=throw_errors,
     )
 
@@ -871,7 +860,7 @@ async def test_traffic_propagates_cancellation_and_unhandled_stream_errors(
         make_error (Callable[[], BaseException]): Factory for a fresh session error.
     """
     error = make_error()
-    path = DIAGNOSTICS_TRAFFIC_ENDPOINT if method == "sample" else STREAM_PATH
+    path = DIAGNOSTICS_TRAFFIC_PATH if method == "sample" else STREAM_PATH
     client, _router = make_router_client(
         make_client, {("GET", path): error}, throw_errors=throw_errors
     )
