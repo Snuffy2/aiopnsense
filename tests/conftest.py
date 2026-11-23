@@ -278,13 +278,17 @@ class FakeRouter:
     """Fake Router that answers HTTP requests at the aiohttp session boundary.
 
     Responses come from ``routes`` (keyed by method and request path, query
-    included) or, when no route matches, from the ordered ``get_payloads`` and
-    ``post_payloads`` queues. A route or queue value is turned into a response
-    this way: an exception instance is raised by the session call, an ``int`` is
-    an HTTP error status, a ``str`` is a 200 text body, a ``FakeResponse`` is used
-    as is, and anything else is a 200 JSON body. With nothing configured the
-    Router answers 200 with an empty JSON object. Tests may change ``routes``
-    between calls to model the Router changing.
+    included). A route value is turned into a response this way: an exception
+    instance is raised by the session call, an ``int`` is an HTTP error status, a
+    ``str`` is a 200 text body, a ``FakeResponse`` is used as is, and anything
+    else is a 200 JSON body. Tests may change ``routes`` between calls to model
+    the Router changing.
+
+    A request with no route is recorded and answered one of two ways. With
+    ``explicit_routes`` it gets a 404, as a real Router answers a missing
+    endpoint. Otherwise it is answered from the ordered ``get_payloads`` and
+    ``post_payloads`` queues, or with a 200 empty JSON object once they run out.
+    The queues and that default reply exist for tests not yet migrated to routes.
     """
 
     def __init__(
@@ -294,6 +298,7 @@ class FakeRouter:
         get_payloads: list[Any] | None = None,
         post_payloads: list[Any] | None = None,
         routes: MutableMapping[tuple[str, str], Any] | None = None,
+        explicit_routes: bool = False,
     ) -> None:
         """Initialize the fake Router.
 
@@ -303,8 +308,16 @@ class FakeRouter:
             post_payloads (list[Any] | None): Ordered values answering POST requests without a route.
             routes (MutableMapping[tuple[str, str], Any] | None): Values keyed by
                 ``(method, path)``.
+            explicit_routes (bool): Answer a request without a route with 404 instead of
+                taking a queued payload or the empty 200 reply.
+
+        Raises:
+            ValueError: ``explicit_routes`` is combined with ordered payloads.
         """
+        if explicit_routes and (get_payloads or post_payloads):
+            raise ValueError("Ordered payloads cannot be combined with explicit routes")
         self._client = client
+        self._explicit_routes = explicit_routes
         self.requests: list[tuple[str, str, Any]] = []
         self.routes: dict[tuple[str, str], Any] = {
             (method.upper(), path): value for (method, path), value in (routes or {}).items()
@@ -350,6 +363,8 @@ class FakeRouter:
         queue = self._queues[method]
         if (method, path) in self.routes:
             value = self.routes[(method, path)]
+        elif self._explicit_routes:
+            value = 404
         else:
             value = queue.pop(0) if queue else {}
         if isinstance(value, BaseException):
@@ -370,13 +385,13 @@ def install_fake_router(
     get_payloads: list[Any] | None = None,
     post_payloads: list[Any] | None = None,
     routes: MutableMapping[tuple[str, str], Any] | None = None,
+    explicit_routes: bool = False,
 ) -> FakeRouter:
-    """Back a client with a fake Router and run its queued requests immediately.
+    """Back a client with a fake Router and run it on the real request queue.
 
-    Queue worker tasks are stubbed in most test modules, so queued requests are
-    dispatched straight to the transport methods the worker would call. The test
-    then exercises the real transport, endpoint cache and public methods against
-    the fake session.
+    The Router answers only at the aiohttp session. Every public call then runs
+    through the client's real queue workers, endpoint cache, error policy and
+    transport. Workers stop in the ``make_client`` cleanup.
 
     Args:
         client (aiopnsense.OPNsenseClient): Client to configure.
@@ -384,51 +399,21 @@ def install_fake_router(
         get_payloads (list[Any] | None): Ordered values answering GET requests without a route.
         post_payloads (list[Any] | None): Ordered values answering POST requests without a route.
         routes (MutableMapping[tuple[str, str], Any] | None): Values keyed by ``(method, path)``.
+        explicit_routes (bool): Answer a request without a route with 404 and record it.
 
     Returns:
         FakeRouter: Fake Router recording every request the client sends.
     """
+    _use_real_queue_workers()
     router = FakeRouter(
-        client, get_payloads=get_payloads, post_payloads=post_payloads, routes=routes
+        client,
+        get_payloads=get_payloads,
+        post_payloads=post_payloads,
+        routes=routes,
+        explicit_routes=explicit_routes,
     )
-
-    get = partial(router.request, "GET")
-    post = partial(router.request, "POST")
-
-    async def queue_immediately(
-        method: str, path: str, payload: MutableMapping[str, Any] | None = None
-    ) -> Any:
-        """Run a queued request through its transport method without a worker.
-
-        Args:
-            method (str): Internal request method handled by the queue worker.
-            path (str): API endpoint path to request.
-            payload (MutableMapping[str, Any] | None): Request body for POST requests.
-
-        Returns:
-            Any: Result the queue worker would set.
-
-        Raises:
-            ValueError: If the requested operation is not supported by the fake router.
-        """
-        caller = "fake router"
-        if method == "get":
-            return await client._do_get(path, caller)
-        if method == "get_outcome":
-            return await client._do_get_outcome(path, caller)
-        if method == "get_text_outcome":
-            return await client._do_get_outcome(path, caller, response_format="text")
-        if method == "post":
-            return await client._do_post(path, payload, caller)
-        if method == "post_outcome":
-            return await client._do_post_outcome(path, payload, caller)
-        if method == "get_from_stream":
-            return await client._do_get_from_stream(path, caller)
-        raise ValueError(f"Unknown fake-router queue method: {method}")
-
-    session.get = get
-    session.post = post
-    client._queue_request = queue_immediately
+    session.get = partial(router.request, "GET")
+    session.post = partial(router.request, "POST")
     return router
 
 
@@ -944,6 +929,46 @@ def _patch_asyncio_create_task(
     monkeypatch.setattr(
         aiopnsense.OPNsenseClient, "_queue_post_with_cancellation", guard_queued_post
     )
+
+
+_real_queue_workers_enabler: Callable[[], None] | None = None
+
+
+@pytest.fixture(autouse=True)
+def _real_queue_workers(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    """Let ``install_fake_router`` run the real request queue for the current test.
+
+    This is the one place that restores real worker tasks and sets the queue pacing
+    delay to zero, so a test never needs a sleep to wait for the queue. Both changes
+    are applied only when a test installs a fake Router, and are undone afterwards.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture used to restore task creation and pacing.
+
+    Yields:
+        None: Control to the test.
+    """
+    global _real_queue_workers_enabler
+
+    def enable() -> None:
+        """Restore real worker tasks and remove the pacing delay."""
+        monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
+        monkeypatch.setattr(client_queue, "QUEUE_REQUEST_INTERVAL_SECONDS", 0)
+
+    _real_queue_workers_enabler = enable
+    yield
+    _real_queue_workers_enabler = None
+
+
+def _use_real_queue_workers() -> None:
+    """Run the current test's client on real queue workers with no pacing delay.
+
+    Raises:
+        RuntimeError: Called outside a test that has the ``_real_queue_workers`` fixture.
+    """
+    if _real_queue_workers_enabler is None:
+        raise RuntimeError("Real queue workers need the autouse _real_queue_workers fixture")
+    _real_queue_workers_enabler()
 
 
 @pytest.fixture
