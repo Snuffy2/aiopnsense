@@ -13,8 +13,9 @@ from collections.abc import (
 import contextlib
 from dataclasses import dataclass
 from functools import partial
+import json
 from types import TracebackType
-from typing import Any, Self, cast
+from typing import Any, Never, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -226,6 +227,25 @@ class FakeResponse:
             FakeStreamContent: Content wrapper used by stream tests.
         """
         return FakeStreamContent(self._stream_chunks)
+
+
+class MalformedJSONResponse(FakeResponse):
+    """Successful response whose body is not valid JSON."""
+
+    async def json(self, content_type: Any = None) -> Never:
+        """Raise the error aiohttp raises for a body that is not valid JSON.
+
+        Args:
+            content_type (Any, optional): Requested content type (unused by the fake).
+
+        Returns:
+            Never: This method always raises.
+
+        Raises:
+            json.JSONDecodeError: Always.
+        """
+        del content_type
+        raise json.JSONDecodeError("Expecting value", "<html>", 0)
 
 
 FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]

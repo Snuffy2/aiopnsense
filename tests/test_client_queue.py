@@ -28,6 +28,7 @@ from tests.conftest import (
     FakeResponse,
     FakeStreamResponseFactory,
     MakeClientFactory,
+    MalformedJSONResponse,
     VpnQueueTasks,
     make_mock_session_client,
 )
@@ -1436,25 +1437,6 @@ async def test_legacy_unbound_apply_http_failure_through_queue(
         await client.async_close()
 
 
-class _MalformedJSONResponse(FakeResponse):
-    """Successful response whose body is not valid JSON."""
-
-    async def json(self, content_type: Any = None) -> Never:
-        """Raise the error aiohttp raises for a body that is not valid JSON.
-
-        Args:
-            content_type (Any, optional): Requested content type (unused by the fake).
-
-        Returns:
-            Never: This method always raises.
-
-        Raises:
-            json.JSONDecodeError: Always.
-        """
-        del content_type
-        raise json.JSONDecodeError("Expecting value", "<html>", 0)
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method_name", "request_method"),
@@ -1484,7 +1466,7 @@ async def test_public_outcome_reads_preserve_malformed_json_policy(
     )
     requests: list[str] = []
 
-    def fake_response(url: str, **_kwargs: Any) -> _MalformedJSONResponse:
+    def fake_response(url: str, **_kwargs: Any) -> MalformedJSONResponse:
         """Return malformed JSON only from the endpoint under test.
 
         Args:
@@ -1492,7 +1474,7 @@ async def test_public_outcome_reads_preserve_malformed_json_policy(
             _kwargs (Any): HTTP options supplied by aiohttp callers.
 
         Returns:
-            _MalformedJSONResponse: Response whose JSON body cannot be decoded.
+            MalformedJSONResponse: Response whose JSON body cannot be decoded.
 
         Raises:
             AssertionError: If a request targets an endpoint other than the one under test.
@@ -1500,7 +1482,7 @@ async def test_public_outcome_reads_preserve_malformed_json_policy(
         requests.append(url)
         if not url.endswith(endpoint):
             raise AssertionError(f"Unexpected {request_method.upper()} request: {url}")
-        return _MalformedJSONResponse()
+        return MalformedJSONResponse()
 
     if request_method == "get":
         session.get = fake_response
@@ -1543,7 +1525,7 @@ async def test_get_ipsec_malformed_phase2_json_through_queue(
         session.get = lambda url, **kwargs: FakeResponse(
             json_payload=sessions if url.endswith("search_phase1") else {"rows": []}
         )
-        session.post = lambda *a, **k: _MalformedJSONResponse()
+        session.post = lambda *a, **k: MalformedJSONResponse()
         task = asyncio.get_running_loop().create_task(client._process_queue())
 
         if throw_errors:
@@ -1593,7 +1575,7 @@ async def test_get_openvpn_malformed_routes_json_through_queue(
         """
         del kwargs
         if url.endswith(routes_endpoint):
-            return _MalformedJSONResponse()
+            return MalformedJSONResponse()
         if url.endswith(sessions_endpoint):
             return FakeResponse(
                 json_payload={"rows": [{"id": "vpn-1_1", "type": "server", "status": "connected"}]}

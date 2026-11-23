@@ -2,9 +2,8 @@
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-import json
 import logging
-from typing import Any, Never, Self
+from typing import Any, Self
 from unittest.mock import AsyncMock
 
 import aiohttp
@@ -25,6 +24,7 @@ from tests.conftest import (
     FakeResponse,
     FirmwareRouter,
     MakeClientFactory,
+    MalformedJSONResponse,
     install_fake_router,
     make_mock_session_client,
 )
@@ -1034,25 +1034,6 @@ async def test_cached_404_is_trusted_in_throw_mode(make_client: MakeClientFactor
         await client.async_close()
 
 
-class _MalformedJSONResponse(FakeResponse):
-    """Successful response whose body is not valid JSON."""
-
-    async def json(self, content_type: Any = None) -> Never:
-        """Raise the error aiohttp raises for a body that is not valid JSON.
-
-        Args:
-            content_type (Any, optional): Requested content type (unused by the fake).
-
-        Returns:
-            Never: This method always raises.
-
-        Raises:
-            json.JSONDecodeError: Always.
-        """
-        del content_type
-        raise json.JSONDecodeError("Expecting value", "<html>", 0)
-
-
 @pytest.mark.asyncio
 async def test_transient_failure_clears_cached_present_status(
     make_client: MakeClientFactory,
@@ -1094,7 +1075,7 @@ async def test_decode_error_clears_cached_absence(make_client: MakeClientFactory
 
         # Expire the absence only for the read that meets the malformed response.
         client._endpoint_cache_ttl_seconds = 0
-        router.routes[("GET", NUT_PATH)] = _MalformedJSONResponse()
+        router.routes[("GET", NUT_PATH)] = MalformedJSONResponse()
         assert await client.get_nut_ups_status() is None
         assert router.count("GET", NUT_PATH) == 2
 

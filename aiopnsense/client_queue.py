@@ -22,7 +22,6 @@ from .helpers import (
 _CALLER_WRAPPER_CODES = frozenset(
     {
         _attempt.__code__,
-        ClientEndpointMixin._fetch_gated_outcome.__code__,
         ClientEndpointMixin._fetch_endpoint_outcome.__code__,
         ClientEndpointMixin._fetch_post_endpoint_outcome.__code__,
     }
@@ -232,10 +231,10 @@ class ClientQueueMixin:
 
     @staticmethod
     def _get_caller_name() -> str:
-        """Return the public caller above the queue wrapper.
+        """Return the first caller above the queue wrapper that is not a wrapper helper.
 
-        Frames of ``_attempt`` and the endpoint outcome helpers are skipped so the
-        public method that started the request is named.
+        Frames of ``_attempt`` and the endpoint outcome helpers are skipped. The result
+        may be a private helper of the public method that started the request.
 
         Returns:
             str: Function name used for diagnostics, or ``"Unknown"`` when frame
