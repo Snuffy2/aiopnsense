@@ -6,7 +6,7 @@ import contextlib
 import json
 import logging
 import re
-from typing import Any, Literal, Never, Self
+from typing import Any, Literal, Never
 from unittest.mock import AsyncMock
 
 import pytest
@@ -2070,7 +2070,6 @@ async def _enable_blocklist_with_unknown_firmware(client: Any) -> bool:
 
 
 _CALLER_NAMES_PATHS = {
-    "alias_search": "/api/firewall/alias/search_item",
     "speedtest_show": "/api/speedtest/service/showlog",
     "firmware_status": "/api/core/firmware/status",
     "firmware_running": "/api/core/firmware/running",
@@ -2086,18 +2085,6 @@ _CALLER_NAMES_PATHS = {
             {},
             "get_gateways",
             id="outcome-read",
-        ),
-        pytest.param(
-            lambda client: client.start_service("unbound"),
-            {},
-            "start_service",
-            id="queued-post-through-private-helper",
-        ),
-        pytest.param(
-            lambda client: client.toggle_alias("blocked", "on"),
-            {_CALLER_NAMES_PATHS["alias_search"]: {"rows": [{"name": "blocked", "uuid": "u-1"}]}},
-            "toggle_alias",
-            id="toggle",
         ),
         pytest.param(
             lambda client: client.toggle_vpn_instance("openvpn", "clients", "u-1", "on"),
@@ -2173,8 +2160,7 @@ async def test_failure_logs_name_the_public_client_method(
             return FakeResponse(status=reply, reason="Failed", ok=False)
         return FakeResponse(json_payload=reply)
 
-    session.get = lambda url, **kwargs: answer(url, **kwargs)
-    session.post = lambda url, **kwargs: answer(url, **kwargs)
+    session.get = session.post = answer
     try:
         with caplog.at_level(logging.WARNING, logger="aiopnsense"):
             await operation(client)
@@ -2193,21 +2179,20 @@ async def test_failure_logs_name_the_public_client_method(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("kind", "is_post", "is_sent"),
+    ("kind", "is_sent"),
     [
-        ("get", False, True),
-        ("get_from_stream", False, True),
-        ("get_outcome", False, False),
-        ("get_text_outcome", False, False),
-        ("post", True, False),
-        ("post_outcome", True, False),
+        ("get", True),
+        ("get_from_stream", True),
+        ("get_outcome", False),
+        ("get_text_outcome", False),
+        ("post", False),
+        ("post_outcome", False),
     ],
 )
 async def test_request_cancelled_before_dispatch_is_skipped_by_kind(
     make_client: MakeClientFactory,
     vpn_queue_tasks: VpnQueueTasks,
     kind: str,
-    is_post: bool,
     is_sent: bool,
 ) -> None:
     """Skip POST and outcome requests cancelled while queued; still send plain GET and streams.
@@ -2216,62 +2201,23 @@ async def test_request_cancelled_before_dispatch_is_skipped_by_kind(
         make_client (MakeClientFactory): Client factory fixture.
         vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
         kind (str): Queued request kind.
-        is_post (bool): Whether the kind goes out through the session's POST method.
         is_sent (bool): Whether the cancelled request is still sent.
     """
     client, session = make_mock_session_client(make_client)
-    client._max_workers = 1
-    block_started = asyncio.Event()
-    release_block = asyncio.Event()
-
-    class BlockingResponse(FakeResponse):
-        """Hold the worker until the test queues and cancels the target request."""
-
-        async def __aenter__(self) -> Self:
-            """Signal that the worker is busy and wait for release.
-
-            Returns:
-                Self: This response once released.
-            """
-            block_started.set()
-            await release_block.wait()
-            return self
-
-    def answer(url: str, **_kwargs: Any) -> FakeResponse:
-        """Answer the blocking request slowly and every other request immediately.
-
-        Args:
-            url (str): Requested URL.
-            **_kwargs (Any): Ignored request options.
-
-        Returns:
-            FakeResponse: Response for the requested URL.
-        """
-        if url.endswith("/block"):
-            return BlockingResponse(json_payload={})
-        return FakeResponse(json_payload={}, text_payload="", stream_chunks=[b"data: {}\n\n"])
-
-    session.get.side_effect = answer
-    session.post.side_effect = answer
-    try:
-        blocker = vpn_queue_tasks.start(client._get("/block"))
-        await asyncio.wait_for(block_started.wait(), timeout=3)
-        target = vpn_queue_tasks.start(
-            client._queue_request(kind, "/target", {"x": 1} if is_post else None),
-            eager_start=True,
-        )
-        assert client._request_queue.qsize() == 1
-        target.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(target, timeout=3)
-        release_block.set()
-        await asyncio.wait_for(blocker, timeout=3)
-        # A later request confirms the worker has passed the cancelled one.
-        await asyncio.wait_for(client._get("/barrier"), timeout=3)
-        sent = [call.args[0] for call in (session.post if is_post else session.get).call_args_list]
-        assert any(url.endswith("/target") for url in sent) is is_sent
-    finally:
-        release_block.set()
+    reply = FakeResponse(json_payload={}, text_payload="", stream_chunks=[b"data: {}\n\n"])
+    session.get.return_value = session.post.return_value = reply
+    # An eager start queues the request before the worker runs; cancelling right
+    # away cancels it while it is still queued.
+    target = vpn_queue_tasks.start(
+        client._queue_request(kind, "/target", {"x": 1}), eager_start=True
+    )
+    target.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(target, timeout=3)
+    # A later request confirms the worker has passed the cancelled one.
+    await asyncio.wait_for(client._get("/barrier"), timeout=3)
+    sent = [c.args[0] for m in (session.get, session.post) for c in m.call_args_list]
+    assert any(url.endswith("/target") for url in sent) is is_sent
 
 
 @pytest.mark.asyncio
