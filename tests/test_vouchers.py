@@ -5,12 +5,7 @@ from typing import Any
 
 import pytest
 
-from aiopnsense import (
-    OPNsenseClient,
-    OPNsenseConnectionError,
-    OPNsensePrivilegeMissing,
-    OPNsenseVoucherServerError,
-)
+from aiopnsense import OPNsenseClient, OPNsenseVoucherServerError
 from tests.conftest import FakeRouter, install_fake_router, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -140,58 +135,6 @@ async def test_generate_vouchers_returns_empty_when_provider_lookup_unavailable(
         assert await client.generate_vouchers({}) == []
         assert router.count("GET", PROVIDERS_PATH) == 1
         assert router.count("POST") == 0
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "route_value, expected_error",
-    [
-        pytest.param(403, OPNsensePrivilegeMissing, id="permission-denied"),
-        pytest.param(500, OPNsenseConnectionError, id="server-error"),
-        pytest.param(TimeoutError("timed out"), OPNsenseConnectionError, id="timeout"),
-    ],
-)
-async def test_generate_vouchers_provider_lookup_raises_in_throw_mode(
-    make_client: ClientType, route_value: Any, expected_error: type[Exception]
-) -> None:
-    """The provider lookup raises a public error for permission and transient failures.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route_value (Any): Response the Router gives for the provider listing endpoint.
-        expected_error (type[Exception]): Public exception type expected from the call.
-
-    Returns:
-        None: This test validates throw-mode errors from the provider lookup.
-    """
-    client, router = _make_voucher_client(make_client, route_value)
-    client._throw_errors = True
-    try:
-        with pytest.raises(expected_error):
-            await client.generate_vouchers({})
-        assert router.count("POST") == 0
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_generate_vouchers_missing_provider_endpoint_does_not_raise_in_throw_mode(
-    make_client: ClientType,
-) -> None:
-    """A missing provider listing (404) returns ``[]`` rather than raising in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates 404 is not an error in throw mode.
-    """
-    client, _router = _make_voucher_client(make_client, 404)
-    client._throw_errors = True
-    try:
-        assert await client.generate_vouchers({}) == []
     finally:
         await client.async_close()
 

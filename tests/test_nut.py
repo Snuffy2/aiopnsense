@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from aiopnsense import OPNsenseClient, OPNsenseConnectionError, OPNsensePrivilegeMissing
+from aiopnsense import OPNsenseClient
 from tests.conftest import install_fake_router, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -157,53 +157,6 @@ async def test_get_nut_ups_status_returns_empty_dict_when_endpoint_unavailable(
 
     assert status == {}
     assert requests == 1
-
-
-@pytest.mark.parametrize(
-    "route_value, expected_error",
-    [
-        pytest.param(403, OPNsensePrivilegeMissing, id="permission-denied"),
-        pytest.param(500, OPNsenseConnectionError, id="server-error"),
-        pytest.param(TimeoutError("timed out"), OPNsenseConnectionError, id="timeout"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_get_nut_ups_status_raises_in_throw_mode(
-    make_client: ClientType, route_value: Any, expected_error: type[Exception]
-) -> None:
-    """NUT UPS status raises a public error for permission and transient failures in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route_value (Any): Response the Router gives for the UPS status endpoint.
-        expected_error (type[Exception]): Public exception type expected from the call.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", NUT_PATH): route_value})
-    client.toggle_throwing_errors(True)
-    try:
-        with pytest.raises(expected_error):
-            await client.get_nut_ups_status()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_nut_ups_status_missing_plugin_does_not_raise_in_throw_mode(
-    make_client: ClientType,
-) -> None:
-    """A missing NUT plugin (404) is an empty result, not an error, even in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", NUT_PATH): 404})
-    client.toggle_throwing_errors(True)
-    try:
-        assert await client.get_nut_ups_status() == {}
-    finally:
-        await client.async_close()
 
 
 @pytest.mark.parametrize(

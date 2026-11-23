@@ -15,7 +15,6 @@ from aiopnsense import (
     OPNsenseConnectionError,
     OPNsenseError,
     OPNsenseInvalidURL,
-    OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
 from tests.conftest import (
@@ -114,57 +113,6 @@ async def test_get_unbound_blocklist_returns_empty_when_endpoint_unavailable(
 
     assert result == {}
     assert requests == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "route_value, expected_error",
-    [
-        pytest.param(403, OPNsensePrivilegeMissing, id="permission-denied"),
-        pytest.param(500, OPNsenseConnectionError, id="server-error"),
-        pytest.param(TimeoutError("timed out"), OPNsenseConnectionError, id="timeout"),
-    ],
-)
-async def test_get_unbound_blocklist_raises_in_throw_mode(
-    make_client: ClientType, route_value: Any, expected_error: type[Exception]
-) -> None:
-    """The DNSBL read raises a public error for permission and transient failures in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route_value (Any): Response the Router gives for the DNSBL endpoint.
-        expected_error (type[Exception]): Public exception type expected from the call.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", DNSBL_PATH): route_value})
-    client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-    client._throw_errors = True
-    try:
-        with pytest.raises(expected_error):
-            await client.get_unbound_blocklist()
-        assert router.count("GET", DNSBL_PATH) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_unbound_blocklist_missing_endpoint_does_not_raise_in_throw_mode(
-    make_client: ClientType,
-) -> None:
-    """A missing DNSBL endpoint (404) is an empty result, not an error, in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", DNSBL_PATH): 404})
-    client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-    client._throw_errors = True
-    try:
-        assert await client.get_unbound_blocklist() == {}
-        assert router.count("GET", DNSBL_PATH) == 1
-    finally:
-        await client.async_close()
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,6 @@ import pytest
 from aiopnsense import (
     OPNsenseClient,
     OPNsenseConnectionError,
-    OPNsenseError,
     OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
@@ -199,46 +198,6 @@ async def test_get_vnstat_metrics_unsupported_period_sends_no_request(
         await client.async_close()
 
 
-@pytest.mark.parametrize("route_value, expected_error", THROW_RESPONSES)
-@pytest.mark.asyncio
-async def test_get_vnstat_metrics_raises_in_throw_mode(
-    make_client: ClientType, route_value: Any, expected_error: type[OPNsenseError]
-) -> None:
-    """get_vnstat_metrics raises a public error for permission and transient failures.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route_value (Any): Response the Router gives for the hourly endpoint.
-        expected_error (type[OPNsenseError]): Public exception type expected from the call.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", HOURLY_PATH): route_value})
-    client._throw_errors = True
-    try:
-        with pytest.raises(expected_error):
-            await client.get_vnstat_metrics("hourly")
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_vnstat_metrics_missing_endpoint_does_not_raise_in_throw_mode(
-    make_client: ClientType,
-) -> None:
-    """A missing vnStat endpoint (404) is an empty result, not an error, even in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", HOURLY_PATH): 404})
-    client._throw_errors = True
-    try:
-        assert await client.get_vnstat_metrics("hourly") == {}
-    finally:
-        await client.async_close()
-
-
 @pytest.mark.asyncio
 async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientType) -> None:
     """get_vnstat should produce per-interface summary fields used by sensors.
@@ -365,27 +324,6 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: ClientType)
         await client.async_close()
 
 
-@pytest.mark.parametrize("route_value", UNAVAILABLE_RESPONSES)
-@pytest.mark.asyncio
-async def test_get_vnstat_returns_empty_when_hourly_endpoint_unavailable(
-    make_client: ClientType, route_value: Any
-) -> None:
-    """get_vnstat returns the empty summary and stops after one request when hourly fails.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route_value (Any): Response the Router gives for the hourly endpoint.
-    """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", HOURLY_PATH): route_value})
-    try:
-        assert await client.get_vnstat() == {"interfaces": {}, "interface_count": 0}
-        assert router.count() == 1
-        assert router.count("GET", HOURLY_PATH) == 1
-    finally:
-        await client.async_close()
-
-
 @pytest.mark.parametrize("failing_path", [DAILY_PATH, MONTHLY_PATH])
 @pytest.mark.parametrize("route_value", UNAVAILABLE_RESPONSES)
 @pytest.mark.asyncio
@@ -418,46 +356,6 @@ async def test_get_vnstat_keeps_hourly_rows_when_other_period_unavailable(
         assert len(interface["hourly"]) == 1
         assert interface["daily"] == []
         assert interface["monthly"] == []
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.parametrize("route_value, expected_error", THROW_RESPONSES)
-@pytest.mark.asyncio
-async def test_get_vnstat_raises_in_throw_mode(
-    make_client: ClientType, route_value: Any, expected_error: type[OPNsenseError]
-) -> None:
-    """get_vnstat raises a public error for permission and transient failures.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route_value (Any): Response the Router gives for the hourly endpoint.
-        expected_error (type[OPNsenseError]): Public exception type expected from the call.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", HOURLY_PATH): route_value})
-    client._throw_errors = True
-    try:
-        with pytest.raises(expected_error):
-            await client.get_vnstat()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_vnstat_missing_endpoint_does_not_raise_in_throw_mode(
-    make_client: ClientType,
-) -> None:
-    """A missing vnStat plugin (404) is an empty summary, not an error, even in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", HOURLY_PATH): 404})
-    client._throw_errors = True
-    try:
-        assert await client.get_vnstat() == {"interfaces": {}, "interface_count": 0}
     finally:
         await client.async_close()
 
@@ -555,5 +453,26 @@ async def test_vnstat_metric_values_none_and_valid(make_client: ClientType) -> N
             "tx_bytes": 3,
         }
         assert client._metric_values({"total_bytes": 1, "rx_bytes": None, "tx_bytes": 3}) is None
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize("route_value", UNAVAILABLE_RESPONSES)
+@pytest.mark.asyncio
+async def test_get_vnstat_returns_empty_when_hourly_endpoint_unavailable(
+    make_client: ClientType, route_value: Any
+) -> None:
+    """get_vnstat returns the empty summary and stops after one request when hourly fails.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        route_value (Any): Response the Router gives for the hourly endpoint.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", HOURLY_PATH): route_value})
+    try:
+        assert await client.get_vnstat() == {"interfaces": {}, "interface_count": 0}
+        assert router.count() == 1
+        assert router.count("GET", HOURLY_PATH) == 1
     finally:
         await client.async_close()

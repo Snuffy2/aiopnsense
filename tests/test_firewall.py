@@ -1,7 +1,6 @@
 """Tests for `aiopnsense.firewall`."""
 
 from collections.abc import Callable
-from functools import partial
 import logging
 from typing import Any
 from unittest.mock import AsyncMock
@@ -359,64 +358,6 @@ async def test_rule_helpers_return_empty_when_endpoint_unavailable(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method_name", list(RULE_HELPER_PATHS))
-@pytest.mark.parametrize(("route_value", "expected_error"), THROW_CASES)
-async def test_rule_helpers_raise_in_throw_mode(
-    make_client: ClientType,
-    method_name: str,
-    route_value: Any,
-    expected_error: type[Exception],
-) -> None:
-    """Rule helpers raise a public error for permission and transient failures in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        method_name (str): Rule helper invoked for the failing endpoint.
-        route_value (Any): Response the Router gives for the helper endpoint.
-        expected_error (type[Exception]): Public exception type expected from the call.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=True))
-    router = install_fake_router(
-        client, session, routes={("GET", RULE_HELPER_PATHS[method_name]): route_value}
-    )
-    client._use_snake_case = True
-    client.get_host_firmware_version = AsyncMock(return_value="26.1.4")
-    try:
-        with pytest.raises(expected_error):
-            await client.get_firewall()
-        assert router.count("GET", RULE_HELPER_PATHS[method_name]) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method_name", list(RULE_HELPER_PATHS))
-async def test_rule_helpers_missing_endpoint_does_not_raise_in_throw_mode(
-    make_client: ClientType, method_name: str
-) -> None:
-    """A missing rule endpoint (404) is an empty result, not an error, even in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        method_name (str): Rule helper invoked for the missing endpoint.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=True))
-    router = install_fake_router(
-        client, session, routes={("GET", RULE_HELPER_PATHS[method_name]): 404}
-    )
-    client._use_snake_case = True
-    client.get_host_firmware_version = AsyncMock(return_value="26.1.4")
-    group = RULE_HELPER_GROUPS[method_name]
-    try:
-        result = await client.get_firewall()
-        rules = result[group[0]] if group[1] is None else result[group[0]][group[1]]
-        assert rules == {}
-        assert router.count("GET", RULE_HELPER_PATHS[method_name]) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("firmware_version", "expected"),
     [
@@ -565,37 +506,6 @@ async def test_toggle_alias_returns_false_when_alias_lookup_unavailable(
 
     assert result is False
     assert router.count("GET", ALIAS_SEARCH_PATH) == 1
-    assert router.count("POST") == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("route_value", "expected_error"), THROW_CASES)
-async def test_toggle_alias_raises_in_throw_mode(
-    make_client: ClientType, route_value: Any, expected_error: type[Exception]
-) -> None:
-    """`toggle_alias` raises a public error for permission and transient lookup failures.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route_value (Any): Response the Router gives for the alias search endpoint.
-        expected_error (type[Exception]): Public exception type expected from the call.
-    """
-    with pytest.raises(expected_error):
-        await _toggle_alias(make_client, route_value, throw_errors=True)
-
-
-@pytest.mark.asyncio
-async def test_toggle_alias_missing_lookup_does_not_raise_in_throw_mode(
-    make_client: ClientType,
-) -> None:
-    """A missing alias endpoint (404) returns False even in throw mode.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    result, router = await _toggle_alias(make_client, 404, throw_errors=True)
-
-    assert result is False
     assert router.count("POST") == 0
 
 

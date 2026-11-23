@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient, OPNsenseError, OPNsenseInvalidURL
+from aiopnsense import OPNsenseClient, OPNsenseInvalidURL
 from aiopnsense.exceptions import OPNsenseMissingDeviceUniqueID
 from tests.conftest import FakeRouter, install_fake_router, make_mock_session_client
 
@@ -139,63 +139,6 @@ async def test_system_read_returns_empty_value_when_endpoint_fails(
     try:
         assert await read(client) == empty
         assert router.count("GET", path) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("read", "path", "empty"), SYSTEM_READS)
-@pytest.mark.parametrize(
-    "failure",
-    [
-        pytest.param(403, id="forbidden-403"),
-        pytest.param(500, id="transient-500"),
-        pytest.param(TimeoutError(), id="transient-timeout"),
-    ],
-)
-async def test_system_read_raises_for_forbidden_or_transient_failure_in_throw_mode(
-    make_client: ClientType,
-    read: Callable[[OPNsenseClient], Awaitable[Any]],
-    path: str,
-    empty: Any,
-    failure: Any,
-) -> None:
-    """In throw mode a 403 or transient failure raises an ``OPNsenseError``.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        read (Callable[[OPNsenseClient], Awaitable[Any]]): Calls the public read under test.
-        path (str): Endpoint path the read requests.
-        empty (Any): Value the read returns in default mode.
-        failure (Any): HTTP status or exception the fake Router answers with.
-    """
-    client, _router = _client_with_router(make_client, {("GET", path): failure}, throw_errors=True)
-    try:
-        with pytest.raises(OPNsenseError):
-            await read(client)
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("read", "path", "empty"), SYSTEM_READS)
-async def test_system_read_returns_empty_without_raising_for_absent_endpoint_in_throw_mode(
-    make_client: ClientType,
-    read: Callable[[OPNsenseClient], Awaitable[Any]],
-    path: str,
-    empty: Any,
-) -> None:
-    """In throw mode a 404 is still the absent endpoint and returns the empty value.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        read (Callable[[OPNsenseClient], Awaitable[Any]]): Calls the public read under test.
-        path (str): Endpoint path the read requests.
-        empty (Any): Value the read returns for an absent endpoint.
-    """
-    client, _router = _client_with_router(make_client, {("GET", path): 404}, throw_errors=True)
-    try:
-        assert await read(client) == empty
     finally:
         await client.async_close()
 

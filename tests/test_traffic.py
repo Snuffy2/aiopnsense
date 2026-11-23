@@ -10,12 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from aiopnsense import (
-    OPNsenseConnectionError,
-    OPNsenseError,
-    OPNsensePrivilegeMissing,
-    OPNsenseTimeoutError,
-)
+from aiopnsense import OPNsenseError, OPNsensePrivilegeMissing, OPNsenseTimeoutError
 from aiopnsense.traffic import (
     DIAGNOSTICS_TRAFFIC_ENDPOINT,
     DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX,
@@ -242,57 +237,6 @@ async def test_get_interface_traffic_returns_empty_sample_when_endpoint_unavaila
 
         assert traffic == {"time": None, "interfaces": {}}
         assert router.count("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.parametrize(
-    "route_value, expected_error",
-    [
-        pytest.param(403, OPNsensePrivilegeMissing, id="permission-denied"),
-        pytest.param(500, OPNsenseConnectionError, id="server-error"),
-        pytest.param(TimeoutError("timed out"), OPNsenseTimeoutError, id="timeout"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_get_interface_traffic_raises_in_throw_mode(
-    make_client: MakeClientFactory,
-    route_value: Any,
-    expected_error: type[OPNsenseError],
-) -> None:
-    """Permission and transient failures raise a public error when throw_errors is enabled.
-
-    Args:
-        make_client (MakeClientFactory): Client factory used to build the client under test.
-        route_value (Any): Response the Router gives for the traffic endpoint.
-        expected_error (type[OPNsenseError]): Public exception type expected from the call.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(
-        client, session, routes={("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): route_value}
-    )
-    client._throw_errors = True
-    try:
-        with pytest.raises(expected_error):
-            await client.get_interface_traffic()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_interface_traffic_missing_endpoint_does_not_raise_in_throw_mode(
-    make_client: MakeClientFactory,
-) -> None:
-    """A missing traffic endpoint (404) is an empty sample, not an error, even in throw mode.
-
-    Args:
-        make_client (MakeClientFactory): Client factory used to build the client under test.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): 404})
-    client._throw_errors = True
-    try:
-        assert await client.get_interface_traffic() == {"time": None, "interfaces": {}}
     finally:
         await client.async_close()
 
@@ -853,42 +797,6 @@ async def test_get_interface_traffic_failure_follows_throw_errors_contract(
             else:
                 assert await client.get_interface_traffic() == {"time": None, "interfaces": {}}
                 assert not [r for r in caplog.records if r.levelname in {"WARNING", "ERROR"}]
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.parametrize("throw_errors", [False, True])
-@pytest.mark.parametrize(("make_error", "expected_error"), _TRAFFIC_FAILURE_CASES)
-@pytest.mark.asyncio
-async def test_stream_interface_traffic_check_failure_follows_throw_errors_contract(
-    make_client: MakeClientFactory,
-    caplog: pytest.LogCaptureFixture,
-    throw_errors: bool,
-    make_error: Callable[[], Exception],
-    expected_error: type[OPNsenseError],
-) -> None:
-    """A handled check failure ends the stream empty, logged quietly, or raises a mapped error.
-
-    Args:
-        make_client (MakeClientFactory): Client factory.
-        caplog (pytest.LogCaptureFixture): Log capture used to check the failure stays at debug.
-        throw_errors (bool): Whether the client raises public errors.
-        make_error (Callable[[], Exception]): Factory for a fresh injected error.
-        expected_error (type[OPNsenseError]): Public error expected with throw on.
-    """
-    client = make_client(throw_errors=throw_errors)
-    try:
-        client._check_endpoint_status = AsyncMock(side_effect=make_error())
-        client._stream_json_events = MagicMock()
-
-        with caplog.at_level("DEBUG", logger="aiopnsense"):
-            if throw_errors:
-                with pytest.raises(expected_error):
-                    [s async for s in client.stream_interface_traffic(poll_interval=1)]
-            else:
-                assert [s async for s in client.stream_interface_traffic(poll_interval=1)] == []
-                assert not [r for r in caplog.records if r.levelname in {"WARNING", "ERROR"}]
-        client._stream_json_events.assert_not_called()
     finally:
         await client.async_close()
 

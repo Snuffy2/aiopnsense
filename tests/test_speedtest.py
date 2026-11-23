@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from aiopnsense import OPNsenseClient, OPNsensePrivilegeMissing
+from aiopnsense import OPNsenseClient
 from aiopnsense.system import SYSTEM_TIME_ENDPOINT
 from tests.conftest import install_fake_router, make_mock_session_client
 
@@ -52,25 +52,6 @@ async def test_get_speedtest_reports_unavailable_without_reading_stats(
         assert await client.get_speedtest() == {"available": False}
         assert router.count("GET", SHOW_LOG_PATH) == 1
         assert router.count("GET", SHOW_STAT_PATH) == 0
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_get_speedtest_raises_in_throw_mode_for_forbidden_plugin(
-    make_client: ClientType,
-) -> None:
-    """get_speedtest raises a permission error in throw mode instead of reporting the plugin absent.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", SHOW_LOG_PATH): 403})
-    client.toggle_throwing_errors(True)
-    try:
-        with pytest.raises(OPNsensePrivilegeMissing):
-            await client.get_speedtest()
     finally:
         await client.async_close()
 

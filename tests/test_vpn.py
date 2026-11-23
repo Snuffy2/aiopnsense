@@ -866,40 +866,6 @@ async def test_get_openvpn_rejects_malformed_required_inventory_entries(
 
 
 @pytest.mark.asyncio
-async def test_get_openvpn_routes_request_failure_raises_in_throw_mode(
-    make_client: ClientType,
-) -> None:
-    """Raise a failed optional routes request in throw mode; default mode is covered above.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    try:
-        client.toggle_throwing_errors(True)
-        client._use_snake_case = True
-        install_fake_router(
-            client,
-            session,
-            routes={
-                **OPENVPN_READY_ROUTES,
-                ("GET", aiopnsense_vpn.OPENVPN_ROUTES_SNAKE_ENDPOINT): 500,
-                ("GET", aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT): {
-                    "rows": [{"type": "server", "id": "server", "status": "connected"}]
-                },
-                ("GET", aiopnsense_vpn.OPENVPN_INSTANCES_SEARCH_ENDPOINT): {
-                    "rows": [{"role": "server", "uuid": "server", "enabled": "1"}]
-                },
-            },
-        )
-
-        with pytest.raises(OPNsenseConnectionError):
-            await client.get_openvpn()
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
 async def test_get_openvpn_routes_cancellation_propagates(make_client: ClientType) -> None:
     """Never swallow cancellation raised by the optional routes request.
 

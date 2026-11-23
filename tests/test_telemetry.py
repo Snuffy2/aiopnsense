@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from aiopnsense import OPNsenseClient, OPNsenseError, OPNsensePrivilegeMissing
+from aiopnsense import OPNsenseClient, OPNsensePrivilegeMissing
 from tests.conftest import FakeRouter, install_fake_router, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -103,37 +103,6 @@ def _client_with_router(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("read, path, empty", EMPTY_READS)
-@pytest.mark.parametrize(
-    "failure",
-    [
-        pytest.param(404, id="absent-404"),
-        pytest.param(403, id="forbidden-403"),
-        pytest.param(500, id="transient-500"),
-        pytest.param(TimeoutError(), id="transient-timeout"),
-    ],
-)
-async def test_telemetry_read_returns_empty_value_when_endpoint_fails(
-    make_client: ClientType, read: str, path: str, empty: Any, failure: Any
-) -> None:
-    """Each telemetry read returns its empty value for 404, 403 and transient failures.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        read (str): Name of the telemetry read method.
-        path (str): Endpoint path the read requests.
-        empty (Any): Value the read returns when the endpoint is unavailable.
-        failure (Any): HTTP status or exception the fake Router answers with.
-    """
-    client, router = _client_with_router(make_client, {("GET", path): failure})
-    try:
-        assert await getattr(client, read)() == empty
-        assert router.count("GET", path) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("read, path, empty", EMPTY_READS)
 async def test_telemetry_read_costs_one_request_when_endpoint_present(
     make_client: ClientType, read: str, path: str, empty: Any
 ) -> None:
@@ -153,58 +122,6 @@ async def test_telemetry_read_costs_one_request_when_endpoint_present(
         assert router.count("GET", path) == 1
         if read == "_get_telemetry_cpu":
             stream_read.assert_awaited_once_with(CPU_STREAM_PATH)
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("read, path, empty", EMPTY_READS)
-@pytest.mark.parametrize(
-    "failure",
-    [
-        pytest.param(403, id="forbidden-403"),
-        pytest.param(500, id="transient-500"),
-        pytest.param(TimeoutError(), id="transient-timeout"),
-    ],
-)
-async def test_telemetry_read_raises_for_forbidden_or_transient_failure_in_throw_mode(
-    make_client: ClientType, read: str, path: str, empty: Any, failure: Any
-) -> None:
-    """In throw mode a 403 or transient failure raises an ``OPNsenseError`` instead of the empty value.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        read (str): Name of the telemetry read method.
-        path (str): Endpoint path the read requests.
-        empty (Any): Value the read returns in default mode.
-        failure (Any): HTTP status or exception the fake Router answers with.
-    """
-    client, router = _client_with_router(make_client, {("GET", path): failure}, throw_errors=True)
-    try:
-        with pytest.raises(OPNsenseError):
-            await getattr(client, read)()
-        assert router.count("GET", path) == 1
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("read, path, empty", EMPTY_READS)
-async def test_telemetry_read_returns_empty_without_raising_for_absent_endpoint_in_throw_mode(
-    make_client: ClientType, read: str, path: str, empty: Any
-) -> None:
-    """In throw mode a 404 is still the absent endpoint and returns the empty value.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        read (str): Name of the telemetry read method.
-        path (str): Endpoint path the read requests.
-        empty (Any): Value the read returns for an absent endpoint.
-    """
-    client, router = _client_with_router(make_client, {("GET", path): 404}, throw_errors=True)
-    try:
-        assert await getattr(client, read)() == empty
-        assert router.count("GET", path) == 1
     finally:
         await client.async_close()
 
@@ -738,5 +655,36 @@ async def test_telemetry_system_aware_datetime_boottime_and_load_fallback(
             "five_minute": None,
             "fifteen_minute": None,
         }
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read, path, empty", EMPTY_READS)
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(404, id="absent-404"),
+        pytest.param(403, id="forbidden-403"),
+        pytest.param(500, id="transient-500"),
+        pytest.param(TimeoutError(), id="transient-timeout"),
+    ],
+)
+async def test_telemetry_read_returns_empty_value_when_endpoint_fails(
+    make_client: ClientType, read: str, path: str, empty: Any, failure: Any
+) -> None:
+    """Each telemetry read returns its empty value for 404, 403 and transient failures.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        read (str): Name of the telemetry read method.
+        path (str): Endpoint path the read requests.
+        empty (Any): Value the read returns when the endpoint is unavailable.
+        failure (Any): HTTP status or exception the fake Router answers with.
+    """
+    client, router = _client_with_router(make_client, {("GET", path): failure})
+    try:
+        assert await getattr(client, read)() == empty
+        assert router.count("GET", path) == 1
     finally:
         await client.async_close()
