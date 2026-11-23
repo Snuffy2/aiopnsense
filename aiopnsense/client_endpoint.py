@@ -7,11 +7,9 @@ import logging
 from typing import TYPE_CHECKING, Any, Literal
 from warnings import deprecated
 
-import aiohttp
-
 from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _error_if_throwing, _throws_errors
-from ._request_failure import _PROBE_PHASE, _REQUEST_PHASE, _request_log_url
+from ._request_failure import _PERMISSION_GUIDANCE, _PROBE_PHASE, _REQUEST_PHASE, _request_log_url
 from .const import SNAKE_CASE_ENDPOINTS_CAPABILITY, FirmwareCapability
 from .exceptions import OPNsenseUnknownFirmware, _map_opnsense_exception
 from .helpers import (
@@ -43,15 +41,10 @@ class ClientEndpointMixin:
         _endpoint_checked_at: dict[str, datetime]
         _endpoint_permission_denied: set[str]
         _request_outages: dict[tuple[str, str, str], int | None]
-        _password: str
-        _rest_api_query_count: int
-        _session: aiohttp.ClientSession
         _throw_errors: bool
         _endpoint_observations: dict[str, _EndpointObservation]
         _url: str
         _use_snake_case: bool | None
-        _username: str
-        _verify_ssl: bool
 
         async def _firmware_capability(self, capability: FirmwareCapability) -> bool | None:
             """Evaluate a firmware capability against the detected firmware.
@@ -343,6 +336,13 @@ class ClientEndpointMixin:
 
         cache_generation = self._endpoint_cache_generation
         phase = _PROBE_PHASE if status_only else _REQUEST_PHASE
+        operation = (
+            "check_endpoint_status"
+            if status_only
+            else "fetch_post_endpoint_outcome"
+            if method == "post"
+            else "fetch_endpoint_outcome"
+        )
         observation = self._endpoint_observations.get(cache_key)
         if observation is None or observation.generation != cache_generation:
             observation = _EndpointObservation(generation=cache_generation)
@@ -429,7 +429,8 @@ class ClientEndpointMixin:
                         path,
                         phase,
                         logging.ERROR,
-                        "Permission Error in fetch_endpoint_outcome. Path: %s. Ensure the OPNsense user connected to HA has appropriate access. Recommend full admin access",
+                        "Permission Error in %s. Path: %s. " + _PERMISSION_GUIDANCE,
+                        operation,
                         _request_log_url(f"{self._url}{path}"),
                         error=error,
                         failure_status=403,

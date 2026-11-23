@@ -29,8 +29,6 @@ class AiopnsenseClientProtocol(Protocol):
     _rest_api_query_count: int
     _throw_errors: bool
 
-    async def _get(self, path: str) -> MutableMapping[str, Any] | list | None: ...
-
     async def _post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
     ) -> MutableMapping[str, Any] | list | None: ...

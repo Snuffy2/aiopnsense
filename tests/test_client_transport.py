@@ -305,6 +305,55 @@ async def test_outcome_closes_response_if_context_entry_fails(
         await client.async_close()
 
 
+async def test_status_check_does_not_read_a_non_json_success_body(
+    make_client: MakeClientFactory,
+) -> None:
+    """A status-only check of a successful non-JSON response leaves its body unread.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+    """
+    client, session = make_mock_session_client(make_client)
+    body_reads: list[str] = []
+
+    class EventStreamResponse(FakeResponse):
+        """Successful response whose body is an event stream, not JSON."""
+
+        async def json(self, content_type: Any = None) -> Any:
+            """Record a JSON read and fail as aiohttp does for a non-JSON body.
+
+            Args:
+                content_type (Any, optional): Requested content type (unused by the fake).
+
+            Returns:
+                Any: Never returns.
+
+            Raises:
+                json.JSONDecodeError: Always.
+            """
+            del content_type
+            body_reads.append("json")
+            raise json.JSONDecodeError("Expecting value", "data: tick", 0)
+
+        async def text(self) -> str:
+            """Record a text read and return the event-stream body.
+
+            Returns:
+                str: Event-stream body.
+            """
+            body_reads.append("text")
+            return "data: tick\n\n"
+
+    session.get.return_value = EventStreamResponse()
+    try:
+        outcome = await client._check_endpoint_status("/api/stream", force_refresh=True)
+        assert outcome.is_data
+        assert outcome.decode_error is None
+        assert body_reads == []
+    finally:
+        await client.async_close()
+
+
 async def test_outcome_logs_redact_url_credentials_in_endpoint_path(
     make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
 ) -> None:

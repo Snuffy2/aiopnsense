@@ -2,14 +2,16 @@
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+import json
 import logging
-from typing import Any, Self
+from typing import Any, Never, Self
 from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
 
 from aiopnsense._endpoint_outcome import _EndpointOutcome
+from aiopnsense._request_failure import _PERMISSION_GUIDANCE
 import aiopnsense.client_endpoint
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
@@ -1028,6 +1030,149 @@ async def test_cached_404_is_trusted_in_throw_mode(make_client: MakeClientFactor
         assert await client.get_nut_ups_status() == {}
         assert await client.get_nut_ups_status() == {}
         assert router.count("GET", NUT_PATH) == 1
+    finally:
+        await client.async_close()
+
+
+class _MalformedJSONResponse(FakeResponse):
+    """Successful response whose body is not valid JSON."""
+
+    async def json(self, content_type: Any = None) -> Never:
+        """Raise the error aiohttp raises for a body that is not valid JSON.
+
+        Args:
+            content_type (Any, optional): Requested content type (unused by the fake).
+
+        Returns:
+            Never: This method always raises.
+
+        Raises:
+            json.JSONDecodeError: Always.
+        """
+        del content_type
+        raise json.JSONDecodeError("Expecting value", "<html>", 0)
+
+
+@pytest.mark.asyncio
+async def test_transient_failure_clears_cached_present_status(
+    make_client: MakeClientFactory,
+) -> None:
+    """A transient failure discards a cached present answer, so the next check asks again.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): NUT_DATA})
+    try:
+        assert (await client._check_endpoint_status(NUT_PATH)).is_data
+        assert (await client._check_endpoint_status(NUT_PATH)).is_data
+        assert router.count("GET", NUT_PATH) == 1
+
+        router.routes[("GET", NUT_PATH)] = 500
+        assert (await client._check_endpoint_status(NUT_PATH, force_refresh=True)).is_transient
+        router.routes[("GET", NUT_PATH)] = NUT_DATA
+        assert (await client._check_endpoint_status(NUT_PATH)).is_data
+        assert router.count("GET", NUT_PATH) == 3
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_decode_error_clears_cached_absence(make_client: MakeClientFactory) -> None:
+    """A malformed 200 supersedes a cached 404, so the next read asks the Router again.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): 404})
+    try:
+        assert await client.get_nut_ups_status() == {}
+        assert await client.get_nut_ups_status() == {}
+        assert router.count("GET", NUT_PATH) == 1
+
+        # Expire the absence only for the read that meets the malformed response.
+        client._endpoint_cache_ttl_seconds = 0
+        router.routes[("GET", NUT_PATH)] = _MalformedJSONResponse()
+        assert await client.get_nut_ups_status() is None
+        assert router.count("GET", NUT_PATH) == 2
+
+        client._endpoint_cache_ttl_seconds = 3600
+        router.routes[("GET", NUT_PATH)] = NUT_DATA
+        assert await client.get_nut_ups_status() == NUT_DATA
+        assert router.count("GET", NUT_PATH) == 3
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_forbidden_in_throw_mode_clears_cached_present_status(
+    make_client: MakeClientFactory,
+) -> None:
+    """A 403 raises in throw mode and discards a cached present answer.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(client, session, routes={("GET", NUT_PATH): NUT_DATA})
+    client.toggle_throwing_errors(True)
+    try:
+        assert (await client._check_endpoint_status(NUT_PATH)).is_data
+        router.routes[("GET", NUT_PATH)] = 403
+        with pytest.raises(OPNsensePrivilegeMissing):
+            await client._check_endpoint_status(NUT_PATH, force_refresh=True)
+
+        router.routes[("GET", NUT_PATH)] = NUT_DATA
+        assert (await client._check_endpoint_status(NUT_PATH)).is_data
+        assert router.count("GET", NUT_PATH) == 3
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("operation", "operation_label"),
+    [
+        pytest.param("status", "check_endpoint_status", id="status-check"),
+        pytest.param("get", "fetch_endpoint_outcome", id="get-read"),
+        pytest.param("post", "fetch_post_endpoint_outcome", id="post-read"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_permission_error_log_names_the_failing_operation(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+    operation: str,
+    operation_label: str,
+) -> None:
+    """The first 403 logs a permission error labeled with the operation that met it.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
+        operation (str): Endpoint operation that receives the 403.
+        operation_label (str): Operation name expected in the log message.
+    """
+    client, session = make_mock_session_client(make_client)
+    method = "POST" if operation == "post" else "GET"
+    router = install_fake_router(client, session, routes={(method, NUT_PATH): 403})
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            if operation == "status":
+                assert (await client._check_endpoint_status(NUT_PATH)).is_absent
+            elif operation == "get":
+                assert (await client._fetch_endpoint_outcome(NUT_PATH)).is_absent
+            else:
+                assert (await client._fetch_post_endpoint_outcome(NUT_PATH)).is_absent
+
+        errors = [
+            record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR
+        ]
+        assert len(errors) == 1
+        assert errors[0].startswith(f"Permission Error in {operation_label}. Path: ")
+        assert errors[0].endswith(_PERMISSION_GUIDANCE)
+        assert router.count(method, NUT_PATH) == 1
     finally:
         await client.async_close()
 

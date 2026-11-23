@@ -2749,3 +2749,153 @@ async def test_cancelled_queued_smart_info_is_skipped_and_queue_progresses(
     finally:
         release.set()
         await asyncio.wait_for(client.async_close(), timeout=3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "request_method", "log_marker"),
+    [
+        ("get_nut_ups_status", "get", "[get_outcome]"),
+        ("get_smart", "post", "[post_outcome]"),
+    ],
+)
+async def test_outcome_read_logs_the_public_method_as_caller(
+    method_name: str,
+    request_method: str,
+    log_marker: str,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A queued outcome read names the public method that started it in the request log.
+
+    Args:
+        method_name (str): Public GET or POST endpoint reader.
+        request_method (str): Session request method used by the reader.
+        log_marker (str): Debug log prefix of the transport request.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        caplog (pytest.LogCaptureFixture): Fixture capturing log records.
+    """
+    client, session = make_mock_session_client(make_client)
+    getattr(session, request_method).return_value = FakeResponse(json_payload={})
+    try:
+        with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+            await getattr(client, method_name)()
+
+        request_logs = [
+            record.getMessage()
+            for record in caplog.records
+            if record.getMessage().startswith(log_marker) and "called by" in record.getMessage()
+        ]
+        assert len(request_logs) == 1
+        assert request_logs[0].endswith(f"(called by {method_name})")
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_worker_cancels_in_flight_outcome_request(
+    make_client: MakeClientFactory,
+) -> None:
+    """Cancelling a worker mid-outcome-read cancels the request and spares the other worker.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, session = make_mock_session_client(make_client)
+    request_started = asyncio.Event()
+    request_cancelled = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingResponse:
+        """Hold the NUT request open until the test cancels or releases it."""
+
+        async def __aenter__(self) -> FakeResponse:
+            """Wait for release, recording cancellation of the in-flight request.
+
+            Returns:
+                FakeResponse: Successful response after ``release`` is set.
+
+            Raises:
+                asyncio.CancelledError: When the in-flight request is cancelled.
+            """
+            request_started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                request_cancelled.set()
+                raise
+            return FakeResponse(json_payload={})
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            _tb: object,
+        ) -> bool:
+            """Leave response exceptions unsuppressed.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type from the response body.
+                exc (BaseException | None): Exception raised inside the context.
+                _tb (object): Traceback supplied by the async context manager protocol.
+
+            Returns:
+                bool: Always false, so cancellation propagates.
+            """
+            return False
+
+    def session_get(url: str, **_kwargs: Any) -> BlockingResponse | FakeResponse:
+        """Block the NUT read and answer every other path.
+
+        Args:
+            url (str): Requested URL.
+            _kwargs (Any): HTTP options supplied by aiohttp callers.
+
+        Returns:
+            BlockingResponse | FakeResponse: Response context for the requested path.
+        """
+        if url.endswith("/api/nut/diagnostics/upsstatus"):
+            return BlockingResponse()
+        return FakeResponse(json_payload={"ok": True})
+
+    session.get = session_get
+    busy_workers: list[asyncio.Task[Any]] = []
+    run_outcome_request = client._run_cancellable_outcome_request
+
+    async def record_worker(*args: Any, **kwargs: Any) -> Any:
+        """Record the queue worker that dispatches the outcome request.
+
+        Args:
+            args (Any): Positional arguments for the queue helper.
+            kwargs (Any): Keyword arguments for the queue helper.
+
+        Returns:
+            Any: Result of the wrapped queue helper.
+        """
+        task = asyncio.current_task()
+        assert task is not None
+        busy_workers.append(task)
+        return await run_outcome_request(*args, **kwargs)
+
+    client._run_cancellable_outcome_request = record_worker
+    try:
+        read = asyncio.create_task(client.get_nut_ups_status())
+        await asyncio.wait_for(request_started.wait(), timeout=3)
+        (busy_worker,) = busy_workers
+        other_worker = next(worker for worker in client._workers if worker is not busy_worker)
+
+        busy_worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(busy_worker, timeout=3)
+        assert busy_worker.cancelled()
+        await asyncio.wait_for(request_cancelled.wait(), timeout=3)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(read, timeout=3)
+
+        served = asyncio.get_running_loop().create_future()
+        await client._request_queue.put(("get", "/other", None, served, "test"))
+        assert await asyncio.wait_for(served, timeout=3) == {"ok": True}
+        assert not other_worker.done()
+    finally:
+        release.set()
+        await asyncio.wait_for(client.async_close(), timeout=3)

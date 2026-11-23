@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _attempt
+from .client_endpoint import ClientEndpointMixin
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
 from .helpers import (
@@ -17,6 +18,16 @@ from .helpers import (
     _mark_request_error_logged,
     _redacted_exception_message,
 )
+
+_CALLER_WRAPPER_CODES = frozenset(
+    {
+        _attempt.__code__,
+        ClientEndpointMixin._fetch_gated_outcome.__code__,
+        ClientEndpointMixin._fetch_endpoint_outcome.__code__,
+        ClientEndpointMixin._fetch_post_endpoint_outcome.__code__,
+    }
+)
+"""Code objects of helpers that sit between a public method and the queue."""
 
 
 @dataclass(slots=True)
@@ -223,14 +234,17 @@ class ClientQueueMixin:
     def _get_caller_name() -> str:
         """Return the public caller above the queue wrapper.
 
+        Frames of ``_attempt`` and the endpoint outcome helpers are skipped so the
+        public method that started the request is named.
+
         Returns:
             str: Function name used for diagnostics, or ``"Unknown"`` when frame
             inspection is unavailable.
         """
         try:
             frame = sys._getframe(3)
-            if frame.f_code is _attempt.__code__:
-                frame = frame.f_back or frame
+            while frame.f_code in _CALLER_WRAPPER_CODES and frame.f_back is not None:
+                frame = frame.f_back
             return frame.f_code.co_name
         except ValueError, AttributeError:
             return "Unknown"
@@ -243,7 +257,9 @@ class ClientQueueMixin:
     ) -> Any:
         """Queue one API request and return its future result.
 
-        Cancelling the caller before dispatch causes the worker to skip a queued POST.
+        Cancelling the caller before dispatch causes the worker to skip a queued POST
+        or outcome read (``get_outcome``, ``get_text_outcome`` or ``post_outcome``).
+        Cancelling the caller while an outcome read is in flight cancels that read.
 
         Args:
             method (str): Internal request method handled by ``_process_queue``.
