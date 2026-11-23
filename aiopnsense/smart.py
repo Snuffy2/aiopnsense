@@ -16,15 +16,15 @@ class SmartMixin(AiopnsenseClientProtocol):
     """SMART plugin methods for OPNsenseClient."""
 
     @_log_errors
-    async def get_smart(self) -> list[dict[str, Any]]:
+    async def get_smart(self) -> list[dict[str, Any]] | None:
         """Return SMART device data from the OPNsense SMART plugin.
 
         Returns:
-            list[dict[str, Any]]: SMART device rows returned by the detailed API, or an
-                empty list when absent (404 in either mode), or on 403/transient HTTP or
-                transport failures with ``throw_errors`` off. Those failures raise
-                ``OPNsenseError`` when enabled. An undecodable response body raises
-                ``OPNsenseError`` in either mode.
+            list[dict[str, Any]] | None: SMART device rows, or an empty list when the
+                endpoint returns 404. With ``throw_errors`` off, 403 and transient HTTP
+                or transport failures return an empty list, and an undecodable response
+                body returns ``None``. With ``throw_errors`` on, those failures raise
+                ``OPNsenseError``.
         """
         outcome = await self._fetch_post_endpoint_outcome(SMART_SERVICE_DETAIL_ENDPOINT)
         if not outcome.is_data:
@@ -53,7 +53,7 @@ class SmartMixin(AiopnsenseClientProtocol):
         return smart_devices
 
     @_log_errors
-    async def get_smart_info(self, device: str, info_type: str = "a") -> dict[str, Any]:
+    async def get_smart_info(self, device: str, info_type: str = "a") -> dict[str, Any] | None:
         """Return SMART detail data for a single device.
 
         Args:
@@ -68,12 +68,11 @@ class SmartMixin(AiopnsenseClientProtocol):
                 - ``x``: Extended
 
         Returns:
-            dict[str, Any]: Decoded SMART detail payload. Non-mapping outputs
-                are wrapped under ``output`` to preserve a stable mapping API. Returns
-                an empty dictionary when absent (404 in either mode), or on 403/transient
-                HTTP or transport failures with ``throw_errors`` off. Those failures raise
-                ``OPNsenseError`` when enabled. An undecodable response body raises
-                ``OPNsenseError`` in either mode.
+            dict[str, Any] | None: Decoded SMART details, with non-mapping outputs
+                wrapped under ``output``. A 404 returns an empty dictionary. With
+                ``throw_errors`` off, 403 and transient HTTP or transport failures return
+                an empty dictionary, and an undecodable response body returns ``None``.
+                With ``throw_errors`` on, those failures raise ``OPNsenseError``.
         """
         outcome = await self._fetch_post_endpoint_outcome(
             SMART_SERVICE_INFO_ENDPOINT,
