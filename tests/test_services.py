@@ -1,15 +1,16 @@
 """Tests for `aiopnsense.services`."""
 
 from collections.abc import Callable
-from unittest.mock import AsyncMock
 
 import pytest
 
 from aiopnsense import OPNsenseClient
-from aiopnsense._endpoint_outcome import _EndpointOutcome
-from tests.conftest import make_mock_session_client, stub_endpoint_outcome
+from tests.conftest import make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
+
+SERVICE_SEARCH_PATH = "/api/core/service/search"
+SERVICE_PATH_PREFIX = "/api/core/service"
 
 
 @pytest.mark.asyncio
@@ -22,90 +23,80 @@ async def test_service_management_and_get_services(make_client: ClientType) -> N
     Returns:
         None: This test validates service normalization and control-path behavior.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        stub_endpoint_outcome(
-            client,
-            _EndpointOutcome.data(
-                {
-                    "rows": [
-                        {"name": "svc1", "running": 1, "id": "svc1"},
-                        "malformed",
-                        123,
-                        None,
-                    ]
-                }
-            ),
-        )
-        services = await client.get_services()
-        assert len(services) == 1
-        assert services[0]["status"] is True
-        assert await client.get_service_is_running("svc1") is True
+    client, router = make_router_client(
+        make_client,
+        routes={
+            ("GET", SERVICE_SEARCH_PATH): {
+                "rows": [
+                    {"name": "svc1", "running": 1, "id": "svc1"},
+                    "malformed",
+                    123,
+                    None,
+                ]
+            },
+            ("POST", f"{SERVICE_PATH_PREFIX}/start/svc1"): {"result": "ok"},
+            ("POST", f"{SERVICE_PATH_PREFIX}/stop/svc1"): {"result": "ok"},
+            ("POST", f"{SERVICE_PATH_PREFIX}/restart/svc1"): {"result": "ok"},
+        },
+    )
 
-        # manage service via _safe_dict_post
-        client._safe_dict_post = AsyncMock(return_value={"result": "ok"})
-        ok = await client._manage_service("start", "svc1")
-        assert ok is True
-        assert await client.start_service("svc1") is True
-        assert await client.stop_service("svc1") is True
-        assert await client.restart_service("svc1") is True
-    finally:
-        await client.async_close()
+    services = await client.get_services()
+    assert len(services) == 1
+    assert services[0]["status"] is True
+    assert await client.get_service_is_running("svc1") is True
+
+    assert await client.start_service("svc1") is True
+    assert await client.stop_service("svc1") is True
+    assert await client.restart_service("svc1") is True
+    for action in ("start", "stop", "restart"):
+        assert router.count("POST", f"{SERVICE_PATH_PREFIX}/{action}/svc1") == 1
 
 
 @pytest.mark.asyncio
-async def test_manage_service_and_restart_if_running(
-    monkeypatch: pytest.MonkeyPatch,
-    make_client: ClientType,
-) -> None:
+async def test_manage_service_and_restart_if_running(make_client: ClientType) -> None:
     """Verify service-management helper behavior and restart-if-running branching.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture used to patch restart helper behavior.
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
 
     Returns:
         None: This test validates service-management endpoint and restart control flow.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        # _manage_service should return False when service empty
-        assert await client._manage_service("start", "") is False
+    restart_path = f"{SERVICE_PATH_PREFIX}/restart/svc1"
+    client, router = make_router_client(
+        make_client,
+        routes={
+            # Preserve the structural separator between a service name and instance
+            # while URL-encoding unsafe characters within each path component.
+            ("POST", f"{SERVICE_PATH_PREFIX}/restart/openvpn/vpn%20instance"): {"result": "ok"},
+            # Instance service switches pass the composite identifier returned by
+            # OPNsense and require the separator to remain part of the API route.
+            ("POST", f"{SERVICE_PATH_PREFIX}/stop/openvpn/INSTANCE_ID"): {"result": "ok"},
+            ("GET", SERVICE_SEARCH_PATH): {"rows": [{"name": "svc1", "id": "svc1", "running": 1}]},
+            ("POST", restart_path): {"result": "ok"},
+        },
+    )
 
-        # when _safe_dict_post returns ok result, manage_service returns True
-        client._safe_dict_post = AsyncMock(return_value={"result": "ok"})
-        assert await client._manage_service("start", "svc1") is True
-        assert client._safe_dict_post.await_args.args[0] == "/api/core/service/start/svc1"
+    # An empty service name sends no request.
+    assert await client.start_service("") is False
+    assert router.count() == 0
 
-        # Preserve the structural separator between a service name and instance
-        # while URL-encoding unsafe characters within each path component.
-        assert await client._manage_service("restart", "openvpn/vpn instance") is True
-        assert (
-            client._safe_dict_post.await_args.args[0]
-            == "/api/core/service/restart/openvpn/vpn%20instance"
-        )
+    assert await client.restart_service("openvpn/vpn instance") is True
+    assert router.count("POST", f"{SERVICE_PATH_PREFIX}/restart/openvpn/vpn%20instance") == 1
 
-        # Instance service switches pass the composite identifier returned by
-        # OPNsense and require the separator to remain part of the API route.
-        assert await client.stop_service("openvpn/INSTANCE_ID") is True
-        assert (
-            client._safe_dict_post.await_args.args[0]
-            == "/api/core/service/stop/openvpn/INSTANCE_ID"
-        )
+    assert await client.stop_service("openvpn/INSTANCE_ID") is True
+    assert router.count("POST", f"{SERVICE_PATH_PREFIX}/stop/openvpn/INSTANCE_ID") == 1
 
-        # restart_service_if_running uses _get_service_running_state; test branch behavior
-        restart_service_mock = AsyncMock(return_value=True)
-        monkeypatch.setattr(client, "restart_service", restart_service_mock, raising=False)
-        client._get_service_running_state = AsyncMock(return_value=True)
-        assert await client.restart_service_if_running("svc1") is True
-        restart_service_mock.assert_awaited_once_with("svc1")
+    # A running service is restarted.
+    assert await client.restart_service_if_running("svc1") is True
+    assert router.count("POST", restart_path) == 1
 
-        restart_service_mock.reset_mock()
-        client._get_service_running_state = AsyncMock(return_value=False)
-        assert await client.restart_service_if_running("svc1") is True
-        restart_service_mock.assert_not_awaited()
-    finally:
-        await client.async_close()
+    # A stopped service succeeds without a restart request.
+    router.routes[("GET", SERVICE_SEARCH_PATH)] = {
+        "rows": [{"name": "svc1", "id": "svc1", "running": 0}]
+    }
+    assert await client.restart_service_if_running("svc1") is True
+    assert router.count("POST", restart_path) == 1
 
 
 @pytest.mark.asyncio
@@ -120,29 +111,29 @@ async def test_restart_service_if_running_matches_composite_service_identifier(
     Returns:
         None: This test validates composite service lookup and restart behavior.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        stub_endpoint_outcome(
-            client,
-            _EndpointOutcome.data(
-                {"rows": [{"name": "openvpn", "id": "openvpn/INSTANCE_ID", "running": 1}]}
-            ),
-        )
-        client._safe_dict_post = AsyncMock(return_value={"result": "ok"})
+    restart_path = f"{SERVICE_PATH_PREFIX}/restart/openvpn/INSTANCE_ID"
+    client, router = make_router_client(
+        make_client,
+        routes={
+            ("GET", SERVICE_SEARCH_PATH): {
+                "rows": [{"name": "openvpn", "id": "openvpn/INSTANCE_ID", "running": 1}]
+            },
+            ("POST", restart_path): {"result": "ok"},
+        },
+    )
 
-        assert await client._get_service_running_state("openvpn") is True
-        assert await client._get_service_running_state("openvpn/INSTANCE_ID") is True
-        assert await client.restart_service_if_running("openvpn/INSTANCE_ID") is True
-        client._safe_dict_post.assert_awaited_once_with(
-            "/api/core/service/restart/openvpn/INSTANCE_ID"
-        )
-    finally:
-        await client.async_close()
+    assert await client.get_service_is_running("openvpn") is True
+    assert await client.get_service_is_running("openvpn/INSTANCE_ID") is True
+    assert await client.restart_service_if_running("openvpn/INSTANCE_ID") is True
+    assert router.count("POST", restart_path) == 1
+    assert router.count("POST") == 1
 
 
 @pytest.mark.asyncio
 async def test_service_unknown_state_fails_closed(make_client: ClientType) -> None:
     """Unavailable service-search endpoint should produce fail-closed restart behavior.
+
+    The cached absence spares the later calls a request.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -150,20 +141,14 @@ async def test_service_unknown_state_fails_closed(make_client: ClientType) -> No
     Returns:
         None: This test validates unknown service-state handling when endpoint probing fails.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        endpoint_read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
-        client.restart_service = AsyncMock(return_value=True)
+    client, router = make_router_client(make_client)
 
-        assert await client.get_services() == []
-        assert await client._fetch_normalized_services(return_none_when_unavailable=True) is None
-        assert await client.get_service_is_running("svc1") is False
-        assert await client.restart_service_if_running("svc1") is False
-        client.restart_service.assert_not_awaited()
-        endpoint_read.assert_any_await("/api/core/service/search")
-        assert endpoint_read.await_count == 4
-    finally:
-        await client.async_close()
+    assert await client.get_services() == []
+    assert await client.get_service_is_running("svc1") is False
+    assert await client.restart_service_if_running("svc1") is False
+
+    assert router.count("GET", SERVICE_SEARCH_PATH) == 1
+    assert router.count("POST") == 0
 
 
 @pytest.mark.asyncio
@@ -178,31 +163,23 @@ async def test_get_services_handles_non_list_rows_and_running_coercion(
     Returns:
         None: This test validates service-row normalization and status coercion.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": "bad-shape"}))
-        assert await client.get_services() == []
+    client, router = make_router_client(
+        make_client, routes={("GET", SERVICE_SEARCH_PATH): {"rows": "bad-shape"}}
+    )
+    assert await client.get_services() == []
 
-        stub_endpoint_outcome(
-            client,
-            _EndpointOutcome.data(
-                {
-                    "rows": [
-                        {"name": "svc1", "running": object(), "id": "svc1"},
-                        {"name": "svc2", "running": "1", "id": "svc2"},
-                    ]
-                }
-            ),
-        )
-        services = await client.get_services()
-        assert len(services) == 2
-        assert services[0]["status"] is False
-        assert services[1]["status"] is True
+    router.routes[("GET", SERVICE_SEARCH_PATH)] = {
+        "rows": [
+            {"name": "svc1", "running": object(), "id": "svc1"},
+            {"name": "svc2", "running": "1", "id": "svc2"},
+        ]
+    }
+    services = await client.get_services()
+    assert len(services) == 2
+    assert services[0]["status"] is False
+    assert services[1]["status"] is True
 
-        assert await client.get_service_is_running("does-not-exist") is False
-        assert await client._get_service_running_state("does-not-exist") is None
-        client.restart_service = AsyncMock(return_value=True)
-        assert await client.restart_service_if_running("does-not-exist") is False
-        client.restart_service.assert_not_awaited()
-    finally:
-        await client.async_close()
+    assert await client.get_service_is_running("does-not-exist") is False
+    # An unknown service is not a stopped one, so no restart request is sent.
+    assert await client.restart_service_if_running("does-not-exist") is False
+    assert router.count("POST") == 0

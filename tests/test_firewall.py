@@ -2,92 +2,90 @@
 
 from collections.abc import Callable
 import logging
-from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
 from aiopnsense import OPNsenseClient
-from aiopnsense._endpoint_outcome import _EndpointOutcome
-from tests.conftest import stub_endpoint_outcome
+from tests.conftest import make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
-AliasRowType = dict[str, str]
-AliasSearchRowsType = list[AliasRowType]
-AliasPostResponseType = dict[str, str]
-AliasPostResultType = AliasPostResponseType | list[AliasPostResponseType] | None
+
+FILTER_RULES_PATH = "/api/firewall/filter/download_rules"
+DNAT_PATH = "/api/firewall/d_nat/search_rule"
+ONE_TO_ONE_PATH = "/api/firewall/one_to_one/search_rule"
+SOURCE_NAT_PATH = "/api/firewall/source_nat/search_rule"
+NPT_PATH = "/api/firewall/npt/search_rule"
+KILL_STATES_PATH = "/api/diagnostics/firewall/kill_states/"
+NAT_GROUP_PATHS = {
+    "d_nat": DNAT_PATH,
+    "one_to_one": ONE_TO_ONE_PATH,
+    "source_nat": SOURCE_NAT_PATH,
+    "npt": NPT_PATH,
+}
+SOURCE_NAT_ROWS = {
+    "rows": [
+        {"uuid": "manual-src", "description": "Manual", "enabled": "1"},
+        {"uuid": "auto-src", "description": "Automatic", "enabled": "1", "is_automatic": True},
+    ]
+}
+DNAT_ROWS = {"rows": [{"uuid": "dnat-1", "descr": "Web", "category": "c1", "%category": "Web"}]}
 
 
-@pytest.mark.asyncio
 async def test_get_firewall_aggregates_rest_payload(make_client: ClientType) -> None:
-    """`get_firewall` should aggregate all REST-native rule collections.
+    """`get_firewall` aggregates the filter rules and every NAT rule collection.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client = make_client()
-    try:
-        client._get_firewall_rules = AsyncMock(return_value={"rule1": {"uuid": "rule1"}})
-        client._get_nat_destination_rules = AsyncMock(return_value={"dst1": {"uuid": "dst1"}})
-        client._get_nat_one_to_one_rules = AsyncMock(return_value={"oto1": {"uuid": "oto1"}})
-        client._get_nat_source_rules = AsyncMock(return_value={"src1": {"uuid": "src1"}})
-        client._get_nat_npt_rules = AsyncMock(return_value={"npt1": {"uuid": "npt1"}})
+    client, router = make_router_client(
+        make_client,
+        {
+            ("GET", FILTER_RULES_PATH): "@uuid;enabled\nrule1;1\n",
+            ("GET", DNAT_PATH): {"rows": [{"uuid": "dst1", "descr": "DNAT", "enabled": "1"}]},
+            ("GET", ONE_TO_ONE_PATH): {"rows": [{"uuid": "oto1"}]},
+            ("GET", SOURCE_NAT_PATH): {"rows": [{"uuid": "src1"}]},
+            ("GET", NPT_PATH): {"rows": [{"uuid": "npt1"}]},
+        },
+    )
 
-        result = await client.get_firewall()
-
-        assert result == {
-            "rules": {"rule1": {"uuid": "rule1"}},
-            "nat": {
-                "d_nat": {"dst1": {"uuid": "dst1"}},
-                "one_to_one": {"oto1": {"uuid": "oto1"}},
-                "source_nat": {"src1": {"uuid": "src1"}},
-                "npt": {"npt1": {"uuid": "npt1"}},
-            },
-        }
-        client._get_firewall_rules.assert_awaited_once()
-        client._get_nat_destination_rules.assert_awaited_once()
-        client._get_nat_one_to_one_rules.assert_awaited_once()
-        client._get_nat_source_rules.assert_awaited_once()
-        client._get_nat_npt_rules.assert_awaited_once()
-    finally:
-        await client.async_close()
+    assert await client.get_firewall() == {
+        "rules": {"rule1": {"uuid": "rule1", "enabled": "1"}},
+        "nat": {
+            "d_nat": {"dst1": {"uuid": "dst1", "description": "DNAT", "enabled": "1"}},
+            "one_to_one": {"oto1": {"uuid": "oto1"}},
+            "source_nat": {"src1": {"uuid": "src1"}},
+            "npt": {"npt1": {"uuid": "npt1"}},
+        },
+    }
+    for path in (FILTER_RULES_PATH, DNAT_PATH, ONE_TO_ONE_PATH, SOURCE_NAT_PATH, NPT_PATH):
+        assert router.count("GET", path) == 1
 
 
-@pytest.mark.asyncio
-async def test_get_firewall_rules_skips_invalid_rows(
-    make_client: ClientType,
-) -> None:
-    """Firewall rule downloads should parse editable rows and skip invalid rows.
+async def test_get_firewall_rules_skips_invalid_rows(make_client: ClientType) -> None:
+    """Firewall rule downloads are read as text, parsing editable rows and skipping invalid ones.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client = make_client()
-    try:
-        read = stub_endpoint_outcome(
-            client,
-            _EndpointOutcome.data(
+    client, router = make_router_client(
+        make_client,
+        {
+            ("GET", FILTER_RULES_PATH): (
                 "@uuid;enabled;description\n"
                 'rule-ok;1;"Allow; DNS"\n'
                 'rule-extra;1;"Has; extra";extra\n'
                 ";1;Missing UUID\n"
                 "lockout-1;1;Lockout\n"
-            ),
-            read="get_text",
-        )
+            )
+        },
+    )
 
-        result = await client._get_firewall_rules()
+    firewall = await client.get_firewall()
 
-        assert result == {
-            "rule-ok": {
-                "uuid": "rule-ok",
-                "enabled": "1",
-                "description": "Allow; DNS",
-            },
-        }
-        read.assert_awaited_once_with("/api/firewall/filter/download_rules", response_format="text")
-    finally:
-        await client.async_close()
+    assert firewall["rules"] == {
+        "rule-ok": {"uuid": "rule-ok", "enabled": "1", "description": "Allow; DNS"},
+    }
+    assert router.count("GET", FILTER_RULES_PATH) == 1
 
 
 @pytest.mark.parametrize(
@@ -120,107 +118,71 @@ async def test_get_firewall_rules_skips_invalid_rows(
     ],
     ids=["opnsense-26.1.1", "opnsense-26.1.2-and-newer"],
 )
-@pytest.mark.asyncio
 async def test_get_firewall_rules_supports_opnsense_csv_versions(
     make_client: ClientType,
     response: str,
     expected: dict[str, str],
 ) -> None:
-    """Firewall rule downloads should support all released CSV formats.
+    """Firewall rule downloads support all released CSV formats.
 
     Args:
-        make_client (ClientType): Fixture factory used to configure the CSV response client.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         response (str): Firewall CSV payload for the OPNsense version case.
         expected (dict[str, str]): Parsed rule mapping expected from the payload.
     """
-    client = make_client()
-    try:
-        stub_endpoint_outcome(client, _EndpointOutcome.data(response), read="get_text")
+    client, _router = make_router_client(make_client, {("GET", FILTER_RULES_PATH): response})
 
-        result = await client._get_firewall_rules()
-
-        assert result == {expected["uuid"]: expected}
-    finally:
-        await client.async_close()
+    assert (await client.get_firewall())["rules"] == {expected["uuid"]: expected}
 
 
-@pytest.mark.asyncio
 async def test_get_nat_source_rules_labels_empty_interface_address_target(
     make_client: ClientType,
 ) -> None:
-    """Source NAT rows with an empty target should expose an interface-address label.
+    """Source NAT rows with an empty target expose an interface-address label.
 
     Args:
-        make_client (ClientType): Fixture factory used to configure the source-NAT response.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client = make_client()
-    try:
-        client.get_host_firmware_version = AsyncMock(return_value="26.7")
-        stub_endpoint_outcome(
-            client,
-            _EndpointOutcome.data(
-                {
-                    "rows": [
-                        {
-                            "uuid": "src-interface-address",
-                            "description": "Interface address target",
-                            "enabled": "1",
-                            "interface": "wan",
-                            "%interface": "WAN",
-                            "target": "",
-                        }
-                    ]
-                }
-            ),
-        )
+    client, _router = make_router_client(
+        make_client,
+        {
+            ("GET", SOURCE_NAT_PATH): {
+                "rows": [
+                    {
+                        "uuid": "src-interface-address",
+                        "description": "Interface address target",
+                        "enabled": "1",
+                        "interface": "wan",
+                        "%interface": "WAN",
+                        "target": "",
+                    }
+                ]
+            }
+        },
+        firmware="26.7",
+    )
 
-        result = await client._get_nat_source_rules()
+    result = (await client.get_firewall())["nat"]["source_nat"]
 
-        assert result["src-interface-address"]["target"] == ""
-        assert result["src-interface-address"]["%target"] == "WAN address"
-    finally:
-        await client.async_close()
+    assert result["src-interface-address"]["target"] == ""
+    assert result["src-interface-address"]["%target"] == "WAN address"
 
 
 @pytest.mark.parametrize(
-    ("method_name", "api_endpoint", "rows", "expected", "firmware_version"),
+    ("nat_group", "rows", "expected", "firmware"),
     [
-        (
-            "_get_nat_destination_rules",
-            "/api/firewall/d_nat/search_rule",
+        pytest.param(
+            "d_nat",
             [
                 {"uuid": "dst1", "descr": "DNAT rule", "disabled": 0},
                 {"uuid": "lockout-1", "descr": "ignored", "disabled": "0"},
             ],
             {"dst1": {"uuid": "dst1", "description": "DNAT rule", "enabled": "1"}},
             "26.1.1",
+            id="d_nat-disabled-flag",
         ),
-        (
-            "_get_nat_destination_rules",
-            "/api/firewall/d_nat/search_rule",
-            [
-                {
-                    "uuid": "dst1",
-                    "descr": "DNAT legacy category",
-                    "disabled": 0,
-                    "category": "cat1",
-                    "%category": "WAN",
-                },
-            ],
-            {
-                "dst1": {
-                    "uuid": "dst1",
-                    "description": "DNAT legacy category",
-                    "enabled": "1",
-                    "category": "cat1",
-                    "%category": "WAN",
-                }
-            },
-            "26.1.3",
-        ),
-        (
-            "_get_nat_destination_rules",
-            "/api/firewall/d_nat/search_rule",
+        pytest.param(
+            "d_nat",
             [
                 {
                     "uuid": "dst1",
@@ -242,291 +204,141 @@ async def test_get_nat_source_rules_labels_empty_interface_address_target(
                 }
             },
             "26.1.4",
+            id="d_nat-enabled-flag-unified-categories",
         ),
-        (
-            "_get_nat_one_to_one_rules",
-            "/api/firewall/one_to_one/search_rule",
+        pytest.param(
+            "one_to_one",
             [{"uuid": "oto1", "description": "1:1 rule", "enabled": "1"}],
             {"oto1": {"uuid": "oto1", "description": "1:1 rule", "enabled": "1"}},
             None,
+            id="one_to_one",
         ),
-        (
-            "_get_nat_source_rules",
-            "/api/firewall/source_nat/search_rule",
+        pytest.param(
+            "source_nat",
             [{"uuid": "src1", "description": "SNAT rule", "enabled": "0"}],
             {"src1": {"uuid": "src1", "description": "SNAT rule", "enabled": "0"}},
             None,
+            id="source_nat",
         ),
-        (
-            "_get_nat_npt_rules",
-            "/api/firewall/npt/search_rule",
+        pytest.param(
+            "npt",
             [{"uuid": "npt1", "description": "NPT rule", "enabled": "1"}],
             {"npt1": {"uuid": "npt1", "description": "NPT rule", "enabled": "1"}},
             None,
+            id="npt",
         ),
     ],
 )
-async def test_nat_rule_helpers_parse_rows(
+async def test_nat_rule_collections_parse_rows(
     make_client: ClientType,
-    method_name: str,
-    api_endpoint: str,
+    nat_group: str,
     rows: list[dict[str, object]],
     expected: dict[str, dict[str, str]],
-    firmware_version: str | None,
+    firmware: str | None,
 ) -> None:
-    """NAT rule helpers should return UUID-keyed mappings from REST search rows.
+    """Each NAT rule collection is returned as a UUID-keyed mapping of its REST search rows.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        method_name (str): Client helper method name.
-        api_endpoint (str): REST endpoint expected from the helper.
-        rows (list[dict[str, object]]): REST search rows to normalize.
+        nat_group (str): Key of the NAT collection in the ``get_firewall`` result.
+        rows (list[dict[str, object]]): REST search rows the Router returns.
         expected (dict[str, dict[str, str]]): Expected UUID-keyed rule mapping.
-        firmware_version (str | None): Optional mocked firmware version.
+        firmware (str | None): Firmware version the Router reports, or ``None`` if unknown.
     """
-    client = make_client()
-    try:
-        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": rows}))
-        if firmware_version is not None:
-            client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
+    client, router = make_router_client(
+        make_client,
+        {("GET", NAT_GROUP_PATHS[nat_group]): {"rows": rows}},
+        firmware=firmware,
+    )
 
-        result = await getattr(client, method_name)()
-
-        assert result == expected
-        read.assert_awaited_once_with(api_endpoint)
-    finally:
-        await client.async_close()
+    assert (await client.get_firewall())["nat"][nat_group] == expected
+    assert router.count("GET", NAT_GROUP_PATHS[nat_group]) == 1
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method_name", "api_endpoint", "expected"),
-    [
-        ("_get_firewall_rules", "/api/firewall/filter/download_rules", {}),
-        ("_get_nat_destination_rules", "/api/firewall/d_nat/search_rule", {}),
-        ("_get_nat_one_to_one_rules", "/api/firewall/one_to_one/search_rule", {}),
-        ("_get_nat_source_rules", "/api/firewall/source_nat/search_rule", {}),
-        ("_get_nat_npt_rules", "/api/firewall/npt/search_rule", {}),
-    ],
-)
-async def test_rule_helpers_return_empty_when_endpoint_unavailable(
-    make_client: ClientType,
-    method_name: str,
-    api_endpoint: str,
-    expected: dict[str, object],
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
+async def test_get_firewall_returns_empty_collections_when_endpoints_are_unavailable(
+    make_client: ClientType, throw_errors: bool
 ) -> None:
-    """Rule helpers should short-circuit when the related endpoint is unavailable.
+    """Rule collections the Router reports as 404 are empty in either error mode.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        method_name (str): Rule helper invoked for the unavailable endpoint.
-        api_endpoint (str): Endpoint that the helper must check before fetching.
-        expected (dict[str, object]): Expected empty rule mapping.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
     """
-    client = make_client()
-    try:
-        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
-        firmware_version_mock = AsyncMock(return_value="26.1.4")
-        if method_name == "_get_nat_destination_rules":
-            client.get_host_firmware_version = firmware_version_mock
+    client, router = make_router_client(make_client, {}, throw_errors=throw_errors)
 
-        result = await getattr(client, method_name)()
-
-        assert result == expected
-        if method_name == "_get_firewall_rules":
-            read.assert_awaited_once_with(api_endpoint, response_format="text")
-        else:
-            read.assert_awaited_once_with(api_endpoint)
-        if method_name == "_get_nat_destination_rules":
-            firmware_version_mock.assert_awaited_once()
-    finally:
-        await client.async_close()
+    assert await client.get_firewall() == {
+        "rules": {},
+        "nat": {"d_nat": {}, "one_to_one": {}, "source_nat": {}, "npt": {}},
+    }
+    for path in (FILTER_RULES_PATH, DNAT_PATH, ONE_TO_ONE_PATH, SOURCE_NAT_PATH, NPT_PATH):
+        assert router.count("GET", path) == 1
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("firmware_version", "expected"),
-    [
-        (
-            "26.1.10",
-            {
-                "manual-src": {
-                    "uuid": "manual-src",
-                    "description": "Manual",
-                    "enabled": "1",
-                },
-                "auto-src": {
-                    "uuid": "auto-src",
-                    "description": "Automatic",
-                    "enabled": "1",
-                    "is_automatic": True,
-                },
-            },
-        ),
-        (
-            "26.1.11",
-            {
-                "manual-src": {
-                    "uuid": "manual-src",
-                    "description": "Manual",
-                    "enabled": "1",
-                }
-            },
-        ),
-        (
-            "26.1.11_4",
-            {
-                "manual-src": {
-                    "uuid": "manual-src",
-                    "description": "Manual",
-                    "enabled": "1",
-                }
-            },
-        ),
-        (
-            "not-a-version",
-            {
-                "manual-src": {
-                    "uuid": "manual-src",
-                    "description": "Manual",
-                    "enabled": "1",
-                },
-                "auto-src": {
-                    "uuid": "auto-src",
-                    "description": "Automatic",
-                    "enabled": "1",
-                    "is_automatic": True,
-                },
-            },
-        ),
-    ],
-)
-async def test_get_nat_source_rules_filters_automatic_rows_for_opnsense_26_1_11(
-    make_client: ClientType, firmware_version: str, expected: dict[str, Any]
-) -> None:
-    """Source NAT should hide OPNsense 26.1.11 generated automatic rows only.
-
-    Args:
-        make_client (ClientType): Fixture factory used to configure the source-NAT response.
-        firmware_version (str): OPNsense version controlling automatic-row filtering.
-        expected (dict[str, Any]): Rule mapping expected after version-specific filtering.
-    """
-    client = make_client()
-    try:
-        client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
-        stub_endpoint_outcome(
-            client,
-            _EndpointOutcome.data(
-                {
-                    "rows": [
-                        {"uuid": "manual-src", "description": "Manual", "enabled": "1"},
-                        {
-                            "uuid": "auto-src",
-                            "description": "Automatic",
-                            "enabled": "1",
-                            "is_automatic": True,
-                        },
-                    ]
-                }
-            ),
-        )
-
-        assert await client._get_nat_source_rules() == expected
-    finally:
-        await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_kill_states_returns_normalized_result(make_client: ClientType) -> None:
-    """`kill_states` should normalize the diagnostics response.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client = make_client()
-    try:
-        client._safe_dict_post = AsyncMock(return_value={"result": "ok", "dropped_states": 7})
-
-        result = await client.kill_states("192.0.2.10")
-
-        assert result == {"success": True, "dropped_states": 7}
-        client._safe_dict_post.assert_awaited_once_with(
-            "/api/diagnostics/firewall/kill_states/",
-            payload={"filter": "192.0.2.10"},
-        )
-    finally:
-        await client.async_close()
-
-
-SOURCE_NAT_PATH = "/api/firewall/source_nat/search_rule"
-DNAT_PATH = "/api/firewall/d_nat/search_rule"
-SOURCE_NAT_ROWS = {
-    "rows": [
-        {"uuid": "manual-src", "description": "Manual", "enabled": "1"},
-        {"uuid": "auto-src", "description": "Automatic", "enabled": "1", "is_automatic": True},
-    ]
-}
-DNAT_ROWS = {"rows": [{"uuid": "dnat-1", "descr": "Web", "category": "c1", "%category": "Web"}]}
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("firmware", "automatic_rows_hidden"),
     [
         pytest.param("26.1.10", False, id="below-threshold"),
         pytest.param("26.1.11", True, id="at-threshold"),
+        pytest.param("26.1.11_4", True, id="at-threshold-with-hotfix"),
         pytest.param("26.2", True, id="above-threshold"),
-        pytest.param(None, False, id="missing"),
+        pytest.param("", False, id="missing"),
         pytest.param("not-a-version", False, id="not-comparable"),
     ],
 )
 async def test_get_firewall_source_nat_filters_automatic_rows_by_firmware(
-    firmware_router: tuple[OPNsenseClient, Any],
-    firmware: str | None,
-    automatic_rows_hidden: bool,
+    make_client: ClientType, firmware: str, automatic_rows_hidden: bool
 ) -> None:
     """Source NAT hides generated rows only on known firmware that generates them.
 
     Args:
-        firmware_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
-        firmware (str | None): Firmware version reported by the Router.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        firmware (str): Firmware version the Router reports.
         automatic_rows_hidden (bool): Whether generated rows are expected to be hidden.
     """
-    client, router = firmware_router
-    router.firmware = firmware
-    router.endpoints[SOURCE_NAT_PATH] = SOURCE_NAT_ROWS
+    client, _router = make_router_client(
+        make_client, {("GET", SOURCE_NAT_PATH): SOURCE_NAT_ROWS}, firmware=firmware
+    )
 
     firewall = await client.get_firewall()
 
-    assert set(firewall["nat"]["source_nat"]) == (
-        {"manual-src"} if automatic_rows_hidden else {"manual-src", "auto-src"}
+    manual = {"uuid": "manual-src", "description": "Manual", "enabled": "1"}
+    automatic = {
+        "uuid": "auto-src",
+        "description": "Automatic",
+        "enabled": "1",
+        "is_automatic": True,
+    }
+    assert firewall["nat"]["source_nat"] == (
+        {"manual-src": manual}
+        if automatic_rows_hidden
+        else {"manual-src": manual, "auto-src": automatic}
     )
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("firmware", "categories_mirrored"),
     [
         pytest.param("26.1.3", False, id="below-threshold"),
         pytest.param("26.1.4", True, id="at-threshold"),
         pytest.param("26.2", True, id="above-threshold"),
-        pytest.param(None, False, id="missing"),
+        pytest.param("", False, id="missing"),
         pytest.param("not-a-version", False, id="not-comparable"),
     ],
 )
 async def test_get_firewall_dnat_mirrors_categories_by_firmware(
-    firmware_router: tuple[OPNsenseClient, Any], firmware: str | None, categories_mirrored: bool
+    make_client: ClientType, firmware: str, categories_mirrored: bool
 ) -> None:
     """Destination NAT mirrors category keys only on known unified-NAT firmware.
 
     Args:
-        firmware_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
-        firmware (str | None): Firmware version reported by the Router.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        firmware (str): Firmware version the Router reports.
         categories_mirrored (bool): Whether plural category keys are expected.
     """
-    client, router = firmware_router
-    router.firmware = firmware
-    router.endpoints[DNAT_PATH] = DNAT_ROWS
+    client, _router = make_router_client(
+        make_client, {("GET", DNAT_PATH): DNAT_ROWS}, firmware=firmware
+    )
 
     rule = (await client.get_firewall())["nat"]["d_nat"]["dnat-1"]
 
@@ -534,20 +346,20 @@ async def test_get_firewall_dnat_mirrors_categories_by_firmware(
     assert ("%categories" in rule) is categories_mirrored
 
 
-@pytest.mark.asyncio
 async def test_unknown_firmware_for_nat_is_logged_once_per_condition(
-    firmware_router: tuple[OPNsenseClient, Any], caplog: pytest.LogCaptureFixture
+    make_client: ClientType, caplog: pytest.LogCaptureFixture
 ) -> None:
     """An uncomparable firmware version is logged once at error level, not per query.
 
     Args:
-        firmware_router (tuple[OPNsenseClient, Any]): Client and the Router that scripts it.
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         caplog (pytest.LogCaptureFixture): Log capture fixture.
     """
-    client, router = firmware_router
-    router.firmware = "not-a-version"
-    router.endpoints[SOURCE_NAT_PATH] = SOURCE_NAT_ROWS
-    router.endpoints[DNAT_PATH] = DNAT_ROWS
+    client, _router = make_router_client(
+        make_client,
+        {("GET", SOURCE_NAT_PATH): SOURCE_NAT_ROWS, ("GET", DNAT_PATH): DNAT_ROWS},
+        firmware="not-a-version",
+    )
     caplog.set_level(logging.DEBUG, logger="aiopnsense")
 
     await client.get_firewall()
@@ -559,3 +371,19 @@ async def test_unknown_firmware_for_nat_is_logged_once_per_condition(
         if record.levelno == logging.ERROR and "cannot be compared" in record.getMessage()
     ]
     assert len(errors) == 2  # one per capability (source NAT, unified NAT), not per call
+
+
+async def test_kill_states_returns_normalized_result(make_client: ClientType) -> None:
+    """`kill_states` posts the address filter and normalizes the diagnostics response.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, router = make_router_client(
+        make_client,
+        {("POST", KILL_STATES_PATH): {"result": "ok", "dropped_states": 7}},
+    )
+
+    assert await client.kill_states("192.0.2.10") == {"success": True, "dropped_states": 7}
+
+    assert router.bodies("POST", KILL_STATES_PATH) == [{"filter": "192.0.2.10"}]

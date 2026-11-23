@@ -783,12 +783,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             now=datetime.now().astimezone(),
         )
 
-    async def _get_isc_dhcpv4_leases(self, opnsense_tz: tzinfo | None = None) -> list:
+    async def _get_isc_dhcpv4_leases(self, opnsense_tz: tzinfo) -> list:
         """Return active IPv4 DHCP leases reported by ISC DHCP.
 
         Args:
-            opnsense_tz (tzinfo | None, optional): Timezone used to localize
-                ISC ``ends`` timestamps. Fetched from OPNsense when omitted.
+            opnsense_tz (tzinfo): Timezone used to localize ISC ``ends`` timestamps.
 
         Returns:
             list: Normalized ISC DHCPv4 lease entries. Non-active, expired,
@@ -801,12 +800,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
             opnsense_tz=opnsense_tz,
         )
 
-    async def _get_isc_dhcpv6_leases(self, opnsense_tz: tzinfo | None = None) -> list:
+    async def _get_isc_dhcpv6_leases(self, opnsense_tz: tzinfo) -> list:
         """Return active IPv6 DHCP leases reported by ISC DHCP.
 
         Args:
-            opnsense_tz (tzinfo | None, optional): Timezone used to localize
-                ISC ``ends`` timestamps. Fetched from OPNsense when omitted.
+            opnsense_tz (tzinfo): Timezone used to localize ISC ``ends`` timestamps.
 
         Returns:
             list: Normalized ISC DHCPv6 lease entries. Non-active, expired,
@@ -824,7 +822,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         snake_case_path: str,
         camel_case_path: str,
         service_name: str,
-        opnsense_tz: tzinfo | None = None,
+        opnsense_tz: tzinfo,
     ) -> list:
         """Return active DHCP leases reported by an ISC DHCP lease endpoint.
 
@@ -832,8 +830,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             snake_case_path (str): ISC lease search endpoint path using snake_case.
             camel_case_path (str): ISC lease search endpoint path using camelCase.
             service_name (str): Display name used for debug logging.
-            opnsense_tz (tzinfo | None, optional): Timezone used to localize
-                ISC ``ends`` timestamps. Fetched from OPNsense when omitted.
+            opnsense_tz (tzinfo): Timezone used to localize ISC ``ends`` timestamps.
 
         Returns:
             list: Normalized ISC lease entries for the supplied endpoint.
@@ -850,8 +847,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
         leases_info: list = response.get("rows", [])
         if not isinstance(leases_info, list):
             return []
-        if opnsense_tz is None:
-            opnsense_tz = await self._get_opnsense_timezone()
         return _normalize_leases(
             leases_info,
             _ISC_LEASE_BACKEND,
