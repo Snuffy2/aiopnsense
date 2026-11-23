@@ -1364,18 +1364,22 @@ async def test_old_endpoint_probe_cannot_restore_cache_after_firmware_change(
         return original_probe(url, **kwargs)
 
     session.get.side_effect = _probe
-    old_probe_task = asyncio.create_task(client.get_system_info())
+    # Learn the old firmware first so the later validate sees the change and resets the cache.
+    assert await client.get_host_firmware_version() == "26.1.1"
+    old_probe_task = asyncio.create_task(
+        client._is_get_endpoint_available(SYSTEM_INFORMATION_SNAKE_PATH)
+    )
     try:
         await asyncio.wait_for(probe_started.wait(), timeout=1)
         router.firmware = "26.1.11"
         await client.validate(require_device_id=False)
 
         router.endpoints[SYSTEM_INFORMATION_SNAKE_PATH] = {"name": "router"}
-        assert await client.get_system_info() == {"name": "router"}
+        assert await client._is_get_endpoint_available(SYSTEM_INFORMATION_SNAKE_PATH) is True
 
         release_probe.set()
-        assert await old_probe_task == {}
-        assert await client.get_system_info() == {"name": "router"}
+        assert await old_probe_task is False
+        assert await client._is_get_endpoint_available(SYSTEM_INFORMATION_SNAKE_PATH) is True
     finally:
         release_probe.set()
         if not old_probe_task.done():

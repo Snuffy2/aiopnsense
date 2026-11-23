@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import make_mock_session_client
+from aiopnsense._endpoint_outcome import _EndpointOutcome
+from tests.conftest import make_mock_session_client, stub_endpoint_outcome
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -192,7 +193,7 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
         }
 
         async def fake_safe_get(path: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
-            """Return mocked vnStat/system-time payloads by endpoint path.
+            """Return mocked vnStat payloads by endpoint path.
 
             Args:
                 path (str): API endpoint path to request.
@@ -200,7 +201,7 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
                 _kwargs (Any): Keyword arguments accepted by `fake_safe_get`.
 
             Returns:
-                dict[str, Any]: Mocked vnStat/system-time payloads by endpoint path.
+                dict[str, Any]: Mocked vnStat payloads by endpoint path.
             """
             if path == "/api/vnstat/service/hourly":
                 return hourly_payload
@@ -208,11 +209,12 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
                 return daily_payload
             if path == "/api/vnstat/service/monthly":
                 return monthly_payload
-            if path == "/api/diagnostics/system/system_time":
-                return {"datetime": "2000-01-15 12:00:00 EST"}
             return {}
 
         client._safe_dict_get = AsyncMock(side_effect=fake_safe_get)
+        stub_endpoint_outcome(
+            client, _EndpointOutcome.data({"datetime": "2000-01-15 12:00:00 EST"})
+        )
         vnstat = await client.get_vnstat()
 
         gib = 1024**3
@@ -250,7 +252,7 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: ClientType)
         client._is_get_endpoint_available = AsyncMock(return_value=True)
 
         async def fake_safe_get(path: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
-            """Return mocked payloads for system-time endpoint coverage.
+            """Return a placeholder vnStat payload.
 
             Args:
                 path (str): API endpoint path to request.
@@ -258,16 +260,15 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: ClientType)
                 _kwargs (Any): Keyword arguments accepted by `fake_safe_get`.
 
             Returns:
-                dict[str, Any]: Mocked payloads for system-time endpoint coverage.
+                dict[str, Any]: Placeholder vnStat payload.
             """
-            if path == "/api/diagnostics/system/system_time":
-                return {"datetime": "invalid"}
             return {"response": ""}
 
         client._safe_dict_get = AsyncMock(side_effect=fake_safe_get)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({"datetime": "invalid"}))
 
         await client.get_vnstat()
-        client._safe_dict_get.assert_any_await("/api/diagnostics/system/system_time")
+        read.assert_any_await("/api/diagnostics/system/system_time")
     finally:
         await client.async_close()
 
