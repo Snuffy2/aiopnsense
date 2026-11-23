@@ -16,15 +16,8 @@ import pytest
 
 from aiopnsense import OPNsenseClient
 from aiopnsense.exceptions import OPNsenseConnectionError, OPNsenseInvalidArgument
-from tests.conftest import (
-    FIRMWARE_STATUS_PATH,
-    FakeRouter,
-    MakeClientFactory,
-    install_fake_router,
-    make_mock_session_client,
-)
+from tests.conftest import MakeClientFactory, make_router_client
 
-BASE_URL = "http://localhost"
 SERVER_ERROR = 500
 """HTTP status of a Router reply that fails the request."""
 
@@ -89,50 +82,7 @@ class ToggleCase:
         return [self.save_paths[target], *commits, self.apply_path]
 
 
-def _client_for_router(
-    make_client: MakeClientFactory,
-    routes: Mapping[tuple[str, str], RouteValue] | None = None,
-    *,
-    throw_errors: bool = False,
-    firmware: str | None = "26.7.6",
-) -> tuple[OPNsenseClient, FakeRouter]:
-    """Create a client whose Router serves a firmware version and the given routes.
-
-    A request with no route is answered with 404 and recorded.
-
-    Args:
-        make_client (MakeClientFactory): Client factory fixture.
-        routes (Mapping[tuple[str, str], RouteValue] | None): Routes keyed by
-            ``(method, path)``; they replace the firmware route of the same key.
-        throw_errors (bool): Client ``throw_errors`` setting.
-        firmware (str | None): Firmware version the Router reports, or ``None`` for a
-            Router with no firmware status.
-
-    Returns:
-        tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    served: dict[tuple[str, str], RouteValue] = {}
-    if firmware is not None:
-        served[("GET", FIRMWARE_STATUS_PATH)] = {"product": {"product_version": firmware}}
-    served.update(routes or {})
-    return client, install_fake_router(client, session, routes=served)
-
-
-def _posts(router: FakeRouter) -> list[str]:
-    """Return the paths of the POSTs the Router received, in order.
-
-    Args:
-        router (FakeRouter): Router that recorded the requests.
-
-    Returns:
-        list[str]: POST paths.
-    """
-    return [
-        url.removeprefix(BASE_URL) for method, url, _body in router.requests if method == "POST"
-    ]
-
-
+_client_for_router = partial(make_router_client, firmware="26.7.6")
 _WIREGUARD_RECONFIGURE = "/api/wireguard/service/reconfigure"
 
 
@@ -325,7 +275,7 @@ async def test_toggle_unacknowledged_save_returns_false_without_apply(
     )
 
     assert await case.toggle(client, target) is False
-    assert _posts(router) == [case.save_paths[target]]
+    assert router.paths("POST") == [case.save_paths[target]]
 
 
 @pytest.mark.parametrize("case", _CASE_PARAMS)
@@ -353,7 +303,7 @@ async def test_toggle_acknowledged_save_and_confirmed_apply_returns_true(
     client, router = _client_for_router(make_client, case.routes(target))
 
     assert await case.toggle(client, toggle_on_off) is True
-    assert _posts(router) == case.posts(target)
+    assert router.paths("POST") == case.posts(target)
 
 
 @pytest.mark.parametrize("case", _CASE_PARAMS)
@@ -371,7 +321,7 @@ async def test_toggle_unconfirmed_apply_returns_false(
     )
 
     assert await case.toggle(client, "on") is False
-    assert _posts(router) == case.posts("on")
+    assert router.paths("POST") == case.posts("on")
 
 
 @pytest.mark.parametrize("case", _CASE_PARAMS)
@@ -531,11 +481,11 @@ async def test_wireguard_toggle_matching_target_skips_save_and_applies_only_pend
     router.requests.clear()
 
     assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "on") is True
-    assert _posts(router) == ([_WIREGUARD_RECONFIGURE] if pending else [])
+    assert router.paths("POST") == ([_WIREGUARD_RECONFIGURE] if pending else [])
     # A confirmed apply clears the pending save, so the next matching request is a no-op.
     router.requests.clear()
     assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "on") is True
-    assert _posts(router) == []
+    assert router.paths("POST") == []
 
 
 async def test_wireguard_toggle_wrong_direction_is_corrected_once_and_kept_pending(
@@ -561,11 +511,11 @@ async def test_wireguard_toggle_wrong_direction_is_corrected_once_and_kept_pendi
     )
 
     assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "on") is False
-    assert _posts(router) == [_WG_TOGGLE_ON, _WG_TOGGLE_ON]
+    assert router.paths("POST") == [_WG_TOGGLE_ON, _WG_TOGGLE_ON]
 
     router.requests.clear()
     assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "off") is True
-    assert _posts(router) == [_WIREGUARD_RECONFIGURE]
+    assert router.paths("POST") == [_WIREGUARD_RECONFIGURE]
 
 
 @pytest.mark.parametrize(
@@ -585,7 +535,7 @@ async def test_wireguard_toggle_unreadable_item_returns_false_without_posting(
     client, router = _client_for_router(make_client, {("GET", _WG_GET): read})
 
     assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "on") is False
-    assert _posts(router) == []
+    assert router.paths("POST") == []
 
 
 async def test_wireguard_flip_does_not_read_state(make_client: MakeClientFactory) -> None:
@@ -653,7 +603,7 @@ async def test_toggle_alias_unavailable_search_endpoint_returns_false(
 
     assert await client.toggle_alias("alias1", "on") is False
     assert router.count("GET", _ALIAS_SEARCH) == 1
-    assert _posts(router) == []
+    assert router.paths("POST") == []
 
 
 @pytest.mark.parametrize(
@@ -678,7 +628,7 @@ async def test_toggle_alias_lookup_failure_returns_false(
     client, router = _client_for_router(make_client, {("GET", _ALIAS_SEARCH): listing})
 
     assert await client.toggle_alias("alias1", "on") is False
-    assert _posts(router) == []
+    assert router.paths("POST") == []
 
 
 @pytest.mark.parametrize("set_reply", [SERVER_ERROR, {"result": "failed"}, {"result": "not-saved"}])
@@ -723,7 +673,7 @@ async def test_toggle_alias_uses_camel_case_endpoints_on_older_firmware(
     )
 
     assert await client.toggle_alias("alias1", "on") is True
-    assert _posts(router) == [
+    assert router.paths("POST") == [
         "/api/firewall/alias/toggleItem/aid/1",
         _ALIAS_SET,
         _ALIAS_RECONFIGURE,

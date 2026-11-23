@@ -1,40 +1,17 @@
 """Tests for `aiopnsense.smart`."""
 
 from collections.abc import Callable
-from functools import partial
-from typing import Any
 
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import FakeRouter, install_fake_router, make_mock_session_client
+from tests.conftest import make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
-ROUTER_URL = "http://localhost"
 SMART_LIST_PATH = "/api/smart/service/list/1"
 SMART_INFO_PATH = "/api/smart/service/info"
 NVME_ROW = {"ident": "nvme0", "device": "nvme0", "status": "PASSED"}
-
-
-def _smart_client(
-    make_client: ClientType,
-    routes: dict[tuple[str, str], Any],
-    *,
-    throw_errors: bool = False,
-) -> tuple[OPNsenseClient, FakeRouter]:
-    """Build a client whose Router answers only the given routes.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        routes (dict[tuple[str, str], Any]): Router answers keyed by HTTP method and path.
-        throw_errors (bool): Public ``throw_errors`` setting of the client.
-
-    Returns:
-        tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    return client, install_fake_router(client, session, routes=routes)
 
 
 @pytest.mark.parametrize(
@@ -64,12 +41,14 @@ async def test_get_smart_returns_device_rows(
         devices (object): ``devices`` value the Router returns.
         expected (list[dict[str, str]]): Device rows the client returns.
     """
-    client, router = _smart_client(make_client, {("POST", SMART_LIST_PATH): {"devices": devices}})
+    client, router = make_router_client(
+        make_client, {("POST", SMART_LIST_PATH): {"devices": devices}}
+    )
 
     assert await client.get_smart() == expected
 
     # One POST with no body and no other request, so the list is read by POST only.
-    assert router.requests == [("POST", ROUTER_URL + SMART_LIST_PATH, None)]
+    assert router.requests == [("POST", SMART_LIST_PATH, None)]
 
 
 @pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
@@ -96,7 +75,9 @@ async def test_smart_fails_closed_when_endpoint_is_unavailable(
         path (str): Path of the POST request the operation sends.
         expected (object): Expected fail-closed result.
     """
-    client, router = _smart_client(make_client, {("POST", path): 404}, throw_errors=throw_errors)
+    client, router = make_router_client(
+        make_client, {("POST", path): 404}, throw_errors=throw_errors
+    )
 
     if operation == "list":
         got = await client.get_smart()
@@ -113,7 +94,7 @@ async def test_get_smart_info_returns_json_output(make_client: ClientType) -> No
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _smart_client(
+    client, router = make_router_client(
         make_client,
         {("POST", SMART_INFO_PATH): {"output": {"smart_status": "PASSED", "temperature": 35}}},
     )
@@ -123,7 +104,7 @@ async def test_get_smart_info_returns_json_output(make_client: ClientType) -> No
     assert router.requests == [
         (
             "POST",
-            ROUTER_URL + SMART_INFO_PATH,
+            SMART_INFO_PATH,
             {"device": "nvme0", "type": "a", "json": True},
         )
     ]
@@ -135,7 +116,7 @@ async def test_get_smart_info_wraps_non_mapping_output(make_client: ClientType) 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _smart_client(
+    client, router = make_router_client(
         make_client, {("POST", SMART_INFO_PATH): {"output": ["line1", "line2"]}}
     )
 
@@ -144,7 +125,7 @@ async def test_get_smart_info_wraps_non_mapping_output(make_client: ClientType) 
     assert router.requests == [
         (
             "POST",
-            ROUTER_URL + SMART_INFO_PATH,
+            SMART_INFO_PATH,
             {"device": "nvme0", "type": "H", "json": True},
         )
     ]
@@ -158,7 +139,7 @@ async def test_smart_post_endpoint_availability_caches_missing_plugin(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _smart_client(make_client, {("POST", SMART_LIST_PATH): 404})
+    client, router = make_router_client(make_client, {("POST", SMART_LIST_PATH): 404})
 
     assert await client.get_smart() == []
     assert await client.get_smart() == []

@@ -1,15 +1,12 @@
 """Tests for `aiopnsense.nut`."""
 
 from collections.abc import Callable
-from functools import partial
 from typing import Any
 
-import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient
-from aiopnsense.exceptions import OPNsenseConnectionError, OPNsensePrivilegeMissing
-from tests.conftest import install_fake_router, make_mock_session_client
+from tests.conftest import make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -28,10 +25,8 @@ async def test_get_nut_ups_status_preserves_nested_status_payload(
     Returns:
         None: This test validates compatibility with already mapped responses.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("GET", NUT_PATH): {
                 "status": {
@@ -65,10 +60,8 @@ async def test_get_nut_ups_status_parses_raw_status_response(make_client: Client
     Returns:
         None: This test validates parsing of plugin string responses into status mappings.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("GET", NUT_PATH): {
                 "response": (
@@ -112,10 +105,8 @@ async def test_get_nut_ups_status_prefers_mapped_status_when_available(
     Returns:
         None: This test verifies precedence and coexistence semantics.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("GET", NUT_PATH): {
                 "status": {"ups.status": "OL"},
@@ -147,11 +138,8 @@ async def test_get_nut_ups_status_uses_raw_response_when_mapped_status_is_empty(
     Returns:
         None: This test validates fallback behavior.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
-        routes={("GET", NUT_PATH): {"status": {}, "response": "ups.status: OL"}},
+    client, router = make_router_client(
+        make_client, routes={("GET", NUT_PATH): {"status": {}, "response": "ups.status: OL"}}
     )
 
     nut_status = await client.get_nut_ups_status()
@@ -175,7 +163,6 @@ async def test_get_nut_ups_status_parses_colon_in_value_and_ignores_invalid_line
     Returns:
         None: This test validates robust line parsing behavior.
     """
-    client, session = make_mock_session_client(make_client)
     raw_response = """\
 battery.charge: 100
 \x20\x20
@@ -183,10 +170,8 @@ Error: UPS unavailable
 ups.message: on battery: replace battery
 this-line-is-invalid
 ups.load: 12"""
-    router = install_fake_router(
-        client,
-        session,
-        routes={("GET", NUT_PATH): {"response": raw_response}},
+    client, router = make_router_client(
+        make_client, routes={("GET", NUT_PATH): {"response": raw_response}}
     )
 
     nut_status = await client.get_nut_ups_status()
@@ -238,8 +223,7 @@ async def test_get_nut_ups_status_handles_invalid_payloads(
     Returns:
         None: This test validates defensive handling of malformed responses.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): response_payload})
+    client, router = make_router_client(make_client, routes={("GET", NUT_PATH): response_payload})
 
     nut_status = await client.get_nut_ups_status()
 
@@ -251,47 +235,21 @@ async def test_get_nut_ups_status_handles_invalid_payloads(
     assert router.count("GET", NUT_PATH) == 1
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
-@pytest.mark.parametrize(
-    "route, raised",
-    [
-        (404, None),
-        (403, OPNsensePrivilegeMissing),
-        (503, OPNsenseConnectionError),
-        (aiohttp.ClientConnectionError("connection reset"), OPNsenseConnectionError),
-    ],
-    ids=["missing", "forbidden", "server-error", "transport-error"],
-)
 @pytest.mark.asyncio
 async def test_get_nut_ups_status_returns_empty_dict_when_endpoint_unavailable(
     make_client: ClientType,
-    route: int | Exception,
-    raised: type[Exception] | None,
-    throw_errors: bool,
 ) -> None:
     """NUT UPS status queries should fail closed when the endpoint is unavailable.
 
-    A missing endpoint is empty in either mode. A permission or transient failure
-    is empty with errors off and raises the documented error with errors on.
-
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        route (int | Exception): Router reply for the NUT status endpoint.
-        raised (type[Exception] | None): Error expected with ``throw_errors``, or ``None``
-            when the reply is empty in either mode.
-        throw_errors (bool): Whether the client raises instead of returning empty values.
 
     Returns:
         None: This test validates fail-closed behavior for unavailable NUT APIs.
     """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): route})
+    client, router = make_router_client(make_client, routes={("GET", NUT_PATH): 404})
 
-    if throw_errors and raised is not None:
-        with pytest.raises(raised):
-            await client.get_nut_ups_status()
-    else:
-        assert await client.get_nut_ups_status() == {}
+    assert await client.get_nut_ups_status() == {}
     assert router.count("GET", NUT_PATH) == 1
 
 

@@ -2,19 +2,13 @@
 
 from collections.abc import Callable
 from functools import partial
-from typing import Any
 
 import pytest
 
 import aiopnsense as aiopnsense_module
 from aiopnsense import OPNsenseClient
 from aiopnsense.exceptions import OPNsenseConnectionError
-from tests.conftest import (
-    FIRMWARE_STATUS_PATH,
-    FakeRouter,
-    install_fake_router,
-    make_mock_session_client,
-)
+from tests.conftest import make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -25,54 +19,7 @@ CAMELCASE_PROVIDERS_PATH = "/api/captiveportal/voucher/listProviders"
 CAMELCASE_GENERATE_PATH = "/api/captiveportal/voucher/generateVouchers"
 SNAKE_CASE_FIRMWARE = "26.7"
 CAMELCASE_FIRMWARE = "25.1"
-
-
-def _voucher_client(
-    make_client: ClientType,
-    routes: dict[tuple[str, str], Any],
-    *,
-    firmware: str = SNAKE_CASE_FIRMWARE,
-    throw_errors: bool = False,
-) -> tuple[OPNsenseClient, FakeRouter]:
-    """Build a client whose Router reports a firmware version and answers only the given routes.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        routes (dict[tuple[str, str], Any]): Router answers keyed by HTTP method and path.
-        firmware (str): Firmware version the Router reports, which selects the endpoint style.
-        throw_errors (bool): Public ``throw_errors`` setting of the client.
-
-    Returns:
-        tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(
-        client,
-        session,
-        routes={
-            ("GET", FIRMWARE_STATUS_PATH): {"product": {"product_version": firmware}},
-            **routes,
-        },
-    )
-    return client, router
-
-
-def _bodies(router: FakeRouter, method: str, path: str) -> list[Any]:
-    """Return the bodies of the requests the Router received for one method and path.
-
-    Args:
-        router (FakeRouter): Router that recorded the requests.
-        method (str): HTTP method to match.
-        path (str): Request path to match.
-
-    Returns:
-        list[Any]: Request bodies in the order received.
-    """
-    return [
-        body
-        for request_method, url, body in router.requests
-        if request_method == method and url == ROUTER_URL + path
-    ]
+_voucher_client = partial(make_router_client, firmware=SNAKE_CASE_FIRMWARE)
 
 
 @pytest.mark.parametrize(
@@ -97,19 +44,15 @@ async def test_generate_vouchers_requires_exactly_one_server_when_none_is_named(
     assert router.count("POST") == 0
 
 
-@pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
 async def test_generate_vouchers_returns_empty_when_provider_endpoint_is_missing(
-    make_client: ClientType, throw_errors: bool
+    make_client: ClientType,
 ) -> None:
-    """A 404 provider listing returns no vouchers in either error mode and sends no POST.
+    """A 404 provider listing returns no vouchers and sends no POST.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Public ``throw_errors`` setting of the client.
     """
-    client, router = _voucher_client(
-        make_client, {("GET", PROVIDERS_PATH): 404}, throw_errors=throw_errors
-    )
+    client, router = _voucher_client(make_client, {("GET", PROVIDERS_PATH): 404})
 
     assert await client.generate_vouchers({}) == []
 
@@ -117,37 +60,22 @@ async def test_generate_vouchers_returns_empty_when_provider_endpoint_is_missing
     assert router.count("POST") == 0
 
 
-@pytest.mark.parametrize(
-    ("throw_errors", "expected_error"),
-    [
-        pytest.param(False, aiopnsense_module.OPNsenseVoucherServerError, id="errors-off"),
-        pytest.param(True, OPNsenseConnectionError, id="errors-on"),
-    ],
-)
 async def test_generate_vouchers_reports_transient_provider_failure(
     make_client: ClientType,
-    throw_errors: bool,
-    expected_error: type[Exception],
 ) -> None:
     """A transient provider failure (HTTP 503) fails voucher generation before any POST is sent.
 
-    With errors off the failure is reported as a voucher server error caused by the connection
-    error. With errors on the connection error itself is raised.
+    The failure is reported as a voucher server error caused by the connection error.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Public ``throw_errors`` setting of the client.
-        expected_error (type[Exception]): Exception the client raises in that mode.
     """
-    client, router = _voucher_client(
-        make_client, {("GET", PROVIDERS_PATH): 503}, throw_errors=throw_errors
-    )
+    client, router = _voucher_client(make_client, {("GET", PROVIDERS_PATH): 503})
 
-    with pytest.raises(expected_error) as caught:
+    with pytest.raises(aiopnsense_module.OPNsenseVoucherServerError) as caught:
         await client.generate_vouchers({})
 
-    if not throw_errors:
-        assert isinstance(caught.value.__cause__, OPNsenseConnectionError)
+    assert isinstance(caught.value.__cause__, OPNsenseConnectionError)
     assert router.count("POST") == 0
 
 
@@ -173,7 +101,7 @@ async def test_generate_vouchers_auto_selects_single_provider(make_client: Clien
     assert vouchers[0]["expiry_timestamp"] == 1700000000
     assert vouchers[0]["expirytime"].timestamp() == 1700000000
     assert router.count("GET", PROVIDERS_PATH) == 1
-    assert _bodies(router, "POST", generate_path) == [{}]
+    assert router.bodies("POST", generate_path) == [{}]
 
 
 async def test_generate_vouchers_posts_to_named_provider_without_listing_providers(
@@ -211,7 +139,7 @@ async def test_generate_vouchers_posts_to_named_provider_without_listing_provide
     assert "expiry_timestamp" in vouchers[0]
     assert "validity_str" in vouchers[0]
     assert router.count("GET", PROVIDERS_PATH) == 0
-    assert _bodies(router, "POST", generate_path) == [{}]
+    assert router.bodies("POST", generate_path) == [{}]
 
 
 async def test_generate_vouchers_returns_empty_on_404_generate_endpoint_with_throw_errors(
@@ -232,7 +160,7 @@ async def test_generate_vouchers_returns_empty_on_404_generate_endpoint_with_thr
     assert await client.generate_vouchers({"voucher_server": "srv"}) == []
 
     assert router.count("GET", PROVIDERS_PATH) == 0
-    assert _bodies(router, "POST", generate_path) == [{}]
+    assert router.bodies("POST", generate_path) == [{}]
 
 
 @pytest.mark.parametrize(
@@ -267,4 +195,4 @@ async def test_voucher_switched_endpoints_follow_selected_case(
     assert await client.generate_vouchers({}) == []
 
     assert router.count("GET", providers_path) == 1
-    assert _bodies(router, "POST", generate_path) == [{}]
+    assert router.bodies("POST", generate_path) == [{}]

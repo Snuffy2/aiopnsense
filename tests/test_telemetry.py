@@ -7,14 +7,7 @@ from typing import Any
 
 import pytest
 
-from tests.conftest import (
-    FIRMWARE_STATUS_PATH,
-    FakeResponse,
-    FakeRouter,
-    MakeClientFactory,
-    install_fake_router,
-    make_mock_session_client,
-)
+from tests.conftest import FakeResponse, FakeRouter, MakeClientFactory, make_router_client
 
 SNAKE_CASE_FIRMWARE = "26.1.1"
 CAMELCASE_FIRMWARE = "25.1"
@@ -47,18 +40,6 @@ CPU_TYPE_PATH = SNAKE_CASE_PATHS["cpu"]
 TEMPERATURE_PATH = SNAKE_CASE_PATHS["temperature"]
 
 
-def _firmware_route(version: str = SNAKE_CASE_FIRMWARE) -> dict[tuple[str, str], Any]:
-    """Return the route through which the Router reports its firmware version.
-
-    Args:
-        version (str): Firmware version the Router reports.
-
-    Returns:
-        dict[tuple[str, str], Any]: Route that selects the Endpoint Style for that version.
-    """
-    return {("GET", FIRMWARE_STATUS_PATH): {"product": {"product_version": version}}}
-
-
 def _router(
     make_client: MakeClientFactory,
     routes: Mapping[str, Any],
@@ -78,18 +59,12 @@ def _router(
     Returns:
         tuple[Any, FakeRouter]: Client under test and the fake Router recording its requests.
     """
-    client, session = make_mock_session_client(
-        lambda **kwargs: make_client(throw_errors=throw_errors, **kwargs)
+    return make_router_client(
+        make_client,
+        {("GET", path): value for path, value in routes.items()},
+        firmware=firmware,
+        throw_errors=throw_errors,
     )
-    router = install_fake_router(
-        client,
-        session,
-        routes={
-            **_firmware_route(firmware),
-            **{("GET", path): value for path, value in routes.items()},
-        },
-    )
-    return client, router
 
 
 def _cpu_stream(usage: Mapping[str, Any]) -> FakeResponse:

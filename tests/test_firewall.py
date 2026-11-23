@@ -1,23 +1,15 @@
 """Tests for `aiopnsense.firewall`."""
 
 from collections.abc import Callable
-from functools import partial
 import logging
-from typing import Any
 
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import (
-    FIRMWARE_STATUS_PATH,
-    FakeRouter,
-    install_fake_router,
-    make_mock_session_client,
-)
+from tests.conftest import make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
-ROUTER_URL = "http://localhost"
 FILTER_RULES_PATH = "/api/firewall/filter/download_rules"
 DNAT_PATH = "/api/firewall/d_nat/search_rule"
 ONE_TO_ONE_PATH = "/api/firewall/one_to_one/search_rule"
@@ -39,53 +31,13 @@ SOURCE_NAT_ROWS = {
 DNAT_ROWS = {"rows": [{"uuid": "dnat-1", "descr": "Web", "category": "c1", "%category": "Web"}]}
 
 
-def _status(version: str) -> dict[str, Any]:
-    """Return the firmware status payload a Router reports for a product version.
-
-    Args:
-        version (str): Product version the Router reports.
-
-    Returns:
-        dict[str, Any]: Firmware status response body.
-    """
-    return {"product": {"product_version": version}}
-
-
-def _firewall_client(
-    make_client: ClientType,
-    routes: dict[tuple[str, str], Any],
-    *,
-    firmware_status: Any = 404,
-    throw_errors: bool = False,
-) -> tuple[OPNsenseClient, FakeRouter]:
-    """Build a client whose Router answers only the given routes.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        routes (dict[tuple[str, str], Any]): Router answers keyed by HTTP method and path.
-        firmware_status (Any): Route value for the firmware status read. The default 404
-            leaves the firmware unknown.
-        throw_errors (bool): Public ``throw_errors`` setting of the client.
-
-    Returns:
-        tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(
-        client,
-        session,
-        routes={("GET", FIRMWARE_STATUS_PATH): firmware_status, **routes},
-    )
-    return client, router
-
-
 async def test_get_firewall_aggregates_rest_payload(make_client: ClientType) -> None:
     """`get_firewall` aggregates the filter rules and every NAT rule collection.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _firewall_client(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", FILTER_RULES_PATH): "@uuid;enabled\nrule1;1\n",
@@ -115,7 +67,7 @@ async def test_get_firewall_rules_skips_invalid_rows(make_client: ClientType) ->
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _firewall_client(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", FILTER_RULES_PATH): (
@@ -178,7 +130,7 @@ async def test_get_firewall_rules_supports_opnsense_csv_versions(
         response (str): Firewall CSV payload for the OPNsense version case.
         expected (dict[str, str]): Parsed rule mapping expected from the payload.
     """
-    client, _router = _firewall_client(make_client, {("GET", FILTER_RULES_PATH): response})
+    client, _router = make_router_client(make_client, {("GET", FILTER_RULES_PATH): response})
 
     assert (await client.get_firewall())["rules"] == {expected["uuid"]: expected}
 
@@ -191,7 +143,7 @@ async def test_get_nat_source_rules_labels_empty_interface_address_target(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _router = _firewall_client(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", SOURCE_NAT_PATH): {
@@ -207,7 +159,7 @@ async def test_get_nat_source_rules_labels_empty_interface_address_target(
                 ]
             }
         },
-        firmware_status=_status("26.7"),
+        firmware="26.7",
     )
 
     result = (await client.get_firewall())["nat"]["source_nat"]
@@ -293,10 +245,10 @@ async def test_nat_rule_collections_parse_rows(
         expected (dict[str, dict[str, str]]): Expected UUID-keyed rule mapping.
         firmware (str | None): Firmware version the Router reports, or ``None`` if unknown.
     """
-    client, router = _firewall_client(
+    client, router = make_router_client(
         make_client,
         {("GET", NAT_GROUP_PATHS[nat_group]): {"rows": rows}},
-        firmware_status=404 if firmware is None else _status(firmware),
+        firmware=firmware,
     )
 
     assert (await client.get_firewall())["nat"][nat_group] == expected
@@ -313,7 +265,7 @@ async def test_get_firewall_returns_empty_collections_when_endpoints_are_unavail
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         throw_errors (bool): Public ``throw_errors`` setting of the client.
     """
-    client, router = _firewall_client(make_client, {}, throw_errors=throw_errors)
+    client, router = make_router_client(make_client, {}, throw_errors=throw_errors)
 
     assert await client.get_firewall() == {
         "rules": {},
@@ -326,26 +278,26 @@ async def test_get_firewall_returns_empty_collections_when_endpoints_are_unavail
 @pytest.mark.parametrize(
     ("firmware", "automatic_rows_hidden"),
     [
-        pytest.param(_status("26.1.10"), False, id="below-threshold"),
-        pytest.param(_status("26.1.11"), True, id="at-threshold"),
-        pytest.param(_status("26.1.11_4"), True, id="at-threshold-with-hotfix"),
-        pytest.param(_status("26.2"), True, id="above-threshold"),
-        pytest.param({}, False, id="missing"),
-        pytest.param(_status("not-a-version"), False, id="not-comparable"),
+        pytest.param("26.1.10", False, id="below-threshold"),
+        pytest.param("26.1.11", True, id="at-threshold"),
+        pytest.param("26.1.11_4", True, id="at-threshold-with-hotfix"),
+        pytest.param("26.2", True, id="above-threshold"),
+        pytest.param("", False, id="missing"),
+        pytest.param("not-a-version", False, id="not-comparable"),
     ],
 )
 async def test_get_firewall_source_nat_filters_automatic_rows_by_firmware(
-    make_client: ClientType, firmware: dict[str, Any], automatic_rows_hidden: bool
+    make_client: ClientType, firmware: str, automatic_rows_hidden: bool
 ) -> None:
     """Source NAT hides generated rows only on known firmware that generates them.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        firmware (dict[str, Any]): Firmware status response the Router sends.
+        firmware (str): Firmware version the Router reports.
         automatic_rows_hidden (bool): Whether generated rows are expected to be hidden.
     """
-    client, _router = _firewall_client(
-        make_client, {("GET", SOURCE_NAT_PATH): SOURCE_NAT_ROWS}, firmware_status=firmware
+    client, _router = make_router_client(
+        make_client, {("GET", SOURCE_NAT_PATH): SOURCE_NAT_ROWS}, firmware=firmware
     )
 
     firewall = await client.get_firewall()
@@ -358,25 +310,25 @@ async def test_get_firewall_source_nat_filters_automatic_rows_by_firmware(
 @pytest.mark.parametrize(
     ("firmware", "categories_mirrored"),
     [
-        pytest.param(_status("26.1.3"), False, id="below-threshold"),
-        pytest.param(_status("26.1.4"), True, id="at-threshold"),
-        pytest.param(_status("26.2"), True, id="above-threshold"),
-        pytest.param({}, False, id="missing"),
-        pytest.param(_status("not-a-version"), False, id="not-comparable"),
+        pytest.param("26.1.3", False, id="below-threshold"),
+        pytest.param("26.1.4", True, id="at-threshold"),
+        pytest.param("26.2", True, id="above-threshold"),
+        pytest.param("", False, id="missing"),
+        pytest.param("not-a-version", False, id="not-comparable"),
     ],
 )
 async def test_get_firewall_dnat_mirrors_categories_by_firmware(
-    make_client: ClientType, firmware: dict[str, Any], categories_mirrored: bool
+    make_client: ClientType, firmware: str, categories_mirrored: bool
 ) -> None:
     """Destination NAT mirrors category keys only on known unified-NAT firmware.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        firmware (dict[str, Any]): Firmware status response the Router sends.
+        firmware (str): Firmware version the Router reports.
         categories_mirrored (bool): Whether plural category keys are expected.
     """
-    client, _router = _firewall_client(
-        make_client, {("GET", DNAT_PATH): DNAT_ROWS}, firmware_status=firmware
+    client, _router = make_router_client(
+        make_client, {("GET", DNAT_PATH): DNAT_ROWS}, firmware=firmware
     )
 
     rule = (await client.get_firewall())["nat"]["d_nat"]["dnat-1"]
@@ -394,10 +346,10 @@ async def test_unknown_firmware_for_nat_is_logged_once_per_condition(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         caplog (pytest.LogCaptureFixture): Log capture fixture.
     """
-    client, _router = _firewall_client(
+    client, _router = make_router_client(
         make_client,
         {("GET", SOURCE_NAT_PATH): SOURCE_NAT_ROWS, ("GET", DNAT_PATH): DNAT_ROWS},
-        firmware_status=_status("not-a-version"),
+        firmware="not-a-version",
     )
     caplog.set_level(logging.DEBUG, logger="aiopnsense")
 
@@ -418,15 +370,11 @@ async def test_kill_states_returns_normalized_result(make_client: ClientType) ->
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _firewall_client(
+    client, router = make_router_client(
         make_client,
         {("POST", KILL_STATES_PATH): {"result": "ok", "dropped_states": 7}},
     )
 
     assert await client.kill_states("192.0.2.10") == {"success": True, "dropped_states": 7}
 
-    assert [
-        body
-        for method, url, body in router.requests
-        if method == "POST" and url == ROUTER_URL + KILL_STATES_PATH
-    ] == [{"filter": "192.0.2.10"}]
+    assert router.bodies("POST", KILL_STATES_PATH) == [{"filter": "192.0.2.10"}]

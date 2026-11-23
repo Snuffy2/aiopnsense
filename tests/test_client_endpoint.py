@@ -1,6 +1,6 @@
 """Tests for client endpoint availability and endpoint-style selection.
 
-Public behavior runs through ``install_fake_router``. Tests that call
+Public behavior runs through ``make_router_client``. Tests that call
 ``_fetch_endpoint_outcome``, ``_check_endpoint_status``, ``_set_use_snake_case`` or
 ``_reset_endpoint_state`` target the endpoint availability layer itself, which has no
 public equivalent for an outcome read, a status-only check or a cache reset.
@@ -8,7 +8,7 @@ public equivalent for an outcome read, a status-only check or a cache reset.
 
 import asyncio
 import logging
-from typing import Any, Self
+from typing import Any
 from unittest.mock import AsyncMock
 
 import aiohttp
@@ -24,11 +24,12 @@ from aiopnsense.exceptions import (
     OPNsenseUnknownFirmware,
 )
 from tests.conftest import (
-    FakeResponse,
+    FIRMWARE_STATUS_PATH,
     FakeRouter,
+    HeldResponse,
     MakeClientFactory,
-    install_fake_router,
-    make_mock_session_client,
+    firmware_status_payload,
+    make_router_client,
 )
 
 DISMISS_SNAKE_PATH = "/api/core/system/dismiss_status"
@@ -38,34 +39,6 @@ NUT_PATH = "/api/nut/diagnostics/upsstatus"
 NUT_DATA = {"status": {"ups.status": "OL"}}
 OUTCOME_PATH = "/api/test/outcome"
 POST_PATH = "/api/test/post"
-FIRMWARE_STATUS_PATH = "/api/core/firmware/status"
-BASE_URL = "http://localhost"
-
-
-def _firmware_status(version: str | None) -> dict[str, Any]:
-    """Return the firmware status a Router reports for an installed version.
-
-    Args:
-        version (str | None): Installed firmware version, or ``None`` for a status without one.
-
-    Returns:
-        dict[str, Any]: Status payload with ``product.product_version``, or an empty payload.
-    """
-    return {"product": {"product_version": version}} if version else {}
-
-
-def _post_paths(router: FakeRouter) -> list[str]:
-    """Return the paths the client sent with POST, in order.
-
-    Args:
-        router (FakeRouter): Router that recorded the client's requests.
-
-    Returns:
-        list[str]: POST request paths.
-    """
-    return [
-        url.removeprefix(BASE_URL) for method, url, _body in router.requests if method == "POST"
-    ]
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):
@@ -96,11 +69,8 @@ async def test_validate_maps_endpoint_probe_ssl_to_opnsense_ssl_error(
     Returns:
         None: This test asserts validate SSL mapping through endpoint probing.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
-        routes={("GET", FIRMWARE_STATUS_PATH): _TestClientSSLError()},
+    client, router = make_router_client(
+        make_client, routes={("GET", FIRMWARE_STATUS_PATH): _TestClientSSLError()}
     )
     try:
         with pytest.raises(OPNsenseSSLError):
@@ -123,8 +93,7 @@ async def test_validate_reprobes_cached_403_in_throw_mode(
     Returns:
         None: This test asserts validation freshly probes cached permission failures.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", FIRMWARE_STATUS_PATH): 403})
+    client, router = make_router_client(make_client, routes={("GET", FIRMWARE_STATUS_PATH): 403})
     try:
         path = FIRMWARE_STATUS_PATH
         assert (await client._check_endpoint_status(path)).is_absent
@@ -155,8 +124,7 @@ async def test_is_endpoint_available_is_deprecated_get_alias(
     Returns:
         None: This test asserts PEP 702 metadata, runtime warnings, and alias behavior.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", "/api/test/endpoint"): {}})
+    client, router = make_router_client(make_client, routes={("GET", "/api/test/endpoint"): {}})
     try:
         legacy_alias = client.is_endpoint_available  # type: ignore[deprecated]
         assert "Endpoint availability probing is internal" in legacy_alias.__deprecated__  # type: ignore[attr-defined]
@@ -196,8 +164,7 @@ async def test_validate_maps_endpoint_probe_http_errors_to_public_exceptions(
     Returns:
         None: This test asserts validation-time endpoint probe error mapping.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", FIRMWARE_STATUS_PATH): status})
+    client, router = make_router_client(make_client, routes={("GET", FIRMWARE_STATUS_PATH): status})
     try:
         path = FIRMWARE_STATUS_PATH
         with pytest.raises(expected_exception):
@@ -361,16 +328,13 @@ async def dismiss_router(
         tuple[Any, FakeRouter]: Client and Router that accept either
             dismiss path. A test sets the firmware version through ``routes``.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    return make_router_client(
+        make_client,
         routes={
             ("POST", DISMISS_SNAKE_PATH): {"status": "ok"},
             ("POST", DISMISS_CAMEL_PATH): {"status": "ok"},
         },
     )
-    return client, router
 
 
 @pytest.mark.parametrize(
@@ -393,11 +357,11 @@ async def test_public_call_uses_endpoint_style_for_known_firmware(
         expected_path (str): Dismiss endpoint the client is expected to call.
     """
     client, router = dismiss_router
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status(firmware)
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload(firmware)
 
     assert await client.close_notice("notice") is True
 
-    assert _post_paths(router) == [expected_path]
+    assert router.paths("POST") == [expected_path]
 
 
 @pytest.mark.parametrize(
@@ -415,13 +379,13 @@ async def test_unknown_firmware_does_not_pin_endpoint_style(
         firmware (str | None): Initial firmware version reported by the Router.
     """
     client, router = dismiss_router
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status(firmware)
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload(firmware)
 
     assert await client.close_notice("first") is True
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("25.1")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("25.1")
     assert await client.close_notice("second") is True
 
-    assert _post_paths(router) == [DISMISS_SNAKE_PATH, DISMISS_CAMEL_PATH]
+    assert router.paths("POST") == [DISMISS_SNAKE_PATH, DISMISS_CAMEL_PATH]
 
 
 async def test_unreachable_firmware_status_does_not_pin_endpoint_style(
@@ -438,10 +402,10 @@ async def test_unreachable_firmware_status_does_not_pin_endpoint_style(
     )
 
     assert await client.close_notice("first") is True
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("25.1")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("25.1")
     assert await client.close_notice("second") is True
 
-    assert _post_paths(router) == [DISMISS_SNAKE_PATH, DISMISS_CAMEL_PATH]
+    assert router.paths("POST") == [DISMISS_SNAKE_PATH, DISMISS_CAMEL_PATH]
 
 
 @pytest.mark.parametrize(
@@ -468,13 +432,13 @@ async def test_unknown_firmware_is_logged_once_per_condition(
         expected_text (str): Text identifying the unknown-firmware reason.
     """
     client, router = dismiss_router
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status(firmware)
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload(firmware)
     caplog.set_level(logging.DEBUG, logger="aiopnsense")
 
     for _ in range(3):
         assert await client.close_notice("notice") is True
 
-    assert _post_paths(router) == [DISMISS_SNAKE_PATH] * 3
+    assert router.paths("POST") == [DISMISS_SNAKE_PATH] * 3
     records = [record for record in caplog.records if expected_text in record.getMessage()]
     assert [record.levelno for record in records] == [expected_level]
 
@@ -511,15 +475,15 @@ async def test_firmware_upgrade_across_threshold_switches_endpoint_style(
         upgrade_router (tuple[Any, FakeRouter]): Client and Router accepting upgrades.
     """
     client, router = upgrade_router
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("25.1")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("25.1")
     assert await client.close_notice("before") is True
 
     await client.upgrade_firmware("upgrade")
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("25.7")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("25.7")
     await client.get_host_firmware_version()
     assert await client.close_notice("after") is True
 
-    assert _post_paths(router) == [DISMISS_CAMEL_PATH, UPGRADE_PATH, DISMISS_SNAKE_PATH]
+    assert router.paths("POST") == [DISMISS_CAMEL_PATH, UPGRADE_PATH, DISMISS_SNAKE_PATH]
 
 
 async def test_firmware_upgrade_refreshes_endpoint_availability(
@@ -531,14 +495,14 @@ async def test_firmware_upgrade_refreshes_endpoint_availability(
         upgrade_router (tuple[Any, FakeRouter]): Client and Router accepting upgrades.
     """
     client, router = upgrade_router
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("25.1")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("25.1")
     assert await client.get_host_firmware_version() == "25.1"
     assert await client.is_endpoint_available(LATE_PATH) is False
 
     router.routes[("GET", LATE_PATH)] = {}
     assert await client.is_endpoint_available(LATE_PATH) is False  # cached until a change
     await client.upgrade_firmware("upgrade")
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("25.7")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("25.7")
     await client.get_host_firmware_version()
 
     assert await client.is_endpoint_available(LATE_PATH) is True
@@ -553,7 +517,7 @@ async def test_unchanged_firmware_version_keeps_endpoint_cache(
         upgrade_router (tuple[Any, FakeRouter]): Client and Router accepting upgrades.
     """
     client, router = upgrade_router
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("25.1")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("25.1")
     assert await client.is_endpoint_available(LATE_PATH) is False
     await client.get_host_firmware_version()
 
@@ -574,7 +538,7 @@ async def test_first_known_firmware_version_keeps_endpoint_cache(
         dismiss_router (tuple[Any, FakeRouter]): Client and Router serving both styles.
     """
     client, router = dismiss_router
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("25.1")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("25.1")
     assert await client.is_endpoint_available(LATE_PATH) is False
 
     assert await client.get_host_firmware_version() == "25.1"
@@ -592,7 +556,7 @@ async def test_failed_firmware_lookup_after_known_version_resets_nothing(
         upgrade_router (tuple[Any, FakeRouter]): Client and Router accepting upgrades.
     """
     client, router = upgrade_router
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("25.1")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("25.1")
     assert await client.close_notice("before") is True
     assert await client.is_endpoint_available(LATE_PATH) is False
 
@@ -605,7 +569,7 @@ async def test_failed_firmware_lookup_after_known_version_resets_nothing(
     assert await client.close_notice("during") is True
     assert await client.is_endpoint_available(LATE_PATH) is False
 
-    assert _post_paths(router) == [DISMISS_CAMEL_PATH, UPGRADE_PATH, DISMISS_CAMEL_PATH]
+    assert router.paths("POST") == [DISMISS_CAMEL_PATH, UPGRADE_PATH, DISMISS_CAMEL_PATH]
 
 
 async def test_not_comparable_firmware_version_resets_nothing(
@@ -617,18 +581,18 @@ async def test_not_comparable_firmware_version_resets_nothing(
         upgrade_router (tuple[Any, FakeRouter]): Client and Router accepting upgrades.
     """
     client, router = upgrade_router
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("25.1")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("25.1")
     assert await client.get_host_firmware_version() == "25.1"
     assert await client.is_endpoint_available(LATE_PATH) is False
 
     await client.upgrade_firmware("update")
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("weird")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("weird")
     router.routes[("GET", LATE_PATH)] = {}
     assert await client.get_host_firmware_version() == "weird"
     assert await client.is_endpoint_available(LATE_PATH) is False
 
     await client.upgrade_firmware("update")
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("25.1")
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("25.1")
     assert await client.get_host_firmware_version() == "25.1"
     assert await client.is_endpoint_available(LATE_PATH) is False
 
@@ -642,29 +606,12 @@ async def test_old_endpoint_outcome_cannot_restore_cache_after_firmware_change(
     Args:
         make_client (MakeClientFactory): Fixture factory returning clients.
     """
-    client, session = make_mock_session_client(make_client)
-    probe_started = asyncio.Event()
-    release_probe = asyncio.Event()
-
-    class DelayedNotFoundResponse(FakeResponse):
-        """404 response held until the test releases an old firmware probe."""
-
-        async def __aenter__(self) -> Self:
-            """Wait for release after the stale probe reaches its response.
-
-            Returns:
-                Self: This response after the test releases the probe.
-            """
-            probe_started.set()
-            await release_probe.wait()
-            return self
-
-    router = install_fake_router(
-        client,
-        session,
+    held = HeldResponse(status=404, ok=False)
+    client, router = make_router_client(
+        make_client,
         routes={
-            ("GET", FIRMWARE_STATUS_PATH): _firmware_status("26.1.1"),
-            ("GET", SYSTEM_INFORMATION_SNAKE_PATH): DelayedNotFoundResponse(status=404, ok=False),
+            ("GET", FIRMWARE_STATUS_PATH): firmware_status_payload("26.1.1"),
+            ("GET", SYSTEM_INFORMATION_SNAKE_PATH): held,
         },
     )
     # Learn the old firmware first so the later validate sees the change and resets the cache.
@@ -673,18 +620,18 @@ async def test_old_endpoint_outcome_cannot_restore_cache_after_firmware_change(
         client._check_endpoint_status(SYSTEM_INFORMATION_SNAKE_PATH)
     )
     try:
-        await asyncio.wait_for(probe_started.wait(), timeout=1)
-        router.routes[("GET", FIRMWARE_STATUS_PATH)] = _firmware_status("26.1.11")
+        await asyncio.wait_for(held.entered.wait(), timeout=1)
+        router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload("26.1.11")
         await client.validate(require_device_id=False)
 
         router.routes[("GET", SYSTEM_INFORMATION_SNAKE_PATH)] = {"name": "router"}
         assert (await client._check_endpoint_status(SYSTEM_INFORMATION_SNAKE_PATH)).is_data
 
-        release_probe.set()
+        held.release.set()
         assert (await old_probe_task).is_absent
         assert (await client._check_endpoint_status(SYSTEM_INFORMATION_SNAKE_PATH)).is_data
     finally:
-        release_probe.set()
+        held.release.set()
         if not old_probe_task.done():
             await asyncio.gather(old_probe_task, return_exceptions=True)
 
@@ -696,8 +643,7 @@ async def test_present_endpoint_costs_one_request_per_read(make_client: MakeClie
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): NUT_DATA})
+    client, router = make_router_client(make_client, routes={("GET", NUT_PATH): NUT_DATA})
     try:
         assert await client.get_nut_ups_status() == NUT_DATA
         assert router.count("GET", NUT_PATH) == 1
@@ -725,8 +671,7 @@ async def test_absent_endpoint_is_cached_until_ttl_expires(
         status (int): HTTP status the Router returns while the endpoint is absent.
         throw_errors (bool): Whether the client raises public errors.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): status})
+    client, router = make_router_client(make_client, routes={("GET", NUT_PATH): status})
     client.toggle_throwing_errors(throw_errors)
     try:
         assert await client.get_nut_ups_status() == {}
@@ -750,8 +695,7 @@ async def test_cached_permission_error_is_trusted_by_default_and_rechecked_in_th
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): 403})
+    client, router = make_router_client(make_client, routes={("GET", NUT_PATH): 403})
     try:
         assert await client.get_nut_ups_status() == {}
         assert await client.get_nut_ups_status() == {}
@@ -777,8 +721,7 @@ async def test_transient_failure_is_not_cached_and_logs_once_per_outage(
         caplog (pytest.LogCaptureFixture): Fixture capturing log records.
         failure (Any): Router response that models the transient failure.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): failure})
+    client, router = make_router_client(make_client, routes={("GET", NUT_PATH): failure})
     try:
         with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
             assert await client.get_nut_ups_status() == {}
@@ -807,8 +750,7 @@ async def test_transient_failure_raises_in_throw_mode_and_is_not_cached(
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
         failure (Any): Router response that models the transient failure.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): failure})
+    client, router = make_router_client(make_client, routes={("GET", NUT_PATH): failure})
     client.toggle_throwing_errors(True)
     try:
         with pytest.raises(OPNsenseError):
@@ -829,8 +771,7 @@ async def test_transient_failure_clears_cached_present_status(
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): NUT_DATA})
+    client, router = make_router_client(make_client, routes={("GET", NUT_PATH): NUT_DATA})
     try:
         assert (await client._check_endpoint_status(NUT_PATH)).is_data
         assert (await client._check_endpoint_status(NUT_PATH)).is_data
@@ -854,8 +795,7 @@ async def test_forbidden_in_throw_mode_clears_cached_present_status(
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): NUT_DATA})
+    client, router = make_router_client(make_client, routes={("GET", NUT_PATH): NUT_DATA})
     client.toggle_throwing_errors(True)
     try:
         assert (await client._check_endpoint_status(NUT_PATH)).is_data
@@ -882,28 +822,24 @@ async def test_reset_during_request_discards_its_cache_answer(
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
         status (int): HTTP status the Router answers with.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", NUT_PATH): status})
-    original_get = session.get
+    client, router = make_router_client(make_client)
 
-    def get_then_reset(url: str, **kwargs: Any) -> Any:
-        """Answer the request, then reset the endpoint cache before the answer is read.
+    def reset_then_answer(**_kwargs: Any) -> int:
+        """Reset the endpoint cache before the client reads the answer.
 
         Args:
-            url (str): Requested URL.
-            kwargs (Any): Request options passed to the fake session.
+            _kwargs (Any): Request options passed by the transport.
 
         Returns:
-            Any: Fake response for the request.
+            int: HTTP status the Router answers with.
         """
-        response = original_get(url, **kwargs)
         client._reset_endpoint_state()
-        return response
+        return status
 
-    session.get = get_then_reset
+    router.routes[("GET", NUT_PATH)] = reset_then_answer
     try:
         await client._fetch_endpoint_outcome(NUT_PATH)
-        session.get = original_get
+        router.routes[("GET", NUT_PATH)] = status
         await client._fetch_endpoint_outcome(NUT_PATH)
         assert router.count("GET", NUT_PATH) == 2
     finally:
@@ -917,8 +853,9 @@ async def test_text_read_returns_body_text_in_one_request(make_client: MakeClien
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("GET", OUTCOME_PATH): "ups.status: OL"})
+    client, router = make_router_client(
+        make_client, routes={("GET", OUTCOME_PATH): "ups.status: OL"}
+    )
     try:
         outcome = await client._fetch_endpoint_outcome(OUTCOME_PATH, "text")
         assert outcome.is_data
@@ -937,13 +874,11 @@ async def test_post_outcome_sends_its_payload_and_caches_absence(
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={("POST", POST_PATH): 404})
+    client, router = make_router_client(make_client, routes={("POST", POST_PATH): 404})
     try:
         assert (await client._fetch_post_endpoint_outcome(POST_PATH, {"device": "ada0"})).is_absent
         assert (await client._fetch_post_endpoint_outcome(POST_PATH, {"device": "ada0"})).is_absent
-        assert router.count("POST", POST_PATH) == 1
-        assert router.requests[0][2] == {"device": "ada0"}
+        assert router.bodies("POST", POST_PATH) == [{"device": "ada0"}]
     finally:
         await client.async_close()
 

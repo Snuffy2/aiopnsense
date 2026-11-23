@@ -2,7 +2,6 @@
 
 import asyncio
 from collections.abc import Callable
-from functools import partial
 import logging
 from typing import Any
 
@@ -15,13 +14,7 @@ from aiopnsense import (
     OPNsenseInvalidURL,
     OPNsenseTimeoutError,
 )
-from tests.conftest import (
-    FIRMWARE_STATUS_PATH,
-    FakeResponse,
-    FakeRouter,
-    install_fake_router,
-    make_mock_session_client,
-)
+from tests.conftest import FIRMWARE_STATUS_PATH, FakeRouter, HeldResponse, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -93,21 +86,6 @@ def _reply(value: Any) -> Any:
     return value
 
 
-def _firmware_routes(version: str | None) -> dict[tuple[str, str], Any]:
-    """Return the routes that make the Router report a firmware version.
-
-    Args:
-        version (str | None): Firmware version to report. ``None`` leaves the firmware status
-            unrouted, so the Router answers 404 and the firmware is Unknown Firmware.
-
-    Returns:
-        dict[tuple[str, str], Any]: Routes for the firmware status read.
-    """
-    if version is None:
-        return {}
-    return {("GET", FIRMWARE_STATUS_PATH): {"product": {"product_version": version}}}
-
-
 def _legacy_routes(
     payload: Any,
     *,
@@ -152,51 +130,6 @@ def _both_apis_routes(legacy_payload: dict[str, Any]) -> dict[tuple[str, str], A
     }
 
 
-def _unbound_client(
-    make_client: ClientType,
-    routes: dict[tuple[str, str], Any],
-    *,
-    firmware: str | None,
-    throw_errors: bool = False,
-) -> tuple[OPNsenseClient, FakeRouter]:
-    """Return a client served by a Router that reports ``firmware`` and answers ``routes``.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        routes (dict[tuple[str, str], Any]): Routes keyed by HTTP method and path.
-        firmware (str | None): Firmware version the Router reports, or ``None`` for none.
-        throw_errors (bool): Client error propagation setting.
-
-    Returns:
-        tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(
-        client,
-        session,
-        routes={**_firmware_routes(firmware), **routes},
-    )
-    return client, router
-
-
-def _bodies(router: FakeRouter, method: str, path: str) -> list[Any]:
-    """Return the JSON bodies the Router received for one method and path.
-
-    Args:
-        router (FakeRouter): Router that recorded the requests.
-        method (str): HTTP method to match.
-        path (str): Request path to match.
-
-    Returns:
-        list[Any]: Request bodies, oldest first.
-    """
-    return [
-        body
-        for request_method, url, body in router.requests
-        if request_method == method and url.endswith(path)
-    ]
-
-
 def _blocklist_request_count(router: FakeRouter) -> int:
     """Count the requests the Router received other than firmware status reads.
 
@@ -215,7 +148,7 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client: ClientTyp
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", SEARCH_DNSBL): {
@@ -249,7 +182,7 @@ async def test_get_unbound_blocklist_handles_empty_or_invalid_responses(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         api_response (object): Opaque malformed or empty API response.
     """
-    client, _router = _unbound_client(
+    client, _router = make_router_client(
         make_client, {("GET", SEARCH_DNSBL): api_response}, firmware=EXTENDED_FIRMWARE
     )
 
@@ -274,7 +207,7 @@ async def test_get_unbound_blocklist_returns_empty_when_endpoint_unavailable(
         status (int): HTTP status the Router answers the DNSBL search with.
         throw_errors (bool): Client error propagation setting.
     """
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client,
         {("GET", SEARCH_DNSBL): status},
         firmware=EXTENDED_FIRMWARE,
@@ -296,7 +229,7 @@ async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         firmware_version (str): Older firmware version requiring the legacy endpoint.
     """
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client,
         {("GET", SETTINGS_GET): {"unbound": {"dnsbl": LEGACY_DNSBL_SELECTED}}},
         firmware=firmware_version,
@@ -338,7 +271,7 @@ async def test_get_unbound_blocklist_returns_empty_for_invalid_legacy_payloads(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         api_response (dict[str, Any]): Legacy API payload returned by OPNsense.
     """
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client, {("GET", SETTINGS_GET): api_response}, firmware=LEGACY_FIRMWARE
     )
 
@@ -354,7 +287,7 @@ async def test_get_unbound_blocklist_legacy_uses_empty_strings_for_non_mapping_s
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _router = _unbound_client(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", SETTINGS_GET): {
@@ -431,7 +364,7 @@ async def test_enable_disable_unbound_blocklist_extended(
         applied (bool): Whether the DNSBL apply should have been sent.
     """
     enabled = method_name == "enable_unbound_blocklist"
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client,
         {
             ("POST", _toggle_path("uuid1", enabled)): toggle_reply,
@@ -467,13 +400,13 @@ async def test_enable_disable_unbound_blocklist_legacy_for_older_firmware(
     """
     legacy_dnsbl_payload["unbound"]["dnsbl"]["type"] = {"ads": {"selected": 1}}
     legacy_dnsbl_payload["unbound"]["dnsbl"]["lists"] = {"list-a": {"selected": 1}}
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client, _legacy_routes(legacy_dnsbl_payload), firmware=LEGACY_FIRMWARE
     )
 
     assert await getattr(client, method_name)() is True
 
-    assert _bodies(router, "POST", SETTINGS_SET) == [
+    assert router.bodies("POST", SETTINGS_SET) == [
         {
             "unbound": {
                 "dnsbl": {
@@ -503,7 +436,7 @@ async def test_enable_unbound_blocklist_legacy_returns_false_when_state_cannot_b
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client,
         _legacy_routes({"unbound": {"dnsbl": []}}),
         firmware=LEGACY_FIRMWARE,
@@ -538,7 +471,7 @@ async def test_enable_unbound_blocklist_legacy_does_not_apply_or_restart_after_f
         legacy_dnsbl_payload (dict[str, Any]): Legacy DNSBL settings payload.
         caplog (pytest.LogCaptureFixture): Logs emitted while rejecting the save.
     """
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client,
         _legacy_routes(legacy_dnsbl_payload, save=save_reply),
         firmware=LEGACY_FIRMWARE,
@@ -575,7 +508,7 @@ async def test_enable_unbound_blocklist_legacy_returns_false_for_bad_apply_statu
         legacy_dnsbl_payload (dict[str, Any]): Legacy DNSBL settings payload.
         caplog (pytest.LogCaptureFixture): Logs emitted while rejecting the apply.
     """
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client,
         _legacy_routes(legacy_dnsbl_payload, apply=apply_reply),
         firmware=LEGACY_FIRMWARE,
@@ -610,7 +543,7 @@ async def test_enable_unbound_blocklist_legacy_requires_restart_response(
         expected (bool): Expected Toggle result.
         legacy_dnsbl_payload (dict[str, Any]): Legacy DNSBL settings payload.
     """
-    client, _router = _unbound_client(
+    client, _router = make_router_client(
         make_client,
         _legacy_routes(legacy_dnsbl_payload, restart=restart_reply),
         firmware=LEGACY_FIRMWARE,
@@ -632,7 +565,7 @@ async def test_legacy_blocklist_completion_log_omits_configuration_and_response_
         legacy_dnsbl_payload (dict[str, Any]): Legacy DNSBL settings returned before the save.
     """
     legacy_dnsbl_payload["unbound"]["dnsbl"]["address"] = "CONFIG_MARKER"
-    client, _router = _unbound_client(
+    client, _router = make_router_client(
         make_client,
         _legacy_routes(
             legacy_dnsbl_payload,
@@ -706,7 +639,7 @@ async def test_legacy_unbound_blocklist_request_failure_follows_throw_errors(
         )
     replies: dict[str, Any] = {"save": SAVED, "apply": OK_APPLIED, "restart": RESTARTED}
     replies[failing_step] = make_error()
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client,
         _legacy_routes(legacy_dnsbl_payload, **replies),
         firmware=LEGACY_FIRMWARE,
@@ -771,7 +704,7 @@ async def test_toggle_unbound_blocklist_apply_exception_follows_throw_errors(
         throw_errors (bool): Client error propagation setting.
     """
     enabled = method_name.startswith("enable")
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client,
         {
             ("POST", _toggle_path("uuid1", enabled)): {
@@ -796,28 +729,6 @@ async def test_toggle_unbound_blocklist_apply_exception_follows_throw_errors(
     assert "password" not in caplog.text
 
 
-class _BlockedResponse(FakeResponse):
-    """Response that signals it was read and then never finishes."""
-
-    def __init__(self) -> None:
-        """Initialize the response with an unset ``read`` event."""
-        super().__init__()
-        self.read = asyncio.Event()
-
-    async def json(self, content_type: Any = None) -> Any:
-        """Signal that the request was dispatched, then wait until cancelled.
-
-        Args:
-            content_type (Any, optional): Requested content type (unused by the fake).
-
-        Returns:
-            Any: Never returns normally.
-        """
-        del content_type
-        self.read.set()
-        await asyncio.Event().wait()
-
-
 @pytest.mark.parametrize("throw_errors", [False, True])
 async def test_toggle_unbound_blocklist_apply_cancellation_propagates(
     make_client: ClientType,
@@ -829,8 +740,8 @@ async def test_toggle_unbound_blocklist_apply_cancellation_propagates(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         throw_errors (bool): Client error propagation setting.
     """
-    blocked = _BlockedResponse()
-    client, router = _unbound_client(
+    blocked = HeldResponse()
+    client, router = make_router_client(
         make_client,
         {
             ("POST", _toggle_path("uuid1", True)): {"result": "Enabled"},
@@ -842,7 +753,7 @@ async def test_toggle_unbound_blocklist_apply_cancellation_propagates(
     toggle = asyncio.create_task(client.enable_unbound_blocklist("uuid1"))
 
     async with asyncio.timeout(2):
-        await blocked.read.wait()
+        await blocked.entered.wait()
     toggle.cancel()
 
     with pytest.raises(asyncio.CancelledError):
@@ -881,7 +792,7 @@ async def test_get_unbound_blocklist_uses_method_for_firmware(
         firmware (str | None): Firmware version reported by the Router.
         expect_legacy (bool): Whether the legacy blocklist is expected.
     """
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client, _both_apis_routes(legacy_dnsbl_payload), firmware=firmware
     )
 
@@ -940,7 +851,7 @@ async def test_unbound_blocklist_write_uses_method_for_firmware(
         backend (str): Backend expected to receive requests: ``legacy``, ``extended`` or ``none``.
         expected_result (bool): Expected method result.
     """
-    client, router = _unbound_client(
+    client, router = make_router_client(
         make_client, _both_apis_routes(legacy_dnsbl_payload), firmware=firmware
     )
     toggle_path = _toggle_path("uuid1", method_name == "enable_unbound_blocklist")
@@ -984,7 +895,7 @@ async def test_unbound_unknown_firmware_is_logged_once_by_the_capability_rule(
         expected_level (int): Level the unknown-firmware message must use.
         expected_text (str): Text identifying the unknown-firmware reason.
     """
-    client, _router = _unbound_client(
+    client, _router = make_router_client(
         make_client, _both_apis_routes(legacy_dnsbl_payload), firmware=firmware
     )
     caplog.set_level(logging.DEBUG, logger="aiopnsense")

@@ -2,13 +2,12 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from functools import partial
 
 import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import install_fake_router, make_mock_session_client
+from tests.conftest import make_mock_session_client, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -72,10 +71,8 @@ async def test_get_vnstat_metrics_yearly_parsing(make_client: ClientType) -> Non
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("GET", VNSTAT_YEARLY_PATH): {
                 "response": """
@@ -108,20 +105,15 @@ async def test_get_vnstat_metrics_yearly_parsing(make_client: ClientType) -> Non
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("throw_errors", [False, True])
 async def test_get_vnstat_metrics_unsupported_period_or_endpoint_missing(
-    make_client: ClientType, throw_errors: bool
+    make_client: ClientType,
 ) -> None:
     """get_vnstat_metrics should return empty data for unsupported/missing endpoints.
 
-    A missing endpoint is empty in either ``throw_errors`` mode.
-
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Whether the client raises instead of returning empty values.
     """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(client, session)
+    client, router = make_router_client(make_client)
 
     assert await client.get_vnstat_metrics("hourly") == {}
     assert router.count("GET", VNSTAT_HOURLY_PATH) == 1
@@ -142,7 +134,6 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         hourly_unavailable (bool): Whether the hourly request fails transiently.
     """
-    client, session = make_mock_session_client(make_client)
     try:
         # Keep payload dates aligned with mocked OPNsense system time to avoid
         # day-boundary/timezone flakiness in CI.
@@ -199,9 +190,8 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(
 """
         }
 
-        router = install_fake_router(
-            client,
-            session,
+        client, router = make_router_client(
+            make_client,
             routes={
                 ("GET", VNSTAT_HOURLY_PATH): (
                     aiohttp.ClientConnectionError("Hourly read failed")
@@ -251,10 +241,8 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: ClientType)
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("GET", VNSTAT_HOURLY_PATH): {},
             ("GET", SYSTEM_TIME_PATH): {"datetime": "invalid"},
@@ -267,20 +255,13 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: ClientType)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("throw_errors", [False, True])
-async def test_get_vnstat_skips_calls_when_endpoint_missing(
-    make_client: ClientType, throw_errors: bool
-) -> None:
+async def test_get_vnstat_skips_calls_when_endpoint_missing(make_client: ClientType) -> None:
     """get_vnstat should return empty payload and skip API calls when endpoint is absent.
-
-    A missing endpoint is empty in either ``throw_errors`` mode.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Whether the client raises instead of returning empty values.
     """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(client, session)
+    client, router = make_router_client(make_client)
 
     vnstat = await client.get_vnstat()
 

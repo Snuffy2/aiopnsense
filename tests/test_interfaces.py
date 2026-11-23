@@ -2,25 +2,15 @@
 
 import asyncio
 from collections.abc import MutableMapping
-from functools import partial
 import logging
-from types import TracebackType
-from typing import Any, Self
+from typing import Any
 
 import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient, OPNsenseConnectionError, OPNsenseInvalidArgument
-from tests.conftest import (
-    FIRMWARE_STATUS_PATH,
-    FakeResponse,
-    FakeRouter,
-    MakeClientFactory,
-    install_fake_router,
-    make_mock_session_client,
-)
+from tests.conftest import FakeRouter, HeldResponse, MakeClientFactory, make_router_client
 
-BASE_URL = "http://localhost"
 SERVER_ERROR = 500
 """HTTP status of a Router reply that fails the request."""
 INTERFACE_ITEM = {
@@ -68,15 +58,16 @@ def interface_client(
     Returns:
         tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
     """
-    client, session = make_mock_session_client(partial(make_client, **client_kwargs))
-    served: dict[tuple[str, str], Any] = {
-        ("GET", PENDING): {"status": "ok"} if pending is None else pending,
-        ("GET", GET_ITEM): item,
-    }
-    if firmware is not None:
-        served[("GET", FIRMWARE_STATUS_PATH)] = {"product": {"product_version": firmware}}
-    served.update(routes or {})
-    return client, install_fake_router(client, session, routes=served)
+    return make_router_client(
+        make_client,
+        {
+            ("GET", PENDING): {"status": "ok"} if pending is None else pending,
+            ("GET", GET_ITEM): item,
+            **(routes or {}),
+        },
+        firmware=firmware,
+        **client_kwargs,
+    )
 
 
 def interface_requests(router: FakeRouter) -> list[tuple[str, str]]:
@@ -88,11 +79,7 @@ def interface_requests(router: FakeRouter) -> list[tuple[str, str]]:
     Returns:
         list[tuple[str, str]]: ``(method, path)`` of each interface assignment request.
     """
-    return [
-        (method, url.removeprefix(BASE_URL))
-        for method, url, _body in router.requests
-        if url.removeprefix(BASE_URL).startswith("/api/interfaces/assignment/")
-    ]
+    return [call for call in router.calls() if call[1].startswith("/api/interfaces/assignment/")]
 
 
 @pytest.mark.asyncio
@@ -125,9 +112,7 @@ async def test_toggle_interface_saves_then_applies(
     )
 
     assert await client.toggle_interface("opt8", target) is True
-    assert [body for _method, url, body in router.requests if url.endswith(SET_ITEM)] == [
-        {"interface": {"enable": desired}}
-    ]
+    assert router.bodies("POST", SET_ITEM) == [{"interface": {"enable": desired}}]
     # One operation: the save is followed by exactly one apply.
     assert [request for request in interface_requests(router) if request[0] == "POST"] == [
         ("POST", SET_ITEM),
@@ -243,58 +228,23 @@ async def test_toggle_interface_cancellation_during_save_leaves_change_pending(
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    save_started = asyncio.Event()
-    release_save = asyncio.Event()
-    save_finished = asyncio.Event()
-
-    class BlockedSaveResponse(FakeResponse):
-        """Pause the save response until the test releases the transport."""
-
-        async def __aenter__(self) -> Self:
-            """Signal that the save is in flight, then wait for release.
-
-            Returns:
-                Self: This response after the test releases the transport.
-            """
-            save_started.set()
-            await release_save.wait()
-            return self
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc: BaseException | None,
-            tb: TracebackType | None,
-        ) -> bool:
-            """Signal that the save transport context has completed.
-
-            Args:
-                exc_type (type[BaseException] | None): Exception type from the context.
-                exc (BaseException | None): Exception raised in the context, if any.
-                tb (TracebackType | None): Traceback for an exception from the context.
-
-            Returns:
-                bool: False so exceptions are not suppressed.
-            """
-            save_finished.set()
-            return False
-
+    save = HeldResponse(json_payload={"result": "saved"})
     client, router = interface_client(
         make_client,
         routes={
-            ("POST", SET_ITEM): BlockedSaveResponse(json_payload={"result": "saved"}),
+            ("POST", SET_ITEM): save,
             ("POST", RECONFIGURE): {"status": "ok"},
         },
     )
     caller = asyncio.get_running_loop().create_task(client.toggle_interface("opt8", "off"))
     try:
-        await asyncio.wait_for(save_started.wait(), timeout=2)
+        await asyncio.wait_for(save.entered.wait(), timeout=2)
         caller.cancel()
         with pytest.raises(asyncio.CancelledError):
             await caller
 
-        release_save.set()
-        await asyncio.wait_for(save_finished.wait(), timeout=2)
+        save.release.set()
+        await asyncio.wait_for(save.exited.wait(), timeout=2)
         # Closing the client finishes any work still queued, so a reconfigure queued
         # by the cancelled caller would reach the Router before the check below.
         await asyncio.wait_for(client.async_close(), timeout=2)
@@ -305,7 +255,7 @@ async def test_toggle_interface_cancellation_during_save_leaves_change_pending(
             ("POST", SET_ITEM),
         ]
     finally:
-        release_save.set()
+        save.release.set()
         if not caller.done():
             caller.cancel()
         await asyncio.gather(caller, return_exceptions=True)

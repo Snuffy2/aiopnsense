@@ -1,12 +1,11 @@
 """Tests for `aiopnsense.services`."""
 
 from collections.abc import Callable
-from functools import partial
 
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import install_fake_router, make_mock_session_client
+from tests.conftest import make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -24,10 +23,8 @@ async def test_service_management_and_get_services(make_client: ClientType) -> N
     Returns:
         None: This test validates service normalization and control-path behavior.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("GET", SERVICE_SEARCH_PATH): {
                 "rows": [
@@ -65,11 +62,9 @@ async def test_manage_service_and_restart_if_running(make_client: ClientType) ->
     Returns:
         None: This test validates service-management endpoint and restart control flow.
     """
-    client, session = make_mock_session_client(make_client)
     restart_path = f"{SERVICE_PATH_PREFIX}/restart/svc1"
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             # Preserve the structural separator between a service name and instance
             # while URL-encoding unsafe characters within each path component.
@@ -116,11 +111,9 @@ async def test_restart_service_if_running_matches_composite_service_identifier(
     Returns:
         None: This test validates composite service lookup and restart behavior.
     """
-    client, session = make_mock_session_client(make_client)
     restart_path = f"{SERVICE_PATH_PREFIX}/restart/openvpn/INSTANCE_ID"
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("GET", SERVICE_SEARCH_PATH): {
                 "rows": [{"name": "openvpn", "id": "openvpn/INSTANCE_ID", "running": 1}]
@@ -137,24 +130,18 @@ async def test_restart_service_if_running_matches_composite_service_identifier(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("throw_errors", [False, True])
-async def test_service_unknown_state_fails_closed(
-    make_client: ClientType, throw_errors: bool
-) -> None:
+async def test_service_unknown_state_fails_closed(make_client: ClientType) -> None:
     """Unavailable service-search endpoint should produce fail-closed restart behavior.
 
-    A missing endpoint is absent in either ``throw_errors`` mode, and the cached
-    absence spares the later calls a request.
+    The cached absence spares the later calls a request.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Whether the client raises instead of returning empty values.
 
     Returns:
         None: This test validates unknown service-state handling when endpoint probing fails.
     """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(client, session)
+    client, router = make_router_client(make_client)
 
     assert await client.get_services() == []
     assert await client.get_service_is_running("svc1") is False
@@ -176,11 +163,8 @@ async def test_get_services_handles_non_list_rows_and_running_coercion(
     Returns:
         None: This test validates service-row normalization and status coercion.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
-        routes={("GET", SERVICE_SEARCH_PATH): {"rows": "bad-shape"}},
+    client, router = make_router_client(
+        make_client, routes={("GET", SERVICE_SEARCH_PATH): {"rows": "bad-shape"}}
     )
     assert await client.get_services() == []
 

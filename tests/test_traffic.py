@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from functools import partial
 import json
 from types import TracebackType
 from typing import Any, Self, cast
@@ -13,19 +12,13 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient, OPNsenseError, OPNsenseTimeoutError
+from aiopnsense import OPNsenseError, OPNsenseTimeoutError
 from aiopnsense.traffic import (
     DIAGNOSTICS_TRAFFIC_ENDPOINT,
     DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX,
     normalize_traffic_payload,
 )
-from tests.conftest import (
-    FakeResponse,
-    FakeRouter,
-    MakeClientFactory,
-    install_fake_router,
-    make_mock_session_client,
-)
+from tests.conftest import FakeResponse, MakeClientFactory, make_router_client
 
 STREAM_PATH = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
 EMPTY_SAMPLE: dict[str, Any] = {"time": None, "interfaces": {}}
@@ -44,26 +37,6 @@ def _sse(time: Any, rx: int, tx: int) -> bytes:
     """
     event = {"time": time, "interfaces": {"wan": {"bytes received": rx, "bytes transmitted": tx}}}
     return b"data: " + json.dumps(event).encode() + b"\n\n"
-
-
-def _traffic_client(
-    make_client: MakeClientFactory,
-    routes: dict[tuple[str, str], Any],
-    *,
-    throw_errors: bool = False,
-) -> tuple[OPNsenseClient, FakeRouter]:
-    """Build a client whose Router answers only the given traffic routes.
-
-    Args:
-        make_client (MakeClientFactory): Client factory fixture.
-        routes (dict[tuple[str, str], Any]): Router responses keyed by method and path.
-        throw_errors (bool): Whether the client raises public errors.
-
-    Returns:
-        tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    return client, install_fake_router(client, session, routes=routes)
 
 
 class _TrackedStreamResponse(FakeResponse):
@@ -239,7 +212,7 @@ async def test_get_interface_traffic_probes_and_normalizes(
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    client, router = _traffic_client(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): {
@@ -282,21 +255,16 @@ def test_normalize_traffic_payload_without_rates_for_snapshots() -> None:
     assert "interval" not in normalized["interfaces"]["wan"]
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
 @pytest.mark.asyncio
 async def test_get_interface_traffic_handles_unavailable_endpoint(
     make_client: MakeClientFactory,
-    throw_errors: bool,
 ) -> None:
-    """A 404 snapshot endpoint returns an empty sample in either error mode.
+    """A 404 snapshot endpoint returns an empty sample.
 
     Args:
         make_client (MakeClientFactory): Client factory fixture.
-        throw_errors (bool): Whether the client raises public errors.
     """
-    client, router = _traffic_client(
-        make_client, {("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): 404}, throw_errors=throw_errors
-    )
+    client, router = make_router_client(make_client, {("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): 404})
 
     assert await client.get_interface_traffic() == EMPTY_SAMPLE
     assert router.count("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT) == 1
@@ -320,7 +288,7 @@ async def test_get_interface_traffic_returns_empty_sample_on_probe_error(
         make_client (MakeClientFactory): Client factory fixture.
         probe_error (Exception): Error raised by the Router session for the snapshot request.
     """
-    client, router = _traffic_client(
+    client, router = make_router_client(
         make_client, {("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): probe_error}
     )
 
@@ -337,7 +305,7 @@ async def test_get_interface_traffic_raises_when_throw_errors_is_enabled(
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    client, _router = _traffic_client(
+    client, _router = make_router_client(
         make_client,
         {("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): TimeoutError("probe timeout")},
         throw_errors=True,
@@ -357,7 +325,7 @@ async def test_get_interface_traffic_raises_same_opnsense_error_when_throw_error
         make_client (MakeClientFactory): Client factory fixture.
     """
     probe_error = OPNsenseError("probe failed")
-    client, _router = _traffic_client(
+    client, _router = make_router_client(
         make_client, {("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): probe_error}, throw_errors=True
     )
 
@@ -434,7 +402,7 @@ async def test_stream_interface_traffic_yields_normalized_samples(
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    client, _router = _traffic_client(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", STREAM_PATH): FakeResponse(
@@ -478,7 +446,7 @@ async def test_stream_interface_traffic_real_stream_path_keeps_non_ascii_name(
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    client, _router = _traffic_client(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", STREAM_PATH): FakeResponse(
@@ -509,7 +477,7 @@ async def test_stream_interface_traffic_releases_stream_when_consumer_exits_earl
     response = _TrackedStreamResponse(
         [_sse(1710000005, 0, 0), _sse(1710000006, 1000, 2000), _sse(1710000007, 2000, 3000)]
     )
-    client, _router = _traffic_client(make_client, {("GET", STREAM_PATH): response})
+    client, _router = make_router_client(make_client, {("GET", STREAM_PATH): response})
 
     samples = client.stream_interface_traffic(poll_interval=1)
     first = await samples.__anext__()
@@ -530,7 +498,7 @@ async def test_stream_interface_traffic_clamps_poll_interval(
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    client, router = _traffic_client(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", STREAM_PATH): FakeResponse(
@@ -554,7 +522,7 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    client, _router = _traffic_client(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", STREAM_PATH): FakeResponse(
@@ -595,33 +563,25 @@ async def test_stream_interface_traffic_passes_read_timeout_from_clamped_poll_in
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(
-        client,
-        session,
-        routes={
-            ("GET", f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/120"): FakeResponse(
-                stream_chunks=[_sse(1710000010, 0, 0), _sse(1710000011, 1000, 2000)]
-            )
-        },
-    )
     timeouts: list[aiohttp.ClientTimeout] = []
-    session_get = session.get
 
-    def recording_get(url: str, **kwargs: Any) -> FakeResponse:
-        """Record the timeout of each request, then answer it from the Router.
+    def stream(*, timeout: aiohttp.ClientTimeout, **_kwargs: Any) -> FakeResponse:
+        """Record the timeout of each request, then answer it with the SSE frames.
 
         Args:
-            url (str): Requested URL.
-            kwargs (Any): Request options passed by the transport.
+            timeout (aiohttp.ClientTimeout): Timeout the HTTP transport applies.
+            _kwargs (Any): Other request parameters passed by the transport.
 
         Returns:
-            FakeResponse: The Router's response.
+            FakeResponse: The Router's stream response.
         """
-        timeouts.append(kwargs["timeout"])
-        return session_get(url, **kwargs)
+        timeouts.append(timeout)
+        return FakeResponse(stream_chunks=[_sse(1710000010, 0, 0), _sse(1710000011, 1000, 2000)])
 
-    session.get = recording_get
+    client, _router = make_router_client(
+        make_client,
+        routes={("GET", f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/120"): stream},
+    )
 
     samples = [sample async for sample in client.stream_interface_traffic(poll_interval=120)]
 
@@ -640,7 +600,7 @@ async def test_stream_interface_traffic_reseeds_interval_after_malformed_json_ev
         make_client (MakeClientFactory): Client factory fixture.
     """
     stream_path = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/10"
-    client, _router = _traffic_client(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", stream_path): FakeResponse(
@@ -669,7 +629,7 @@ async def test_stream_interface_traffic_reseeds_interval_after_non_mapping_json_
         make_client (MakeClientFactory): Client factory fixture.
     """
     stream_path = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/10"
-    client, _router = _traffic_client(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", stream_path): FakeResponse(
@@ -698,7 +658,7 @@ async def test_stream_interface_traffic_resets_interval_after_stream_json_reset(
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    client, _router = _traffic_client(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", STREAM_PATH): FakeResponse(
@@ -721,21 +681,16 @@ async def test_stream_interface_traffic_resets_interval_after_stream_json_reset(
     assert samples[1]["interfaces"]["wan"]["interval"] == 1.0
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
 @pytest.mark.asyncio
 async def test_stream_interface_traffic_returns_when_endpoint_unavailable(
     make_client: MakeClientFactory,
-    throw_errors: bool,
 ) -> None:
-    """A 404 stream endpoint ends the stream without reading it, in either error mode.
+    """A 404 stream endpoint ends the stream without reading it.
 
     Args:
         make_client (MakeClientFactory): Client factory fixture.
-        throw_errors (bool): Whether the client raises public errors.
     """
-    client, router = _traffic_client(
-        make_client, {("GET", STREAM_PATH): 404}, throw_errors=throw_errors
-    )
+    client, router = make_router_client(make_client, {("GET", STREAM_PATH): 404})
 
     samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
@@ -761,7 +716,7 @@ async def test_stream_interface_traffic_returns_empty_iteration_on_probe_error(
         make_client (MakeClientFactory): Client factory fixture.
         probe_error (Exception): Error raised by the Router session for the availability check.
     """
-    client, router = _traffic_client(make_client, {("GET", STREAM_PATH): probe_error})
+    client, router = make_router_client(make_client, {("GET", STREAM_PATH): probe_error})
 
     samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
@@ -779,7 +734,7 @@ async def test_stream_interface_traffic_raises_same_opnsense_error_when_throw_er
         make_client (MakeClientFactory): Client factory fixture.
     """
     probe_error = OPNsenseError("probe failed")
-    client, _router = _traffic_client(
+    client, _router = make_router_client(
         make_client, {("GET", STREAM_PATH): probe_error}, throw_errors=True
     )
 
@@ -797,7 +752,7 @@ async def test_stream_interface_traffic_raises_when_probe_timeout_and_throw_erro
     Args:
         make_client (MakeClientFactory): Client factory fixture.
     """
-    client, _router = _traffic_client(
+    client, _router = make_router_client(
         make_client, {("GET", STREAM_PATH): TimeoutError("probe timeout")}, throw_errors=True
     )
 

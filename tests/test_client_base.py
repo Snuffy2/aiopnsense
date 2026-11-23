@@ -23,14 +23,14 @@ from aiopnsense.exceptions import (
     OPNsenseUnknownFirmware,
 )
 from tests.conftest import (
+    FIRMWARE_STATUS_PATH,
     FakeClientSession,
     FakeResponse,
     MakeClientFactory,
-    install_fake_router,
+    firmware_status_payload,
     make_mock_session_client,
+    make_router_client,
 )
-
-FIRMWARE_STATUS_PATH = "/api/core/firmware/status"
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):
@@ -455,16 +455,11 @@ async def test_validate_can_skip_device_unique_id_requirement(
         monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
-        routes={("GET", FIRMWARE_STATUS_PATH): {"product": {"product_version": "0.0"}}},
-    )
+    client, router = make_router_client(make_client, firmware="0.0")
     assert await client.get_host_firmware_version() == "0.0"
-    router.routes[("GET", FIRMWARE_STATUS_PATH)] = {
-        "product": {"product_version": OPNSENSE_RECOMMENDED_FIRMWARE}
-    }
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = firmware_status_payload(
+        OPNSENSE_RECOMMENDED_FIRMWARE
+    )
     monkeypatch.setattr(
         client,
         "get_device_unique_id",

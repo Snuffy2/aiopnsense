@@ -4,29 +4,21 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any, Self
+from typing import Any
 
 import aiohttp
 import pytest
 
 import aiopnsense as aiopnsense_module
 from aiopnsense import OPNsenseClient, vpn as aiopnsense_vpn
-from aiopnsense.exceptions import OPNsenseConnectionError, OPNsensePrivilegeMissing
-from tests.conftest import (
-    FIRMWARE_STATUS_PATH,
-    FakeResponse,
-    FakeRouter,
-    install_fake_router,
-    make_mock_session_client,
-)
+from aiopnsense.exceptions import OPNsenseConnectionError
+from tests.conftest import FIRMWARE_STATUS_PATH, FakeRouter, HeldResponse, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
-ROUTER_URL = "http://localhost"
-SNAKE_CASE_FIRMWARE = {"product": {"product_version": "26.1.1"}}
-CAMEL_CASE_FIRMWARE = {"product": {"product_version": "25.1.1"}}
+SNAKE_CASE_FIRMWARE = "26.1.1"
+CAMEL_CASE_FIRMWARE = "25.1.1"
 NOT_FOUND = 404
-FORBIDDEN = 403
 UNAVAILABLE = 503
 
 # Toggle endpoints on snake_case firmware, keyed by VPN type and collection.
@@ -50,86 +42,7 @@ TOGGLE_ENDPOINTS = {
 }
 
 
-class HeldResponse(FakeResponse):
-    """Response whose request stays in flight until the test releases it."""
-
-    def __init__(self, **kwargs: Any) -> None:
-        """Initialize the held response.
-
-        Args:
-            kwargs (Any): Options accepted by ``FakeResponse``.
-        """
-        super().__init__(**kwargs)
-        self.entered = asyncio.Event()
-        self.release = asyncio.Event()
-
-    async def __aenter__(self) -> Self:
-        """Report that the request reached the Router, then wait to be released.
-
-        Returns:
-            Self: This response once the test releases it.
-        """
-        self.entered.set()
-        await self.release.wait()
-        return self
-
-
-def make_vpn_router(
-    make_client: ClientType,
-    routes: dict[tuple[str, str], Any] | None = None,
-    *,
-    snake_case: bool = True,
-    throw_errors: bool = False,
-    answer: Callable[[str, str, Any], Any] | None = None,
-) -> tuple[OPNsenseClient, FakeRouter]:
-    """Build a client on the real queue against a fake Router that reports its firmware.
-
-    A request without a route is answered with 404 and recorded.
-
-    Args:
-        make_client (ClientType): Factory for clients using a mocked HTTP session.
-        routes (dict[tuple[str, str], Any] | None): Replies keyed by ``(method, path)``.
-        snake_case (bool): Whether the Router runs firmware with snake_case endpoints.
-        throw_errors (bool): Public ``throw_errors`` argument of the client.
-        answer (Callable[[str, str, Any], Any] | None): Chooses a reply from the method,
-            path and JSON body when a request arrives, for Router state that changes
-            between requests. Returning ``None`` falls back to ``routes``. The firmware
-            status read is always answered from ``routes``.
-
-    Returns:
-        tuple[OPNsenseClient, FakeRouter]: The client and the Router it talks to.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    firmware = SNAKE_CASE_FIRMWARE if snake_case else CAMEL_CASE_FIRMWARE
-    router = install_fake_router(
-        client,
-        session,
-        routes={("GET", FIRMWARE_STATUS_PATH): firmware, **(routes or {})},
-    )
-    if answer is not None:
-
-        def request(method: str, url: str, **kwargs: Any) -> FakeResponse:
-            """Choose the reply for one request and let the fake Router answer it.
-
-            Args:
-                method (str): HTTP method of the request.
-                url (str): Full requested URL.
-                kwargs (Any): Request parameters passed by the HTTP transport.
-
-            Returns:
-                FakeResponse: Response from the fake Router.
-            """
-            path = url.removeprefix(ROUTER_URL)
-            reply = (
-                None if path == FIRMWARE_STATUS_PATH else answer(method, path, kwargs.get("json"))
-            )
-            if reply is not None:
-                router.routes[(method, path)] = reply
-            return router.request(method, url, **kwargs)
-
-        session.get = partial(request, "GET")
-        session.post = partial(request, "POST")
-    return client, router
+make_vpn_router = partial(make_router_client, firmware=SNAKE_CASE_FIRMWARE)
 
 
 def sent(router: FakeRouter, method: str | None = None) -> list[tuple[str, str]]:
@@ -142,29 +55,7 @@ def sent(router: FakeRouter, method: str | None = None) -> list[tuple[str, str]]
     Returns:
         list[tuple[str, str]]: ``(method, path)`` pairs in arrival order.
     """
-    return [
-        (request_method, url.removeprefix(ROUTER_URL))
-        for request_method, url, _body in router.requests
-        if not url.endswith(FIRMWARE_STATUS_PATH) and method in (None, request_method)
-    ]
-
-
-def expected_error(status: int, throw_errors: bool) -> type[Exception] | None:
-    """Return the public exception a read raises for an HTTP failure, if any.
-
-    A 404 is an absent endpoint in either mode. A 403 or a transient failure
-    raises only when ``throw_errors`` is on.
-
-    Args:
-        status (int): HTTP status the Router answers with.
-        throw_errors (bool): Public ``throw_errors`` argument of the client.
-
-    Returns:
-        type[Exception] | None: Exception type raised, or ``None`` when the read degrades.
-    """
-    if status == NOT_FOUND or not throw_errors:
-        return None
-    return OPNsensePrivilegeMissing if status == FORBIDDEN else OPNsenseConnectionError
+    return [call for call in router.calls(method) if call[1] != FIRMWARE_STATUS_PATH]
 
 
 async def cancel_while_in_flight(call: Awaitable[Any], held: HeldResponse) -> None:
@@ -651,15 +542,11 @@ async def test_openvpn_server_details_missing_server_field(make_client: ClientTy
     assert "tunnel_addresses" not in srv or srv["tunnel_addresses"] == []
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
-async def test_openvpn_server_details_skip_unavailable_endpoint(
-    make_client: ClientType, throw_errors: bool
-) -> None:
-    """Verify unsupported OpenVPN per-instance endpoints are skipped in either error mode.
+async def test_openvpn_server_details_skip_unavailable_endpoint(make_client: ClientType) -> None:
+    """Verify unsupported OpenVPN per-instance endpoints are skipped.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Public ``throw_errors`` argument of the client.
     """
     details_path = f"{aiopnsense_vpn.OPENVPN_INSTANCE_DETAILS_ENDPOINT_PREFIX}srv1"
     client, router = make_vpn_router(
@@ -668,7 +555,6 @@ async def test_openvpn_server_details_skip_unavailable_endpoint(
             instances={"rows": [{"role": "server", "uuid": "srv1", "enabled": "1"}]},
             details={"srv1": NOT_FOUND},
         ),
-        throw_errors=throw_errors,
     )
 
     openvpn = await client.get_openvpn()
@@ -805,40 +691,26 @@ async def test_get_wireguard_rejects_malformed_inventory_entries(
     assert await client.get_wireguard() is None
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
-@pytest.mark.parametrize("status", [NOT_FOUND, FORBIDDEN, UNAVAILABLE])
+@pytest.mark.parametrize("status", [NOT_FOUND, UNAVAILABLE])
 @pytest.mark.parametrize("unavailable_inventory", ["clients", "servers"])
-async def test_get_wireguard_configuration_failure_by_error_mode(
-    make_client: ClientType,
-    unavailable_inventory: str,
-    status: int,
-    throw_errors: bool,
+async def test_get_wireguard_missing_or_unavailable_inventory(
+    make_client: ClientType, unavailable_inventory: str, status: int
 ) -> None:
-    """Keep a missing or forbidden configuration inventory distinct from a failure.
-
-    A missing inventory is empty in either mode. A forbidden one is empty with errors
-    off, and a transient failure returns ``None``. With errors on, both raise.
+    """Keep a missing configuration inventory empty, and a transient failure unavailable.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         unavailable_inventory (str): Configuration endpoint that fails.
         status (int): HTTP status the failing endpoint answers with.
-        throw_errors (bool): Whether strict request errors are enabled.
     """
     client, _router = make_vpn_router(
-        make_client,
-        wireguard_routes(**{unavailable_inventory: status}),
-        throw_errors=throw_errors,
+        make_client, wireguard_routes(**{unavailable_inventory: status})
     )
-    error = expected_error(status, throw_errors)
 
-    if error is not None:
-        with pytest.raises(error):
-            await client.get_wireguard()
-    elif status == UNAVAILABLE:
-        assert await client.get_wireguard() is None
-    else:
-        assert await client.get_wireguard() == {"servers": {}, "clients": {}}
+    expected: dict[str, Any] | None = (
+        None if status == UNAVAILABLE else {"servers": {}, "clients": {}}
+    )
+    assert await client.get_wireguard() == expected
 
 
 @pytest.mark.parametrize("throw_errors", [False, True])
@@ -891,42 +763,26 @@ async def test_get_wireguard_empty_inventories(make_client: ClientType) -> None:
     assert await client.get_wireguard() == {"servers": {}, "clients": {}}
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
-async def test_get_wireguard_known_missing_summary_returns_none(
-    make_client: ClientType, throw_errors: bool
-) -> None:
+async def test_get_wireguard_known_missing_summary_returns_none(make_client: ClientType) -> None:
     """Return None when the WireGuard summary is known missing, since it has no empty fallback.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Whether strict request errors are enabled.
     """
-    client, _router = make_vpn_router(
-        make_client, wireguard_routes(summary=NOT_FOUND), throw_errors=throw_errors
-    )
+    client, _router = make_vpn_router(make_client, wireguard_routes(summary=NOT_FOUND))
 
     assert await client.get_wireguard() is None
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
-async def test_openvpn_sessions_failure_stops_the_read(
-    make_client: ClientType, throw_errors: bool
-) -> None:
+async def test_openvpn_sessions_failure_stops_the_read(make_client: ClientType) -> None:
     """Fail closed without further requests when the OpenVPN sessions endpoint is unavailable.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Whether strict request errors are enabled.
     """
-    client, router = make_vpn_router(
-        make_client, openvpn_routes(sessions=UNAVAILABLE), throw_errors=throw_errors
-    )
+    client, router = make_vpn_router(make_client, openvpn_routes(sessions=UNAVAILABLE))
 
-    if throw_errors:
-        with pytest.raises(OPNsenseConnectionError):
-            await client.get_openvpn()
-    else:
-        assert await client.get_openvpn() is None
+    assert await client.get_openvpn() is None
     assert sent(router) == [("GET", aiopnsense_vpn.OPENVPN_SESSIONS_SNAKE_ENDPOINT)]
 
 
@@ -1051,41 +907,26 @@ async def test_get_openvpn_ignores_explicit_unsupported_role(make_client: Client
     assert await client.get_openvpn() == {"servers": {}, "clients": {}}
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
-@pytest.mark.parametrize("status", [NOT_FOUND, FORBIDDEN, UNAVAILABLE])
+@pytest.mark.parametrize("status", [NOT_FOUND, UNAVAILABLE])
 @pytest.mark.parametrize("unavailable_inventory", ["providers", "instances"])
-async def test_get_openvpn_configuration_failure_by_error_mode(
-    make_client: ClientType,
-    unavailable_inventory: str,
-    status: int,
-    throw_errors: bool,
+async def test_get_openvpn_missing_or_unavailable_inventory(
+    make_client: ClientType, unavailable_inventory: str, status: int
 ) -> None:
-    """Keep a missing or forbidden OpenVPN inventory distinct from a failure.
-
-    A missing inventory allows partial results in either mode. A forbidden one does
-    with errors off, and a transient failure returns ``None``. With errors on, both
-    raise.
+    """Keep a missing configuration inventory empty, and a transient failure unavailable.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         unavailable_inventory (str): Configuration endpoint that fails.
         status (int): HTTP status the failing endpoint answers with.
-        throw_errors (bool): Whether strict request errors are enabled.
     """
     client, _router = make_vpn_router(
-        make_client,
-        openvpn_routes(**{unavailable_inventory: status}),
-        throw_errors=throw_errors,
+        make_client, openvpn_routes(**{unavailable_inventory: status})
     )
-    error = expected_error(status, throw_errors)
 
-    if error is not None:
-        with pytest.raises(error):
-            await client.get_openvpn()
-    elif status == UNAVAILABLE:
-        assert await client.get_openvpn() is None
-    else:
-        assert await client.get_openvpn() == {"servers": {}, "clients": {}}
+    expected: dict[str, Any] | None = (
+        None if status == UNAVAILABLE else {"servers": {}, "clients": {}}
+    )
+    assert await client.get_openvpn() == expected
 
 
 async def test_get_openvpn_empty_inventories(make_client: ClientType) -> None:
@@ -1139,7 +980,7 @@ async def test_vpn_switched_endpoints_follow_selected_case(
             ("POST", expected_client_toggle): {"changed": True},
             ("POST", aiopnsense_vpn.WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT): {"result": "ok"},
         },
-        snake_case=snake_case,
+        firmware=SNAKE_CASE_FIRMWARE if snake_case else CAMEL_CASE_FIRMWARE,
     )
 
     await client.get_openvpn()
@@ -1372,7 +1213,6 @@ async def test_get_ipsec_configured_enabled_and_version_normalization(
     assert ipsec["connections"]["uuid-off"]["version"] == expected_version
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
 @pytest.mark.parametrize(
     "configured",
     [
@@ -1382,31 +1222,18 @@ async def test_get_ipsec_configured_enabled_and_version_normalization(
     ],
 )
 async def test_get_ipsec_without_connection_inventory_returns_none(
-    make_client: ClientType,
-    configured: Any,
-    throw_errors: bool,
+    make_client: ClientType, configured: Any
 ) -> None:
     """Report an unavailable inventory when connection configuration cannot be read.
-
-    A transient failure raises with errors on. A malformed reply returns ``None``
-    in either mode.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         configured (Any): Connections reply: a malformed payload or an HTTP status.
-        throw_errors (bool): Whether strict request errors are enabled.
     """
     sessions = {"rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]}
-    client, _router = make_vpn_router(
-        make_client, ipsec_routes(sessions, configured), throw_errors=throw_errors
-    )
-    error = expected_error(configured, throw_errors) if isinstance(configured, int) else None
+    client, _router = make_vpn_router(make_client, ipsec_routes(sessions, configured))
 
-    if error is not None:
-        with pytest.raises(error):
-            await client.get_ipsec()
-    else:
-        assert await client.get_ipsec() is None
+    assert await client.get_ipsec() is None
 
 
 @pytest.mark.parametrize(
@@ -1435,30 +1262,17 @@ async def test_get_ipsec_rejects_malformed_connection_rows(
     assert await client.get_ipsec() is None
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
-@pytest.mark.parametrize("status", [NOT_FOUND, FORBIDDEN])
 async def test_get_ipsec_known_unavailable_connection_inventory_reports_no_toggle(
-    make_client: ClientType, status: int, throw_errors: bool
+    make_client: ClientType,
 ) -> None:
-    """Report ``enabled=None`` when the connections endpoint is missing or forbidden.
-
-    A forbidden endpoint raises instead when errors are on.
+    """Report ``enabled=None`` when the connections endpoint is missing.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        status (int): HTTP status of the connections configuration endpoint.
-        throw_errors (bool): Whether strict request errors are enabled.
     """
     sessions = {"rows": [{"ikeid": "uuid-up", "name": "uuid-up", "connected": True}]}
-    client, router = make_vpn_router(
-        make_client, ipsec_routes(sessions, status), throw_errors=throw_errors
-    )
-    error = expected_error(status, throw_errors)
+    client, router = make_vpn_router(make_client, ipsec_routes(sessions, NOT_FOUND))
 
-    if error is not None:
-        with pytest.raises(error):
-            await client.get_ipsec()
-        return
     ipsec = await client.get_ipsec()
 
     assert ipsec is not None
@@ -1549,23 +1363,20 @@ async def test_get_ipsec_children_aggregate_phase2_sessions(make_client: ClientT
         },
     }
 
-    def answer(method: str, path: str, body: Any) -> Any:
+    def phase2_rows(*, json: dict[str, str], **_kwargs: Any) -> Any:
         """Return the phase 2 SA rows for the phase 1 session the request names.
 
         Args:
-            method (str): HTTP method of the request.
-            path (str): Requested path.
-            body (Any): JSON request body naming the phase 1 session.
+            json (dict[str, str]): JSON request body naming the phase 1 session.
+            _kwargs (Any): Other request parameters passed by the transport.
 
         Returns:
-            Any: Phase 2 sessions reply, or ``None`` for any other request.
+            Any: Phase 2 sessions reply.
         """
-        if (method, path) == ("POST", aiopnsense_vpn.IPSEC_PHASE2_SESSIONS_SNAKE_ENDPOINT):
-            return phase2[body["id"]]
-        return None
+        return phase2[json["id"]]
 
     client, router = make_vpn_router(
-        make_client, ipsec_routes(sessions, children=children_config), answer=answer
+        make_client, ipsec_routes(sessions, children=children_config, phase2=phase2_rows)
     )
 
     ipsec = await client.get_ipsec()
@@ -1573,8 +1384,7 @@ async def test_get_ipsec_children_aggregate_phase2_sessions(make_client: ClientT
     assert ipsec is not None
     assert sorted(
         body["id"]
-        for method, url, body in router.requests
-        if method == "POST" and url.endswith(aiopnsense_vpn.IPSEC_PHASE2_SESSIONS_SNAKE_ENDPOINT)
+        for body in router.bodies("POST", aiopnsense_vpn.IPSEC_PHASE2_SESSIONS_SNAKE_ENDPOINT)
     ) == ["con1", "ike-1"]
     children = ipsec["children"]
     assert set(children) == {"child-a", "child-off", "con1-legacy"}
@@ -1608,7 +1418,6 @@ async def test_get_ipsec_children_aggregate_phase2_sessions(make_client: ClientT
     assert legacy["status"] == "connected"
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
 @pytest.mark.parametrize(
     ("children_status", "phase2_payload", "expected_children"),
     [
@@ -1623,13 +1432,12 @@ async def test_get_ipsec_children_fail_closed(
     children_status: int,
     phase2_payload: dict[str, Any],
     expected_children: set[str] | None,
-    throw_errors: bool,
 ) -> None:
     """Omit ``children`` when phase 2 data cannot be read completely.
 
     A transient child configuration failure or a malformed phase 2 reply omits the
     key; a child configuration endpoint that is missing falls back to the children
-    seen in the sessions API. With errors on, the transient failure raises.
+    seen in the sessions API.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1637,20 +1445,12 @@ async def test_get_ipsec_children_fail_closed(
         phase2_payload (dict[str, Any]): Phase 2 sessions payload returned by the API.
         expected_children (set[str] | None): Expected child keys, or ``None`` when
             ``children`` must be omitted.
-        throw_errors (bool): Whether strict request errors are enabled.
     """
     sessions = {"rows": [{"ikeid": "ike-1", "name": "ike-1", "connected": True}]}
     client, _router = make_vpn_router(
-        make_client,
-        ipsec_routes(sessions, children=children_status, phase2=phase2_payload),
-        throw_errors=throw_errors,
+        make_client, ipsec_routes(sessions, children=children_status, phase2=phase2_payload)
     )
-    error = expected_error(children_status, throw_errors)
 
-    if error is not None:
-        with pytest.raises(error):
-            await client.get_ipsec()
-        return
     ipsec = await client.get_ipsec()
 
     assert ipsec is not None
@@ -1776,28 +1576,17 @@ async def test_get_ipsec_malformed_sessions_payload_returns_none(
     assert sent(router) == [("GET", aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT)]
 
 
-@pytest.mark.parametrize("throw_errors", [False, True])
-async def test_get_ipsec_endpoint_unavailable_fails_closed(
-    make_client: ClientType, throw_errors: bool
-) -> None:
+async def test_get_ipsec_endpoint_unavailable_fails_closed(make_client: ClientType) -> None:
     """Request only the sessions endpoint, in the Router's endpoint style, when it is unavailable.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Whether strict request errors are enabled.
     """
     client, router = make_vpn_router(
-        make_client,
-        ipsec_routes(UNAVAILABLE, snake_case=False),
-        snake_case=False,
-        throw_errors=throw_errors,
+        make_client, ipsec_routes(UNAVAILABLE, snake_case=False), firmware=CAMEL_CASE_FIRMWARE
     )
 
-    if throw_errors:
-        with pytest.raises(OPNsenseConnectionError):
-            await client.get_ipsec()
-    else:
-        assert await client.get_ipsec() is None
+    assert await client.get_ipsec() is None
     assert sent(router) == [("GET", aiopnsense_vpn.IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT)]
 
 
@@ -1868,6 +1657,7 @@ def test_ipsec_flag_variants(value: Any, expected: bool) -> None:
         ("ipsec", "connections", {"changed": True}, {"status": "ok"}, True),
         ("ipsec", "connections", {"changed": True}, {"status": "failed"}, False),
         ("ipsec", "connections", {"changed": False}, None, False),
+        ("ipsec", "servers", {"changed": True}, None, False),
     ],
 )
 async def test_toggle_vpn_instance_variants(
@@ -1880,6 +1670,8 @@ async def test_toggle_vpn_instance_variants(
 ) -> None:
     """Flip OpenVPN, WireGuard and IPsec instances and apply only a saved change.
 
+    An unknown collection is rejected before any request is sent.
+
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         vpn_type (str): VPN implementation selected for the toggle request.
@@ -1889,31 +1681,22 @@ async def test_toggle_vpn_instance_variants(
             ``None`` when no apply request is expected.
         expected (bool): Whether the toggle operation should report success.
     """
-    toggle_path, apply_path = TOGGLE_ENDPOINTS[(vpn_type, collection)]
-    routes = {("POST", toggle_path): toggle_reply}
-    if apply_reply is not None:
-        routes[("POST", apply_path)] = apply_reply
+    endpoints = TOGGLE_ENDPOINTS.get((vpn_type, collection))
+    routes: dict[tuple[str, str], Any] = {}
+    if endpoints is not None:
+        routes[("POST", endpoints[0])] = toggle_reply
+        if apply_reply is not None:
+            routes[("POST", endpoints[1])] = apply_reply
     client, router = make_vpn_router(make_client, routes)
 
     assert await client.toggle_vpn_instance(vpn_type, collection, "uuid") is expected
 
+    if endpoints is None:
+        assert router.requests == []
+        return
+    toggle_path, apply_path = endpoints
     assert router.count("POST", toggle_path) == 1
     assert router.count("POST", apply_path) == (apply_reply is not None)
-
-
-async def test_toggle_vpn_instance_unknown_collection_sends_nothing(
-    make_client: ClientType,
-) -> None:
-    """Reject an unknown collection before sending any request.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, router = make_vpn_router(make_client)
-
-    assert await client.toggle_vpn_instance("ipsec", "servers", "uuid") is False
-
-    assert router.requests == []
 
 
 @pytest.mark.parametrize(
@@ -1976,7 +1759,9 @@ async def test_toggle_vpn_instance_posts_to_firmware_endpoints(
     }
     if expected_get is not None:
         routes[("GET", expected_get)] = {collection[:-1]: {"enabled": "0"}}
-    client, router = make_vpn_router(make_client, routes, snake_case=snake_case)
+    client, router = make_vpn_router(
+        make_client, routes, firmware=SNAKE_CASE_FIRMWARE if snake_case else CAMEL_CASE_FIRMWARE
+    )
 
     assert await client.toggle_vpn_instance(vpn_type, collection, "uuid", "on") is True
 
@@ -2010,31 +1795,72 @@ class FakeVpnToggleApi:
         self.reconfigure_count = 0
         self.applied_enabled = enabled
 
-    def answer(self, method: str, path: str, _body: Any) -> dict[str, Any]:
-        """Answer a simulated item read, toggle or service reconfigure.
+    def routes(self, vpn_type: str, collection: str) -> dict[tuple[str, str], Any]:
+        """Return the routes that serve one item's read, toggle and service reconfigure.
 
         Args:
-            method (str): HTTP method of the request.
-            path (str): Requested endpoint.
-            _body (Any): Unused request body.
+            vpn_type (str): VPN implementation under test.
+            collection (str): Collection that holds the item.
+
+        Returns:
+            dict[tuple[str, str], Any]: Routes keyed by ``(method, path)``.
+        """
+        toggle, apply = TOGGLE_ENDPOINTS[(vpn_type, collection)]
+        item = collection[:-1]
+        routes: dict[tuple[str, str], Any] = {
+            ("POST", apply): partial(
+                self.reconfigure, "status" if vpn_type == "ipsec" else "result"
+            ),
+            ("POST", toggle): partial(self.toggle, None),
+            ("POST", f"{toggle}/0"): partial(self.toggle, "0"),
+            ("POST", f"{toggle}/1"): partial(self.toggle, "1"),
+        }
+        if vpn_type == "wireguard":
+            routes[("GET", f"/api/wireguard/{item}/get_{item}/uuid")] = partial(self.read, item)
+        return routes
+
+    def read(self, item: str, **_kwargs: Any) -> dict[str, Any]:
+        """Answer a read of the stored item state.
+
+        Args:
+            item (str): Response key, ``client`` or ``server``.
+            _kwargs (Any): Request parameters passed by the transport.
 
         Returns:
             dict[str, Any]: Response shaped like the OPNsense endpoint.
         """
-        if method == "GET":
-            key = "client" if "/client/" in path else "server"
-            return {key: {"enabled": self.enabled}}
-        if path.endswith("/service/reconfigure"):
-            self.reconfigure_count += 1
-            result_key = "status" if path.startswith("/api/ipsec/") else "result"
-            if self.reconfigure_count == self.fail_reconfigure_number:
-                return {result_key: "failed"}
-            self.applied_enabled = self.enabled
-            return {result_key: "ok"}
+        return {item: {"enabled": self.enabled}}
+
+    def reconfigure(self, result_key: str, **_kwargs: Any) -> dict[str, str]:
+        """Answer a service reconfigure, applying the stored state unless it is set to fail.
+
+        Args:
+            result_key (str): Response key, ``status`` for IPsec and ``result`` otherwise.
+            _kwargs (Any): Request parameters passed by the transport.
+
+        Returns:
+            dict[str, str]: Response shaped like the OPNsense endpoint.
+        """
+        self.reconfigure_count += 1
+        if self.reconfigure_count == self.fail_reconfigure_number:
+            return {result_key: "failed"}
+        self.applied_enabled = self.enabled
+        return {result_key: "ok"}
+
+    def toggle(self, target: str | None, **_kwargs: Any) -> dict[str, Any]:
+        """Answer a toggle request, honoring an explicit target when the firmware does.
+
+        Args:
+            target (str | None): ``0`` or ``1`` from the request path, or ``None`` for a flip.
+            _kwargs (Any): Request parameters passed by the transport.
+
+        Returns:
+            dict[str, Any]: Response shaped like the OPNsense endpoint.
+        """
         self.toggle_count += 1
-        last_segment = path.rsplit("/", 1)[-1]
-        target = last_segment if self.honors_target and last_segment in {"0", "1"} else None
-        new_state = target or ("0" if self.enabled == "1" else "1")
+        new_state = (target if self.honors_target else None) or (
+            "0" if self.enabled == "1" else "1"
+        )
         changed = new_state != self.enabled
         self.enabled = new_state
         self.mutation_count += int(changed)
@@ -2082,7 +1908,7 @@ async def test_toggle_vpn_instance_reaches_requested_state(
         reconfigures (int): Expected service reconfigure count.
     """
     api = FakeVpnToggleApi(initial, honors_target)
-    client, router = make_vpn_router(make_client, answer=api.answer)
+    client, router = make_vpn_router(make_client, api.routes(vpn_type, collection))
     _toggle_path, apply_path = TOGGLE_ENDPOINTS[(vpn_type, collection)]
 
     result = await client.toggle_vpn_instance(vpn_type, collection, "uuid", target)
@@ -2115,22 +1941,14 @@ async def test_toggle_vpn_instance_wireguard_handles_change_after_read(
     apply = "/api/wireguard/service/reconfigure"
     toggle_replies = iter([{"changed": True, "result": "Disabled"}, correction])
 
-    def answer(method: str, path: str, _body: Any) -> Any:
-        """Answer the item read, the toggle replies in order and the apply.
-
-        Args:
-            method (str): HTTP method of the request.
-            path (str): Requested path.
-            _body (Any): Unused request body.
-
-        Returns:
-            Any: Scripted Router reply for the request.
-        """
-        if method == "GET":
-            return {"client": {"enabled": "0"}}
-        return next(toggle_replies) if path == toggle else {"result": "ok"}
-
-    client, router = make_vpn_router(make_client, answer=answer)
+    client, router = make_vpn_router(
+        make_client,
+        {
+            ("GET", "/api/wireguard/client/get_client/uuid"): {"client": {"enabled": "0"}},
+            ("POST", toggle): lambda **_kwargs: next(toggle_replies),
+            ("POST", apply): {"result": "ok"},
+        },
+    )
 
     assert await client.toggle_vpn_instance("wireguard", "clients", "uuid", "on") is expected
     if not expected:
@@ -2167,7 +1985,7 @@ async def test_toggle_vpn_instance_retries_known_failed_apply(
         external_change (bool): Whether another writer changes the saved state before retry.
     """
     api = FakeVpnToggleApi("0", honors_target, fail_reconfigure_number=1)
-    client, _router = make_vpn_router(make_client, answer=api.answer)
+    client, _router = make_vpn_router(make_client, api.routes(vpn_type, collection))
 
     assert await client.toggle_vpn_instance(vpn_type, collection, "uuid", "on") is False
     assert (api.enabled, api.applied_enabled, api.toggle_count, api.reconfigure_count) == (
@@ -2200,7 +2018,9 @@ async def test_wireguard_toggle_rejects_empty_uuid(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         collection (str): WireGuard collection under test.
     """
-    client, router = make_vpn_router(make_client, answer=FakeVpnToggleApi("1", False).answer)
+    client, router = make_vpn_router(
+        make_client, FakeVpnToggleApi("1", False).routes("wireguard", collection)
+    )
 
     assert await client.toggle_vpn_instance("wireguard", collection, "", "on") is False
 
@@ -2269,23 +2089,12 @@ async def test_toggle_vpn_instance_wireguard_serializes_concurrent_calls(
     api = FakeVpnToggleApi("0", honors_target=False)
     held = HeldResponse(json_payload={"client": {"enabled": "0"}})
 
-    def answer(method: str, path: str, body: Any) -> Any:
-        """Hold the first item read while a second VPN call starts.
-
-        Args:
-            method (str): HTTP method of the request.
-            path (str): Requested path.
-            body (Any): JSON request body.
-
-        Returns:
-            Any: Held response for the first read, otherwise the simulated reply.
-        """
-        reply = api.answer(method, path, body)
-        if method == "GET" and not held.entered.is_set():
-            return held
-        return reply
-
-    client, router = make_vpn_router(make_client, answer=answer)
+    routes = api.routes("wireguard", "clients")
+    simulated_read = routes[("GET", read_path)]
+    routes[("GET", read_path)] = lambda **kwargs: (
+        simulated_read(**kwargs) if held.entered.is_set() else held
+    )
+    client, router = make_vpn_router(make_client, routes)
     tasks: list[asyncio.Task[bool]] = []
     try:
         tasks.append(

@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta, timezone
-from functools import partial
 from types import MappingProxyType
 from typing import Any, Literal
 import warnings
@@ -17,13 +16,7 @@ from aiopnsense.exceptions import (
     OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
-from tests.conftest import (
-    FIRMWARE_STATUS_PATH,
-    FakeResponse,
-    FakeRouter,
-    install_fake_router,
-    make_mock_session_client,
-)
+from tests.conftest import FakeResponse, FakeRouter, make_mock_session_client, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 HOST_OBSERVATIONS_PATH = "/api/hostdiscovery/service/search"
@@ -47,8 +40,8 @@ _ISC_LEASES6_CAMEL = "/api/dhcpv6/leases/searchLease"
 _LEASE_ROUTER_TZ = timezone(timedelta(hours=-5))
 # The firmware status the Router reports decides the Endpoint Style: 25.7 is the last
 # camelCase release.
-_SNAKE_CASE_FIRMWARE = {"product": {"product_version": "26.1.2"}}
-_CAMEL_CASE_FIRMWARE = {"product": {"product_version": "25.1.1"}}
+_SNAKE_CASE_FIRMWARE = "26.1.2"
+_CAMEL_CASE_FIRMWARE = "25.1.1"
 
 
 def _dhcp_router(
@@ -56,7 +49,7 @@ def _dhcp_router(
     routes: Mapping[str, object] | None = None,
     *,
     throw_errors: bool = False,
-    firmware: dict[str, Any] = _SNAKE_CASE_FIRMWARE,
+    firmware: str = _SNAKE_CASE_FIRMWARE,
 ) -> tuple[OPNsenseClient, FakeRouter]:
     """Build a client against a Router that serves only the given GET routes.
 
@@ -65,19 +58,17 @@ def _dhcp_router(
         routes (Mapping[str, object] | None): Response served for each GET path. Every
             other request answers 404, so that DHCP backend looks not installed.
         throw_errors (bool): Whether the client raises public errors.
-        firmware (dict[str, Any]): Firmware status the Router reports.
+        firmware (str): Firmware version the Router reports.
 
     Returns:
         tuple[OPNsenseClient, FakeRouter]: The client and the Router recording its requests.
     """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    router = install_fake_router(
-        client,
-        session,
-        routes={("GET", FIRMWARE_STATUS_PATH): firmware}
-        | {("GET", path): response for path, response in (routes or {}).items()},
+    return make_router_client(
+        make_client,
+        {("GET", path): response for path, response in (routes or {}).items()},
+        firmware=firmware,
+        throw_errors=throw_errors,
     )
-    return client, router
 
 
 async def _get_leases(client: OPNsenseClient) -> dict[str, Any]:
@@ -147,13 +138,10 @@ async def test_get_ndp_table_http_results(
         status (int): HTTP status of the table lookup.
         expected (list[dict[str, str]] | None): Public inventory result.
     """
-    client, session = make_mock_session_client(make_client)
     response = FakeResponse(status=status, ok=status == 200, json_payload=payload)
     result = payload if isinstance(payload, TimeoutError) else response
-    router = install_fake_router(
-        client,
-        session,
-        routes={("GET", "/api/diagnostics/interface/search_ndp"): result},
+    client, router = make_router_client(
+        make_client, routes={("GET", "/api/diagnostics/interface/search_ndp"): result}
     )
 
     assert await client.get_ndp_table() == expected  # type: ignore[deprecated]
@@ -184,12 +172,11 @@ async def test_get_ndp_table_propagates_public_errors(
         timeout (bool): Whether to simulate a transport timeout instead of a response.
         expected_error (type[OPNsenseConnectionError]): Expected public exception type.
     """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=True))
     result = TimeoutError("NDP timed out") if timeout else FakeResponse(status=status, ok=False)
-    install_fake_router(
-        client,
-        session,
+    client, _router = make_router_client(
+        make_client,
         routes={("GET", "/api/diagnostics/interface/search_ndp"): result},
+        throw_errors=True,
     )
 
     with pytest.raises(expected_error) as raised:
@@ -1141,7 +1128,7 @@ async def test_version_switched_kea_dhcpv4_returns_leases_when_reservation_unava
 )
 async def test_dhcp_switched_endpoints_follow_selected_case(
     make_client: ClientType,
-    firmware: dict[str, Any],
+    firmware: str,
     used: tuple[str, str, str],
     unused: tuple[str, str, str],
 ) -> None:
@@ -1149,7 +1136,7 @@ async def test_dhcp_switched_endpoints_follow_selected_case(
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        firmware (dict[str, Any]): Firmware status the Router reports.
+        firmware (str): Firmware version the Router reports.
         used (tuple[str, str, str]): Reservation, ISC DHCPv4 and ISC DHCPv6 paths the client
             should request.
         unused (tuple[str, str, str]): Paths of the other endpoint style, which must not be
@@ -1208,10 +1195,8 @@ async def test_host_observations_normalizes_packet_sightings(
         make_client (ClientType): Factory for a client with a mocked HTTP session.
         family_ip (str): IPv4 or IPv6 address observed by hostwatch.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("POST", HOST_OBSERVATIONS_PATH): {
                 "total": 1,
@@ -1245,10 +1230,8 @@ async def test_host_observation_entries_returns_typed_result_with_one_fetch(
     Args:
         make_client (ClientType): Factory for a client with a mocked HTTP session.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("POST", HOST_OBSERVATIONS_PATH): {
                 "total": 1,
@@ -1282,9 +1265,7 @@ async def test_host_observation_entries_returns_typed_result_with_one_fetch(
     )
     with pytest.raises(FrozenInstanceError):
         observations.entries[0].ip = "192.0.2.1"  # type: ignore[misc]
-    assert router.requests == [
-        ("POST", f"http://localhost{HOST_OBSERVATIONS_PATH}", {"rowCount": -1})
-    ]
+    assert router.requests == [("POST", HOST_OBSERVATIONS_PATH, {"rowCount": -1})]
 
 
 @pytest.mark.asyncio
@@ -1296,10 +1277,8 @@ async def test_host_observation_entries_preserves_disabled_source(
     Args:
         make_client (ClientType): Factory for a client with a mocked HTTP session.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("POST", HOST_OBSERVATIONS_PATH): {
                 "total": 1,
@@ -1340,11 +1319,10 @@ async def test_host_observation_entries_preserves_failure_semantics(
         status (int): Response status of the endpoint request.
         expected_error (type[OPNsensePrivilegeMissing] | None): Expected mapped error.
     """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    install_fake_router(
-        client,
-        session,
+    client, _router = make_router_client(
+        make_client,
         routes={("POST", HOST_OBSERVATIONS_PATH): payload if status == 200 else status},
+        throw_errors=throw_errors,
     )
 
     if expected_error is not None:
@@ -1365,10 +1343,8 @@ async def test_host_observations_rejects_invalid_totals(
         make_client (ClientType): Factory for a client with a mocked HTTP session.
         total (object): Invalid count supplied by the search endpoint.
     """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(
-        client,
-        session,
+    client, _router = make_router_client(
+        make_client,
         routes={
             ("POST", HOST_OBSERVATIONS_PATH): {
                 "total": total,
@@ -1403,10 +1379,8 @@ async def test_host_observations_requests_all_rows_through_post_json(
         "last_seen": datetime.now(UTC).isoformat(),
     }
     observations = [observation.copy() for _ in range(10_000)]
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("POST", HOST_OBSERVATIONS_PATH): {"total": len(observations), "rows": observations}
         },
@@ -1416,9 +1390,7 @@ async def test_host_observations_requests_all_rows_through_post_json(
 
     assert result is not None
     assert len(result["rows"]) == 10_000
-    assert router.requests == [
-        ("POST", f"http://localhost{HOST_OBSERVATIONS_PATH}", {"rowCount": -1})
-    ]
+    assert router.requests == [("POST", HOST_OBSERVATIONS_PATH, {"rowCount": -1})]
 
 
 @pytest.mark.asyncio
@@ -1484,8 +1456,9 @@ async def test_host_observations_rejects_non_authoritative_payloads(
         make_client (ClientType): Factory for a client with a mocked HTTP session.
         payload (object): Unusable host-observation response.
     """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("POST", HOST_OBSERVATIONS_PATH): payload})
+    client, _router = make_router_client(
+        make_client, routes={("POST", HOST_OBSERVATIONS_PATH): payload}
+    )
     assert await client.get_host_observations() is None  # type: ignore[deprecated]
 
 
@@ -1496,10 +1469,8 @@ async def test_host_observations_distinguishes_disabled_service(make_client: Cli
     Args:
         make_client (ClientType): Factory for a client with a mocked HTTP session.
     """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(
-        client,
-        session,
+    client, _router = make_router_client(
+        make_client,
         routes={
             ("POST", HOST_OBSERVATIONS_PATH): {
                 "total": 1,
@@ -1521,8 +1492,9 @@ async def test_host_observations_http_failure_is_unavailable(
         make_client (ClientType): Factory for a client with a mocked HTTP session.
         status (int): HTTP failure status of the endpoint request.
     """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("POST", HOST_OBSERVATIONS_PATH): status})
+    client, _router = make_router_client(
+        make_client, routes={("POST", HOST_OBSERVATIONS_PATH): status}
+    )
     assert await client.get_host_observations() is None  # type: ignore[deprecated]
 
 
@@ -1558,8 +1530,7 @@ async def test_neighbor_lookup_logs_failure_once_until_recovery_then_again(
         payload (object): Successful response payload for the recovery requests.
         expected (object): Public lookup result after recovery.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(client, session, routes={route: 503})
+    client, router = make_router_client(make_client, routes={route: 503})
 
     async def lookup() -> object:
         """Call the selected public neighbor lookup method.
@@ -1608,13 +1579,8 @@ async def test_neighbor_outage_logging_is_per_client(
         make_client (ClientType): Factory for clients using a mocked HTTP session.
         caplog (pytest.LogCaptureFixture): Captured records used to inspect log levels.
     """
-    first_client, first_session = make_mock_session_client(make_client)
-    second_client, second_session = make_mock_session_client(make_client)
-    for client, session in (
-        (first_client, first_session),
-        (second_client, second_session),
-    ):
-        install_fake_router(client, session, routes={("GET", NDP_TABLE_PATH): 503})
+    first_client, _first_router = make_router_client(make_client, {("GET", NDP_TABLE_PATH): 503})
+    second_client, _second_router = make_router_client(make_client, {("GET", NDP_TABLE_PATH): 503})
 
     with caplog.at_level("DEBUG"):
         assert await first_client.get_ndp_table() is None  # type: ignore[deprecated]
@@ -1640,11 +1606,10 @@ async def test_throwing_neighbor_lookup_does_not_duplicate_request_failure_log(
         make_client (ClientType): Factory for clients using a mocked HTTP session.
         caplog (pytest.LogCaptureFixture): Captured records used to inspect log count.
     """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=True))
-    install_fake_router(
-        client,
-        session,
+    client, _router = make_router_client(
+        make_client,
         routes={("GET", NDP_TABLE_PATH): FakeResponse(status=500, reason="Server Error", ok=False)},
+        throw_errors=True,
     )
 
     with caplog.at_level("DEBUG"), pytest.raises(OPNsenseConnectionError):
@@ -1664,7 +1629,7 @@ async def _fetch_entries(
     family: Literal["arp", "ndp"],
     payload: object,
     **client_options: Any,
-) -> tuple[OPNsenseClient.ArpNdpTable | None, Any]:
+) -> OPNsenseClient.ArpNdpTable | None:
     """Fetch a normalized table through the HTTP-like client seam.
 
     Args:
@@ -1674,18 +1639,13 @@ async def _fetch_entries(
         **client_options (Any): Options passed to the client factory.
 
     Returns:
-        tuple[OPNsenseClient.ArpNdpTable | None, Any]: Normalized table and the mocked session.
+        OPNsenseClient.ArpNdpTable | None: Normalized table.
     """
-    client, session = make_mock_session_client(partial(make_client, **client_options))
+    path = ARP_TABLE_RESOLVE_PATH if family == "arp" else NDP_TABLE_PATH
+    client, _router = make_router_client(make_client, {("POST", path): payload}, **client_options)
     if family == "arp":
-        install_fake_router(
-            client,
-            session,
-            routes={("POST", ARP_TABLE_RESOLVE_PATH): payload},
-        )
-        return await client.get_arp_entries(resolve_hostnames=True), session
-    install_fake_router(client, session, routes={("POST", NDP_TABLE_PATH): payload})
-    return await client.get_ndp_entries(), session
+        return await client.get_arp_entries(resolve_hostnames=True)
+    return await client.get_ndp_entries()
 
 
 @pytest.mark.asyncio
@@ -1714,7 +1674,7 @@ async def test_neighbor_entries_unavailable_or_malformed_outer_payload(
         family (Literal["arp", "ndp"]): Neighbor table family.
         payload (object): Malformed table response.
     """
-    table, _session = await _fetch_entries(make_client, family, payload)
+    table = await _fetch_entries(make_client, family, payload)
     assert table is None
 
 
@@ -1730,7 +1690,7 @@ async def test_neighbor_entries_unavailable_endpoint_and_empty_table(
         family (Literal["arp", "ndp"]): Neighbor table family.
     """
     before_fetch = datetime.now(UTC)
-    table, _session = await _fetch_entries(make_client, family, {"total": 0, "rows": []})
+    table = await _fetch_entries(make_client, family, {"total": 0, "rows": []})
     after_fetch = datetime.now(UTC)
     assert table is not None
     assert table.entries == ()
@@ -1741,9 +1701,8 @@ async def test_neighbor_entries_unavailable_endpoint_and_empty_table(
     fetched_at = table.fetched_at
     assert table.fetched_at is fetched_at
 
-    client, session = make_mock_session_client(make_client)
     path = "/api/diagnostics/interface/search_arp?resolve=no" if family == "arp" else NDP_TABLE_PATH
-    install_fake_router(client, session, routes={("POST", path): 404})
+    client, _router = make_router_client(make_client, routes={("POST", path): 404})
     fetch = client.get_arp_entries if family == "arp" else client.get_ndp_entries
     assert await fetch() is None
 
@@ -1758,10 +1717,8 @@ async def test_neighbor_entries_fetch_all_rows_with_one_post(
         make_client (ClientType): Factory for clients using a mocked HTTP session.
     """
     rows = [{"mac": "aa:bb:cc:dd:ee:ff", "ip": "192.0.2.1"}] * 10_000
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
+    client, router = make_router_client(
+        make_client,
         routes={
             ("POST", ARP_TABLE_RESOLVE_PATH): {
                 "total": len(rows),
@@ -1776,9 +1733,7 @@ async def test_neighbor_entries_fetch_all_rows_with_one_post(
 
     assert table is not None
     assert len(table.entries) == 10_000
-    assert router.requests == [
-        ("POST", f"http://localhost{ARP_TABLE_RESOLVE_PATH}", {"rowCount": -1})
-    ]
+    assert router.requests == [("POST", ARP_TABLE_RESOLVE_PATH, {"rowCount": -1})]
 
 
 @pytest.mark.asyncio
@@ -1790,10 +1745,8 @@ async def test_neighbor_entries_propagate_cancellation(
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
     """
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(
-        client,
-        session,
+    client, _router = make_router_client(
+        make_client,
         routes={
             ("POST", "/api/diagnostics/interface/search_arp?resolve=no"): asyncio.CancelledError()
         },
@@ -1814,20 +1767,17 @@ async def test_get_arp_entries_requests_table_once_with_resolve_flag(
         make_client (ClientType): Factory for clients using a mocked HTTP session.
         resolve_hostnames (bool): Requested reverse-DNS behavior.
     """
-    client, session = make_mock_session_client(make_client)
     resolve = "yes" if resolve_hostnames else "no"
     path = f"/api/diagnostics/interface/search_arp?resolve={resolve}"
-    router = install_fake_router(
-        client,
-        session,
-        routes={("POST", path): {"total": 1, "rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}},
+    client, router = make_router_client(
+        make_client, routes={("POST", path): {"total": 1, "rows": [{"mac": "aa:bb:cc:dd:ee:ff"}]}}
     )
 
     table = await client.get_arp_entries(resolve_hostnames=resolve_hostnames)
 
     assert table is not None
     assert len(table.entries) == 1
-    assert router.requests == [("POST", f"http://localhost{path}", {"rowCount": -1})]
+    assert router.requests == [("POST", path, {"rowCount": -1})]
 
 
 @pytest.mark.asyncio
@@ -1858,14 +1808,15 @@ async def test_neighbor_entries_propagate_public_errors_when_throwing(
         expected_error (type[OPNsenseConnectionError]): Expected public exception type.
     """
     for throw_errors in (True, False):
-        client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
         failure = TimeoutError("timed out") if timeout else FakeResponse(status=status, ok=False)
         path = (
             "/api/diagnostics/interface/search_arp?resolve=no"
             if family == "arp"
             else NDP_TABLE_PATH
         )
-        install_fake_router(client, session, routes={("POST", path): failure})
+        client, _router = make_router_client(
+            make_client, routes={("POST", path): failure}, throw_errors=throw_errors
+        )
         fetch = client.get_arp_entries if family == "arp" else client.get_ndp_entries
         if throw_errors:
             with pytest.raises(expected_error):
@@ -1923,7 +1874,7 @@ async def test_neighbor_entries_normalize_identity_and_retain_invalid_mappings(
         ipv4 (str | None): Expected IPv4 address.
         ipv6 (str | None): Expected IPv6 address.
     """
-    table, _session = await _fetch_entries(make_client, "ndp", {"total": 1, "rows": [row]})
+    table = await _fetch_entries(make_client, "ndp", {"total": 1, "rows": [row]})
 
     assert table is not None
     assert table.unparsed_row_count == 0
@@ -1955,7 +1906,7 @@ async def test_neighbor_entries_partial_table_preserves_order_and_counts_nonmapp
         {"mac": "aa:bb:cc:dd:ee:02", "ip": "192.0.2.2"},
     ]
 
-    table, _session = await _fetch_entries(make_client, "arp", {"total": len(rows), "rows": rows})
+    table = await _fetch_entries(make_client, "arp", {"total": len(rows), "rows": rows})
 
     assert table is not None
     assert [entry.mac for entry in table.entries] == [
@@ -1988,10 +1939,8 @@ async def test_neighbor_entries_copy_metadata_and_raw_rows_and_are_frozen(
         "expires": expires,
         "type": {"kind": "dynamic"},
     }
-    client, session = make_mock_session_client(make_client)
-    install_fake_router(
-        client,
-        session,
+    client, _router = make_router_client(
+        make_client,
         routes={
             ("POST", "/api/diagnostics/interface/search_arp?resolve=no"): {
                 "total": 1,
@@ -2057,7 +2006,7 @@ async def test_neighbor_entries_boolean_flag_conversion(
         row (dict[str, object]): Raw neighbor row.
         expected (bool): Expected expiration and permanent-entry flags.
     """
-    table, _session = await _fetch_entries(
+    table = await _fetch_entries(
         make_client,
         "arp",
         {"total": 1, "rows": [{**row, "permanent": row.get("expired")}]},
@@ -2146,7 +2095,7 @@ async def test_normalized_neighbors_preserve_all_endpoint_fields(
         warnings.filterwarnings(
             "error", message="Use get_(arp|ndp)_entries", category=DeprecationWarning
         )
-        table, _session = await _fetch_entries(make_client, family, {"total": 1, "rows": [row]})
+        table = await _fetch_entries(make_client, family, {"total": 1, "rows": [row]})
     assert table is not None
     entry = table.entries[0]
     assert entry.interface == "LAN"
@@ -2181,7 +2130,7 @@ async def test_neighbor_entries_trim_host_metadata_and_preserve_raw_values(
         },
         {"hostname": "??", "manufacturer": None},
     ]
-    table, _session = await _fetch_entries(make_client, "arp", {"total": len(rows), "rows": rows})
+    table = await _fetch_entries(make_client, "arp", {"total": len(rows), "rows": rows})
 
     assert table is not None
     first, second, third = table.entries
@@ -2208,10 +2157,9 @@ async def test_raw_neighbor_getters_warn_and_preserve_results(
         make_client (ClientType): Factory for clients using a mocked HTTP session.
         family (Literal["arp", "ndp"]): Deprecated endpoint to exercise.
     """
-    client, session = make_mock_session_client(make_client)
     rows = [{"ip": "invalid", "future_field": [1]}]
     path = "/api/diagnostics/interface/search_arp?resolve=no" if family == "arp" else NDP_TABLE_PATH
-    install_fake_router(client, session, routes={("GET", path): {"rows": rows}})
+    client, _router = make_router_client(make_client, routes={("GET", path): {"rows": rows}})
     with pytest.warns(DeprecationWarning, match=f"Use get_{family}_entries"):
         result = await getattr(client, f"get_{family}_table")()
     assert result == rows

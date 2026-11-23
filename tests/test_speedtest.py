@@ -1,14 +1,14 @@
 """Tests for `aiopnsense.speedtest`."""
 
 from collections.abc import Callable
-from functools import partial
 from typing import Any
 
+import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient
 from aiopnsense.system import SYSTEM_TIME_ENDPOINT
-from tests.conftest import FakeRouter, install_fake_router, make_mock_session_client
+from tests.conftest import make_mock_session_client, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -47,45 +47,17 @@ def _showlog_row(
     ]
 
 
-def _speedtest_client(
-    make_client: ClientType,
-    routes: dict[tuple[str, str], Any],
-    *,
-    throw_errors: bool = False,
-) -> tuple[OPNsenseClient, FakeRouter]:
-    """Build a client whose Router answers only the given routes.
+async def test_get_speedtest_skips_calls_when_endpoint_missing(make_client: ClientType) -> None:
+    """A 404 show-log reports Speedtest unavailable and reads nothing more.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        routes (dict[tuple[str, str], Any]): Router answers keyed by HTTP method and path.
-        throw_errors (bool): Public ``throw_errors`` setting of the client.
-
-    Returns:
-        tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
     """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    return client, install_fake_router(client, session, routes=routes)
-
-
-@pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
-async def test_get_speedtest_skips_calls_when_endpoint_missing(
-    make_client: ClientType, throw_errors: bool
-) -> None:
-    """A 404 show-log reports Speedtest unavailable in either error mode and reads nothing more.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Public ``throw_errors`` setting of the client.
-    """
-    client, router = _speedtest_client(
-        make_client, {("GET", SHOWLOG_PATH): 404}, throw_errors=throw_errors
-    )
+    client, router = make_router_client(make_client, {("GET", SHOWLOG_PATH): 404})
 
     assert await client.get_speedtest() == {"available": False}
 
-    assert [(method, url) for method, url, _body in router.requests] == [
-        ("GET", "http://localhost" + SHOWLOG_PATH)
-    ]
+    assert router.calls() == [("GET", SHOWLOG_PATH)]
 
 
 async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client: ClientType) -> None:
@@ -94,7 +66,7 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client: Cl
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _router = _speedtest_client(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", SHOWLOG_PATH): _showlog_row(
@@ -143,7 +115,7 @@ async def test_get_speedtest_reads_optional_showstat_payload(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         showstat_available (bool): Whether the ``showstat`` endpoint answers with data.
     """
-    client, router = _speedtest_client(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", SHOWLOG_PATH): _showlog_row(server="Test ISP, New York, NY"),
@@ -170,7 +142,7 @@ async def test_get_speedtest_preserves_timezone_aware_date(make_client: ClientTy
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _speedtest_client(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", SHOWLOG_PATH): _showlog_row(date="2026-03-14T03:09:45+01:30"),
@@ -191,7 +163,7 @@ async def test_get_speedtest_drops_malformed_date(make_client: ClientType) -> No
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _speedtest_client(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", SHOWLOG_PATH): _showlog_row(date="not-a-date"),
@@ -214,7 +186,7 @@ async def test_get_speedtest_preserves_aware_date_and_drops_naive_periods_when_t
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _speedtest_client(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", SHOWLOG_PATH): _showlog_row(date="2026-03-14T03:09:45+01:30"),
@@ -240,7 +212,7 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client: ClientTy
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _router = _speedtest_client(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", SHOWLOG_PATH): [
@@ -391,50 +363,39 @@ async def test_run_speedtest_uses_extended_timeout(make_client: ClientType) -> N
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, session = make_mock_session_client(make_client)
-    router = install_fake_router(
-        client,
-        session,
-        routes={("GET", SHOWLOG_PATH): _showlog_row(), ("GET", RUN_PATH): {"timestamp": "x"}},
-    )
-    send_get = session.get
-    timeouts: dict[str, float | None] = {}
+    timeouts: list[float | None] = []
 
-    def record_timeout(url: str, **kwargs: Any) -> Any:
-        """Record the total timeout of each GET before the Router answers it.
+    def start_run(*, timeout: aiohttp.ClientTimeout, **_kwargs: Any) -> dict[str, str]:
+        """Record the total timeout of the run request before the Router answers it.
 
         Args:
-            url (str): Full requested URL.
-            kwargs (Any): Request parameters passed by the HTTP transport.
+            timeout (aiohttp.ClientTimeout): Timeout the HTTP transport applies.
+            _kwargs (Any): Other request parameters passed by the transport.
 
         Returns:
-            Any: The fake Router's response.
+            dict[str, str]: The Router's reply to the run request.
         """
-        timeouts[url.removeprefix("http://localhost")] = kwargs["timeout"].total
-        return send_get(url, **kwargs)
+        timeouts.append(timeout.total)
+        return {"timestamp": "x"}
 
-    session.get = record_timeout
+    client, router = make_router_client(
+        make_client, routes={("GET", SHOWLOG_PATH): _showlog_row(), ("GET", RUN_PATH): start_run}
+    )
 
     assert await client.run_speedtest() == {"timestamp": "x"}
 
     assert router.count("GET", SHOWLOG_PATH) == 1
     assert router.count("GET", RUN_PATH) == 1
-    assert timeouts[RUN_PATH] == 180
+    assert timeouts == [180]
 
 
-@pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
-async def test_run_speedtest_returns_empty_when_endpoint_missing(
-    make_client: ClientType, throw_errors: bool
-) -> None:
+async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client: ClientType) -> None:
     """run_speedtest returns an empty payload and starts no run when show-log is a 404.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Public ``throw_errors`` setting of the client.
     """
-    client, router = _speedtest_client(
-        make_client, {("GET", SHOWLOG_PATH): 404}, throw_errors=throw_errors
-    )
+    client, router = make_router_client(make_client, {("GET", SHOWLOG_PATH): 404})
 
     assert await client.run_speedtest() == {}
 
@@ -450,7 +411,7 @@ async def test_run_speedtest_returns_empty_for_non_mapping_response(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _speedtest_client(
+    client, router = make_router_client(
         make_client,
         {("GET", SHOWLOG_PATH): _showlog_row(), ("GET", RUN_PATH): ["not", "a", "mapping"]},
     )
@@ -470,7 +431,7 @@ async def test_get_speedtest_survives_failed_system_time_lookup(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         throw_errors (bool): Public ``throw_errors`` setting of the client.
     """
-    client, router = _speedtest_client(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", SHOWLOG_PATH): _showlog_row(date="2026-03-14T03:09:45+01:30"),

@@ -5,7 +5,9 @@ from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
     Callable,
+    Collection,
     Coroutine,
+    Iterator,
     Mapping,
     MutableMapping,
 )
@@ -16,6 +18,7 @@ import json
 from types import TracebackType
 from typing import Any, Never, Self, cast
 from unittest.mock import MagicMock
+from urllib.parse import urlsplit
 
 import aiohttp
 import pytest
@@ -272,38 +275,167 @@ def make_mock_session_client(
 FIRMWARE_STATUS_PATH = "/api/core/firmware/status"
 
 
+def firmware_status_payload(version: str | None) -> dict[str, Any]:
+    """Return the firmware status a Router reports for an installed version.
+
+    Args:
+        version (str | None): Installed product version, or an empty value for a status without one.
+
+    Returns:
+        dict[str, Any]: Status payload with ``product.product_version``, or an empty payload.
+    """
+    return {"product": {"product_version": version}} if version else {}
+
+
+class HeldResponse(FakeResponse):
+    """Response whose request stays in flight until the test releases it.
+
+    Attributes:
+        entered (asyncio.Event): Set when the request reaches the Router.
+        release (asyncio.Event): Set by the test to let the request finish.
+        exited (asyncio.Event): Set when the response context is left.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        """Initialize the held response.
+
+        Args:
+            kwargs (Any): Options accepted by ``FakeResponse``.
+        """
+        super().__init__(**kwargs)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.exited = asyncio.Event()
+
+    async def __aenter__(self) -> Self:
+        """Report that the request reached the Router, then wait to be released.
+
+        Returns:
+            Self: This response once the test releases it.
+        """
+        self.entered.set()
+        await self.release.wait()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool:
+        """Report that the request has finished.
+
+        Args:
+            exc_type (type[BaseException] | None): Exception type raised in the context.
+            exc (BaseException | None): Exception instance raised in the context.
+            tb (TracebackType | None): Traceback of the exception.
+
+        Returns:
+            bool: ``False`` so exceptions are not suppressed.
+        """
+        self.exited.set()
+        return False
+
+
+class SequencedResponse(FakeResponse):
+    """200 JSON response that answers successive reads in turn, and can hold chosen reads.
+
+    The last payload answers every read after the list runs out. A held read has already
+    taken its answer when it waits, as a slow Router response does. ``held`` receives one
+    gate per held read, which the test sets to let that read finish.
+
+    Attributes:
+        held (asyncio.Queue[asyncio.Event]): Gates of reads waiting to be released.
+        reads (int): Number of reads answered or held so far.
+    """
+
+    def __init__(self, *payloads: Any, hold: Collection[int] = ()) -> None:
+        """Script the answers.
+
+        Args:
+            *payloads (Any): Answers for the first read, the second read, and so on.
+            hold (Collection[int]): Reads to hold, counted from 1.
+        """
+        super().__init__()
+        self._payloads = list(payloads)
+        self._hold = set(hold)
+        self.held: asyncio.Queue[asyncio.Event] = asyncio.Queue()
+        self.reads = 0
+        self._gates: list[asyncio.Event] = []
+
+    def release_all(self) -> None:
+        """Let every held read finish, including reads that are not waiting yet."""
+        self._hold.clear()
+        for gate in self._gates:
+            gate.set()
+
+    def replace(self, payload: Any) -> None:
+        """Answer every later read with one payload.
+
+        Args:
+            payload (Any): Answer for each read that has not started yet.
+        """
+        self._payloads = [payload]
+
+    async def json(self, content_type: Any = None) -> Any:
+        """Return this read's answer, after the gate opens when the read is held.
+
+        Args:
+            content_type (Any): Unused decoding option.
+
+        Returns:
+            Any: Payload scripted for this read.
+        """
+        del content_type
+        self.reads += 1
+        payload = self._payloads.pop(0) if len(self._payloads) > 1 else self._payloads[0]
+        if self.reads in self._hold:
+            gate = asyncio.Event()
+            self._gates.append(gate)
+            self.held.put_nowait(gate)
+            await gate.wait()
+        return payload
+
+
 class FakeRouter:
     """Fake Router that answers HTTP requests at the aiohttp session boundary.
 
     Responses come from ``routes`` (keyed by method and request path, query
-    included). A route value is turned into a response this way: an exception
-    instance is raised by the session call, an ``int`` is an HTTP error status, a
-    ``str`` is a 200 text body, a ``FakeResponse`` is used as is, and anything
-    else is a 200 JSON body. Tests may change ``routes`` between calls to model
-    the Router changing.
+    included). A route value is turned into a response this way: a callable is
+    called with the request parameters (``json``, ``timeout`` and so on) and its
+    result is used instead, an exception instance is raised by the session call,
+    an ``int`` is an HTTP status, a ``str`` is a 200 text body, a ``FakeResponse``
+    is used as is, and anything else is a 200 JSON body. Tests may change
+    ``routes`` between calls to model the Router changing.
 
     A request with no route is recorded and answered with 404, as a real Router
     answers a missing endpoint.
     """
 
-    def __init__(
-        self,
-        client: aiopnsense.OPNsenseClient,
-        *,
-        routes: MutableMapping[tuple[str, str], Any] | None = None,
-    ) -> None:
+    def __init__(self, routes: Mapping[tuple[str, str], Any] | None = None) -> None:
         """Initialize the fake Router.
 
         Args:
-            client (aiopnsense.OPNsenseClient): Client whose requests this Router answers.
-            routes (MutableMapping[tuple[str, str], Any] | None): Values keyed by
-                ``(method, path)``.
+            routes (Mapping[tuple[str, str], Any] | None): Values keyed by ``(method, path)``.
         """
-        self._client = client
         self.requests: list[tuple[str, str, Any]] = []
         self.routes: dict[tuple[str, str], Any] = {
             (method.upper(), path): value for (method, path), value in (routes or {}).items()
         }
+
+    def _matching(self, method: str | None, path: str | None) -> Iterator[tuple[str, str, Any]]:
+        """Yield the recorded requests that match a method and path.
+
+        Args:
+            method (str | None): HTTP method to match, or ``None`` for any method.
+            path (str | None): Request path (query included) to match, or ``None`` for any path.
+
+        Yields:
+            tuple[str, str, Any]: ``(method, path, JSON body)`` of each matching request.
+        """
+        for request in self.requests:
+            if (method is None or request[0] == method.upper()) and path in (None, request[1]):
+                yield request
 
     def count(self, method: str | None = None, path: str | None = None) -> int:
         """Count recorded requests.
@@ -315,12 +447,41 @@ class FakeRouter:
         Returns:
             int: Number of matching requests.
         """
-        return sum(
-            1
-            for request_method, url, _body in self.requests
-            if (method is None or request_method == method.upper())
-            and (path is None or url.removeprefix(self._client._url) == path)
-        )
+        return sum(1 for _request in self._matching(method, path))
+
+    def calls(self, method: str | None = None) -> list[tuple[str, str]]:
+        """Return the method and path of each recorded request, in arrival order.
+
+        Args:
+            method (str | None): HTTP method to keep, or ``None`` for every method.
+
+        Returns:
+            list[tuple[str, str]]: ``(method, path)`` pairs.
+        """
+        return [(request[0], request[1]) for request in self._matching(method, None)]
+
+    def paths(self, method: str) -> list[str]:
+        """Return the paths of the requests sent with one method, in arrival order.
+
+        Args:
+            method (str): HTTP method to match.
+
+        Returns:
+            list[str]: Request paths (query included).
+        """
+        return [request[1] for request in self._matching(method, None)]
+
+    def bodies(self, method: str, path: str) -> list[Any]:
+        """Return the JSON bodies of the requests for one method and path.
+
+        Args:
+            method (str): HTTP method to match.
+            path (str): Request path (query included) to match.
+
+        Returns:
+            list[Any]: Request bodies in arrival order.
+        """
+        return [request[2] for request in self._matching(method, path)]
 
     def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
         """Record one request and return the configured response.
@@ -336,8 +497,12 @@ class FakeRouter:
         Raises:
             value: Configured transport error for this request.
         """
-        self.requests.append((method, url, kwargs.get("json")))
-        value = self.routes.get((method, url.removeprefix(self._client._url)), 404)
+        parts = urlsplit(url)
+        path = f"{parts.path}?{parts.query}" if parts.query else parts.path
+        self.requests.append((method, path, kwargs.get("json")))
+        value = self.routes.get((method, path), 404)
+        if callable(value):
+            value = value(**kwargs)
         if isinstance(value, BaseException):
             raise value
         if isinstance(value, FakeResponse):
@@ -346,33 +511,50 @@ class FakeRouter:
             if isinstance(value, str):
                 return FakeResponse(text_payload=value)
             return FakeResponse(json_payload=value)
-        return FakeResponse(status=value, reason="ERR", ok=value < 400)
+        return FakeResponse(status=value, reason="OK" if value < 400 else "ERR", ok=value < 400)
 
 
-def install_fake_router(
-    client: aiopnsense.OPNsenseClient,
-    session: Any,
+def make_router_client(
+    make_client: Callable[..., aiopnsense.OPNsenseClient],
+    routes: Mapping[tuple[str, str], Any] | None = None,
     *,
-    routes: MutableMapping[tuple[str, str], Any] | None = None,
-) -> FakeRouter:
-    """Back a client with a fake Router and run it on the real request queue.
+    firmware: str | None = None,
+    throw_errors: bool = False,
+    **client_kwargs: Any,
+) -> tuple[aiopnsense.OPNsenseClient, FakeRouter]:
+    """Build a client on the real request queue against a fake Router.
 
     The Router answers only at the aiohttp session. Every public call then runs
     through the client's real queue workers, endpoint cache, error policy and
     transport. Workers stop in the ``make_client`` cleanup.
 
     Args:
-        client (aiopnsense.OPNsenseClient): Client to configure.
-        session (Any): Mock aiohttp session returned by ``make_mock_session_client``.
-        routes (MutableMapping[tuple[str, str], Any] | None): Values keyed by ``(method, path)``.
+        make_client (Callable[..., aiopnsense.OPNsenseClient]): ``make_client`` fixture factory.
+        routes (Mapping[tuple[str, str], Any] | None): Values keyed by ``(method, path)``. They
+            override the firmware status route.
+        firmware (str | None): Firmware version the Router reports, an empty string for a
+            status without a version, or ``None`` to leave the firmware status unrouted.
+        throw_errors (bool): Public ``throw_errors`` argument of the client.
+        client_kwargs (Any): Other arguments for ``make_client``.
 
     Returns:
-        FakeRouter: Fake Router recording every request the client sends.
+        tuple[aiopnsense.OPNsenseClient, FakeRouter]: The client and the Router it talks to.
     """
-    router = FakeRouter(client, routes=routes)
+    session = MagicMock(spec=aiohttp.ClientSession)
+    router = FakeRouter(
+        {
+            **(
+                {("GET", FIRMWARE_STATUS_PATH): firmware_status_payload(firmware)}
+                if firmware
+                else {}
+            ),
+            **(routes or {}),
+        }
+    )
     session.get = partial(router.request, "GET")
     session.post = partial(router.request, "POST")
-    return router
+    client = make_client(session=session, throw_errors=throw_errors, **client_kwargs)
+    return client, router
 
 
 @dataclass(frozen=True, slots=True)

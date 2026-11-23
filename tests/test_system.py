@@ -1,8 +1,7 @@
 """Tests for `aiopnsense.system`."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, tzinfo
-from functools import partial
 from typing import Any
 
 import aiohttp
@@ -11,11 +10,10 @@ import pytest
 from aiopnsense import OPNsenseClient
 from aiopnsense.exceptions import OPNsenseMissingDeviceUniqueID
 from tests.conftest import (
-    FIRMWARE_STATUS_PATH,
-    FakeResponse,
     FakeRouter,
-    install_fake_router,
+    SequencedResponse,
     make_mock_session_client,
+    make_router_client,
 )
 
 ClientType = Callable[..., OPNsenseClient]
@@ -36,78 +34,6 @@ INFO_SNAKE_PATH = "/api/diagnostics/system/system_information"
 # Firmware versions that select each Endpoint Style.
 SNAKE_CASE_FIRMWARE = "26.1"
 CAMEL_CASE_FIRMWARE = "25.1"
-
-
-class _SequencedReplies(FakeResponse):
-    """One prepared JSON response that answers successive requests with successive bodies.
-
-    Use it where one public call sends several requests to the same path and the
-    Router answers each one differently.
-    """
-
-    def __init__(self, bodies: list[Any]) -> None:
-        """Store the bodies to hand out, one per request.
-
-        Args:
-            bodies (list[Any]): JSON bodies, in the order the Router answers them.
-        """
-        super().__init__()
-        self._bodies = list(bodies)
-
-    async def json(self, content_type: Any = None) -> Any:
-        """Return the next body.
-
-        Args:
-            content_type (Any, optional): Requested content type (unused by the fake).
-
-        Returns:
-            Any: The next JSON body.
-        """
-        del content_type
-        return self._bodies.pop(0)
-
-
-def _make_router(
-    make_client: ClientType,
-    routes: Mapping[tuple[str, str], Any] | None = None,
-    *,
-    firmware: str | None = None,
-    throw_errors: bool = False,
-) -> tuple[OPNsenseClient, FakeRouter]:
-    """Return a client backed by a fake Router that answers only the given routes.
-
-    Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        routes (Mapping[tuple[str, str], Any] | None): Router replies keyed by method and path.
-        firmware (str | None): Firmware version the Router reports, or ``None`` for a Router
-            whose firmware status is unavailable (Unknown Firmware).
-        throw_errors (bool): Public ``throw_errors`` setting of the client.
-
-    Returns:
-        tuple[OPNsenseClient, FakeRouter]: The client and the Router that answers it.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    all_routes: dict[tuple[str, str], Any] = dict(routes or {})
-    if firmware is not None:
-        all_routes[("GET", FIRMWARE_STATUS_PATH)] = {"product": {"product_version": firmware}}
-    return client, install_fake_router(client, session, routes=all_routes)
-
-
-def _posted_bodies(router: FakeRouter, path: str) -> list[Any]:
-    """Return the JSON bodies of the POST requests the Router received for a path.
-
-    Args:
-        router (FakeRouter): Router that recorded the requests.
-        path (str): Request path to match.
-
-    Returns:
-        list[Any]: Request bodies, in the order they were sent.
-    """
-    return [
-        body
-        for method, url, body in router.requests
-        if method == "POST" and url.removeprefix("http://localhost") == path
-    ]
 
 
 def _assert_local_timezone(tz: tzinfo) -> None:
@@ -157,7 +83,7 @@ async def test_get_system_info(make_client: ClientType) -> None:
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _make_router(
+    client, router = make_router_client(
         make_client,
         {("GET", INFO_SNAKE_PATH): {"name": "foo"}},
         firmware=SNAKE_CASE_FIRMWARE,
@@ -212,7 +138,7 @@ async def test_get_device_unique_id_variants(
         expected_id (str | None): Optional preferred unique ID candidate.
         expected (str | None): Expected normalized unique ID result.
     """
-    client, _router = _make_router(make_client, {("GET", INTERFACE_EXPORT_PATH): instances})
+    client, _router = make_router_client(make_client, {("GET", INTERFACE_EXPORT_PATH): instances})
 
     assert await client.get_device_unique_id(expected_id=expected_id) == expected
 
@@ -236,7 +162,7 @@ async def test_get_device_unique_id_missing_follows_throw_errors_contract(
         throw_errors (bool): Whether the client raises public errors.
         export (Any): Router reply to the interface overview export.
     """
-    client, _router = _make_router(
+    client, _router = make_router_client(
         make_client, {("GET", INTERFACE_EXPORT_PATH): export}, throw_errors=throw_errors
     )
 
@@ -253,7 +179,7 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client: ClientType)
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _make_router(make_client)
+    client, router = make_router_client(make_client)
 
     for datetime_str, when, expected_offset in [
         ("2026-03-07 12:00:00 EST", datetime(2026, 3, 7, 12, 0, 0), timedelta(hours=-5)),
@@ -287,7 +213,7 @@ async def test_get_opnsense_timezone_falls_back_when_time_read_fails(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         time_reply (Exception): Session error raised for the system-time read.
     """
-    client, _router = _make_router(make_client, {("GET", SYSTEM_TIME_PATH): time_reply})
+    client, _router = make_router_client(make_client, {("GET", SYSTEM_TIME_PATH): time_reply})
 
     _assert_local_timezone(await client._get_opnsense_timezone())
 
@@ -311,7 +237,7 @@ async def test_get_resolved_opnsense_timezone_returns_none_when_unresolvable(
         time_reply (Any): Router reply to the system-time read.
         throw_errors (bool): Whether the client raises public errors.
     """
-    client, router = _make_router(
+    client, router = make_router_client(
         make_client, {("GET", SYSTEM_TIME_PATH): time_reply}, throw_errors=throw_errors
     )
 
@@ -347,7 +273,7 @@ async def test_get_opnsense_timezone_supports_known_daylight_abbreviations(
         expected_dt (datetime): Wall time used to evaluate the resolved timezone offset.
         expected_offset (timedelta): Expected UTC offset for the parsed timezone.
     """
-    client, _router = _make_router(
+    client, _router = make_router_client(
         make_client, {("GET", SYSTEM_TIME_PATH): {"datetime": datetime_str}}
     )
 
@@ -371,7 +297,7 @@ async def test_system_actions_report_router_status(
         expected_reboot (bool): Whether the actions that report success are expected to.
     """
     reply = {"status": reply_status}
-    client, router = _make_router(
+    client, router = make_router_client(
         make_client,
         {("POST", REBOOT_PATH): reply, ("POST", HALT_PATH): reply, ("POST", WOL_PATH): reply},
     )
@@ -382,7 +308,7 @@ async def test_system_actions_report_router_status(
 
     assert router.count("POST", REBOOT_PATH) == 1
     assert router.count("POST", HALT_PATH) == 1
-    assert _posted_bodies(router, WOL_PATH) == [{"wake": {"interface": "em0", "mac": "aa:bb:cc"}}]
+    assert router.bodies("POST", WOL_PATH) == [{"wake": {"interface": "em0", "mac": "aa:bb:cc"}}]
 
 
 @pytest.mark.parametrize(
@@ -421,7 +347,7 @@ async def test_toggle_carp_maintenance_mode_uses_endpoint_for_firmware(
         firmware (str | None): Firmware version reported by the Router.
         expected_path (str): CARP maintenance endpoint the client is expected to post to.
     """
-    client, router = _make_router(
+    client, router = make_router_client(
         make_client, {("POST", expected_path): {"status": "ok"}}, firmware=firmware
     )
 
@@ -439,7 +365,7 @@ async def test_get_certificates_handles_non_list_and_missing_description(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _make_router(make_client, {("GET", CERT_SEARCH_PATH): {"rows": "bad"}})
+    client, router = make_router_client(make_client, {("GET", CERT_SEARCH_PATH): {"rows": "bad"}})
     assert await client.get_certificates() == {}
 
     router.routes[("GET", CERT_SEARCH_PATH)] = {
@@ -479,7 +405,7 @@ async def test_get_gateways_normalizes_translated_status(make_client: ClientType
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _router = _make_router(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", GATEWAY_STATUS_PATH): {
@@ -506,7 +432,7 @@ async def test_get_notices_lists_only_pending_notices(make_client: ClientType) -
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     created = int(datetime.now(tz=UTC).timestamp())
-    client, _router = _make_router(
+    client, _router = make_router_client(
         make_client,
         {
             ("GET", CORE_STATUS_PATH): {
@@ -537,7 +463,7 @@ async def test_close_notice_reports_router_status(
         reply_status (str): ``status`` field of the Router reply.
         expected (bool): Expected result of the call.
     """
-    client, router = _make_router(
+    client, router = make_router_client(
         make_client,
         {("POST", DISMISS_SNAKE_PATH): {"status": reply_status}},
         firmware=SNAKE_CASE_FIRMWARE,
@@ -545,7 +471,7 @@ async def test_close_notice_reports_router_status(
 
     assert await client.close_notice("single-notice") is expected
 
-    assert _posted_bodies(router, DISMISS_SNAKE_PATH) == [{"subject": "single-notice"}]
+    assert router.bodies("POST", DISMISS_SNAKE_PATH) == [{"subject": "single-notice"}]
 
 
 @pytest.mark.parametrize(
@@ -565,7 +491,7 @@ async def test_close_notice_all_dismisses_each_pending_notice(
         replies (list[str]): ``status`` of the Router reply to each dismissal, in order.
         expected (bool): Expected result of the call.
     """
-    client, router = _make_router(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", CORE_STATUS_PATH): {
@@ -574,14 +500,14 @@ async def test_close_notice_all_dismisses_each_pending_notice(
                 "n3": {"statusCode": 1},
                 "bad": "invalid",
             },
-            ("POST", DISMISS_SNAKE_PATH): _SequencedReplies([{"status": s} for s in replies]),
+            ("POST", DISMISS_SNAKE_PATH): SequencedResponse(*[{"status": s} for s in replies]),
         },
         firmware=SNAKE_CASE_FIRMWARE,
     )
 
     assert await client.close_notice("all") is expected
 
-    assert _posted_bodies(router, DISMISS_SNAKE_PATH) == [{"subject": "n1"}, {"subject": "n3"}]
+    assert router.bodies("POST", DISMISS_SNAKE_PATH) == [{"subject": "n1"}, {"subject": "n3"}]
 
 
 async def test_get_opnsense_timezone_without_tzinfo_string_uses_local_fallback(
@@ -592,7 +518,7 @@ async def test_get_opnsense_timezone_without_tzinfo_string_uses_local_fallback(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _make_router(make_client)
+    client, router = make_router_client(make_client)
 
     _assert_local_timezone(await client._get_opnsense_timezone("2026-03-07 12:00:00"))
     _assert_local_timezone(await client._get_opnsense_timezone(""))
@@ -608,7 +534,7 @@ async def test_get_carp_handles_invalid_payloads_and_default_status(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _make_router(make_client)
+    client, router = make_router_client(make_client)
 
     _serve_carp(router, {"rows": "bad"}, {"rows": "bad"})
     assert (await client.get_carp()).get("interfaces", []) == []
@@ -664,7 +590,7 @@ async def test_get_carp_matches_multiple_vips_on_same_interface(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _make_router(make_client)
+    client, router = make_router_client(make_client)
     _serve_carp(
         router,
         {
@@ -723,7 +649,7 @@ async def test_get_carp_returns_no_match_for_ambiguous_partial_key_collisions(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _make_router(make_client)
+    client, router = make_router_client(make_client)
     _serve_carp(
         router,
         {"rows": [{"mode": "carp", "interface": "lan", "vhid": "10", "status": "MASTER"}]},
@@ -828,7 +754,7 @@ async def test_get_carp_status_states(
         payload (dict[str, Any]): Raw payload the Router returns for both CARP reads.
         expected_state (str): Expected normalized CARP summary state.
     """
-    client, router = _make_router(make_client)
+    client, router = make_router_client(make_client)
     _serve_carp(router, payload, payload)
 
     summary = dict((await client.get_carp()).get("status_summary", {}))
@@ -850,7 +776,7 @@ async def test_get_carp_skips_whitespace_interface_values(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _make_router(make_client)
+    client, router = make_router_client(make_client)
     payload = {
         "rows": [
             {"mode": "carp", "status": "MASTER", "interface": "   ", "subnet": "1.2.3.4"},
@@ -877,7 +803,7 @@ async def test_get_carp_status_uses_settings_merge_for_partial_rows(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _make_router(make_client)
+    client, router = make_router_client(make_client)
     _serve_carp(
         router,
         {
@@ -903,7 +829,7 @@ async def test_get_carp_returns_interfaces_and_summary_from_one_fetch(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _make_router(make_client)
+    client, router = make_router_client(make_client)
     _serve_carp(
         router,
         {
@@ -942,7 +868,7 @@ async def test_get_carp_uses_status_rows_when_settings_unusable(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         settings (Any): Router reply to the VIP settings read.
     """
-    client, router = _make_router(make_client)
+    client, router = make_router_client(make_client)
     _serve_carp(
         router,
         {"rows": [{"mode": "carp", "interface": "wan", "subnet": "1.2.3.4", "vhid": "1"}]},
@@ -989,7 +915,7 @@ async def test_version_switched_system_endpoints_fail_closed(make_client: Client
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _make_router(make_client, firmware=SNAKE_CASE_FIRMWARE)
+    client, router = make_router_client(make_client, firmware=SNAKE_CASE_FIRMWARE)
 
     assert await client.get_system_info() == {}
     assert await client.get_device_unique_id() is None
@@ -1063,7 +989,7 @@ async def test_system_switched_endpoints_follow_selected_case(
         expected_dismiss (str): Expected notice-dismiss endpoint path.
         expected_reload (str): Expected interface-reload endpoint path.
     """
-    client, router = _make_router(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", expected_info): {"name": "fw"},

@@ -8,7 +8,6 @@ mock (``install_client``) exercise the install path directly and keep that setup
 import asyncio
 from collections.abc import Callable, Collection, Coroutine
 from datetime import UTC, datetime, timedelta
-from functools import partial
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -39,11 +38,12 @@ from tests.conftest import (
     FakeResponse,
     FakeRouter,
     FirmwareVersionShape,
-    install_fake_router,
+    SequencedResponse,
+    firmware_status_payload,
     make_mock_session_client,
+    make_router_client,
 )
 
-BASE_URL = "http://localhost"
 STATUS_PATH = firmware_module.FIRMWARE_STATUS_ENDPOINT
 RUNNING_PATH = firmware_module.FIRMWARE_RUNNING_ENDPOINT
 CHECK_PATH = firmware_module.FIRMWARE_CHECK_ENDPOINT
@@ -58,129 +58,13 @@ READY = {"status": "ready"}
 _POLL_REQUESTS = {("GET", STATUS_PATH), ("GET", RUNNING_PATH), ("POST", CHECK_PATH)}
 
 
-def _requests(router: FakeRouter) -> list[tuple[str, str]]:
-    """Return the method and path of every request the client sent, in order.
-
-    Args:
-        router (FakeRouter): Router that recorded the client's requests.
-
-    Returns:
-        list[tuple[str, str]]: ``(method, path)`` for each recorded request.
-    """
-    return [(method, url.removeprefix(BASE_URL)) for method, url, _body in router.requests]
-
-
-def _post_paths(router: FakeRouter) -> list[str]:
-    """Return the paths the client sent with POST, in order.
-
-    Args:
-        router (FakeRouter): Router that recorded the client's requests.
-
-    Returns:
-        list[str]: POST request paths.
-    """
-    return [path for method, path in _requests(router) if method == "POST"]
-
-
 def _assert_only_poll_requests(router: FakeRouter) -> None:
     """Assert that a firmware poll sent nothing outside the ADR 0002 allow-list.
 
     Args:
         router (FakeRouter): Router that recorded the client's requests.
     """
-    assert set(_requests(router)) <= _POLL_REQUESTS
-
-
-def _firmware_client(
-    make_client: Callable[..., Any],
-    routes: dict[tuple[str, str], Any] | None = None,
-    *,
-    throw_errors: bool = False,
-) -> tuple[aiopnsense.OPNsenseClient, FakeRouter]:
-    """Return a client backed by a fake Router that answers only the given routes.
-
-    Args:
-        make_client (Callable[..., Any]): Public client factory.
-        routes (dict[tuple[str, str], Any] | None): Router replies keyed by ``(method, path)``.
-        throw_errors (bool): Whether the client raises public errors.
-
-    Returns:
-        tuple[aiopnsense.OPNsenseClient, FakeRouter]: Client and the Router that answers it.
-    """
-    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
-    return client, install_fake_router(client, session, routes=routes)
-
-
-def _version_status(version: str | None) -> dict[str, Any]:
-    """Return the status a Router reports for an installed firmware version.
-
-    Args:
-        version (str | None): Installed version, or ``None`` for a status without one.
-
-    Returns:
-        dict[str, Any]: Status payload with ``product.product_version``, or an empty payload.
-    """
-    return {"product": {"product_version": version}} if version else {}
-
-
-class _ScriptedReads(FakeResponse):
-    """200 JSON response that answers successive reads in turn, and can hold chosen reads.
-
-    The last payload answers every read after the list runs out. A held read has already
-    taken its answer when it waits, as a slow Router response does. ``held`` receives one
-    gate per held read, which the test sets to let that read finish.
-
-    Attributes:
-        held (asyncio.Queue[asyncio.Event]): Gates of reads waiting to be released.
-        reads (int): Number of reads answered or held so far.
-    """
-
-    def __init__(self, *payloads: Any, hold: Collection[int] = ()) -> None:
-        """Script the answers.
-
-        Args:
-            *payloads (Any): Answers for the first read, the second read, and so on.
-            hold (Collection[int]): Reads to hold, counted from 1.
-        """
-        super().__init__()
-        self._payloads = list(payloads)
-        self._hold = set(hold)
-        self.held: asyncio.Queue[asyncio.Event] = asyncio.Queue()
-        self.reads = 0
-        self._gates: list[asyncio.Event] = []
-
-    def release_all(self) -> None:
-        """Let every held read finish, including reads that are not waiting yet."""
-        self._hold.clear()
-        for gate in self._gates:
-            gate.set()
-
-    def replace(self, payload: Any) -> None:
-        """Answer every later read with one payload.
-
-        Args:
-            payload (Any): Answer for each read that has not started yet.
-        """
-        self._payloads = [payload]
-
-    async def json(self, content_type: Any = None) -> Any:
-        """Return this read's answer, after the gate opens when the read is held.
-
-        Args:
-            content_type (Any): Unused decoding option.
-
-        Returns:
-            Any: Payload scripted for this read.
-        """
-        del content_type
-        self.reads += 1
-        payload = self._payloads.pop(0) if len(self._payloads) > 1 else self._payloads[0]
-        if self.reads in self._hold:
-            gate = asyncio.Event()
-            self._gates.append(gate)
-            self.held.put_nowait(gate)
-            await gate.wait()
-        return payload
+    assert set(router.calls()) <= _POLL_REQUESTS
 
 
 _SHAPE_PARAMS = [pytest.param(shape, id=shape.id) for shape in FIRMWARE_VERSION_SHAPES]
@@ -204,13 +88,13 @@ async def test_get_host_firmware_version_and_fallback(
     Args:
         make_client (Callable[..., Any]): Factory used to create primary and fallback firmware clients.
     """
-    client, router = _firmware_client(
+    client, router = make_router_client(
         make_client, {("GET", STATUS_PATH): {"product": {"product_version": "25.8.0"}}}
     )
     assert await client.get_host_firmware_version() == "25.8.0"
-    assert _requests(router) == [("GET", STATUS_PATH)]
+    assert router.calls() == [("GET", STATUS_PATH)]
 
-    fallback_client, fallback_router = _firmware_client(
+    fallback_client, fallback_router = make_router_client(
         make_client,
         {
             ("GET", STATUS_PATH): {
@@ -219,7 +103,7 @@ async def test_get_host_firmware_version_and_fallback(
         },
     )
     assert await fallback_client.get_host_firmware_version() == "seriesX"
-    assert _requests(fallback_router) == [("GET", STATUS_PATH)]
+    assert fallback_router.calls() == [("GET", STATUS_PATH)]
 
 
 @pytest.mark.asyncio
@@ -231,13 +115,15 @@ async def test_delayed_firmware_read_cannot_overwrite_a_newer_observation(
     Args:
         make_client (Callable[..., Any]): Public client factory.
     """
-    status = _ScriptedReads(_version_status("25.1"), hold={1})
-    client, router = _firmware_client(make_client, {("GET", STATUS_PATH): status} | _DISMISS_ROUTES)
+    status = SequencedResponse(firmware_status_payload("25.1"), hold={1})
+    client, router = make_router_client(
+        make_client, {("GET", STATUS_PATH): status} | _DISMISS_ROUTES
+    )
     old_read_call = asyncio.create_task(client.close_notice("old-read"))
     try:
         async with asyncio.timeout(1):
             first_read = await status.held.get()
-        status.replace(_version_status("25.7"))
+        status.replace(firmware_status_payload("25.7"))
         assert await client.close_notice("new-read") is True
         first_read.set()
         async with asyncio.timeout(1):
@@ -249,7 +135,7 @@ async def test_delayed_firmware_read_cannot_overwrite_a_newer_observation(
         await asyncio.gather(old_read_call, return_exceptions=True)
 
     assert await client.get_host_firmware_version() == "25.7"
-    assert _post_paths(router) == [
+    assert router.paths("POST") == [
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
     ]
@@ -264,14 +150,16 @@ async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
     Args:
         make_client (Callable[..., Any]): Public client factory.
     """
-    status = _ScriptedReads(_version_status("25.1"), hold={1})
-    client, router = _firmware_client(make_client, {("GET", STATUS_PATH): status} | _DISMISS_ROUTES)
+    status = SequencedResponse(firmware_status_payload("25.1"), hold={1})
+    client, router = make_router_client(
+        make_client, {("GET", STATUS_PATH): status} | _DISMISS_ROUTES
+    )
     delayed_call = asyncio.create_task(client.close_notice("delayed-probe"))
     try:
         async with asyncio.timeout(1):
             first_read = await status.held.get()
         assert await client.close_notice("second-lookup") is True
-        status.replace(_version_status("25.7"))
+        status.replace(firmware_status_payload("25.7"))
         first_read.set()
         async with asyncio.timeout(1):
             assert await delayed_call is True
@@ -283,7 +171,7 @@ async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
         await asyncio.gather(delayed_call, return_exceptions=True)
 
     assert await client.get_host_firmware_version() == "25.7"
-    assert _post_paths(router) == [
+    assert router.paths("POST") == [
         CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
@@ -307,8 +195,8 @@ async def test_validation_reads_firmware_across_an_empty_cache_observation(
         delayed_stage (str): Stage of the lookup to pause; the status read is the only stage.
         interruption (str): Whether a check or an empty status response wins the race.
     """
-    status = _ScriptedReads(_version_status("26.7.8"), hold={1})
-    client, router = _firmware_client(
+    status = SequencedResponse(firmware_status_payload("26.7.8"), hold={1})
+    client, router = make_router_client(
         make_client,
         {
             ("GET", STATUS_PATH): status,
@@ -322,11 +210,11 @@ async def test_validation_reads_firmware_across_an_empty_cache_observation(
             first_read = await status.held.get()
             if interruption == "check":
                 await client.get_firmware_update_info()
-                assert _post_paths(router) == [CHECK_PATH]
+                assert router.paths("POST") == [CHECK_PATH]
             else:
                 status.replace({})
                 assert await client.get_host_firmware_version() is None
-                status.replace(_version_status("26.7.8"))
+                status.replace(firmware_status_payload("26.7.8"))
             first_read.set()
             await validation
     finally:
@@ -353,8 +241,8 @@ async def test_validation_survives_repeated_automatic_firmware_checks(
         make_client (Callable[..., Any]): Public client factory.
         monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
     """
-    status = _ScriptedReads(_version_status("26.7.7"), hold={2, 4})
-    client, router = _firmware_client(
+    status = SequencedResponse(firmware_status_payload("26.7.7"), hold={2, 4})
+    client, router = make_router_client(
         make_client,
         {
             ("GET", STATUS_PATH): status,
@@ -371,7 +259,7 @@ async def test_validation_survives_repeated_automatic_firmware_checks(
         async with asyncio.timeout(1):
             first_read = await status.held.get()
             await client.get_firmware_update_info()
-            status.replace(_version_status("26.7.8"))
+            status.replace(firmware_status_payload("26.7.8"))
             first_read.set()
             retry = await status.held.get()
             now += FIRMWARE_CHECK_COOLDOWN_SECONDS
@@ -398,15 +286,15 @@ async def test_delayed_firmware_read_cannot_overwrite_verified_install(
         make_client (Callable[..., Any]): Public client factory.
     """
     target_version = "26.7.8"
-    status = _ScriptedReads(_version_status("26.1.1"), hold={1})
-    client, _router = _firmware_client(
+    status = SequencedResponse(firmware_status_payload("26.1.1"), hold={1})
+    client, _router = make_router_client(
         make_client, {**_install_routes(), ("GET", STATUS_PATH): status}
     )
     old_read = asyncio.create_task(client.get_host_firmware_version())
     try:
         async with asyncio.timeout(1):
             old_read_gate = await status.held.get()
-        status.replace(_version_status(target_version))
+        status.replace(firmware_status_payload(target_version))
         await client.install_firmware(target_version=target_version, poll_interval=0.001)
         old_read_gate.set()
         async with asyncio.timeout(1):
@@ -429,14 +317,14 @@ async def test_firmware_status_probe_retries_cached_forbidden_endpoint(
     Args:
         make_client (Callable[..., Any]): Public client factory.
     """
-    client, router = _firmware_client(make_client, {("GET", STATUS_PATH): 403} | _DISMISS_ROUTES)
+    client, router = make_router_client(make_client, {("GET", STATUS_PATH): 403} | _DISMISS_ROUTES)
 
     assert await client.close_notice("before-recovery") is True
-    router.routes[("GET", STATUS_PATH)] = _version_status("25.1")
+    router.routes[("GET", STATUS_PATH)] = firmware_status_payload("25.1")
     assert await client.close_notice("after-recovery") is True
 
     assert router.count("GET", STATUS_PATH) == 2
-    assert _post_paths(router) == [
+    assert router.paths("POST") == [
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
         CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
     ]
@@ -451,14 +339,14 @@ async def test_malformed_firmware_series_uses_unknown_capability_fallback(
     Args:
         make_client (Callable[..., Any]): Factory used to create an OPNsense client.
     """
-    client, router = _firmware_client(
+    client, router = make_router_client(
         make_client, {("GET", STATUS_PATH): {"product": {"product_series": []}}} | _DISMISS_ROUTES
     )
 
     assert await client.close_notice("malformed-series") is True
 
-    assert _post_paths(router) == [CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT]
-    assert [body for method, _url, body in router.requests if method == "POST"] == [
+    assert router.paths("POST") == [CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT]
+    assert router.bodies("POST", CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT) == [
         {"subject": "malformed-series"}
     ]
 
@@ -571,7 +459,7 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
         status["status_msg"] = status_msg
     if last_check_age is not None:
         status["last_check"] = (datetime.now(UTC) - last_check_age).isoformat()
-    client, router = _firmware_client(make_client, _poll_routes(status, check={}))
+    client, router = make_router_client(make_client, _poll_routes(status, check={}))
 
     result = await client.get_firmware_update_info()
 
@@ -617,14 +505,14 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
         "status_msg": "There are no updates available on the selected mirror.",
         "last_check": datetime.now(UTC).isoformat(),
     }
-    client, router = _firmware_client(make_client, {("GET", STATUS_PATH): status})
+    client, router = make_router_client(make_client, {("GET", STATUS_PATH): status})
 
     for _ in range(3):
         result = await client.get_firmware_update_info()
         assert result == status
 
     # Each poll is one status read: no check, no lock read, no `/info` and no `POST /status`.
-    assert _requests(router) == [("GET", STATUS_PATH)] * 3
+    assert router.calls() == [("GET", STATUS_PATH)] * 3
 
 
 @pytest.mark.asyncio
@@ -644,10 +532,10 @@ async def test_upgrade_firmware_calls_expected_endpoint(
         upgrade_type (str): Supported upgrade action supplied to the client.
         expected_path (str): Firmware API path expected for the action.
     """
-    client, router = _firmware_client(
+    client, router = make_router_client(
         make_client,
         {
-            ("GET", STATUS_PATH): _version_status("26.1.1"),
+            ("GET", STATUS_PATH): firmware_status_payload("26.1.1"),
             ("POST", UPDATE_PATH): {"status": "ok"},
             ("POST", UPGRADE_PATH): {"status": "ok"},
         },
@@ -660,8 +548,8 @@ async def test_upgrade_firmware_calls_expected_endpoint(
         result = await legacy_upgrade(upgrade_type)
 
     assert result == {"status": "ok"}
-    assert _post_paths(router) == [expected_path]
-    router.routes[("GET", STATUS_PATH)] = _version_status("26.1.2")
+    assert router.paths("POST") == [expected_path]
+    router.routes[("GET", STATUS_PATH)] = firmware_status_payload("26.1.2")
     assert await client.get_host_firmware_version() == "26.1.2"
 
 
@@ -672,7 +560,7 @@ async def test_upgrade_firmware_rejects_unknown_type(make_client: Callable[..., 
     Args:
         make_client (Callable[..., Any]): Factory used to create the client rejecting the action.
     """
-    client, router = _firmware_client(
+    client, router = make_router_client(
         make_client,
         {("POST", UPDATE_PATH): {"status": "ok"}, ("POST", UPGRADE_PATH): {"status": "ok"}},
     )
@@ -680,7 +568,7 @@ async def test_upgrade_firmware_rejects_unknown_type(make_client: Callable[..., 
     result = await client.upgrade_firmware("invalid")  # type: ignore[deprecated]
 
     assert result is None
-    assert _requests(router) == []
+    assert router.calls() == []
 
 
 @pytest.mark.asyncio
@@ -756,14 +644,14 @@ async def test_firmware_actions_are_rejected_during_install(
     """
     routes = _install_routes(hold={2}) | {("GET", STATUS_PATH): {"status": "error"}}
     progress_reads = routes[("GET", UPGRADE_STATUS_PATH)]
-    client, router = _firmware_client(make_client, routes, throw_errors=throw_errors)
+    client, router = make_router_client(make_client, routes, throw_errors=throw_errors)
     install_task = asyncio.create_task(client.install_firmware(target_version="26.7.8"))
     try:
         async with asyncio.timeout(1):
             await progress_reads.held.get()
 
         await client.get_firmware_update_info()
-        router.routes[("GET", STATUS_PATH)] = _version_status("26.7.8")
+        router.routes[("GET", STATUS_PATH)] = firmware_status_payload("26.7.8")
 
         if throw_errors:
             with pytest.raises(OPNsenseError, match="already active"):
@@ -771,7 +659,7 @@ async def test_firmware_actions_are_rejected_during_install(
         else:
             assert await client.upgrade_firmware("upgrade") is None  # type: ignore[deprecated]
         # Only the install's own dispatch reached the Router: no check and no upgrade.
-        assert _post_paths(router) == [UPDATE_PATH]
+        assert router.paths("POST") == [UPDATE_PATH]
     finally:
         progress_reads.release_all()
         await install_task
@@ -832,7 +720,7 @@ async def test_upgrade_status_and_changelog(make_client: Callable[..., Any]) -> 
         make_client (Callable[..., Any]): Factory used to configure the status and changelog client.
     """
     changelog_path = "/api/core/firmware/changelog/26.1.1"
-    client, router = _firmware_client(
+    client, router = make_router_client(
         make_client,
         {
             ("GET", UPGRADE_STATUS_PATH): {"status": "running"},
@@ -845,7 +733,7 @@ async def test_upgrade_status_and_changelog(make_client: Callable[..., Any]) -> 
 
     assert status == {"status": "running"}
     assert changelog == {"changelog": "..."}
-    assert _requests(router) == [("GET", UPGRADE_STATUS_PATH), ("POST", changelog_path)]
+    assert router.calls() == [("GET", UPGRADE_STATUS_PATH), ("POST", changelog_path)]
 
 
 @pytest.mark.asyncio
@@ -857,7 +745,7 @@ async def test_firmware_helpers_return_defaults_when_endpoints_unavailable(
     Args:
         make_client (Callable[..., Any]): Fixture factory used to create client instances.
     """
-    client, router = _firmware_client(make_client)
+    client, router = make_router_client(make_client)
 
     host_version = await client.get_host_firmware_version()
     update_info = await client.get_firmware_update_info()
@@ -867,8 +755,8 @@ async def test_firmware_helpers_return_defaults_when_endpoints_unavailable(
     assert update_info == {}
     assert upgrade_status == {}
     # Nothing was checked or changed: only reads were sent, and none of them the lock.
-    assert {method for method, _path in _requests(router)} == {"GET"}
-    assert ("GET", RUNNING_PATH) not in _requests(router)
+    assert {method for method, _path in router.calls()} == {"GET"}
+    assert ("GET", RUNNING_PATH) not in router.calls()
 
 
 @pytest.fixture
@@ -966,7 +854,7 @@ def _install_routes(
     """
     return {
         ("GET", RUNNING_PATH): READY,
-        ("GET", UPGRADE_STATUS_PATH): _ScriptedReads(
+        ("GET", UPGRADE_STATUS_PATH): SequencedResponse(
             {"status": "done", "log": "old check"},
             progress or _install_progress("done", "***DONE***"),
             hold=hold,
@@ -1279,12 +1167,12 @@ async def test_firmware_update_info_reports_exact_devel_build(
             "product_check": {"upgrade_packages": packages},
         },
     )
-    client, router = _firmware_client(make_client, _poll_routes(status))
+    client, router = make_router_client(make_client, _poll_routes(status))
 
     result = await client.get_firmware_update_info(check_for_updates=False)
 
     assert result["product"]["product_latest"] == expected_latest
-    assert _requests(router) == [("GET", STATUS_PATH)]
+    assert router.calls() == [("GET", STATUS_PATH)]
 
 
 @pytest.mark.asyncio
@@ -1460,7 +1348,7 @@ async def test_firmware_automatic_check_is_suppressed(
         check (bool): Whether automatic checking is permitted.
         server (str): Server lock state.
     """
-    client, router = _firmware_client(
+    client, router = make_router_client(
         make_client, _poll_routes({}, running={"status": server}, check={"status": "ok"})
     )
 
@@ -1526,7 +1414,7 @@ def _poll_routes(
 
     Args:
         status (dict[str, Any]): Status returned on each poll.
-        running (Any): Lock state reply, or a ``_ScriptedReads`` to serve states in turn.
+        running (Any): Lock state reply, or a ``SequencedResponse`` to serve states in turn.
         check (Any): Reply to the check POST, or a transport exception.
 
     Returns:
@@ -1570,7 +1458,7 @@ async def test_persistent_refresh_condition_checks_once_per_cooldown(
     """
     now = 1000.0
     monkeypatch.setattr(firmware_module, "monotonic", lambda: now)
-    client, router = _firmware_client(make_client, _poll_routes(status))
+    client, router = make_router_client(make_client, _poll_routes(status))
 
     for _ in range(3):
         await client.get_firmware_update_info()
@@ -1598,11 +1486,11 @@ async def test_busy_router_does_not_start_firmware_check_cooldown(
         monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
     """
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, router = _firmware_client(
+    client, router = make_router_client(
         make_client,
         _poll_routes(
             _firmware_status(status="error"),
-            running=_ScriptedReads({"status": "busy"}, READY),
+            running=SequencedResponse({"status": "busy"}, READY),
             check={"status": "ok"},
         ),
     )
@@ -1636,7 +1524,7 @@ async def test_unacknowledged_firmware_check_does_not_start_cooldown(
         unacknowledged (Any): Transport exception or non-ok response payload for the first check.
     """
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, router = _firmware_client(
+    client, router = make_router_client(
         make_client, _poll_routes(_firmware_status(status="error"), check=unacknowledged)
     )
 
@@ -1677,7 +1565,7 @@ async def test_dispatched_firmware_action_ends_check_cooldown(
         progress (dict[str, str] | None): Progress the dispatched action reports.
     """
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, router = _firmware_client(
+    client, router = make_router_client(
         make_client,
         _install_routes(progress) | _poll_routes(_firmware_status(status="error")),
     )
@@ -1714,7 +1602,7 @@ async def test_firmware_lookup_handles_router_version_shapes(
         make_client (Callable[..., Any]): Public client factory.
         shape (FirmwareVersionShape): Version form reported by the Router.
     """
-    client, router = _firmware_client(
+    client, router = make_router_client(
         make_client, {("GET", STATUS_PATH): _firmware_status_for_shape(shape)}
     )
 
@@ -1722,7 +1610,7 @@ async def test_firmware_lookup_handles_router_version_shapes(
     reads_before = router.count("GET", STATUS_PATH)
     assert await client.get_host_firmware_version() == shape.lookup_version
     assert router.count("GET", STATUS_PATH) - reads_before == (0 if shape.cached else 1)
-    assert set(_requests(router)) == {("GET", STATUS_PATH)}
+    assert set(router.calls()) == {("GET", STATUS_PATH)}
 
 
 async def _lookup_after_cooldown_poll(
@@ -1776,7 +1664,7 @@ async def test_firmware_cooldown_keeps_cache_for_unchanged_version_shape(
         shape (FirmwareVersionShape): Version form reported by the Router.
     """
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, router = _firmware_client(make_client)
+    client, router = make_router_client(make_client)
     result = await _lookup_after_cooldown_poll(
         client,
         router,
@@ -1802,7 +1690,7 @@ async def test_firmware_cooldown_refreshes_cache_for_new_version_shape(
     """
     previous_version = "25.7.1"
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, router = _firmware_client(make_client)
+    client, router = make_router_client(make_client)
     result = await _lookup_after_cooldown_poll(
         client,
         router,
@@ -1855,7 +1743,7 @@ async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
         expected_reads (int): Status reads expected from the final version lookup.
     """
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, router = _firmware_client(make_client)
+    client, router = make_router_client(make_client)
     result = await _lookup_after_cooldown_poll(
         client,
         router,
@@ -1894,7 +1782,7 @@ async def test_concurrent_firmware_update_info_sends_one_check(
             return CHECK_ACK
 
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, router = _firmware_client(
+    client, router = make_router_client(
         make_client,
         _poll_routes(_firmware_status(last_check="not a date"), check=SlowCheckResponse()),
     )
@@ -2033,9 +1921,9 @@ async def test_cancelled_firmware_check_does_not_dispatch_later(
     Args:
         make_client (Callable[..., Any]): Public client factory.
     """
-    unrelated_read = _ScriptedReads({"status": "running"}, hold={1})
-    check_response = _ScriptedReads({"status": "ok"}, hold={1})
-    client, router = _firmware_client(
+    unrelated_read = SequencedResponse({"status": "running"}, hold={1})
+    check_response = SequencedResponse({"status": "ok"}, hold={1})
+    client, router = make_router_client(
         make_client,
         _poll_routes({}, check=check_response) | {("GET", UPGRADE_STATUS_PATH): unrelated_read},
     )
