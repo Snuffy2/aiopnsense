@@ -1,96 +1,129 @@
 """Tests for `aiopnsense.speedtest`."""
 
 from collections.abc import Callable
-from datetime import timedelta, timezone
+from functools import partial
 from typing import Any
-from unittest.mock import AsyncMock
-from zoneinfo import ZoneInfo
 
 import pytest
 
 from aiopnsense import OPNsenseClient
-from aiopnsense._endpoint_outcome import _EndpointOutcome
-from aiopnsense.exceptions import OPNsenseConnectionError
 from aiopnsense.system import SYSTEM_TIME_ENDPOINT
-from tests.conftest import make_mock_session_client, stub_endpoint_outcome
+from tests.conftest import FakeRouter, install_fake_router, make_mock_session_client
 
 ClientType = Callable[..., OPNsenseClient]
 
+SHOWLOG_PATH = "/api/speedtest/service/showlog"
+SHOWSTAT_PATH = "/api/speedtest/service/showstat"
+RUN_PATH = "/api/speedtest/service/run"
+NEW_YORK_TIME = {"datetime": "Sat Mar 14 03:10:00 EDT 2026"}
+MINUS_FOUR_TIME = {"datetime": "2026-03-14 03:10:00 -0400"}
 
-@pytest.mark.asyncio
-async def test_get_speedtest_skips_calls_when_endpoint_missing(make_client: ClientType) -> None:
-    """get_speedtest should skip speedtest API calls when endpoint is unavailable.
+
+def _showlog_row(
+    date: object = "2026-03-14T03:09:45",
+    server_id: object = "72800",
+    server: object = "Test ISP",
+    download: object = "1",
+    upload: object = "2",
+    latency: object = "3",
+    url: object = "https://www.speedtest.net/result/c/abc",
+) -> list[list[object]]:
+    """Return a show-log payload holding one result row.
+
+    Args:
+        date (object): Timestamp column.
+        server_id (object): Server identifier column.
+        server (object): Server name column.
+        download (object): Download column.
+        upload (object): Upload column.
+        latency (object): Latency column.
+        url (object): Result URL column.
+
+    Returns:
+        list[list[object]]: Payload with the nine-column row the Router returns.
+    """
+    return [
+        [date, "198.51.100.10", server_id, server, "United States", download, upload, latency, url]
+    ]
+
+
+def _speedtest_client(
+    make_client: ClientType,
+    routes: dict[tuple[str, str], Any],
+    *,
+    throw_errors: bool = False,
+) -> tuple[OPNsenseClient, FakeRouter]:
+    """Build a client whose Router answers only the given routes.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        routes (dict[tuple[str, str], Any]): Router answers keyed by HTTP method and path.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+
+    Returns:
+        tuple[OPNsenseClient, FakeRouter]: Client and the Router that records its requests.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
-
-        result = await client.get_speedtest()
-
-        assert result == {"available": False}
-        read.assert_awaited_once_with("/api/speedtest/service/showlog")
-    finally:
-        await client.async_close()
+    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
+    return client, install_fake_router(client, session, routes=routes, explicit_routes=True)
 
 
-@pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
+async def test_get_speedtest_skips_calls_when_endpoint_missing(
+    make_client: ClientType, throw_errors: bool
+) -> None:
+    """A 404 show-log reports Speedtest unavailable in either error mode and reads nothing more.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+    """
+    client, router = _speedtest_client(
+        make_client, {("GET", SHOWLOG_PATH): 404}, throw_errors=throw_errors
+    )
+
+    assert await client.get_speedtest() == {"available": False}
+
+    assert [(method, url) for method, url, _body in router.requests] == [
+        ("GET", "http://localhost" + SHOWLOG_PATH)
+    ]
+
+
 async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client: ClientType) -> None:
-    """get_speedtest should normalize shared showlog and showstat payload fields.
+    """get_speedtest normalizes the shared show-log and show-stat payload fields.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
-        read.side_effect = [
-            _EndpointOutcome.data(
-                [
-                    [
-                        "2026-03-14T03:09:45",
-                        "198.51.100.10",
-                        "72800",
-                        "RippleFiber, Newark, NJ",
-                        "United States",
-                        "836.05",
-                        "832.97",
-                        "4.0",
-                        "https://www.speedtest.net/result/c/abc",
-                    ]
-                ]
+    client, _router = _speedtest_client(
+        make_client,
+        {
+            ("GET", SHOWLOG_PATH): _showlog_row(
+                server="RippleFiber, Newark, NJ", download="836.05", upload="832.97", latency="4.0"
             ),
-            _EndpointOutcome.data(
-                {
-                    "samples": 10717,
-                    "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
-                    "latency": {"avg": 13.42, "min": 2.35, "max": 1266.74},
-                    "download": {"avg": 723.83, "min": 4.18, "max": 942.02},
-                    "upload": {"avg": 706.7, "min": 1.54, "max": 890.32},
-                }
-            ),
-        ]
-        client._get_resolved_opnsense_timezone = AsyncMock(
-            return_value=ZoneInfo("America/New_York")
-        )
+            ("GET", SHOWSTAT_PATH): {
+                "samples": 10717,
+                "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
+                "latency": {"avg": 13.42, "min": 2.35, "max": 1266.74},
+                "download": {"avg": 723.83, "min": 4.18, "max": 942.02},
+                "upload": {"avg": 706.7, "min": 1.54, "max": 890.32},
+            },
+            ("GET", SYSTEM_TIME_ENDPOINT): NEW_YORK_TIME,
+        },
+    )
 
-        result = await client.get_speedtest()
+    result = await client.get_speedtest()
 
-        assert result["available"] is True
-        assert result["last"]["download"]["value"] == 836.05
-        assert result["last"]["download"]["server_id"] == "72800"
-        assert result["last"]["download"]["server"] == "RippleFiber, Newark, NJ"
-        assert result["last"]["download"]["date"] == "2026-03-14T03:09:45-04:00"
-        assert result["average"]["download"]["value"] == 723.83
-        assert result["average"]["download"]["min"] == 4.18
-        assert result["average"]["download"]["max"] == 942.02
-        assert result["average"]["download"]["samples"] == 10717
-        assert result["average"]["download"]["oldest"] == "2023-01-22T00:29:00-05:00"
-        assert result["average"]["download"]["youngest"] == "2026-03-14T03:09:45-04:00"
-    finally:
-        await client.async_close()
+    assert result["available"] is True
+    assert result["last"]["download"]["value"] == 836.05
+    assert result["last"]["download"]["server_id"] == "72800"
+    assert result["last"]["download"]["server"] == "RippleFiber, Newark, NJ"
+    assert result["last"]["download"]["date"] == "2026-03-14T03:09:45-04:00"
+    assert result["average"]["download"]["value"] == 723.83
+    assert result["average"]["download"]["min"] == 4.18
+    assert result["average"]["download"]["max"] == 942.02
+    assert result["average"]["download"]["samples"] == 10717
+    assert result["average"]["download"]["oldest"] == "2023-01-22T00:29:00-05:00"
+    assert result["average"]["download"]["youngest"] == "2026-03-14T03:09:45-04:00"
 
 
 @pytest.mark.parametrize(
@@ -100,239 +133,157 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client: Cl
         pytest.param(False, id="showstat-missing"),
     ],
 )
-@pytest.mark.asyncio
 async def test_get_speedtest_reads_optional_showstat_payload(
     make_client: ClientType,
     showstat_available: bool,
 ) -> None:
-    """Validate ``get_speedtest`` reads the ``showstat`` payload and uses it only when present.
+    """get_speedtest reads show-stat and uses it only when the Router answers it.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         showstat_available (bool): Whether the ``showstat`` endpoint answers with data.
-
-    Returns:
-        None: This test validates that a missing showstat endpoint yields empty statistics.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        endpoint_outcomes = {
-            "/api/speedtest/service/showlog": _EndpointOutcome.data(
-                [
-                    [
-                        "2026-03-14T03:09:45",
-                        "198.51.100.10",
-                        "72800",
-                        "Test ISP, New York, NY",
-                        "United States",
-                        "1",
-                        "2",
-                        "3",
-                        "https://www.speedtest.net/result/c/abc",
-                    ]
-                ]
-            ),
-            "/api/speedtest/service/showstat": (
-                _EndpointOutcome.data({}) if showstat_available else _EndpointOutcome.absent()
-            ),
-        }
-        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
-        read.side_effect = lambda endpoint: endpoint_outcomes[endpoint]
-        client._get_resolved_opnsense_timezone = AsyncMock(
-            return_value=timezone(timedelta(hours=-4))
-        )
+    client, router = _speedtest_client(
+        make_client,
+        {
+            ("GET", SHOWLOG_PATH): _showlog_row(server="Test ISP, New York, NY"),
+            ("GET", SHOWSTAT_PATH): {"samples": 5} if showstat_available else 404,
+            ("GET", SYSTEM_TIME_ENDPOINT): MINUS_FOUR_TIME,
+        },
+    )
 
-        result = await client.get_speedtest()
+    result = await client.get_speedtest()
 
-        assert result["available"] is True
-        assert read.await_count == 2
-        read.assert_any_await("/api/speedtest/service/showlog")
-        read.assert_any_await("/api/speedtest/service/showstat")
-        client._get_resolved_opnsense_timezone.assert_awaited_once_with()
-        assert result["last"]["download"]["value"] == 1.0
-        assert result["last"]["upload"]["value"] == 2.0
-        assert result["last"]["latency"]["value"] == 3.0
-    finally:
-        await client.async_close()
+    assert result["available"] is True
+    assert router.count("GET", SHOWLOG_PATH) == 1
+    assert router.count("GET", SHOWSTAT_PATH) == 1
+    assert router.count("GET", SYSTEM_TIME_ENDPOINT) == 1
+    assert result["average"]["download"]["samples"] == (5 if showstat_available else None)
+    assert result["last"]["download"]["value"] == 1.0
+    assert result["last"]["upload"]["value"] == 2.0
+    assert result["last"]["latency"]["value"] == 3.0
 
 
-@pytest.mark.asyncio
 async def test_get_speedtest_preserves_timezone_aware_date(make_client: ClientType) -> None:
-    """get_speedtest should preserve an existing timestamp UTC offset.
+    """get_speedtest preserves an existing timestamp UTC offset over the Router timezone.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
-        read.side_effect = [
-            _EndpointOutcome.data(
-                [
-                    [
-                        "2026-03-14T03:09:45+01:30",
-                        "198.51.100.10",
-                        "72800",
-                        "Test ISP",
-                        "United States",
-                        "1",
-                        "2",
-                        "3",
-                        "https://www.speedtest.net/result/c/abc",
-                    ]
-                ]
-            ),
-            _EndpointOutcome.absent(),
-        ]
-        client._get_resolved_opnsense_timezone = AsyncMock()
+    client, router = _speedtest_client(
+        make_client,
+        {
+            ("GET", SHOWLOG_PATH): _showlog_row(date="2026-03-14T03:09:45+01:30"),
+            ("GET", SHOWSTAT_PATH): 404,
+            ("GET", SYSTEM_TIME_ENDPOINT): NEW_YORK_TIME,
+        },
+    )
 
-        result = await client.get_speedtest()
+    result = await client.get_speedtest()
 
-        assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
-        client._get_resolved_opnsense_timezone.assert_awaited_once_with()
-    finally:
-        await client.async_close()
+    assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
+    assert router.count("GET", SYSTEM_TIME_ENDPOINT) == 1
 
 
-@pytest.mark.asyncio
 async def test_get_speedtest_drops_malformed_date(make_client: ClientType) -> None:
-    """get_speedtest should omit malformed timestamp values.
+    """get_speedtest omits malformed timestamp values.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
-        read.side_effect = [
-            _EndpointOutcome.data(
-                [
-                    [
-                        "not-a-date",
-                        "198.51.100.10",
-                        "72800",
-                        "Test ISP",
-                        "United States",
-                        "1",
-                        "2",
-                        "3",
-                        "https://www.speedtest.net/result/c/abc",
-                    ]
-                ]
-            ),
-            _EndpointOutcome.absent(),
-        ]
-        client._get_resolved_opnsense_timezone = AsyncMock()
+    client, router = _speedtest_client(
+        make_client,
+        {
+            ("GET", SHOWLOG_PATH): _showlog_row(date="not-a-date"),
+            ("GET", SHOWSTAT_PATH): 404,
+            ("GET", SYSTEM_TIME_ENDPOINT): NEW_YORK_TIME,
+        },
+    )
 
-        result = await client.get_speedtest()
+    result = await client.get_speedtest()
 
-        assert result["last"]["download"]["date"] is None
-        client._get_resolved_opnsense_timezone.assert_awaited_once_with()
-    finally:
-        await client.async_close()
+    assert result["last"]["download"]["date"] is None
+    assert router.count("GET", SYSTEM_TIME_ENDPOINT) == 1
 
 
-@pytest.mark.asyncio
 async def test_get_speedtest_preserves_aware_date_and_drops_naive_periods_when_timezone_unresolved(
     make_client: ClientType,
 ) -> None:
-    """When OPNsense timezone is unresolved, keep aware date fields but drop naive period fields.
+    """With no resolvable Router timezone, aware dates stay and naive period fields are dropped.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
-        read.side_effect = [
-            _EndpointOutcome.data(
-                [
-                    [
-                        "2026-03-14T03:09:45+01:30",
-                        "198.51.100.10",
-                        "72800",
-                        "Test ISP",
-                        "United States",
-                        "1",
-                        "2",
-                        "3",
-                        "https://www.speedtest.net/result/c/abc",
-                    ]
-                ]
-            ),
-            _EndpointOutcome.absent(),
-        ]
-        client._get_resolved_opnsense_timezone = AsyncMock(return_value=None)
+    client, router = _speedtest_client(
+        make_client,
+        {
+            ("GET", SHOWLOG_PATH): _showlog_row(date="2026-03-14T03:09:45+01:30"),
+            ("GET", SHOWSTAT_PATH): {
+                "samples": 10717,
+                "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
+            },
+            ("GET", SYSTEM_TIME_ENDPOINT): 404,
+        },
+    )
 
-        result = await client.get_speedtest()
+    result = await client.get_speedtest()
 
-        assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
-        assert result["average"]["download"]["oldest"] is None
-        assert result["average"]["download"]["youngest"] is None
-        client._get_resolved_opnsense_timezone.assert_awaited_once_with()
-    finally:
-        await client.async_close()
+    assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
+    assert result["average"]["download"]["oldest"] is None
+    assert result["average"]["download"]["youngest"] is None
+    assert router.count("GET", SYSTEM_TIME_ENDPOINT) == 1
 
 
-@pytest.mark.asyncio
 async def test_get_speedtest_normalizes_malformed_payloads(make_client: ClientType) -> None:
-    """get_speedtest should coerce malformed or missing values to None safely.
+    """get_speedtest coerces malformed or missing values to None safely.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
-        read.side_effect = [
-            _EndpointOutcome.data(
+    client, _router = _speedtest_client(
+        make_client,
+        {
+            ("GET", SHOWLOG_PATH): [
                 [
-                    [
-                        12345,
-                        "198.51.100.10",
-                        None,
-                        "Regional POP - NYC",
-                        "United States",
-                        "bad-number",
-                        "12.5",
-                        None,
-                        999,
-                    ]
+                    12345,
+                    "198.51.100.10",
+                    None,
+                    "Regional POP - NYC",
+                    "United States",
+                    "bad-number",
+                    "12.5",
+                    None,
+                    999,
                 ]
-            ),
-            _EndpointOutcome.data(
-                {
-                    "samples": "not-an-int",
-                    "period": "bad-period-shape",
-                    "download": "bad-download-shape",
-                    "upload": None,
-                    "latency": ["bad-latency-shape"],
-                }
-            ),
-        ]
-        client._get_resolved_opnsense_timezone = AsyncMock(
-            return_value=timezone(timedelta(hours=-4))
-        )
+            ],
+            ("GET", SHOWSTAT_PATH): {
+                "samples": "not-an-int",
+                "period": "bad-period-shape",
+                "download": "bad-download-shape",
+                "upload": None,
+                "latency": ["bad-latency-shape"],
+            },
+            ("GET", SYSTEM_TIME_ENDPOINT): MINUS_FOUR_TIME,
+        },
+    )
 
-        result = await client.get_speedtest()
+    result = await client.get_speedtest()
 
-        assert result["available"] is True
-        assert result["last"]["download"]["server_id"] is None
-        assert result["last"]["download"]["server"] == "Regional POP - NYC"
-        assert result["last"]["download"]["date"] is None
-        assert result["last"]["download"]["url"] is None
-        assert result["last"]["download"]["value"] is None
-        assert result["last"]["upload"]["value"] == 12.5
-        assert result["last"]["latency"]["value"] is None
+    assert result["available"] is True
+    assert result["last"]["download"]["server_id"] is None
+    assert result["last"]["download"]["server"] == "Regional POP - NYC"
+    assert result["last"]["download"]["date"] is None
+    assert result["last"]["download"]["url"] is None
+    assert result["last"]["download"]["value"] is None
+    assert result["last"]["upload"]["value"] == 12.5
+    assert result["last"]["latency"]["value"] is None
 
-        assert result["average"]["download"]["value"] is None
-        assert result["average"]["download"]["min"] is None
-        assert result["average"]["download"]["max"] is None
-        assert result["average"]["download"]["samples"] is None
-        assert result["average"]["download"]["oldest"] is None
-        assert result["average"]["download"]["youngest"] is None
-    finally:
-        await client.async_close()
+    assert result["average"]["download"]["value"] is None
+    assert result["average"]["download"]["min"] is None
+    assert result["average"]["download"]["max"] is None
+    assert result["average"]["download"]["samples"] is None
+    assert result["average"]["download"]["oldest"] is None
+    assert result["average"]["download"]["youngest"] is None
 
 
 @pytest.mark.parametrize("show_log", [None, {}, [], ["malformed-row"], [["too", "short"]]])
@@ -434,75 +385,83 @@ async def test_parse_showlog_latest_preserves_server_fields(
         await client.async_close()
 
 
-@pytest.mark.asyncio
 async def test_run_speedtest_uses_extended_timeout(make_client: ClientType) -> None:
-    """run_speedtest should use custom timeout helper for long-running endpoint calls.
+    """run_speedtest checks show-log, then starts the run with the extended timeout.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        status = stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
-        client._safe_dict_get_with_timeout = AsyncMock(return_value={"timestamp": "x"})
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(
+        client,
+        session,
+        routes={("GET", SHOWLOG_PATH): _showlog_row(), ("GET", RUN_PATH): {"timestamp": "x"}},
+        explicit_routes=True,
+    )
+    send_get = session.get
+    timeouts: dict[str, float | None] = {}
 
-        result = await client.run_speedtest()
+    def record_timeout(url: str, **kwargs: Any) -> Any:
+        """Record the total timeout of each GET before the Router answers it.
 
-        assert result == {"timestamp": "x"}
-        status.assert_awaited_once_with("/api/speedtest/service/showlog")
-        client._safe_dict_get_with_timeout.assert_awaited_once_with(
-            "/api/speedtest/service/run", timeout_seconds=180
-        )
-    finally:
-        await client.async_close()
+        Args:
+            url (str): Full requested URL.
+            kwargs (Any): Request parameters passed by the HTTP transport.
+
+        Returns:
+            Any: The fake Router's response.
+        """
+        timeouts[url.removeprefix("http://localhost")] = kwargs["timeout"].total
+        return send_get(url, **kwargs)
+
+    session.get = record_timeout
+
+    assert await client.run_speedtest() == {"timestamp": "x"}
+
+    assert router.count("GET", SHOWLOG_PATH) == 1
+    assert router.count("GET", RUN_PATH) == 1
+    assert timeouts[RUN_PATH] == 180
 
 
-@pytest.mark.asyncio
-async def test_run_speedtest_returns_empty_when_endpoint_missing(make_client: ClientType) -> None:
-    """run_speedtest should return an empty payload when endpoint is unavailable.
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
+async def test_run_speedtest_returns_empty_when_endpoint_missing(
+    make_client: ClientType, throw_errors: bool
+) -> None:
+    """run_speedtest returns an empty payload and starts no run when show-log is a 404.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        status = stub_endpoint_outcome(client, _EndpointOutcome.absent(), read="status")
-        client._safe_dict_get_with_timeout = AsyncMock()
+    client, router = _speedtest_client(
+        make_client, {("GET", SHOWLOG_PATH): 404}, throw_errors=throw_errors
+    )
 
-        result = await client.run_speedtest()
+    assert await client.run_speedtest() == {}
 
-        assert result == {}
-        client._safe_dict_get_with_timeout.assert_not_awaited()
-        status.assert_awaited_once_with("/api/speedtest/service/showlog")
-    finally:
-        await client.async_close()
+    assert router.count("GET", SHOWLOG_PATH) == 1
+    assert router.count("GET", RUN_PATH) == 0
 
 
-@pytest.mark.asyncio
 async def test_run_speedtest_returns_empty_for_non_mapping_response(
     make_client: ClientType,
 ) -> None:
-    """run_speedtest should return an empty payload for non-mapping responses.
+    """run_speedtest returns an empty payload when the run answers with a non-mapping body.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        status = stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
-        client._do_get = AsyncMock(return_value=["not", "a", "mapping"])
+    client, router = _speedtest_client(
+        make_client,
+        {("GET", SHOWLOG_PATH): _showlog_row(), ("GET", RUN_PATH): ["not", "a", "mapping"]},
+    )
 
-        result = await client.run_speedtest()
+    assert await client.run_speedtest() == {}
 
-        assert result == {}
-        status.assert_awaited_once_with("/api/speedtest/service/showlog")
-        client._do_get.assert_awaited_once()
-    finally:
-        await client.async_close()
+    assert router.count("GET", RUN_PATH) == 1
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("throw_errors", [False, True])
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
 async def test_get_speedtest_survives_failed_system_time_lookup(
     make_client: ClientType, throw_errors: bool
 ) -> None:
@@ -510,57 +469,24 @@ async def test_get_speedtest_survives_failed_system_time_lookup(
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        throw_errors (bool): Whether strict request errors are enabled.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        client._throw_errors = throw_errors
+    client, router = _speedtest_client(
+        make_client,
+        {
+            ("GET", SHOWLOG_PATH): _showlog_row(date="2026-03-14T03:09:45+01:30"),
+            ("GET", SHOWSTAT_PATH): {
+                "samples": 10717,
+                "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
+            },
+            ("GET", SYSTEM_TIME_ENDPOINT): 503,
+        },
+        throw_errors=throw_errors,
+    )
 
-        async def fake_fetch(path: str, *_args: Any, **_kwargs: Any) -> _EndpointOutcome:
-            """Fail the system-time request and serve the show-log and show-stat reads.
+    result = await client.get_speedtest()
 
-            Args:
-                path (str): API endpoint path requested by the getter.
-                _args (Any): Positional arguments accepted by `fake_fetch`.
-                _kwargs (Any): Keyword arguments accepted by `fake_fetch`.
-
-            Returns:
-                _EndpointOutcome: Transient failure for the system-time endpoint, otherwise the
-                    canned show-log or show-stat payload.
-            """
-            if path == SYSTEM_TIME_ENDPOINT:
-                return _EndpointOutcome.transient(
-                    OPNsenseConnectionError("system time unavailable")
-                )
-            if path == "/api/speedtest/service/showlog":
-                return _EndpointOutcome.data(
-                    [
-                        [
-                            "2026-03-14T03:09:45+01:30",
-                            "198.51.100.10",
-                            "72800",
-                            "Test ISP",
-                            "United States",
-                            "1",
-                            "2",
-                            "3",
-                            "https://www.speedtest.net/result/c/abc",
-                        ]
-                    ]
-                )
-            return _EndpointOutcome.data(
-                {
-                    "samples": 10717,
-                    "period": {"oldest": "2023-01-22 00:29:00", "youngest": "2026-03-14 03:09:45"},
-                }
-            )
-
-        client._fetch_endpoint_outcome = AsyncMock(side_effect=fake_fetch)
-
-        result = await client.get_speedtest()
-
-        assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
-        assert result["average"]["download"]["oldest"] is None
-        assert result["average"]["download"]["youngest"] is None
-    finally:
-        await client.async_close()
+    assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
+    assert result["average"]["download"]["oldest"] is None
+    assert result["average"]["download"]["youngest"] is None
+    assert router.count("GET", SYSTEM_TIME_ENDPOINT) == 1
