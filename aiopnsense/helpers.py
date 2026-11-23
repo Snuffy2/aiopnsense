@@ -146,7 +146,7 @@ def _log_request_recovery(
     key = (method.upper(), path, phase)
     if key in client._request_outages:
         del client._request_outages[key]
-        _LOGGER.info("%s %s recovered for %s", method.upper(), phase, path)
+        _LOGGER.info("%s %s recovered for %s", method.upper(), phase, _redact_url_credentials(path))
 
 
 def _mark_request_error_logged(error: BaseException) -> None:

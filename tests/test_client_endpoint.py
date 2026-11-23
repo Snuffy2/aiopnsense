@@ -185,11 +185,12 @@ async def test_endpoint_status_raises_for_forbidden_or_transient_in_throw_mode(
         error_type (type[OPNsenseError]): Public error type the alias must raise.
     """
     client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", STATUS_PATH): answer})
+    router = install_fake_router(client, session, routes={("GET", STATUS_PATH): answer})
     client.toggle_throwing_errors(True)
     try:
         with pytest.warns(DeprecationWarning), pytest.raises(error_type):
             await client.is_endpoint_available(STATUS_PATH)  # type: ignore[deprecated]
+        assert router.count("GET", STATUS_PATH) == 1
     finally:
         await client.async_close()
 
@@ -204,11 +205,12 @@ async def test_endpoint_status_404_is_false_without_raising_in_throw_mode(
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", STATUS_PATH): 404})
+    router = install_fake_router(client, session, routes={("GET", STATUS_PATH): 404})
     client.toggle_throwing_errors(True)
     try:
         with pytest.warns(DeprecationWarning):
             assert await client.is_endpoint_available(STATUS_PATH) is False  # type: ignore[deprecated]
+        assert router.count("GET", STATUS_PATH) == 1
     finally:
         await client.async_close()
 
@@ -752,6 +754,16 @@ async def test_older_data_read_cannot_overwrite_newer_status_success(
     delay_first = True
 
     async def delayed_queue(method: str, path: str, payload: Any = None) -> Any:
+        """Delay the first completed NUT read until ``release_old_response`` is set.
+
+        Args:
+            method (str): HTTP method passed to the queued request.
+            path (str): Endpoint path passed to the queued request.
+            payload (Any): Optional request payload.
+
+        Returns:
+            Any: NUT endpoint outcome returned after the release event.
+        """
         nonlocal delay_first
         outcome = await original_queue(method, path, payload)
         if delay_first:
@@ -795,12 +807,31 @@ async def test_older_result_can_publish_when_newer_observation_is_cancelled(
     release_new = asyncio.Event()
 
     async def delayed_queue(method: str, path: str, payload: Any = None) -> Any:
+        """Hold the older NUT read until ``release_old`` allows publication.
+
+        Args:
+            method (str): HTTP method passed to the queued request.
+            path (str): Endpoint path passed to the queued request.
+            payload (Any): Optional request payload.
+
+        Returns:
+            Any: NUT endpoint outcome returned after ``release_old``.
+        """
         outcome = await original_queue(method, path, payload)
         old_ready.set()
         await release_old.wait()
         return outcome
 
     async def delayed_status(*args: Any, **kwargs: Any) -> _EndpointOutcome:
+        """Pause the forced NUT status probe until cancelled or ``release_new`` is set.
+
+        Args:
+            *args (Any): Arguments passed to the original status request.
+            **kwargs (Any): Keyword arguments passed to the original status request.
+
+        Returns:
+            _EndpointOutcome: Result of the original status request after release.
+        """
         outcome = await original_get(*args, **kwargs)
         if len(args) > 1 and args[1] == "_check_endpoint_status":
             new_ready.set()
@@ -854,6 +885,16 @@ async def test_old_generation_success_does_not_clear_new_outage(
     delay_first = True
 
     async def delayed_queue(method: str, path: str, payload: Any = None) -> Any:
+        """Hold the first NUT response until ``release_old_response`` is set.
+
+        Args:
+            method (str): HTTP method passed to the queued request.
+            path (str): Endpoint path passed to the queued request.
+            payload (Any): Optional request payload.
+
+        Returns:
+            Any: NUT endpoint outcome from the original queue call after release.
+        """
         nonlocal delay_first
         outcome = await original_queue(method, path, payload)
         if delay_first:
@@ -902,6 +943,16 @@ async def test_probe_success_does_not_suppress_bounded_read_recovery(
     delay_next = False
 
     async def delayed_queue(method: str, path: str, payload: Any = None) -> Any:
+        """Hold the selected NUT read until ``release_old_response`` is set.
+
+        Args:
+            method (str): HTTP method passed to the queued request.
+            path (str): Endpoint path passed to the queued request.
+            payload (Any): Optional request payload.
+
+        Returns:
+            Any: NUT endpoint outcome from the original queue call after release.
+        """
         nonlocal delay_next
         outcome = await original_queue(method, path, payload)
         if delay_next:

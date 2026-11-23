@@ -17,7 +17,12 @@ from .exceptions import (
     _map_opnsense_exception,
     _opnsense_http_error,
 )
-from .helpers import _log_request_failure, _redacted_exception_message, _RequestLoggingClient
+from .helpers import (
+    _log_request_failure,
+    _redact_url_credentials,
+    _redacted_exception_message,
+    _RequestLoggingClient,
+)
 
 _REQUEST_PHASE = "request"
 """Request phase of immediate GET and POST calls and bounded endpoint reads."""
@@ -45,7 +50,7 @@ def _request_log_url(url: str) -> str:
     scheme, separator, location = url.partition("://")
     authority, slash, endpoint = location.partition("/")
     host = authority.rsplit("@", 1)[-1]
-    return f"{scheme}{separator}{host}{slash}{endpoint}"
+    return _redact_url_credentials(f"{scheme}{separator}{host}{slash}{endpoint}")
 
 
 class _RequestFailureClient(_RequestLoggingClient, _ThrowErrorsClient, Protocol):

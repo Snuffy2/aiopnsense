@@ -3,7 +3,7 @@
 import asyncio
 import codecs
 from collections.abc import AsyncGenerator, Awaitable, Callable, MutableMapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import json
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
@@ -35,24 +35,32 @@ type _ValidatorFailure = (
     aiohttp.ClientError | TimeoutError | UnicodeDecodeError | json.JSONDecodeError
 )
 type _ValidatorErrors = list[tuple[_ValidatorFailure, aiohttp.ClientResponse]]
-type _OutcomeResponses = list[aiohttp.ClientResponse]
+
+
+@dataclass(slots=True)
+class _ObservedResponse:
+    """Record the response handed to aiohttp's status validator."""
+
+    response: aiohttp.ClientResponse | None = None
+    observation_id: int = 0
 
 
 def _outcome_raise_for_status(
     session: aiohttp.ClientSession,
-) -> tuple[_ResponseStatusValidator, _OutcomeResponses, _ValidatorErrors]:
+    next_observation_id: Callable[[], int],
+) -> tuple[_ResponseStatusValidator, _ObservedResponse, _ValidatorErrors]:
     """Wrap a custom session validator for endpoint outcome requests.
 
     Args:
         session (aiohttp.ClientSession): Session whose validator applies to requests.
+        next_observation_id (Callable[[], int]): Assign the response's arrival order.
 
     Returns:
-        tuple[_ResponseStatusValidator, _OutcomeResponses, _ValidatorErrors]:
-            Per-request validator, responses it receives, and exceptions it raises.
-            The validator records responses before aiohttp's request completion hooks.
+        tuple[_ResponseStatusValidator, _ObservedResponse, _ValidatorErrors]:
+            Per-request validator, its observed response, and exceptions it raises.
     """
     validator = session.raise_for_status
-    responses: _OutcomeResponses = []
+    observed = _ObservedResponse()
     validator_errors: _ValidatorErrors = []
 
     async def validate_response(response: aiohttp.ClientResponse) -> None:
@@ -67,7 +75,8 @@ def _outcome_raise_for_status(
             UnicodeDecodeError: Propagated from the session validator.
             json.JSONDecodeError: Propagated from the session validator.
         """
-        responses.append(response)
+        observed.response = response
+        observed.observation_id = next_observation_id()
         try:
             if callable(validator):
                 await validator(response)
@@ -82,14 +91,14 @@ def _outcome_raise_for_status(
             validator_errors.append((error, response))
             raise
 
-    return validate_response, responses, validator_errors
+    return validate_response, observed, validator_errors
 
 
 def _classify_outcome_response_error(
     error: aiohttp.ClientResponseError,
     *,
     response_entered: bool,
-    responses: _OutcomeResponses,
+    observed_response: aiohttp.ClientResponse | None,
     method: str,
     url: str,
     validator_errors: _ValidatorErrors,
@@ -99,7 +108,7 @@ def _classify_outcome_response_error(
     Args:
         error (aiohttp.ClientResponseError): Raised HTTP response error.
         response_entered (bool): Whether transport received the response context.
-        responses (_OutcomeResponses): Responses delivered to aiohttp's status callback.
+        observed_response (aiohttp.ClientResponse | None): Response delivered to the validator.
         method (str): HTTP method of the endpoint request.
         url (str): Raw endpoint request URL passed to aiohttp.
         validator_errors (_ValidatorErrors):
@@ -125,7 +134,7 @@ def _classify_outcome_response_error(
 
     if (
         response_entered
-        or responses
+        or observed_response is not None
         or _raised_by_aiohttp_trace(error.__traceback__)
         or not _response_error_matches_request(error, method, url)
     ):
@@ -257,7 +266,7 @@ class ClientTransportMixin:
     """Immediate request execution and safe response methods for OPNsenseClient."""
 
     if TYPE_CHECKING:
-        _endpoint_dispatch_id: int
+        _endpoint_observation_id: int
         _password: str
         _request_outages: dict[tuple[str, str, str], int | None]
         _rest_api_query_count: int
@@ -610,6 +619,15 @@ class ClientTransportMixin:
 
         return None
 
+    def _next_endpoint_observation_id(self) -> int:
+        """Assign an ordering number shared by endpoint dispatch and response delivery.
+
+        Returns:
+            int: Next observation ID for this client.
+        """
+        self._endpoint_observation_id += 1
+        return self._endpoint_observation_id
+
     async def _do_get_outcome(
         self,
         path: str,
@@ -640,21 +658,24 @@ class ClientTransportMixin:
             _EndpointOutcome: ``DATA`` with the decoded payload or body text (``None`` when
                 ``read_body`` is ``False``) for a successful response,
                 ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any
-                other HTTP status, timeout or client error.
+                other HTTP status, timeout or client error. A successful response
+                that fails decoding carries the original decoding error.
 
         Raises:
-            UnicodeDecodeError: For invalid text encoding outside a validator failure
-                attributable to a delivered HTTP error response.
-            json.JSONDecodeError: For undecodable JSON outside a validator failure
-                attributable to a delivered HTTP error response.
+            UnicodeDecodeError: For invalid text encoding without an attributable response.
+            json.JSONDecodeError: For undecodable JSON without an attributable response.
         """
-        self._endpoint_dispatch_id += 1
-        dispatch_id = self._endpoint_dispatch_id
+        dispatch_id = self._next_endpoint_observation_id()
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        _LOGGER.debug("[get_outcome] path: %s (called by %s)", path, caller)
-        raise_for_status, responses, validator_errors = _outcome_raise_for_status(self._session)
+        _LOGGER.debug(
+            "[get_outcome] path: %s (called by %s)", _redact_url_credentials(path), caller
+        )
+        raise_for_status, observed, validator_errors = _outcome_raise_for_status(
+            self._session, self._next_endpoint_observation_id
+        )
         response_entered = False
+        successful_response = False
         outcome: _EndpointOutcome | None
         try:
             async with self._session.get(
@@ -665,6 +686,7 @@ class ClientTransportMixin:
                 raise_for_status=raise_for_status,
             ) as response:
                 response_entered = True
+                successful_response = response.ok
                 _LOGGER.debug(
                     "[get_outcome] Response %s: %s",
                     response.status,
@@ -681,7 +703,12 @@ class ClientTransportMixin:
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             outcome = _classify_outcome_payload_error(e, validator_errors)
             if outcome is None:
-                raise
+                if not successful_response and not any(
+                    e is validator_error and response.ok
+                    for validator_error, response in validator_errors
+                ):
+                    raise
+                outcome = replace(_EndpointOutcome.data(None), decode_error=e)
         except (aiohttp.ClientError, TimeoutError) as e:
             outcome = None
             if isinstance(e, aiohttp.ClientResponseError) and not isinstance(
@@ -690,7 +717,7 @@ class ClientTransportMixin:
                 outcome = _classify_outcome_response_error(
                     e,
                     response_entered=response_entered,
-                    responses=responses,
+                    observed_response=observed.response,
                     method="GET",
                     url=url,
                     validator_errors=validator_errors,
@@ -705,7 +732,10 @@ class ClientTransportMixin:
                 outcome = _EndpointOutcome.transient(
                     error, f"{type(e).__name__}: {_redacted_exception_message(e)}"
                 )
-        return replace(outcome, dispatch_id=dispatch_id)
+        finally:
+            if not response_entered and observed.response is not None:
+                observed.response.close()
+        return replace(outcome, observation_id=observed.observation_id or dispatch_id)
 
     def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
         """Normalize per-call timeout values to a positive float in seconds.
@@ -839,21 +869,24 @@ class ClientTransportMixin:
         Returns:
             _EndpointOutcome: ``DATA`` with the decoded payload for a successful response,
                 ``ABSENT`` for a 404 or 403 response, and ``TRANSIENT`` for any other
-                HTTP status, timeout or client error.
+                HTTP status, timeout or client error. A successful response that
+                fails decoding carries the original decoding error.
 
         Raises:
-            UnicodeDecodeError: For invalid text encoding outside a validator failure
-                attributable to a delivered HTTP error response.
-            json.JSONDecodeError: For undecodable JSON outside a validator failure
-                attributable to a delivered HTTP error response.
+            UnicodeDecodeError: For invalid text encoding without an attributable response.
+            json.JSONDecodeError: For undecodable JSON without an attributable response.
         """
-        self._endpoint_dispatch_id += 1
-        dispatch_id = self._endpoint_dispatch_id
+        dispatch_id = self._next_endpoint_observation_id()
         self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        _LOGGER.debug("[post_outcome] path: %s (called by %s)", path, caller)
-        raise_for_status, responses, validator_errors = _outcome_raise_for_status(self._session)
+        _LOGGER.debug(
+            "[post_outcome] path: %s (called by %s)", _redact_url_credentials(path), caller
+        )
+        raise_for_status, observed, validator_errors = _outcome_raise_for_status(
+            self._session, self._next_endpoint_observation_id
+        )
         response_entered = False
+        successful_response = False
         outcome: _EndpointOutcome | None
         try:
             async with self._session.post(
@@ -865,6 +898,7 @@ class ClientTransportMixin:
                 raise_for_status=raise_for_status,
             ) as response:
                 response_entered = True
+                successful_response = response.ok
                 _LOGGER.debug(
                     "[post_outcome] Response %s: %s",
                     response.status,
@@ -877,7 +911,12 @@ class ClientTransportMixin:
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             outcome = _classify_outcome_payload_error(e, validator_errors)
             if outcome is None:
-                raise
+                if not successful_response and not any(
+                    e is validator_error and response.ok
+                    for validator_error, response in validator_errors
+                ):
+                    raise
+                outcome = replace(_EndpointOutcome.data(None), decode_error=e)
         except (aiohttp.ClientError, TimeoutError) as e:
             outcome = None
             if isinstance(e, aiohttp.ClientResponseError) and not isinstance(
@@ -886,7 +925,7 @@ class ClientTransportMixin:
                 outcome = _classify_outcome_response_error(
                     e,
                     response_entered=response_entered,
-                    responses=responses,
+                    observed_response=observed.response,
                     method="POST",
                     url=url,
                     validator_errors=validator_errors,
@@ -901,7 +940,10 @@ class ClientTransportMixin:
                 outcome = _EndpointOutcome.transient(
                     error, f"{type(e).__name__}: {_redacted_exception_message(e)}"
                 )
-        return replace(outcome, dispatch_id=dispatch_id)
+        finally:
+            if not response_entered and observed.response is not None:
+                observed.response.close()
+        return replace(outcome, observation_id=observed.observation_id or dispatch_id)
 
     async def _safe_dict_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None

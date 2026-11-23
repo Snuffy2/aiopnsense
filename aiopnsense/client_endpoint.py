@@ -13,8 +13,14 @@ from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _error_if_throwing, _throws_errors
 from ._request_failure import _PROBE_PHASE, _REQUEST_PHASE, _request_log_url
 from .const import SNAKE_CASE_ENDPOINTS_CAPABILITY, FirmwareCapability
-from .exceptions import OPNsenseUnknownFirmware
-from .helpers import _LOGGER, _log_request_failure, _log_request_recovery, _redact_url_credentials
+from .exceptions import OPNsenseUnknownFirmware, _map_opnsense_exception
+from .helpers import (
+    _LOGGER,
+    _log_request_failure,
+    _log_request_recovery,
+    _mark_request_error_logged,
+    _redact_url_credentials,
+)
 
 
 @dataclass
@@ -297,12 +303,17 @@ class ClientEndpointMixin:
         Raises:
             error: OPNsenseError raised for a 403 or a transient HTTP or transport
                 failure when ``self._throw_errors`` is ``True``.
+            decode_error: A decoding exception on a successful HTTP response.
+                Bounded reads raise its mapped public error; probes propagate the
+                original exception from the session validator.
 
         Side Effects:
-            Updates endpoint availability caches. A 200 caches the endpoint as present
-            and a 404 as absent. Outside throw mode a 403 also caches the endpoint as
-            absent with the permission-denied marker. Transient failures and, in throw
-            mode, a 403 also clears the cache entry so the next call requests again.
+            Updates endpoint availability caches. A 200 without a decoding error
+            caches the endpoint as present and a 404 as absent. A 200 with a decoding
+            error supersedes older responses and clears any cached absence. Outside
+            throw mode a 403 also caches absence with the permission-denied marker.
+            Transient failures and, in throw mode, a 403 clear the cache entry so the
+            next call requests again.
         """
         cache_key = path
         if method == "post":
@@ -351,30 +362,48 @@ class ClientEndpointMixin:
                     else f"{method}_outcome"
                 )
                 outcome = await self._queue_request(queue_method, path, payload)
-            # A direct probe can reach transport before an earlier queued call.
-            dispatch_id = outcome.dispatch_id
+            observation_id = outcome.observation_id
+            decode_error: Exception | None = outcome.decode_error
+            if decode_error is not None and not status_only:
+                mapped_error = _map_opnsense_exception(decode_error)
+                mapped_error.__cause__ = decode_error
+                decode_error = mapped_error
+            error = _error_if_throwing(self, outcome.error) if outcome.error is not None else None
             checked_at = datetime.now().astimezone()
-            cache_can_publish = (
+            current_generation = (
                 self._endpoint_cache_generation == cache_generation
                 and self._endpoint_observations.get(cache_key) is observation
-                and observation.cache_publication_id < dispatch_id
+            )
+            cache_can_publish = (
+                current_generation and observation.cache_publication_id < observation_id
             )
             phase_can_publish = (
-                self._endpoint_cache_generation == cache_generation
-                and self._endpoint_observations.get(cache_key) is observation
-                and observation.phase_publication_ids.get(phase, 0) < dispatch_id
+                current_generation
+                and decode_error is None
+                and observation.phase_publication_ids.get(phase, 0) < observation_id
             )
             if not cache_can_publish and not phase_can_publish:
-                error = (
-                    _error_if_throwing(self, outcome.error) if outcome.error is not None else None
-                )
+                if decode_error is not None:
+                    raise decode_error
                 if error is not None:
+                    key = (method.upper(), path, phase)
+                    failure_status = 403 if outcome.is_absent else None
+                    if (
+                        current_generation
+                        and key in self._request_outages
+                        and self._request_outages[key] == failure_status
+                    ):
+                        _mark_request_error_logged(error)
                     raise error
                 return outcome
             if cache_can_publish:
-                observation.cache_publication_id = dispatch_id
+                observation.cache_publication_id = observation_id
             if phase_can_publish:
-                observation.phase_publication_ids[phase] = dispatch_id
+                observation.phase_publication_ids[phase] = observation_id
+            if decode_error is not None:
+                if cache_can_publish and self._endpoint_availability.get(cache_key) is False:
+                    self._clear_endpoint_cache_entry(cache_key)
+                raise decode_error
             if outcome.is_data:
                 if phase_can_publish:
                     _log_request_recovery(self, method, path, phase)
@@ -385,14 +414,13 @@ class ClientEndpointMixin:
                 return outcome
 
             if outcome.is_absent and outcome.http_status != 403:
-                _LOGGER.debug("Endpoint %s not found", path)
+                _LOGGER.debug("Endpoint %s not found", _redact_url_credentials(path))
                 if cache_can_publish:
                     self._endpoint_permission_denied.discard(cache_key)
                     self._endpoint_availability[cache_key] = False
                     self._endpoint_checked_at[cache_key] = checked_at
                 return outcome
 
-            error = _error_if_throwing(self, outcome.error) if outcome.error is not None else None
             if outcome.is_absent:
                 if phase_can_publish:
                     _log_request_failure(
@@ -427,7 +455,7 @@ class ClientEndpointMixin:
                     logging.WARNING,
                     "Transient %s failure for %s. %s. Not caching result.",
                     method.upper(),
-                    path,
+                    _redact_url_credentials(path),
                     _redact_url_credentials(outcome.detail),
                     error=error,
                 )

@@ -499,6 +499,7 @@ async def test_delivered_404_body_read_failure_is_absent(
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
     trace_events: list[str] = []
+    request_count = 0
 
     async def validate_response(response: aiohttp.ClientResponse) -> None:
         """Read the 404 body and reproduce a caller-side decoding failure.
@@ -521,6 +522,8 @@ async def test_delivered_404_body_read_failure_is_absent(
         Returns:
             aiohttp.ClientResponse: Simulated 404 response.
         """
+        nonlocal request_count
+        request_count += 1
         response = MagicMock(spec=aiohttp.ClientResponse)
         response.status = 404
         response.ok = False
@@ -554,7 +557,9 @@ async def test_delivered_404_body_read_failure_is_absent(
     ) as session:
         client = make_client(session=session, throw_errors=True)
         assert await client.get_nut_ups_status() == {}
+        assert await client.get_nut_ups_status() == {}
         assert trace_events == ["exception"]
+        assert request_count == 1
 
 
 @pytest.mark.parametrize("throw_errors", [False, True])

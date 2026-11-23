@@ -122,11 +122,12 @@ async def test_get_host_firmware_version_raises_in_throw_mode(
         expected_error (type[OPNsenseError]): Public exception type expected from the call.
     """
     client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", STATUS_PATH): route_value})
+    router = install_fake_router(client, session, routes={("GET", STATUS_PATH): route_value})
     client.toggle_throwing_errors(True)
     try:
         with pytest.raises(expected_error):
             await client.get_host_firmware_version()
+        assert router.count("GET", STATUS_PATH) == 1
     finally:
         await client.async_close()
 
@@ -141,10 +142,11 @@ async def test_get_host_firmware_version_missing_status_does_not_raise_in_throw_
         make_client (Callable[..., Any]): Factory used to create the firmware client.
     """
     client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", STATUS_PATH): 404})
+    router = install_fake_router(client, session, routes={("GET", STATUS_PATH): 404})
     client.toggle_throwing_errors(True)
     try:
         assert await client.get_host_firmware_version() is None
+        assert router.count("GET", STATUS_PATH) == 1
     finally:
         await client.async_close()
 
@@ -936,11 +938,12 @@ async def test_firmware_reads_raise_in_throw_mode(
         expected_error (type[OPNsenseError]): Public exception type expected from the call.
     """
     client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", path): route_value})
+    router = install_fake_router(client, session, routes={("GET", path): route_value})
     client.toggle_throwing_errors(True)
     try:
         with pytest.raises(expected_error):
             await getattr(client, read)()
+        assert router.count("GET", path) == 1
     finally:
         await client.async_close()
 
@@ -964,10 +967,11 @@ async def test_firmware_reads_missing_endpoint_does_not_raise_in_throw_mode(
         path (str): Endpoint the method reads.
     """
     client, session = make_mock_session_client(make_client)
-    install_fake_router(client, session, routes={("GET", path): 404})
+    router = install_fake_router(client, session, routes={("GET", path): 404})
     client.toggle_throwing_errors(True)
     try:
         assert await getattr(client, read)() == {}
+        assert router.count("GET", path) == 1
     finally:
         await client.async_close()
 

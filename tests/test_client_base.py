@@ -461,9 +461,20 @@ async def test_cancelled_outcome_reads_release_queue_workers(
     cancelled_reads = 0
 
     class BlockingResponse:
-        """Hold NUT requests in response acquisition until the test cancels them."""
+        """Hold NUT requests until released or cancelled by the test.
+
+        Cancellation during acquisition propagates after recording the cancelled read.
+        """
 
         async def __aenter__(self) -> FakeResponse:
+            """Wait for release, or record and re-raise cancellation.
+
+            Returns:
+                FakeResponse: Successful response after ``release_reads`` is set.
+
+            Raises:
+                asyncio.CancelledError: When the test or caller cancels response acquisition.
+            """
             nonlocal active_reads
             active_reads += 1
             if active_reads == 2:
@@ -484,6 +495,16 @@ async def test_cancelled_outcome_reads_release_queue_workers(
             exc: BaseException | None,
             _tb: object,
         ) -> bool:
+            """Leave response exceptions unsuppressed.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type from the response body.
+                exc (BaseException | None): Exception raised inside the context.
+                _tb (object): Traceback supplied by the async context manager protocol.
+
+            Returns:
+                bool: Always false, so cancellation and other exceptions propagate.
+            """
             return False
 
     def session_get(url: str, **_kwargs: Any) -> BlockingResponse | FakeResponse:
@@ -514,7 +535,7 @@ async def test_cancelled_outcome_reads_release_queue_workers(
 
         for call in cancelled_calls:
             call.cancel()
-        await asyncio.gather(*cancelled_calls, return_exceptions=True)
+        await asyncio.wait_for(asyncio.gather(*cancelled_calls, return_exceptions=True), timeout=2)
         await asyncio.wait_for(two_reads_cancelled.wait(), timeout=2)
 
         assert cancelled_reads == 2
@@ -544,9 +565,20 @@ async def test_cancelled_transport_child_does_not_stop_queue_worker(
     service_read_started = asyncio.Event()
 
     class CancelledResponse:
-        """Raise cancellation from an independently aborted Router request."""
+        """Raise cancellation from an independently aborted Router request.
+
+        The cancellation raised during acquisition propagates to the request caller.
+        """
 
         async def __aenter__(self) -> FakeResponse:
+            """Wait for the test release and then raise request cancellation.
+
+            Returns:
+                FakeResponse: Not returned because cancellation is raised first.
+
+            Raises:
+                asyncio.CancelledError: After the test releases the independently cancelled read.
+            """
             nonlocal active_reads
             active_reads += 1
             if active_reads == 2:
@@ -560,6 +592,16 @@ async def test_cancelled_transport_child_does_not_stop_queue_worker(
             exc: BaseException | None,
             _tb: object,
         ) -> bool:
+            """Leave response exceptions unsuppressed.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type from the response body.
+                exc (BaseException | None): Exception raised inside the context.
+                _tb (object): Traceback supplied by the async context manager protocol.
+
+            Returns:
+                bool: Always false, so cancellation and other exceptions propagate.
+            """
             return False
 
     def session_get(url: str, **_kwargs: Any) -> CancelledResponse | FakeResponse:
@@ -590,7 +632,9 @@ async def test_cancelled_transport_child_does_not_stop_queue_worker(
         assert client._request_queue.qsize() == 1
 
         release_reads.set()
-        nut_results = await asyncio.gather(*nut_calls, return_exceptions=True)
+        nut_results = await asyncio.wait_for(
+            asyncio.gather(*nut_calls, return_exceptions=True), timeout=2
+        )
         assert all(isinstance(result, asyncio.CancelledError) for result in nut_results)
         assert await asyncio.wait_for(services_call, timeout=2) == [
             {"name": "service", "running": "1", "status": True}

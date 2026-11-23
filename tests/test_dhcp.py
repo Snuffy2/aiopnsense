@@ -444,14 +444,15 @@ async def test_dhcp_reads_follow_throw_mode_contract(
             None when the read returns its empty value.
     """
     client, session = make_mock_session_client(partial(make_client, throw_errors=True))
-    install_fake_router(client, session, routes={("GET", endpoint): route})
+    router = install_fake_router(client, session, routes={("GET", endpoint): route})
     try:
         client._use_snake_case = True
         if expected_error is None:
             assert await getattr(client, method_name)() == empty_value
-            return
-        with pytest.raises(expected_error):
-            await getattr(client, method_name)()
+        else:
+            with pytest.raises(expected_error):
+                await getattr(client, method_name)()
+        assert router.count("GET", endpoint) == 1
     finally:
         await client.async_close()
 

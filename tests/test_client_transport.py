@@ -1,5 +1,6 @@
 """Tests for client transport helpers and HTTP response handling."""
 
+import asyncio
 from collections.abc import Callable, MutableMapping
 import json
 import logging
@@ -26,6 +27,312 @@ from tests.conftest import (
     MakeClientFactory,
     make_mock_session_client,
 )
+
+
+def _outcome_middleware_response(
+    request: aiohttp.ClientRequest, status: int
+) -> aiohttp.ClientResponse:
+    """Build an HTTP response for a socket-free aiohttp middleware.
+
+    Args:
+        request (aiohttp.ClientRequest): Request being answered.
+        status (int): Response status.
+
+    Returns:
+        aiohttp.ClientResponse: Synthetic response passed to aiohttp.
+    """
+    response = MagicMock(spec=aiohttp.ClientResponse)
+    response.status = status
+    response.ok = status < 400
+    response.reason = "Test response"
+    response.request_info = request.request_info
+    response.connection = None
+    response._raw_cookie_headers = ()
+    response.__aenter__.return_value = response
+    response.json.return_value = {"status": {"ups.status": "OL"}}
+    return response
+
+
+@pytest.mark.parametrize(
+    "decode_error",
+    [
+        json.JSONDecodeError("Bad JSON", "<html>", 0),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+    ],
+)
+async def test_status_alias_preserves_session_validator_decode_error(
+    make_client: MakeClientFactory, decode_error: UnicodeDecodeError | json.JSONDecodeError
+) -> None:
+    """Propagate the original validator error on each direct status check.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+        decode_error (UnicodeDecodeError | json.JSONDecodeError): Failure on a 200 response.
+    """
+
+    async def respond(
+        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Deliver a 200 response to the session validator.
+
+        Args:
+            request (aiohttp.ClientRequest): Request entering middleware.
+            _handler (aiohttp.ClientHandlerType): Unused network handler.
+
+        Returns:
+            aiohttp.ClientResponse: Successful HTTP response.
+        """
+        return _outcome_middleware_response(request, 200)
+
+    validator = AsyncMock(side_effect=decode_error)
+    async with aiohttp.ClientSession(raise_for_status=validator, middlewares=[respond]) as session:
+        client = make_client(session=session)
+        try:
+            for _ in range(2):
+                with pytest.warns(DeprecationWarning), pytest.raises(type(decode_error)) as error:
+                    await client.is_endpoint_available("/api/example")  # type: ignore[deprecated]
+                assert error.value is decode_error
+            assert validator.await_count == 2
+        finally:
+            await client.async_close()
+
+
+async def test_outcome_probe_prefers_response_delivered_after_a_delayed_dispatch(
+    make_client: MakeClientFactory,
+) -> None:
+    """A probe reaching the Router last can clear a 404 from an earlier response.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+    dispatches = 0
+    trace = aiohttp.TraceConfig()
+
+    async def delay_first_dispatch(
+        _session: aiohttp.ClientSession, _context: Any, _params: aiohttp.TraceRequestStartParams
+    ) -> None:
+        """Pause the first request before it enters the middleware.
+
+        Args:
+            _session (aiohttp.ClientSession): Request session.
+            _context (Any): Unused trace context.
+            _params (aiohttp.TraceRequestStartParams): Unused request details.
+        """
+        if not started.is_set():
+            started.set()
+            await release.wait()
+
+    async def respond(
+        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Return 404 on the first dispatched request, then 200.
+
+        Args:
+            request (aiohttp.ClientRequest): Request entering the middleware.
+            _handler (aiohttp.ClientHandlerType): Unused network handler.
+
+        Returns:
+            aiohttp.ClientResponse: Synthetic missing or successful response.
+        """
+        nonlocal dispatches
+        dispatches += 1
+        return _outcome_middleware_response(request, 404 if dispatches == 1 else 200)
+
+    trace.on_request_start.append(delay_first_dispatch)
+    async with aiohttp.ClientSession(trace_configs=[trace], middlewares=[respond]) as session:
+        client = make_client(session=session)
+        path = "/api/example"
+        first = asyncio.create_task(client._check_endpoint_status(path))
+        try:
+            async with asyncio.timeout(2):
+                await started.wait()
+                assert (await client._check_endpoint_status(path)).is_absent
+                release.set()
+                assert (await first).is_data
+                assert (await client._check_endpoint_status(path)).is_data
+                assert dispatches == 2
+        finally:
+            release.set()
+            await asyncio.gather(first, return_exceptions=True)
+            await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("old_status", "throw_errors"),
+    [
+        pytest.param(404, False, id="malformed-200-suppressed"),
+        pytest.param(404, True, id="malformed-200-throws"),
+        pytest.param(500, True, id="overlapping-outage"),
+    ],
+)
+async def test_overlapping_endpoint_responses_preserve_order_and_error_policy(
+    make_client: MakeClientFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    old_status: int,
+    throw_errors: bool,
+) -> None:
+    """Preserve a malformed success or a single outage across overlapping reads.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+        monkeypatch (pytest.MonkeyPatch): Fixture to enable real queue worker tasks.
+        caplog (pytest.LogCaptureFixture): Captured client outage diagnostics.
+        old_status (int): Status of the delayed response.
+        throw_errors (bool): Whether malformed JSON raises a public error.
+    """
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(asyncio, "create_task", loop.create_task)
+    old_response_seen = asyncio.Event()
+    release = asyncio.Event()
+    dispatches = 0
+
+    async def delay_first(response: aiohttp.ClientResponse) -> None:
+        """Hold the first response after it has reached validation.
+
+        Args:
+            response (aiohttp.ClientResponse): Delivered Router response.
+        """
+        if response.status == old_status and not old_response_seen.is_set():
+            old_response_seen.set()
+            await release.wait()
+
+    async def respond(
+        request: aiohttp.ClientRequest, _handler: aiohttp.ClientHandlerType
+    ) -> aiohttp.ClientResponse:
+        """Serve a new malformed body or a second failure ahead of the old response.
+
+        Args:
+            request (aiohttp.ClientRequest): Request entering the middleware.
+            _handler (aiohttp.ClientHandlerType): Unused network handler.
+
+        Returns:
+            aiohttp.ClientResponse: Synthetic Router response for the read.
+        """
+        nonlocal dispatches
+        dispatches += 1
+        status = old_status if dispatches == 1 or old_status == 500 else 200
+        response = _outcome_middleware_response(request, status)
+        if dispatches == 2 and status == 200:
+            response.json = AsyncMock(side_effect=json.JSONDecodeError("Bad JSON", "<html>", 0))
+        return response
+
+    async with aiohttp.ClientSession(
+        raise_for_status=delay_first, middlewares=[respond]
+    ) as session:
+        client = make_client(session=session, throw_errors=throw_errors)
+        older = asyncio.create_task(client.get_nut_ups_status())
+        try:
+            async with asyncio.timeout(2):
+                await old_response_seen.wait()
+                if throw_errors:
+                    with pytest.raises(OPNsenseError) as error:
+                        await client.get_nut_ups_status()
+                    if old_status == 404:
+                        assert isinstance(error.value.__cause__, json.JSONDecodeError)
+                else:
+                    assert await client.get_nut_ups_status() is None
+                release.set()
+                if old_status == 500:
+                    with pytest.raises(OPNsenseConnectionError):
+                        await older
+                    assert [record.levelno for record in caplog.records] == [logging.WARNING]
+                    assert dispatches == 2
+                else:
+                    assert await older == {}
+                    assert await client.get_nut_ups_status() == {"status": {"ups.status": "OL"}}
+                    assert dispatches == 3
+        finally:
+            release.set()
+            await asyncio.gather(older, return_exceptions=True)
+            await client.async_close()
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+@pytest.mark.parametrize(
+    "error", [aiohttp.ClientPayloadError("Unread body"), asyncio.CancelledError()]
+)
+async def test_outcome_closes_response_if_context_entry_fails(
+    make_client: MakeClientFactory, method: str, error: BaseException
+) -> None:
+    """Release a response when the session exits before the response context opens.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+        method (str): HTTP request method.
+        error (BaseException): Failure delivered to the status validator.
+    """
+    client, session = make_mock_session_client(make_client)
+    response = MagicMock(spec=aiohttp.ClientResponse, status=200, ok=True)
+    session.raise_for_status = AsyncMock(side_effect=error)
+
+    def start_request(_url: str, **options: Any) -> MagicMock:
+        """Mimic a session that leaves validator-error cleanup to the caller.
+
+        Args:
+            _url (str): Requested URL.
+            options (Any): Session options holding the wrapped validator.
+
+        Returns:
+            MagicMock: Request context that runs validation before entry completes.
+        """
+        context = MagicMock()
+
+        async def validate() -> aiohttp.ClientResponse:
+            """Run validation before returning the synthetic context response.
+
+            Returns:
+                aiohttp.ClientResponse: Response if validation completes.
+            """
+            await options["raise_for_status"](response)
+            return response
+
+        context.__aenter__.side_effect = validate
+        return context
+
+    getattr(session, method).side_effect = start_request
+    read = client._do_get_outcome if method == "get" else client._do_post_outcome
+    try:
+        if isinstance(error, asyncio.CancelledError):
+            with pytest.raises(asyncio.CancelledError):
+                await read("/api/endpoint")
+        else:
+            assert (await read("/api/endpoint")).is_transient
+        response.close.assert_called_once_with()
+    finally:
+        await client.async_close()
+
+
+async def test_outcome_logs_redact_url_credentials_in_endpoint_path(
+    make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Keep userinfo out of diagnostic paths while sending the original request.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+        caplog (pytest.LogCaptureFixture): Captured diagnostic records.
+    """
+    client, session = make_mock_session_client(make_client)
+    path = "/api/example?dest=https://synthetic-user:synthetic-pass@host.invalid/a"
+    session.get.side_effect = [
+        FakeResponse(status=500, ok=False),
+        FakeResponse(),
+        FakeResponse(status=403, ok=False),
+        FakeResponse(status=404, ok=False),
+    ]
+    try:
+        with caplog.at_level(logging.DEBUG):
+            for _ in range(4):
+                await client._check_endpoint_status(path, force_refresh=True)
+        assert "synthetic-user" not in caplog.text
+        assert "synthetic-pass" not in caplog.text
+        assert "host.invalid/a" in caplog.text
+        assert "recovered" in caplog.text
+        assert [call.args[0] for call in session.get.call_args_list] == [f"{client._url}{path}"] * 4
+    finally:
+        await client.async_close()
 
 
 @pytest.mark.asyncio

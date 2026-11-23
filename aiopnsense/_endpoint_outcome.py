@@ -3,6 +3,7 @@
 from collections.abc import MutableMapping
 from dataclasses import dataclass
 from enum import StrEnum
+from json import JSONDecodeError
 from typing import Any
 
 from .exceptions import OPNsenseError, _opnsense_http_error
@@ -28,9 +29,12 @@ class _EndpointOutcome:
             body when ``status`` is ``DATA``: JSON, or the body text for a text read.
         http_status (int | None): HTTP status of a failed response, when known.
         error (OPNsenseError | None): Public exception describing a 403 or a
-            transient failure, raised by the caller in throw mode.
+            transient failure.
+        decode_error (UnicodeDecodeError | JSONDecodeError | None): Decoding error
+            from a successful HTTP response.
         detail (str): Short failure description for log messages.
-        dispatch_id (int): Client-local transport ordering number, or zero for
+        observation_id (int): Client-local response order or dispatch order when
+            no response was delivered. Zero for
             an outcome that did not come from transport.
     """
 
@@ -38,8 +42,9 @@ class _EndpointOutcome:
     payload: MutableMapping[str, Any] | list | str | None = None
     http_status: int | None = None
     error: OPNsenseError | None = None
+    decode_error: UnicodeDecodeError | JSONDecodeError | None = None
     detail: str = ""
-    dispatch_id: int = 0
+    observation_id: int = 0
 
     @classmethod
     def data(cls, payload: MutableMapping[str, Any] | list | str | None) -> _EndpointOutcome:
