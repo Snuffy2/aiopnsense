@@ -498,3 +498,5 @@ async def test_telemetry_endpoints_missing_on_router_return_empty_data(
         assert router.count("GET", path) == 1
     # Without a CPU type the usage stream is never requested.
     assert router.count("GET", CPU_STREAM_PATH) == 0
+    # A missing memory endpoint stops before the swap read.
+    assert router.count("GET", SWAP_PATH) == 0

@@ -17,8 +17,8 @@ async def test_unrouted_request_does_not_kill_the_worker(make_client: MakeClient
     """
     client, router = make_router_client(make_client, {("GET", NUT_PATH): NUT_DATA})
 
-    assert await client.get_smart() == []
     async with asyncio.timeout(2):
+        assert await client.get_smart() == []
         assert await client.get_nut_ups_status() == NUT_DATA
 
     assert router.count("POST", SMART_PATH) == 1

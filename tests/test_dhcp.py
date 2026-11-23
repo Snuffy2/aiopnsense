@@ -23,7 +23,6 @@ HOST_OBSERVATIONS_PATH = "/api/hostdiscovery/service/search"
 NDP_TABLE_PATH = "/api/diagnostics/interface/search_ndp"
 ARP_TABLE_RESOLVE_PATH = "/api/diagnostics/interface/search_arp?resolve=yes"
 
-_ARP_RESOLVE_YES = ARP_TABLE_RESOLVE_PATH
 _ARP_RESOLVE_NO = "/api/diagnostics/interface/search_arp?resolve=no"
 _KEA_INTERFACES = "/api/kea/dhcpv4/get"
 _KEA_LEASES4 = "/api/kea/leases4/search"
@@ -247,13 +246,13 @@ async def test_get_arp_table_uses_get_query_param(make_client: ClientType) -> No
     """
     client, router = _dhcp_router(
         make_client,
-        {_ARP_RESOLVE_YES: {"rows": []}, _ARP_RESOLVE_NO: {"rows": []}},
+        {ARP_TABLE_RESOLVE_PATH: {"rows": []}, _ARP_RESOLVE_NO: {"rows": []}},
     )
 
     assert await client.get_arp_table(resolve_hostnames=True) == []  # type: ignore[deprecated]
     assert await client.get_arp_table(resolve_hostnames=False) == []  # type: ignore[deprecated]
 
-    assert router.count("GET", _ARP_RESOLVE_YES) == 1
+    assert router.count("GET", ARP_TABLE_RESOLVE_PATH) == 1
     assert router.count("GET", _ARP_RESOLVE_NO) == 1
 
 
@@ -281,10 +280,10 @@ async def test_get_arp_table_distinguishes_empty_and_failed_lookups(
         response (dict[str, Any] | TimeoutError): Endpoint payload or transport failure.
         expected (list[dict[str, str]] | None): Public result for the lookup.
     """
-    client, router = _dhcp_router(make_client, {_ARP_RESOLVE_YES: response})
+    client, router = _dhcp_router(make_client, {ARP_TABLE_RESOLVE_PATH: response})
 
     assert await client.get_arp_table(resolve_hostnames=True) == expected  # type: ignore[deprecated]
-    assert router.count("GET", _ARP_RESOLVE_YES) == 1
+    assert router.count("GET", ARP_TABLE_RESOLVE_PATH) == 1
 
 
 @pytest.mark.asyncio
@@ -476,12 +475,12 @@ async def test_get_dhcp_leases_reads_router_timezone_when_omitted(
     Args:
         make_client (ClientType): Factory for clients using a mocked HTTP session.
     """
-    router_tz = timezone(timedelta(hours=5, minutes=30))
+    router_tz = timezone(timedelta(hours=5, minutes=17))
     ends_at = (datetime.now(tz=router_tz) + timedelta(hours=1)).replace(microsecond=0)
     client, _router = _dhcp_router(
         make_client,
         {
-            _SYSTEM_TIME: {"datetime": "2000-01-15 12:00:00 +0530"},
+            _SYSTEM_TIME: {"datetime": "2000-01-15 12:00:00 +0517"},
             _ISC_LEASES4: {
                 "rows": [
                     {
@@ -1211,12 +1210,12 @@ async def test_version_switched_get_arp_table_endpoint_unavailable(
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = _dhcp_router(make_client, {_ARP_RESOLVE_YES: {"rows": []}})
+    client, router = _dhcp_router(make_client, {ARP_TABLE_RESOLVE_PATH: {"rows": []}})
 
     assert await client.get_arp_table(resolve_hostnames=True) == []  # type: ignore[deprecated]
     assert await client.get_arp_table(resolve_hostnames=False) is None  # type: ignore[deprecated]
 
-    assert router.count("GET", _ARP_RESOLVE_YES) == 1
+    assert router.count("GET", ARP_TABLE_RESOLVE_PATH) == 1
     assert router.count("GET", _ARP_RESOLVE_NO) == 1
 
 

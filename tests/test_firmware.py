@@ -46,8 +46,8 @@ from tests.conftest import (
 
 STATUS_PATH = firmware_module.FIRMWARE_STATUS_ENDPOINT
 RUNNING_PATH = firmware_module.FIRMWARE_RUNNING_ENDPOINT
-CHECK_PATH = firmware_module.FIRMWARE_CHECK_ENDPOINT
-UPGRADE_STATUS_PATH = firmware_module.FIRMWARE_UPGRADE_STATUS_ENDPOINT
+CHECK_PATH = "/api/core/firmware/check"
+UPGRADE_STATUS_PATH = "/api/core/firmware/upgradestatus"
 UPDATE_PATH = "/api/core/firmware/update"
 UPGRADE_PATH = "/api/core/firmware/upgrade"
 CHECK_ACK = {"status": "ok", "msg_uuid": "check"}

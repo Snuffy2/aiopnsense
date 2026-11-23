@@ -952,6 +952,8 @@ async def test_version_switched_system_endpoints_fail_closed(make_client: Client
         SYSTEM_TIME_PATH,
     ):
         assert router.count("GET", path) == 1
+    # With the VIP status endpoint missing the settings endpoint is never requested.
+    assert router.count("GET", VIP_SETTINGS_PATH) == 0
     # get_notices recorded the missing status endpoint, so close_notice did not ask again.
     assert router.count("GET", CORE_STATUS_PATH) == 1
 
