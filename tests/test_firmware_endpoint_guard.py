@@ -266,6 +266,8 @@ UNPARSABLE_URL = "http://localhost:notaport"
         (LOCAL_URL, "get", "/api/core"),
         (LOCAL_URL, "post", "/api/core"),
         (LOCAL_URL, "get", "/"),
+        (LOCAL_URL, "get", "/api/other/firmware/info"),
+        (LOCAL_URL, "get", "/other/core/firmware/info"),
         (UNPARSABLE_URL, "get", f"{BASE}/{INFO_ACTION}"),
     ],
 )
