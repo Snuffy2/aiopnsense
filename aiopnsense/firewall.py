@@ -128,12 +128,12 @@ class FirewallMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, Any]: Rule mapping keyed by UUID.
         """
-        if not await self._is_get_endpoint_available(endpoint):
+        outcome = await self._fetch_endpoint_outcome(endpoint)
+        if not outcome.is_data:
             _LOGGER.debug("%s endpoint not available", debug_label)
             return {}
 
-        response = await self._safe_dict_get(endpoint)
-        rules: list = response.get("rows", [])
+        rules: list = outcome.mapping().get("rows", [])
         rules_dict = self._index_rule_rows(rules, normalizer=normalizer, include_rule=include_rule)
         _LOGGER.debug("[%s] rules_dict length: %s", debug_label, len(rules_dict))
         return rules_dict
@@ -167,11 +167,14 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 rules (the download endpoint exports only MVC model rules
                 and structurally excludes plugin-generated entries).
         """
-        if not await self._is_get_endpoint_available(FIREWALL_FILTER_RULES_DOWNLOAD_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(
+            FIREWALL_FILTER_RULES_DOWNLOAD_ENDPOINT, response_format="text"
+        )
+        if not outcome.is_data:
             _LOGGER.debug("get_firewall_rules endpoint not available")
             return {}
 
-        response = await self._get_text(FIREWALL_FILTER_RULES_DOWNLOAD_ENDPOINT)
+        response = outcome.text()
         if not response:
             return {}
 
@@ -243,12 +246,12 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 malformed rows and lockout rules. For OPNsense 26.1.11 and
                 newer, generated automatic source NAT rows are also excluded.
         """
-        if not await self._is_get_endpoint_available(FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("%s endpoint not available", "get_nat_source_rules")
             return {}
 
-        response = await self._safe_dict_get(FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT)
-        rules: list = response.get("rows", [])
+        rules: list = outcome.mapping().get("rows", [])
         has_automatic_rows = any(
             isinstance(rule, MutableMapping) and coerce_bool(rule.get("is_automatic"))
             for rule in rules
@@ -403,11 +406,12 @@ class FirewallMixin(AiopnsenseClientProtocol):
             snake_case_path=FIREWALL_ALIAS_SEARCH_ENDPOINT,
             camel_case_path=FIREWALL_ALIAS_SEARCH_CAMELCASE_ENDPOINT,
         )
-        if not await self._is_get_endpoint_available(alias_search_endpoint):
+        alias_search_outcome = await self._fetch_endpoint_outcome(alias_search_endpoint)
+        if not alias_search_outcome.is_data:
             _LOGGER.debug("Firewall alias search endpoint unavailable")
             return False
 
-        alias_list_resp = await self._safe_dict_get(alias_search_endpoint)
+        alias_list_resp = alias_search_outcome.mapping()
         alias_list: list = alias_list_resp.get("rows", [])
         if not isinstance(alias_list, list):
             return False

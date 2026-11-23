@@ -500,6 +500,7 @@ class FirmwareRouter:
         client._get = self._get  # type: ignore[method-assign]
         client._post = self._post  # type: ignore[method-assign]
         client._do_post = self._do_post  # type: ignore[method-assign]
+        client._queue_request = self._queue_outcome_read  # type: ignore[method-assign]
 
     def _payload(self, path: str) -> Any:
         """Return the scripted JSON payload for a path.
@@ -563,6 +564,28 @@ class FirmwareRouter:
         del payload
         self.post_paths.append(path)
         return self._payload(path)
+
+    async def _queue_outcome_read(
+        self, method: str, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> _EndpointOutcome:
+        """Answer a queued endpoint read from the scripted endpoints.
+
+        Args:
+            method (str): Queue operation requested by the client.
+            path (str): API endpoint path requested.
+            payload (MutableMapping[str, Any] | None): Ignored request body.
+
+        Returns:
+            _EndpointOutcome: Scripted payload for the path, or an absent endpoint.
+
+        Raises:
+            ValueError: The client requests a queued operation other than a GET outcome.
+        """
+        if method not in ("get_outcome", "get_text_outcome"):
+            raise ValueError(f"Unexpected scripted Router operation: {method}")
+        del payload
+        reply = await self._get(path)
+        return _EndpointOutcome.absent() if reply is None else _EndpointOutcome.data(reply)
 
     async def _do_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
@@ -1036,6 +1059,7 @@ class ScriptedRouter:
         client._post = self._post
         client._get = self._get
         client._is_get_endpoint_available = self._is_get_endpoint_available
+        client._queue_request = self._queue_outcome_read
         client._queue_post_with_cancellation = self._post_with_cancellation
         return client
 
@@ -1053,6 +1077,28 @@ class ScriptedRouter:
             bool: ``True`` when a GET reply is scripted for ``path``.
         """
         return ("GET", path) in self._replies
+
+    async def _queue_outcome_read(
+        self, method: str, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> _EndpointOutcome:
+        """Answer a queued outcome GET from the script, reporting an unscripted path as absent.
+
+        Args:
+            method (str): Queue operation requested by the client.
+            path (str): API path being read.
+            payload (MutableMapping[str, Any] | None): Unused body for the GET request.
+
+        Returns:
+            _EndpointOutcome: Scripted payload, or an absent endpoint when none is scripted.
+
+        Raises:
+            ValueError: The client requests a queued operation other than a GET outcome.
+        """
+        if method != "get_outcome":
+            raise ValueError(f"Unexpected scripted Router operation: {method}")
+        del payload
+        reply = await self._get(path)
+        return _EndpointOutcome.absent() if reply is None else _EndpointOutcome.data(reply)
 
     def requested(self, path: str, *, method: str = "POST") -> bool:
         """Return whether the client sent a request.

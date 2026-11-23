@@ -17,7 +17,14 @@ from aiopnsense import (
     OPNsenseInvalidURL,
     OPNsenseTimeoutError,
 )
-from tests.conftest import FirmwareRouter, RouterReply, ScriptedRouter, make_mock_session_client
+from aiopnsense._endpoint_outcome import _EndpointOutcome
+from tests.conftest import (
+    FirmwareRouter,
+    RouterReply,
+    ScriptedRouter,
+    make_mock_session_client,
+    stub_endpoint_outcome,
+)
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -32,16 +39,18 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client: ClientTyp
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"uuid": "dnsbl1", "enabled": "1"},
-                    {"uuid": "dnsbl2", "enabled": "0"},
-                    {"no_uuid": "skip-me"},
-                    "bad-row",
-                ]
-            }
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {"uuid": "dnsbl1", "enabled": "1"},
+                        {"uuid": "dnsbl2", "enabled": "0"},
+                        {"no_uuid": "skip-me"},
+                        "bad-row",
+                    ]
+                }
+            ),
         )
 
         result = await client.get_unbound_blocklist()
@@ -50,10 +59,7 @@ async def test_get_unbound_blocklist_returns_uuid_mapping(make_client: ClientTyp
             "dnsbl1": {"uuid": "dnsbl1", "enabled": "1"},
             "dnsbl2": {"uuid": "dnsbl2", "enabled": "0"},
         }
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/unbound/settings/search_dnsbl"
-        )
-        client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/search_dnsbl")
+        read.assert_awaited_once_with("/api/unbound/settings/search_dnsbl")
     finally:
         await client.async_close()
 
@@ -72,8 +78,7 @@ async def test_get_unbound_blocklist_handles_empty_or_invalid_responses(
     client = make_client()
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value=api_response)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(api_response))
 
         result = await client.get_unbound_blocklist()
 
@@ -97,16 +102,12 @@ async def test_get_unbound_blocklist_returns_empty_when_endpoint_unavailable(
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value="25.7.8")
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
 
         result = await client.get_unbound_blocklist()
 
         assert result == {}
-        client._is_get_endpoint_available.assert_awaited_once_with(
-            "/api/unbound/settings/search_dnsbl"
-        )
-        client._safe_dict_get.assert_not_awaited()
+        read.assert_awaited_once_with("/api/unbound/settings/search_dnsbl")
     finally:
         await client.async_close()
 
@@ -902,6 +903,7 @@ def unbound_router(
             f"{UNBOUND_TOGGLE_PATH}0": {"result": "Disabled"},
         }
     )
+
     return client, router
 
 

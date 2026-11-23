@@ -48,10 +48,11 @@ class VouchersMixin(AiopnsenseClientProtocol):
         if data.get("voucher_server", None):
             server = data.get("voucher_server")
         else:
-            if not await self._is_get_endpoint_available(list_providers_endpoint):
+            providers_outcome = await self._fetch_endpoint_outcome(list_providers_endpoint)
+            if not providers_outcome.is_data:
                 _LOGGER.debug("Voucher provider endpoint unavailable")
                 return []
-            servers = await self._safe_list_get(list_providers_endpoint)
+            servers = providers_outcome.sequence()
             if len(servers) == 0:
                 raise OPNsenseVoucherServerError("No voucher servers exist")
             if len(servers) != 1:

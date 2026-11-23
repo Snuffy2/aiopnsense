@@ -11,12 +11,13 @@ import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseError, OPNsenseTimeoutError
+from aiopnsense._endpoint_outcome import _EndpointOutcome
 from aiopnsense.traffic import (
     DIAGNOSTICS_TRAFFIC_ENDPOINT,
     DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX,
     normalize_traffic_payload,
 )
-from tests.conftest import FakeStreamResponseFactory, MakeClientFactory
+from tests.conftest import FakeStreamResponseFactory, MakeClientFactory, stub_endpoint_outcome
 
 
 def test_diagnostics_traffic_stream_endpoint_prefix() -> None:
@@ -153,18 +154,20 @@ async def test_get_interface_traffic_probes_and_normalizes(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "time": 1710000001,
-                "interfaces": {
-                    "wan": {
-                        "name": "WAN",
-                        "bytes received": 120,
-                        "bytes transmitted": 240,
-                    }
-                },
-            }
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "time": 1710000001,
+                    "interfaces": {
+                        "wan": {
+                            "name": "WAN",
+                            "bytes received": 120,
+                            "bytes transmitted": 240,
+                        }
+                    },
+                }
+            ),
         )
 
         traffic = await client.get_interface_traffic()
@@ -173,8 +176,7 @@ async def test_get_interface_traffic_probes_and_normalizes(
         assert traffic["interfaces"]["wan"]["name"] == "WAN"
         assert traffic["interfaces"]["wan"]["rx_bytes"] == 120
         assert "tx_bits_per_second" not in traffic["interfaces"]["wan"]
-        client._is_get_endpoint_available.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
-        client._safe_dict_get.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
+        read.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
     finally:
         await client.async_close()
 
@@ -211,13 +213,11 @@ async def test_get_interface_traffic_handles_unavailable_endpoint(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
 
         traffic = await client.get_interface_traffic()
         assert traffic == {"time": None, "interfaces": {}}
-        client._is_get_endpoint_available.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
-        client._safe_dict_get.assert_not_awaited()
+        read.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
     finally:
         await client.async_close()
 
@@ -242,13 +242,11 @@ async def test_get_interface_traffic_returns_empty_sample_on_probe_error(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=probe_error)
-        client._safe_dict_get = AsyncMock()
+        client._fetch_endpoint_outcome = AsyncMock(side_effect=probe_error)
 
         traffic = await client.get_interface_traffic()
         assert traffic == {"time": None, "interfaces": {}}
-        client._is_get_endpoint_available.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
-        client._safe_dict_get.assert_not_awaited()
+        client._fetch_endpoint_outcome.assert_awaited_once_with(DIAGNOSTICS_TRAFFIC_ENDPOINT)
     finally:
         await client.async_close()
 
@@ -264,7 +262,7 @@ async def test_get_interface_traffic_raises_when_throw_errors_is_enabled(
     """
     client = make_client(throw_errors=True)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
+        client._fetch_endpoint_outcome = AsyncMock(side_effect=TimeoutError("probe timeout"))
 
         with pytest.raises(OPNsenseTimeoutError):
             await client.get_interface_traffic()
@@ -284,7 +282,7 @@ async def test_get_interface_traffic_raises_same_opnsense_error_when_throw_error
     client = make_client(throw_errors=True)
     try:
         probe_error = OPNsenseError("probe failed")
-        client._is_get_endpoint_available = AsyncMock(side_effect=probe_error)
+        client._fetch_endpoint_outcome = AsyncMock(side_effect=probe_error)
 
         with pytest.raises(OPNsenseError) as exc:
             await client.get_interface_traffic()
@@ -374,7 +372,7 @@ async def test_stream_interface_traffic_yields_normalized_samples(
 
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
         client._stream_json_events = cast(Any, fake_stream)
 
         samples: list[dict[str, Any]] = []
@@ -383,7 +381,7 @@ async def test_stream_interface_traffic_yields_normalized_samples(
             if len(samples) == 1:
                 break
 
-        client._is_get_endpoint_available.assert_awaited_once_with(
+        client._check_endpoint_status.assert_awaited_once_with(
             f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
         )
         assert samples == [
@@ -428,11 +426,11 @@ async def test_stream_interface_traffic_real_stream_path_keeps_non_ascii_name(
     )
     client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
-        client._is_get_endpoint_available.assert_awaited_once_with(
+        client._check_endpoint_status.assert_awaited_once_with(
             f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
         )
         assert list(samples[0]["interfaces"].keys()) == ["wlan-ß"]
@@ -470,7 +468,7 @@ async def test_stream_interface_traffic_closes_inner_iterator(
 
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
         client._stream_json_events = cast(Any, fake_stream)
 
         samples = client.stream_interface_traffic(poll_interval=1)
@@ -506,12 +504,12 @@ async def test_stream_interface_traffic_clamps_poll_interval(
 
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
         client._stream_json_events = cast(Any, fake_stream)
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=0)]
 
-        client._is_get_endpoint_available.assert_awaited_once_with(
+        client._check_endpoint_status.assert_awaited_once_with(
             f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/1"
         )
         assert samples[0]["interfaces"]["wan"]["interval"] == 1.0
@@ -557,7 +555,7 @@ async def test_stream_interface_traffic_uses_poll_interval_fallback_on_bad_or_ba
 
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
         client._stream_json_events = cast(Any, fake_stream)
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
@@ -605,7 +603,7 @@ async def test_stream_interface_traffic_passes_read_timeout_from_clamped_poll_in
     session.get = fake_get
     client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=120)]
 
@@ -638,7 +636,7 @@ async def test_stream_interface_traffic_reseeds_interval_after_malformed_json_ev
     )
     client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=10)]
 
@@ -670,7 +668,7 @@ async def test_stream_interface_traffic_reseeds_interval_after_non_mapping_json_
     )
     client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=10)]
 
@@ -704,7 +702,7 @@ async def test_stream_interface_traffic_resets_interval_after_stream_json_reset(
     )
     client = make_client(session=session)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        stub_endpoint_outcome(client, _EndpointOutcome.data(None), read="status")
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
@@ -728,7 +726,7 @@ async def test_stream_interface_traffic_returns_when_endpoint_unavailable(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
+        stub_endpoint_outcome(client, _EndpointOutcome.absent(), read="status")
         client._stream_json_events = AsyncMock()
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
@@ -759,7 +757,7 @@ async def test_stream_interface_traffic_returns_empty_iteration_on_probe_error(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=probe_error)
+        client._check_endpoint_status = AsyncMock(side_effect=probe_error)
         client._stream_json_events = AsyncMock()
 
         samples = [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
@@ -782,7 +780,7 @@ async def test_stream_interface_traffic_raises_same_opnsense_error_when_throw_er
     client = make_client(throw_errors=True)
     try:
         probe_error = OPNsenseError("probe failed")
-        client._is_get_endpoint_available = AsyncMock(side_effect=probe_error)
+        client._check_endpoint_status = AsyncMock(side_effect=probe_error)
 
         with pytest.raises(OPNsenseError) as exc:
             [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
@@ -802,7 +800,7 @@ async def test_stream_interface_traffic_raises_when_probe_timeout_and_throw_erro
     """
     client = make_client(throw_errors=True)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=TimeoutError("probe timeout"))
+        client._check_endpoint_status = AsyncMock(side_effect=TimeoutError("probe timeout"))
 
         with pytest.raises(OPNsenseTimeoutError):
             [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
@@ -824,7 +822,6 @@ _TRAFFIC_FAILURE_CASES: tuple[Any, ...] = (
 
 @pytest.mark.parametrize("throw_errors", [False, True])
 @pytest.mark.parametrize(("make_error", "expected_error"), _TRAFFIC_FAILURE_CASES)
-@pytest.mark.parametrize("failing_step", ["probe", "fetch"])
 @pytest.mark.asyncio
 async def test_get_interface_traffic_failure_follows_throw_errors_contract(
     make_client: MakeClientFactory,
@@ -832,7 +829,6 @@ async def test_get_interface_traffic_failure_follows_throw_errors_contract(
     throw_errors: bool,
     make_error: Callable[[], Exception],
     expected_error: type[OPNsenseError],
-    failing_step: str,
 ) -> None:
     """A handled failure yields an empty sample, logged quietly, or a mapped error.
 
@@ -842,17 +838,10 @@ async def test_get_interface_traffic_failure_follows_throw_errors_contract(
         throw_errors (bool): Whether the client raises public errors.
         make_error (Callable[[], Exception]): Factory for a fresh injected error.
         expected_error (type[OPNsenseError]): Public error expected with throw on.
-        failing_step (str): Request step that raises, the probe or the sample fetch.
     """
     client = make_client(throw_errors=throw_errors)
     try:
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=make_error() if failing_step == "probe" else None,
-            return_value=True,
-        )
-        client._safe_dict_get = AsyncMock(
-            side_effect=make_error() if failing_step == "fetch" else None
-        )
+        client._fetch_endpoint_outcome = AsyncMock(side_effect=make_error())
 
         with caplog.at_level("DEBUG", logger="aiopnsense"):
             if throw_errors:
@@ -886,7 +875,7 @@ async def test_stream_interface_traffic_probe_failure_follows_throw_errors_contr
     """
     client = make_client(throw_errors=throw_errors)
     try:
-        client._is_get_endpoint_available = AsyncMock(side_effect=make_error())
+        client._check_endpoint_status = AsyncMock(side_effect=make_error())
         client._stream_json_events = MagicMock()
 
         with caplog.at_level("DEBUG", logger="aiopnsense"):
@@ -926,7 +915,8 @@ async def test_traffic_probe_propagates_cancellation_and_unhandled_errors(
     client = make_client(throw_errors=throw_errors)
     try:
         error = make_error()
-        client._is_get_endpoint_available = AsyncMock(side_effect=error)
+        client._fetch_endpoint_outcome = AsyncMock(side_effect=error)
+        client._check_endpoint_status = AsyncMock(side_effect=error)
 
         with pytest.raises(type(error)):
             if method == "sample":

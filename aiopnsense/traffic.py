@@ -179,24 +179,26 @@ class TrafficMixin(AiopnsenseClientProtocol):
 
         Returns:
             dict[str, Any]: Normalized diagnostics traffic sample. Returns an
-                empty traffic sample when endpoint probing or response parsing
+                empty traffic sample when the endpoint fetch or response parsing
                 fails. With ``throw_errors`` enabled, a failure is raised as an
                 ``OPNsenseError`` subclass instead.
         """
         empty_sample: dict[str, Any] = {"time": None, "interfaces": {}}
 
         async def fetch_sample() -> dict[str, Any]:
-            """Probe the endpoint and return its normalized traffic sample.
+            """Fetch the endpoint and return its normalized traffic sample.
 
             Returns:
                 dict[str, Any]: Normalized sample, or the empty sample when the
                     endpoint is unavailable.
             """
-            if not await self._is_get_endpoint_available(DIAGNOSTICS_TRAFFIC_ENDPOINT):
+            outcome = await self._fetch_endpoint_outcome(DIAGNOSTICS_TRAFFIC_ENDPOINT)
+            if not outcome.is_data:
                 _LOGGER.debug("Diagnostics traffic endpoint unavailable")
                 return empty_sample
-            payload = await self._safe_dict_get(DIAGNOSTICS_TRAFFIC_ENDPOINT)
-            return normalize_traffic_payload(payload, interval=1.0, include_per_second_rates=False)
+            return normalize_traffic_payload(
+                outcome.mapping(), interval=1.0, include_per_second_rates=False
+            )
 
         return await _attempt(
             self,
@@ -222,27 +224,27 @@ class TrafficMixin(AiopnsenseClientProtocol):
                 event is discarded because it cannot represent an interval delta.
                 Later samples use elapsed time between strictly increasing server
                 timestamps; after a timing reset, the next valid sample uses the
-                selected stream interval. The stream ends empty when probing the
+                selected stream interval. The stream ends empty when checking the
                 stream endpoint fails; with ``throw_errors`` enabled, that failure
                 is raised as an ``OPNsenseError`` subclass instead.
         """
         interval = max(poll_interval, 1)
         endpoint = f"{DIAGNOSTICS_TRAFFIC_STREAM_ENDPOINT_PREFIX}/{interval}"
 
-        async def probe_stream_endpoint() -> bool:
-            """Probe the stream endpoint.
+        async def check_stream_endpoint() -> bool:
+            """Check the stream endpoint.
 
             Returns:
                 bool: ``True`` when the stream endpoint is available.
             """
-            if not await self._is_get_endpoint_available(endpoint):
+            if not (await self._check_endpoint_status(endpoint)).is_data:
                 _LOGGER.debug("Diagnostics traffic stream endpoint unavailable")
                 return False
             return True
 
         if not await _attempt(
             self,
-            probe_stream_endpoint,
+            check_stream_endpoint,
             empty=False,
             name="stream_interface_traffic",
             errors=_TRAFFIC_HANDLED_ERRORS,

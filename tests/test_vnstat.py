@@ -3,7 +3,6 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -69,10 +68,11 @@ async def test_get_vnstat_metrics_yearly_parsing(make_client: ClientType) -> Non
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "response": """
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "response": """
  igc0  /  yearly
 
          year        rx      |     tx      |    total    |   avg. rate
@@ -84,7 +84,8 @@ async def test_get_vnstat_metrics_yearly_parsing(make_client: ClientType) -> Non
      ------------------------+-------------+-------------+---------------
      estimated     38.88 TiB |   11.85 TiB |   50.73 TiB |
 """
-            }
+                }
+            ),
         )
 
         parsed = await client.get_vnstat_metrics("yearly")
@@ -97,7 +98,7 @@ async def test_get_vnstat_metrics_yearly_parsing(make_client: ClientType) -> Non
         assert rows[0]["total_bytes"] == round(63.25 * tib)
         assert rows[3]["label"] == "2026"
         assert rows[3]["avg_rate_bits_per_second"] == 14150000
-        client._safe_dict_get.assert_awaited_once_with("/api/vnstat/service/yearly")
+        read.assert_awaited_once_with("/api/vnstat/service/yearly")
     finally:
         await client.async_close()
 
@@ -113,16 +114,14 @@ async def test_get_vnstat_metrics_unsupported_period_or_endpoint_missing(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
 
         assert await client.get_vnstat_metrics("hourly") == {}
-        client._safe_dict_get.assert_not_awaited()
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/vnstat/service/hourly")
+        read.assert_awaited_once_with("/api/vnstat/service/hourly")
 
-        client._is_get_endpoint_available.reset_mock()
+        read.reset_mock()
         assert await client.get_vnstat_metrics("weekly") == {}
-        client._is_get_endpoint_available.assert_not_awaited()
+        read.assert_not_awaited()
     finally:
         await client.async_close()
 
@@ -136,7 +135,7 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
         # Keep payload dates aligned with mocked OPNsense system time to avoid
         # day-boundary/timezone flakiness in CI.
         now = datetime(2000, 1, 15, 12, 0, 0, tzinfo=UTC)
@@ -192,29 +191,26 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientT
 """
         }
 
-        async def fake_safe_get(path: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
-            """Return mocked vnStat payloads by endpoint path.
+        async def fake_fetch(path: str, *_args: Any, **_kwargs: Any) -> _EndpointOutcome:
+            """Return mocked vnStat and system-time payload outcomes by endpoint path.
 
             Args:
                 path (str): API endpoint path to request.
-                _args (Any): Positional arguments accepted by `fake_safe_get`.
-                _kwargs (Any): Keyword arguments accepted by `fake_safe_get`.
+                _args (Any): Positional arguments accepted by `fake_fetch`.
+                _kwargs (Any): Keyword arguments accepted by `fake_fetch`.
 
             Returns:
-                dict[str, Any]: Mocked vnStat payloads by endpoint path.
+                _EndpointOutcome: Mocked payload outcome for the endpoint path.
             """
-            if path == "/api/vnstat/service/hourly":
-                return hourly_payload
-            if path == "/api/vnstat/service/daily":
-                return daily_payload
-            if path == "/api/vnstat/service/monthly":
-                return monthly_payload
-            return {}
+            payloads = {
+                "/api/vnstat/service/hourly": hourly_payload,
+                "/api/vnstat/service/daily": daily_payload,
+                "/api/vnstat/service/monthly": monthly_payload,
+                "/api/diagnostics/system/system_time": {"datetime": "2000-01-15 12:00:00 EST"},
+            }
+            return _EndpointOutcome.data(payloads.get(path, {}))
 
-        client._safe_dict_get = AsyncMock(side_effect=fake_safe_get)
-        stub_endpoint_outcome(
-            client, _EndpointOutcome.data({"datetime": "2000-01-15 12:00:00 EST"})
-        )
+        read.side_effect = fake_fetch
         vnstat = await client.get_vnstat()
 
         gib = 1024**3
@@ -249,22 +245,6 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: ClientType)
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-
-        async def fake_safe_get(path: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
-            """Return a placeholder vnStat payload.
-
-            Args:
-                path (str): API endpoint path to request.
-                _args (Any): Positional arguments accepted by `fake_safe_get`.
-                _kwargs (Any): Keyword arguments accepted by `fake_safe_get`.
-
-            Returns:
-                dict[str, Any]: Placeholder vnStat payload.
-            """
-            return {"response": ""}
-
-        client._safe_dict_get = AsyncMock(side_effect=fake_safe_get)
         read = stub_endpoint_outcome(client, _EndpointOutcome.data({"datetime": "invalid"}))
 
         await client.get_vnstat()
@@ -282,13 +262,11 @@ async def test_get_vnstat_skips_calls_when_endpoint_missing(make_client: ClientT
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_get = AsyncMock()
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
         vnstat = await client.get_vnstat()
 
         assert vnstat == {"interfaces": {}, "interface_count": 0}
-        client._safe_dict_get.assert_not_awaited()
-        client._is_get_endpoint_available.assert_awaited_once_with("/api/vnstat/service/hourly")
+        read.assert_awaited_once_with("/api/vnstat/service/hourly")
     finally:
         await client.async_close()
 

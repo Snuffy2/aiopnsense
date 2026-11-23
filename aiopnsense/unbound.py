@@ -116,7 +116,10 @@ class UnboundMixin(AiopnsenseClientProtocol):
             dict[str, Any]:  A UUID-keyed mapping of DNSBL rows from
                 ``search_dnsbl``. For legacy firmware, a mapping with ``legacy``
                 set to the regular DNSBL settings. Returns an empty mapping when
-                the endpoint is unavailable or malformed.
+                the endpoint is unavailable or its decoded payload has no usable rows.
+                With errors disabled, malformed JSON follows the shared error policy
+                and returns ``None``; with errors enabled, the mapped
+                ``OPNsenseError`` propagates.
         """
         extended_supported = await self._firmware_capability_enabled(
             EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY
@@ -128,13 +131,12 @@ class UnboundMixin(AiopnsenseClientProtocol):
             )
             return {"legacy": await self._get_unbound_blocklist_legacy()}
 
-        if not await self._is_get_endpoint_available(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT):
+        dnsbl_outcome = await self._fetch_endpoint_outcome(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT)
+        if not dnsbl_outcome.is_data:
             _LOGGER.debug("Unbound DNSBL endpoint unavailable")
             return {}
 
-        dnsbl_raw = await self._safe_dict_get(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT)
-        if not isinstance(dnsbl_raw, MutableMapping):
-            return {}
+        dnsbl_raw = dnsbl_outcome.mapping()
         dnsbl_rows = dnsbl_raw.get("rows", [])
         if not isinstance(dnsbl_rows, list) or not len(dnsbl_rows) > 0:
             return {}
