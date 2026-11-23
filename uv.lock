@@ -129,6 +129,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "awesomeversion" },
     { name = "python-dateutil" },
+    { name = "yarl" },
 ]
 
 [package.optional-dependencies]
@@ -189,6 +190,7 @@ requires-dist = [
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=9,<10" },
     { name = "sphinx-argparse-cli", marker = "extra == 'docs'", specifier = ">=1,<2" },
     { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=3,<4" },
+    { name = "yarl", specifier = ">=1.17.0,<2" },
 ]
 provides-extras = ["docs"]
 
