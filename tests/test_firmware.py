@@ -348,7 +348,9 @@ async def test_malformed_firmware_series_uses_unknown_capability_fallback(
     assert await client.close_notice("malformed-series") is True
 
     assert router.paths("POST") == [DISMISS_SNAKE_PATH]
-    assert router.bodies("POST", DISMISS_SNAKE_PATH) == [{"subject": "malformed-series"}]
+    assert router.bodies("POST", DISMISS_SNAKE_PATH) == [
+        {"subject": "malformed-series"}
+    ]
 
 
 @pytest.mark.asyncio
