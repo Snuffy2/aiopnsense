@@ -231,8 +231,8 @@ class ClientEndpointMixin:
         availability status (never the payload) is cached for the endpoint cache
         TTL, which starts when the Router answers, so a known-absent endpoint is
         answered without a request. Status-only checks also reuse a fresh present
-        answer. GET and POST share this logic;
-        the HTTP method and exact path, including query, distinguish cache entries.
+        answer. GET and POST share this logic; the HTTP method and exact path,
+        including query, distinguish cache entries.
 
         Args:
             method (Literal["get", "post"]): HTTP method of the data request.
