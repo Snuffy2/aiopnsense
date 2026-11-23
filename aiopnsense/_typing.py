@@ -3,10 +3,11 @@
 import asyncio
 from collections.abc import AsyncGenerator, MutableMapping
 from datetime import tzinfo
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import aiohttp
 
+from ._endpoint_outcome import _EndpointOutcome
 from .const import FirmwareCapability
 
 if TYPE_CHECKING:
@@ -94,6 +95,22 @@ class AiopnsenseClientProtocol(Protocol):
     async def _is_post_endpoint_available(
         self, path: str, force_refresh: bool = False
     ) -> bool | None: ...
+
+    async def _fetch_endpoint_outcome(
+        self,
+        path: str,
+        response_format: Literal["json", "text"] = "json",
+        *,
+        force_refresh: bool = False,
+    ) -> _EndpointOutcome: ...
+
+    async def _fetch_post_endpoint_outcome(
+        self, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> _EndpointOutcome: ...
+
+    async def _check_endpoint_status(
+        self, path: str, *, force_refresh: bool = False
+    ) -> _EndpointOutcome: ...
 
     @staticmethod
     def _parse_toggle_target(toggle_on_off: object) -> ToggleTarget: ...

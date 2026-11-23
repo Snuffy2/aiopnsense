@@ -1,13 +1,20 @@
 """Endpoint selection and availability helpers for OPNsenseClient."""
 
+from collections.abc import MutableMapping
 from datetime import datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from warnings import deprecated
 
 import aiohttp
 
+from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _raise_if_throwing, _throws_errors
-from ._request_failure import _PROBE_PHASE, _report_http_failure, _report_transport_failure
+from ._request_failure import (
+    _PROBE_PHASE,
+    _REQUEST_PHASE,
+    _report_http_failure,
+    _report_transport_failure,
+)
 from ._typing import AiopnsenseClientProtocol
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS, SNAKE_CASE_ENDPOINTS_CAPABILITY
 from .exceptions import OPNsenseUnknownFirmware
@@ -35,6 +42,48 @@ class ClientEndpointMixin:
         _use_snake_case: bool | None
         _username: str
         _verify_ssl: bool
+
+        async def _do_get_outcome(
+            self,
+            path: str,
+            caller: str = "Unknown",
+            *,
+            read_body: bool = True,
+            response_format: Literal["json", "text"] = "json",
+            phase: str = _REQUEST_PHASE,
+        ) -> _EndpointOutcome:
+            """Execute an immediate GET request and classify the response.
+
+            Args:
+                path (str): API endpoint path to request.
+                caller (str): Calling method name used for diagnostics.
+                read_body (bool): Whether to decode a successful response body.
+                response_format (Literal["json", "text"], optional): Decoding mode for
+                    a successful response body.
+                phase (str): Request phase for outage logging.
+
+            Returns:
+                _EndpointOutcome: Classified transport response.
+            """
+            ...
+
+        async def _queue_request(
+            self,
+            method: str,
+            path: str,
+            payload: MutableMapping[str, Any] | None = None,
+        ) -> Any:
+            """Queue one API request and return its result.
+
+            Args:
+                method (str): Internal request method handled by the queue worker.
+                path (str): API endpoint path to request.
+                payload (MutableMapping[str, Any] | None): Request body for POST requests.
+
+            Returns:
+                Any: Result set by the queue worker.
+            """
+            ...
 
     _UNSAFE_POST_ENDPOINT_PROBE_PATHS: frozenset[str] = frozenset()
     _UNSAFE_POST_ENDPOINT_PROBE_PREFIXES: tuple[str, ...] = ()
@@ -342,6 +391,200 @@ class ClientEndpointMixin:
             _LOGGER.debug("POST endpoint availability probe blocked for unsafe path: %s", path)
             return None
         return await self._is_endpoint_available(path, method="post", force_refresh=force_refresh)
+
+    def _set_endpoint_cache(
+        self,
+        cache_key: str,
+        *,
+        available: bool,
+        checked_at: datetime,
+        permission_denied: bool = False,
+    ) -> None:
+        """Store one availability answer for the endpoint cache TTL.
+
+        Args:
+            cache_key (str): Method-aware endpoint cache key.
+            available (bool): Whether the endpoint answered successfully.
+            checked_at (datetime): Time the request was started, which starts the TTL.
+            permission_denied (bool): Whether the answer is a 403 that is cached outside
+                throw mode.
+        """
+        if permission_denied:
+            self._endpoint_permission_denied.add(cache_key)
+        else:
+            self._endpoint_permission_denied.discard(cache_key)
+        self._endpoint_availability[cache_key] = available
+        self._endpoint_checked_at[cache_key] = checked_at
+
+    async def _fetch_endpoint_outcome(
+        self,
+        path: str,
+        response_format: Literal["json", "text"] = "json",
+        *,
+        force_refresh: bool = False,
+    ) -> _EndpointOutcome:
+        """Fetch a GET endpoint once and report whether it returned data, is absent or failed.
+
+        Args:
+            path (str): API endpoint path to request. The exact path, including
+                its query string, is used for the availability cache key.
+            response_format (Literal["json", "text"], optional): ``"text"`` returns the
+                body text in the ``DATA`` outcome; ``"json"`` returns the decoded body.
+            force_refresh (bool): Whether to bypass a cached absent answer.
+
+        Returns:
+            _EndpointOutcome: The outcome described by ``_fetch_gated_outcome``. A 403 or a
+                transient failure raises instead when ``self._throw_errors`` is ``True``.
+        """
+        return await self._fetch_gated_outcome(
+            "get", path, response_format=response_format, force_refresh=force_refresh
+        )
+
+    async def _fetch_post_endpoint_outcome(
+        self,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+    ) -> _EndpointOutcome:
+        """Send one POST with its payload and report whether it returned data, is absent or failed.
+
+        The payload is the real request body; no payload-less probe is sent.
+
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None): Request body sent with the POST.
+
+        Returns:
+            _EndpointOutcome: The outcome described by ``_fetch_gated_outcome``. A 403 or a
+                transient failure raises instead when ``self._throw_errors`` is ``True``.
+        """
+        return await self._fetch_gated_outcome("post", path, payload)
+
+    async def _check_endpoint_status(
+        self,
+        path: str,
+        *,
+        force_refresh: bool = False,
+    ) -> _EndpointOutcome:
+        """Report whether a GET endpoint is present, absent or failed, without reading its payload.
+
+        Used for reads that are not a plain bounded fetch, such as streams and
+        state-changing actions, where the caller needs the availability answer
+        but must not consume the response. A dispatched check is a GET with no
+        payload. Outcomes and cache rules are the same as ``_fetch_endpoint_outcome``.
+
+        Args:
+            path (str): API endpoint path to check. The exact path, including
+                its query string, is used for the availability cache key.
+            force_refresh (bool): Whether to bypass cached present or absent answers.
+                The result of a dispatched request is cached.
+
+        Returns:
+            _EndpointOutcome: ``DATA`` (with no payload) when the endpoint answers
+                successfully, ``ABSENT`` for a 404 or a 403, or ``TRANSIENT`` for any
+                other failure. A 403 or a transient failure raises the mapped
+                ``OPNsenseError`` instead when ``self._throw_errors`` is ``True``.
+        """
+        return await self._fetch_gated_outcome(
+            "get", path, status_only=True, force_refresh=force_refresh
+        )
+
+    async def _fetch_gated_outcome(
+        self,
+        method: Literal["get", "post"],
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+        *,
+        response_format: Literal["json", "text"] = "json",
+        status_only: bool = False,
+        force_refresh: bool = False,
+    ) -> _EndpointOutcome:
+        """Send one availability-gated request and report whether it returned data, is absent or failed.
+
+        A dispatched request both checks availability and returns the data. The
+        availability status (never the payload) is cached for the endpoint cache
+        TTL, so a known-absent endpoint is answered without a request. Status-only
+        checks also reuse a fresh present answer. GET and POST share this logic;
+        the HTTP method and exact path, including query, distinguish cache entries.
+
+        Args:
+            method (Literal["get", "post"]): HTTP method of the data request.
+            path (str): API endpoint path to request. The exact path, including
+                its query string, is used for the availability cache key.
+            payload (MutableMapping[str, Any] | None): Request body, sent with POST requests.
+            response_format (Literal["json", "text"]): ``"text"`` returns the body text of
+                a GET in the ``DATA`` outcome; ``"json"`` returns the decoded body.
+            status_only (bool): Whether to check availability without reading the
+                payload (GET only). Status checks bypass the request queue. A fresh
+                cached present answer skips a status-only request; data fetches
+                dispatch a request unless a fresh absent answer can be reused.
+            force_refresh (bool): Whether to bypass cached present and absent answers.
+
+        Returns:
+            _EndpointOutcome: ``DATA`` with the decoded payload or body text, ``ABSENT`` when the
+                Router reports the endpoint missing (404) or not permitted (403), or
+                ``TRANSIENT`` for any other failure. A 403 or a transient failure
+                raises the mapped ``OPNsenseError`` instead when ``self._throw_errors``
+                is ``True``; a 404 never raises.
+
+        Side Effects:
+            Updates endpoint availability caches. A 200 caches the endpoint as present
+            and a 404 as absent. Outside throw mode a 403 also caches absence with the
+            permission-denied marker. Transient failures and, in throw mode, a 403 clear
+            the cache entry so the next call requests again. An undecodable 200 body
+            propagates and leaves the cache unchanged. A reset of the endpoint cache
+            while the request is in flight discards its answer.
+        """
+        cache_key = f"post:{path}" if method == "post" else path
+        now = datetime.now().astimezone()
+        cache_is_fresh = (
+            cache_key in self._endpoint_checked_at
+            and (now - self._endpoint_checked_at[cache_key]).total_seconds()
+            < self._endpoint_cache_ttl_seconds
+        )
+        if not force_refresh and cache_is_fresh:
+            cached_available = self._endpoint_availability.get(cache_key)
+            if cached_available is False and not (
+                _throws_errors(self) and cache_key in self._endpoint_permission_denied
+            ):
+                denied = cache_key in self._endpoint_permission_denied
+                return _EndpointOutcome.absent(403 if denied else 404)
+            if cached_available is True and status_only:
+                return _EndpointOutcome.data(None)
+
+        cache_generation = self._endpoint_cache_generation
+        if status_only:
+            outcome = await self._do_get_outcome(
+                path, "_check_endpoint_status", read_body=False, phase=_PROBE_PHASE
+            )
+        else:
+            queue_method = (
+                "get_text_outcome"
+                if method == "get" and response_format == "text"
+                else f"{method}_outcome"
+            )
+            outcome = await self._queue_request(queue_method, path, payload)
+
+        current = self._endpoint_cache_generation == cache_generation
+        # The TTL starts when the Router answers, so a slow request keeps its full TTL.
+        checked_at = datetime.now().astimezone()
+        if outcome.is_data:
+            if current:
+                self._set_endpoint_cache(cache_key, available=True, checked_at=checked_at)
+            return outcome
+        if outcome.error is None:
+            if current:
+                self._set_endpoint_cache(cache_key, available=False, checked_at=checked_at)
+            return outcome
+        if outcome.is_absent and not _throws_errors(self):
+            if current:
+                self._set_endpoint_cache(
+                    cache_key, available=False, checked_at=checked_at, permission_denied=True
+                )
+            return outcome
+        if current:
+            self._clear_endpoint_cache_entry(cache_key)
+        _raise_if_throwing(self, outcome.error)
+        return outcome
 
     @deprecated("Endpoint availability probing is internal. Direct calls are no longer needed.")
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:

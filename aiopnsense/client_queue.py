@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _attempt
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
@@ -69,6 +70,46 @@ class ClientQueueMixin:
 
             Returns:
                 dict[str, Any]: Decoded payload extracted from the stream response.
+            """
+            ...
+
+        async def _do_get_outcome(
+            self,
+            path: str,
+            caller: str = "Unknown",
+            *,
+            read_body: bool = True,
+            response_format: Literal["json", "text"] = "json",
+        ) -> _EndpointOutcome:
+            """Execute an immediate GET request and classify the response.
+
+            Args:
+                path (str): API endpoint path to request.
+                caller (str): Calling method name used for diagnostics.
+                read_body (bool): Whether to decode a successful response body.
+                response_format (Literal["json", "text"], optional): Decoding mode for
+                    a successful response body.
+
+            Returns:
+                _EndpointOutcome: Classified transport response.
+            """
+            ...
+
+        async def _do_post_outcome(
+            self,
+            path: str,
+            payload: MutableMapping[str, Any] | None = None,
+            caller: str = "Unknown",
+        ) -> _EndpointOutcome:
+            """Execute an immediate POST request and classify the response.
+
+            Args:
+                path (str): API endpoint path to request.
+                payload (MutableMapping[str, Any] | None): Request body.
+                caller (str): Calling method name used for diagnostics.
+
+            Returns:
+                _EndpointOutcome: Classified transport response.
             """
             ...
 
@@ -284,7 +325,9 @@ class ClientQueueMixin:
                     method, path, payload, future, caller, cancellation_state = entry
                 else:
                     method, path, payload, future, caller = entry
-                if method == "post" and future is not None and future.cancelled():
+                if method in {"post", "get_outcome", "get_text_outcome", "post_outcome"} and (
+                    future is not None and future.cancelled()
+                ):
                     continue
                 if cancellation_state is not None:
                     waiter = cancellation_state.waiter
@@ -305,8 +348,20 @@ class ClientQueueMixin:
                     result = await self._do_get(path, caller, response_format="text")
                     if future is not None and not future.done():
                         future.set_result(result)
+                elif method == "get_outcome":
+                    result = await self._do_get_outcome(path, caller)
+                    if future is not None and not future.done():
+                        future.set_result(result)
+                elif method == "get_text_outcome":
+                    result = await self._do_get_outcome(path, caller, response_format="text")
+                    if future is not None and not future.done():
+                        future.set_result(result)
                 elif method == "post":
                     result = await self._do_post(path, payload, caller)
+                    if future is not None and not future.done():
+                        future.set_result(result)
+                elif method == "post_outcome":
+                    result = await self._do_post_outcome(path, payload, caller)
                     if future is not None and not future.done():
                         future.set_result(result)
                 else:

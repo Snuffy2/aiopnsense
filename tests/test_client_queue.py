@@ -5,7 +5,7 @@ from collections.abc import MutableMapping
 import contextlib
 import json
 import logging
-from typing import Any, Never
+from typing import Any, Literal, Never
 from unittest.mock import AsyncMock
 
 import pytest
@@ -21,6 +21,7 @@ from tests.conftest import (
     FakeResponse,
     FakeStreamResponseFactory,
     MakeClientFactory,
+    MalformedJSONResponse,
     VpnQueueTasks,
     make_mock_session_client,
 )
@@ -2036,3 +2037,97 @@ async def test_cancelled_close_releases_queued_vpn_call(
         ]
     finally:
         release.set()
+
+
+@pytest.mark.parametrize(
+    ("response_format", "response", "expected"),
+    [
+        pytest.param("json", FakeResponse(json_payload={"ok": True}), {"ok": True}, id="json"),
+        pytest.param("text", FakeResponse(text_payload="ok"), "ok", id="text"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_outcome_read_returns_decoded_body_through_queue(
+    make_client: MakeClientFactory,
+    response_format: Literal["json", "text"],
+    response: FakeResponse,
+    expected: Any,
+) -> None:
+    """A GET outcome read queued through the worker returns its decoded JSON or text body.
+
+    Args:
+        make_client (MakeClientFactory): Factory for clients using a mocked HTTP session.
+        response_format (Literal["json", "text"]): Decoding mode of the read.
+        response (FakeResponse): Response the mocked session returns.
+        expected (Any): Payload the outcome must carry.
+    """
+    client, session = make_mock_session_client(make_client)
+    session.get.return_value = response
+    try:
+        outcome = await client._fetch_endpoint_outcome("/api/x", response_format)
+        assert outcome.is_data
+        assert outcome.payload == expected
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_post_outcome_read_returns_the_queued_post_response(
+    make_client: MakeClientFactory,
+) -> None:
+    """A POST outcome read queued through the worker returns its decoded response.
+
+    Args:
+        make_client (MakeClientFactory): Factory for clients using a mocked HTTP session.
+    """
+    client, session = make_mock_session_client(make_client)
+    session.post.return_value = FakeResponse(json_payload={"output": {"model": "test"}})
+    try:
+        outcome = await client._fetch_post_endpoint_outcome("/api/x", {"device": "ada0"})
+        assert outcome.is_data
+        assert outcome.mapping() == {"output": {"model": "test"}}
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.parametrize("throw_errors", [False, True])
+@pytest.mark.asyncio
+async def test_malformed_json_outcome_read_follows_public_error_policy(
+    make_client: MakeClientFactory,
+    throw_errors: bool,
+) -> None:
+    """Malformed JSON from a queued GET outcome read follows the public error policy.
+
+    Args:
+        make_client (MakeClientFactory): Factory for clients using a mocked HTTP session.
+        throw_errors (bool): Whether the client raises mapped errors.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.toggle_throwing_errors(throw_errors)
+    endpoint = "/api/nut/diagnostics/upsstatus"
+    requests: list[str] = []
+
+    def fake_response(url: str, **_kwargs: Any) -> MalformedJSONResponse:
+        """Return malformed JSON for the endpoint under test.
+
+        Args:
+            url (str): Requested URL.
+            _kwargs (Any): HTTP options supplied by aiohttp callers.
+
+        Returns:
+            MalformedJSONResponse: Response whose JSON body cannot be decoded.
+        """
+        requests.append(url)
+        return MalformedJSONResponse()
+
+    session.get = fake_response
+    try:
+        if throw_errors:
+            with pytest.raises(OPNsenseError) as error:
+                await client.get_nut_ups_status()
+            assert isinstance(error.value.__cause__, json.JSONDecodeError)
+        else:
+            assert await client.get_nut_ups_status() is None
+        assert requests == [f"http://localhost{endpoint}"]
+    finally:
+        await client.async_close()
