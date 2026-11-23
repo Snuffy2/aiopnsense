@@ -21,14 +21,17 @@ class AiopnsenseClientProtocol(Protocol):
     _firmware_action_lock: asyncio.Lock
     _firmware_check_requested_at: float | None
     _active_close_count: int
-    _session: aiohttp.ClientSession
-    _url: str
-    _username: str
-    _password: str
-    _verify_ssl: bool
-    _rest_api_query_count: int
     _throw_errors: bool
     _endpoint_availability: dict[str, bool]
+
+    def _open_request(
+        self,
+        method: Literal["get", "post"],
+        path: str,
+        *,
+        timeout: aiohttp.ClientTimeout,
+        payload: MutableMapping[str, Any] | None = None,
+    ) -> Any: ...
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None: ...
 
