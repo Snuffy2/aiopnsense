@@ -12,8 +12,10 @@ from collections.abc import (
 )
 import contextlib
 from dataclasses import dataclass
+from functools import partial
+import json
 from types import TracebackType
-from typing import Any, Self, cast
+from typing import Any, Literal, Never, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -22,6 +24,7 @@ from yarl import URL
 
 import aiopnsense
 from aiopnsense import client_queue
+from aiopnsense._endpoint_outcome import _EndpointOutcome
 
 MakeClientFactory = Callable[..., aiopnsense.OPNsenseClient]
 
@@ -224,6 +227,25 @@ class FakeResponse:
         return FakeStreamContent(self._stream_chunks)
 
 
+class MalformedJSONResponse(FakeResponse):
+    """Successful response whose body is not valid JSON."""
+
+    async def json(self, content_type: Any = None) -> Never:
+        """Raise the error aiohttp raises for a body that is not valid JSON.
+
+        Args:
+            content_type (Any, optional): Requested content type (unused by the fake).
+
+        Returns:
+            Never: This method always raises.
+
+        Raises:
+            json.JSONDecodeError: Always.
+        """
+        del content_type
+        raise json.JSONDecodeError("Expecting value", "<html>", 0)
+
+
 FakeStreamResponseFactory = Callable[[list[bytes]], FakeResponse]
 
 
@@ -250,6 +272,198 @@ def make_mock_session_client(
 
 
 FIRMWARE_STATUS_PATH = "/api/core/firmware/status"
+
+
+class FakeRouter:
+    """Fake Router that answers HTTP requests at the aiohttp session boundary.
+
+    Responses come from ``routes`` (keyed by method and request path, query
+    included) or, when no route matches, from the ordered ``get_payloads`` and
+    ``post_payloads`` queues. A route or queue value is turned into a response
+    this way: an exception instance is raised by the session call, an ``int`` is
+    an HTTP error status, a ``str`` is a 200 text body, a ``FakeResponse`` is used
+    as is, and anything else is a 200 JSON body. With nothing configured the
+    Router answers 200 with an empty JSON object. Tests may change ``routes``
+    between calls to model the Router changing.
+    """
+
+    def __init__(
+        self,
+        client: aiopnsense.OPNsenseClient,
+        *,
+        get_payloads: list[Any] | None = None,
+        post_payloads: list[Any] | None = None,
+        routes: MutableMapping[tuple[str, str], Any] | None = None,
+    ) -> None:
+        """Initialize the fake Router.
+
+        Args:
+            client (aiopnsense.OPNsenseClient): Client whose requests this Router answers.
+            get_payloads (list[Any] | None): Ordered values answering GET requests without a route.
+            post_payloads (list[Any] | None): Ordered values answering POST requests without a route.
+            routes (MutableMapping[tuple[str, str], Any] | None): Values keyed by
+                ``(method, path)``.
+        """
+        self._client = client
+        self.requests: list[tuple[str, str, Any]] = []
+        self.routes: dict[tuple[str, str], Any] = {
+            (method.upper(), path): value for (method, path), value in (routes or {}).items()
+        }
+        self._queues: dict[str, list[Any]] = {
+            "GET": list(get_payloads or []),
+            "POST": list(post_payloads or []),
+        }
+
+    def count(self, method: str | None = None, path: str | None = None) -> int:
+        """Count recorded requests.
+
+        Args:
+            method (str | None): HTTP method to match, or ``None`` for any method.
+            path (str | None): Request path (query included) to match, or ``None`` for any path.
+
+        Returns:
+            int: Number of matching requests.
+        """
+        return sum(
+            1
+            for request_method, url, _body in self.requests
+            if (method is None or request_method == method.upper())
+            and (path is None or url.removeprefix(self._client._url) == path)
+        )
+
+    def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
+        """Record one request and return the configured response.
+
+        Args:
+            method (str): HTTP method of the request.
+            url (str): Full requested URL.
+            kwargs (Any): Request parameters passed by the HTTP transport.
+
+        Returns:
+            FakeResponse: Configured response for the request.
+
+        Raises:
+            value: Configured transport error for this request.
+        """
+        self.requests.append((method, url, kwargs.get("json")))
+        path = url.removeprefix(self._client._url)
+        queue = self._queues[method]
+        if (method, path) in self.routes:
+            value = self.routes[(method, path)]
+        else:
+            value = queue.pop(0) if queue else {}
+        if isinstance(value, BaseException):
+            raise value
+        if isinstance(value, FakeResponse):
+            return value
+        if isinstance(value, bool) or not isinstance(value, int):
+            if isinstance(value, str):
+                return FakeResponse(text_payload=value)
+            return FakeResponse(json_payload=value)
+        return FakeResponse(status=value, reason="ERR", ok=value < 400)
+
+
+def install_fake_router(
+    client: aiopnsense.OPNsenseClient,
+    session: Any,
+    *,
+    get_payloads: list[Any] | None = None,
+    post_payloads: list[Any] | None = None,
+    routes: MutableMapping[tuple[str, str], Any] | None = None,
+) -> FakeRouter:
+    """Back a client with a fake Router and run its queued requests immediately.
+
+    Queue worker tasks are stubbed in most test modules, so queued requests are
+    dispatched straight to the transport methods the worker would call. The test
+    then exercises the real transport, endpoint cache and public methods against
+    the fake session.
+
+    Args:
+        client (aiopnsense.OPNsenseClient): Client to configure.
+        session (Any): Mock aiohttp session returned by ``make_mock_session_client``.
+        get_payloads (list[Any] | None): Ordered values answering GET requests without a route.
+        post_payloads (list[Any] | None): Ordered values answering POST requests without a route.
+        routes (MutableMapping[tuple[str, str], Any] | None): Values keyed by ``(method, path)``.
+
+    Returns:
+        FakeRouter: Fake Router recording every request the client sends.
+    """
+    router = FakeRouter(
+        client, get_payloads=get_payloads, post_payloads=post_payloads, routes=routes
+    )
+
+    get = partial(router.request, "GET")
+    post = partial(router.request, "POST")
+
+    async def queue_immediately(
+        method: str, path: str, payload: MutableMapping[str, Any] | None = None
+    ) -> Any:
+        """Run a queued request through its transport method without a worker.
+
+        Args:
+            method (str): Internal request method handled by the queue worker.
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None): Request body for POST requests.
+
+        Returns:
+            Any: Result the queue worker would set.
+
+        Raises:
+            ValueError: If the requested operation is not supported by the fake router.
+        """
+        caller = "fake router"
+        if method == "get":
+            return await client._do_get(path, caller)
+        if method == "get_outcome":
+            return await client._do_get_outcome(path, caller)
+        if method == "get_text_outcome":
+            return await client._do_get_outcome(path, caller, response_format="text")
+        if method == "post":
+            return await client._do_post(path, payload, caller)
+        if method == "post_outcome":
+            return await client._do_post_outcome(path, payload, caller)
+        if method == "get_from_stream":
+            return await client._do_get_from_stream(path, caller)
+        raise ValueError(f"Unknown fake-router queue method: {method}")
+
+    session.get = get
+    session.post = post
+    client._queue_request = queue_immediately
+    return router
+
+
+def stub_endpoint_outcome(
+    client: aiopnsense.OPNsenseClient,
+    outcome: _EndpointOutcome,
+    *,
+    read: Literal["get", "get_text", "post", "status"] = "get",
+) -> AsyncMock:
+    """Replace one endpoint outcome read on a client with a stub returning ``outcome``.
+
+    Use this in place of stubbing the probe and the fetch separately. The stub answers
+    the read the public method makes, so ``outcome`` decides the result: ``_EndpointOutcome.data(payload)``
+    for data, ``_EndpointOutcome.absent()`` for a missing endpoint, or
+    ``_EndpointOutcome.transient(error)`` for a transient failure.
+
+    Args:
+        client (aiopnsense.OPNsenseClient): Client whose read is stubbed.
+        outcome (_EndpointOutcome): Outcome that the stubbed read returns.
+        read (Literal["get", "get_text", "post", "status"]): Read to stub. ``get`` and
+            ``get_text`` replace ``_fetch_endpoint_outcome``, ``post`` replaces
+            ``_fetch_post_endpoint_outcome`` and ``status`` replaces ``_check_endpoint_status``.
+
+    Returns:
+        AsyncMock: The stub, so a test can assert the path it was awaited with.
+    """
+    attributes = {
+        "get": "_fetch_endpoint_outcome",
+        "get_text": "_fetch_endpoint_outcome",
+        "post": "_fetch_post_endpoint_outcome",
+        "status": "_check_endpoint_status",
+    }
+    stub = AsyncMock(return_value=outcome)
+    setattr(client, attributes[read], stub)
+    return stub
 
 
 class FirmwareRouter:

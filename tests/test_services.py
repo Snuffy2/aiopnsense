@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import make_mock_session_client
+from aiopnsense._endpoint_outcome import _EndpointOutcome
+from tests.conftest import make_mock_session_client, stub_endpoint_outcome
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -23,16 +24,18 @@ async def test_service_management_and_get_services(make_client: ClientType) -> N
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"name": "svc1", "running": 1, "id": "svc1"},
-                    "malformed",
-                    123,
-                    None,
-                ]
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {"name": "svc1", "running": 1, "id": "svc1"},
+                        "malformed",
+                        123,
+                        None,
+                    ]
+                }
+            ),
         )
         services = await client.get_services()
         assert len(services) == 1
@@ -119,9 +122,11 @@ async def test_restart_service_if_running_matches_composite_service_identifier(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            return_value={"rows": [{"name": "openvpn", "id": "openvpn/INSTANCE_ID", "running": 1}]}
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {"rows": [{"name": "openvpn", "id": "openvpn/INSTANCE_ID", "running": 1}]}
+            ),
         )
         client._safe_dict_post = AsyncMock(return_value={"result": "ok"})
 
@@ -147,7 +152,7 @@ async def test_service_unknown_state_fails_closed(make_client: ClientType) -> No
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
+        endpoint_read = stub_endpoint_outcome(client, _EndpointOutcome.absent())
         client.restart_service = AsyncMock(return_value=True)
 
         assert await client.get_services() == []
@@ -155,8 +160,8 @@ async def test_service_unknown_state_fails_closed(make_client: ClientType) -> No
         assert await client.get_service_is_running("svc1") is False
         assert await client.restart_service_if_running("svc1") is False
         client.restart_service.assert_not_awaited()
-        client._is_get_endpoint_available.assert_any_await("/api/core/service/search")
-        assert client._is_get_endpoint_available.await_count == 4
+        endpoint_read.assert_any_await("/api/core/service/search")
+        assert endpoint_read.await_count == 4
     finally:
         await client.async_close()
 
@@ -175,17 +180,19 @@ async def test_get_services_handles_non_list_rows_and_running_coercion(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"rows": "bad-shape"})
+        stub_endpoint_outcome(client, _EndpointOutcome.data({"rows": "bad-shape"}))
         assert await client.get_services() == []
 
-        client._safe_dict_get = AsyncMock(
-            return_value={
-                "rows": [
-                    {"name": "svc1", "running": object(), "id": "svc1"},
-                    {"name": "svc2", "running": "1", "id": "svc2"},
-                ]
-            }
+        stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "rows": [
+                        {"name": "svc1", "running": object(), "id": "svc1"},
+                        {"name": "svc2", "running": "1", "id": "svc2"},
+                    ]
+                }
+            ),
         )
         services = await client.get_services()
         assert len(services) == 2

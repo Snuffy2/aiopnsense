@@ -47,7 +47,9 @@ GUARDED_CONSTANTS: dict[str, str] = {
 }
 GET_HELPERS = frozenset(
     {
+        "_check_endpoint_status",
         "_do_get",
+        "_fetch_endpoint_outcome",
         "_firmware_request",
         "_get",
         "_get_text",

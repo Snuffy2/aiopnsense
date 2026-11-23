@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
 
+from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _raise_if_throwing
 from ._request_failure import (
     _REQUEST_PHASE,
@@ -383,6 +384,135 @@ class ClientTransportMixin:
 
         return None
 
+    async def _request_outcome(
+        self,
+        method: Literal["GET", "POST"],
+        path: str,
+        caller: str,
+        payload: MutableMapping[str, Any] | None = None,
+        *,
+        phase: str = _REQUEST_PHASE,
+        read_body: bool = True,
+        response_format: Literal["json", "text"] = "json",
+    ) -> _EndpointOutcome:
+        """Execute an endpoint request immediately and classify the response.
+
+        Shared body of ``_do_get_outcome`` and ``_do_post_outcome``. A 404 is returned
+        as an absent outcome. Any other failed HTTP response or transport error is
+        logged by the shared request reporter and returned as an outcome instead of
+        being raised. Undecodable response bodies propagate to the queue worker.
+
+        Args:
+            method (Literal["GET", "POST"]): HTTP method to send.
+            path (str): API endpoint path to request.
+            caller (str): Caller name used for diagnostics.
+            payload (MutableMapping[str, Any] | None, optional): Request payload sent
+                with a POST request; ignored for GET.
+            phase (str): Request phase for outage logging, ``probe`` for status-only
+                checks or ``request`` for data reads.
+            read_body (bool): Whether to decode the body of a successful response.
+                ``False`` makes a status-only check: the body is not read and a
+                successful response carries no payload.
+            response_format (Literal["json", "text"], optional): Decoding mode for a
+                successful response body.
+
+        Returns:
+            _EndpointOutcome: ``DATA`` with the decoded payload or body text (``None`` when
+                ``read_body`` is ``False``) for a successful response, ``ABSENT`` for a
+                404 or 403 response, and ``TRANSIENT`` for any other HTTP status, timeout
+                or client error.
+        """
+        self._rest_api_query_count += 1
+        url: str = f"{self._url}{path}"
+        method_name = method.lower()
+        operation = f"do_{method_name}_outcome"
+        _LOGGER.debug("[%s] path: %s (called by %s)", method_name, path, caller)
+        request_kwargs: dict[str, Any] = {
+            "auth": aiohttp.BasicAuth(self._username, self._password),
+            "timeout": aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
+            "ssl": self._verify_ssl,
+        }
+        try:
+            if method == "GET":
+                request = self._session.get(url, **request_kwargs)
+            else:
+                request = self._session.post(url, json=payload, **request_kwargs)
+            async with request as response:
+                _LOGGER.debug("[%s] Response %s: %s", method_name, response.status, response.reason)
+                if response.status == 404:
+                    return _EndpointOutcome.absent()
+                if not response.ok:
+                    http_error = _report_http_failure(
+                        self,
+                        method=method_name,
+                        path=path,
+                        phase=phase,
+                        operation=operation,
+                        url=url,
+                        status=response.status,
+                        reason=response.reason,
+                        caller=caller,
+                    )
+                    return _EndpointOutcome.from_http_error(response.status, http_error)
+                if not read_body:
+                    body = None
+                elif response_format == "text":
+                    body = await response.text()
+                else:
+                    body = await response.json(content_type=None)
+                _log_request_recovery(self, method_name, path, phase)
+                return _EndpointOutcome.data(body)
+        except (aiohttp.ClientError, TimeoutError) as e:
+            transport_error = _report_transport_failure(
+                self,
+                method=method_name,
+                path=path,
+                phase=phase,
+                operation=operation,
+                exc=e,
+                caller=caller,
+            )
+            transport_error.__cause__ = e
+            return _EndpointOutcome.transient(transport_error)
+
+    async def _do_get_outcome(
+        self,
+        path: str,
+        caller: str = "Unknown",
+        *,
+        read_body: bool = True,
+        response_format: Literal["json", "text"] = "json",
+        phase: str = _REQUEST_PHASE,
+    ) -> _EndpointOutcome:
+        """Execute a GET request immediately and classify the response.
+
+        Unlike ``_do_get``, an HTTP or transport failure is returned as an
+        outcome instead of being raised, so the endpoint module can tell a missing
+        endpoint from a transient failure and apply the ``throw_errors`` policy itself.
+
+        Args:
+            path (str): API endpoint path to request.
+            caller (str): Caller name used for diagnostics.
+            read_body (bool): Whether to decode the body of a successful response.
+                ``False`` makes a status-only check: the body is not read and a
+                successful response carries no payload.
+            response_format (Literal["json", "text"], optional): Decoding mode for a
+                successful response body.
+            phase (str): Request phase for outage logging, ``probe`` for status-only
+                checks or ``request`` for data reads.
+
+        Returns:
+            _EndpointOutcome: The outcome described by ``_request_outcome``.
+        """
+        return await self._request_outcome(
+            "GET",
+            path,
+            caller,
+            phase=phase,
+            read_body=read_body,
+            response_format=response_format,
+        )
+
     def _normalize_timeout_seconds(self, timeout_seconds: float | None) -> float:
         """Normalize per-call timeout values to a positive float in seconds.
 
@@ -502,6 +632,29 @@ class ClientTransportMixin:
             _raise_if_throwing(self, transport_error, e)
 
         return None
+
+    async def _do_post_outcome(
+        self,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+        caller: str = "Unknown",
+    ) -> _EndpointOutcome:
+        """Execute a POST request immediately and classify the response.
+
+        Unlike ``_do_post``, an HTTP or transport failure is returned as an
+        outcome instead of being raised, so the endpoint module can tell a missing
+        endpoint from a transient failure and apply the ``throw_errors`` policy itself.
+        The request always carries the caller's payload.
+
+        Args:
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None): Request payload sent to the API endpoint.
+            caller (str): Caller name used for diagnostics.
+
+        Returns:
+            _EndpointOutcome: The outcome described by ``_request_outcome``.
+        """
+        return await self._request_outcome("POST", path, caller, payload)
 
     async def _safe_dict_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None

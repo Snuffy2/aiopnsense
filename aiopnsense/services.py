@@ -43,20 +43,20 @@ class ServicesMixin(AiopnsenseClientProtocol):
 
         Args:
             return_none_when_unavailable (bool): Whether to return ``None`` instead of an empty
-                list when the endpoint probe fails.
+                list when the endpoint is absent or the request fails.
 
         Returns:
-            list[dict[str, Any]] | None: Normalized service payload, or ``None`` when endpoint
-                probing fails and ``return_none_when_unavailable`` is ``True``.
+            list[dict[str, Any]] | None: Normalized service payload, or ``None`` when the
+                endpoint is absent or the request fails and ``return_none_when_unavailable`` is ``True``.
         """
-        if not await self._is_get_endpoint_available(CORE_SERVICE_SEARCH_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(CORE_SERVICE_SEARCH_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Service search endpoint unavailable")
             if return_none_when_unavailable:
                 return None
             return []
 
-        response = await self._safe_dict_get(CORE_SERVICE_SEARCH_ENDPOINT)
-        return self._normalize_services_rows(response.get("rows") or [])
+        return self._normalize_services_rows(outcome.mapping().get("rows") or [])
 
     @_log_errors
     async def get_services(self) -> list[dict[str, Any]]:
