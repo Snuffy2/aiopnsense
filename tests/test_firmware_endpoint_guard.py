@@ -66,6 +66,7 @@ GUARDED_PATH = re.compile(
 UNKNOWN = "\0"
 ACTION_LABEL = "firmware action prefix outside install_firmware or upgrade_firmware"
 CHECK_DISPATCH = "await self._do_post(FIRMWARE_CHECK_ENDPOINT)"
+ACTION_STATEMENT = 'await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}")'
 
 
 def _violation_label(endpoint: str) -> str:
@@ -664,7 +665,7 @@ async def request(client):
     ],
 )
 def test_module_constant_is_replayed_in_source_order(other: str, expected: list[str]) -> None:
-    """Resolve each assignment against earlier values, and uses in function bodies against the final value.
+    """Resolve module constants by replaying their assignments in source order.
 
     Assignments resolve in source order, so ``BASE = BASE + "atus"`` sees the value before it.
     Uses inside function bodies resolve to the module's final value.
@@ -715,29 +716,15 @@ def test_guard_allows_annotated_endpoint_definitions() -> None:
     assert _source_violations({FIRMWARE_MODULE: source}) == []
 
 
-@pytest.mark.parametrize(
-    ("method", "statement"),
-    [
-        ("install_firmware", 'await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}")'),
-        ("upgrade_firmware", 'await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}")'),
-        ("install_firmware", 'await self._do_post("/api/core/firmware/update")'),
-    ],
-)
-def test_guard_allows_action_prefix_in_install_methods(method: str, statement: str) -> None:
-    """Accept the action prefix and the update path in the two install methods.
-
-    Args:
-        method (str): Install method that dispatches the action.
-        statement (str): Statement added to the install method.
-    """
+def test_guard_allows_literal_update_path_in_install_firmware() -> None:
+    """Accept the literal update path in install_firmware under the exact update and upgrade gate."""
     source = _firmware_source(
-        statement, method=method, gate=_action_gate(method, '"update", "upgrade"')
+        'await self._do_post("/api/core/firmware/update")',
+        method="install_firmware",
+        gate=_action_gate("install_firmware", '"update", "upgrade"'),
     )
 
     assert _source_violations({FIRMWARE_MODULE: source}) == []
-
-
-ACTION_STATEMENT = 'await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}")'
 
 
 @pytest.mark.parametrize("method", ["install_firmware", "upgrade_firmware"])
