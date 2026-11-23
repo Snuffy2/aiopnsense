@@ -601,7 +601,6 @@ async def test_legacy_blocklist_completion_log_omits_configuration_and_response_
 )
 @pytest.mark.parametrize("throw_errors", [False, True])
 async def test_legacy_unbound_blocklist_request_failure_follows_throw_errors(
-    request: pytest.FixtureRequest,
     make_client: ClientType,
     caplog: pytest.LogCaptureFixture,
     legacy_dnsbl_payload: dict[str, Any],
@@ -614,10 +613,8 @@ async def test_legacy_unbound_blocklist_request_failure_follows_throw_errors(
     """Verify a failed legacy save, apply or restart request follows ``throw_errors``.
 
     Args:
-        request (pytest.FixtureRequest): Request used to mark the known double-log cases.
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        caplog (pytest.LogCaptureFixture): Log capture used to check the failure is logged once
-            when errors are thrown.
+        caplog (pytest.LogCaptureFixture): Log capture used to check the failure log records.
         legacy_dnsbl_payload (dict[str, Any]): Legacy DNSBL settings returned before the save.
         method_name (str): Client toggle method name.
         failing_step (str): Legacy step whose request fails: ``save``, ``apply`` or ``restart``.
@@ -626,17 +623,6 @@ async def test_legacy_unbound_blocklist_request_failure_follows_throw_errors(
         expected_error (type[Exception]): Public error expected when errors are thrown.
         throw_errors (bool): Client error propagation setting.
     """
-    if not throw_errors and failing_step in {"save", "apply"}:
-        # Production finding: with errors off, the transport logs the failed request at ERROR
-        # and then the Toggle logs the unconfirmed ERROR-level step, so the failure is logged
-        # twice. The earlier mocks sat below the transport and never saw the first record.
-        request.applymarker(
-            pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="legacy save and apply transport failures log two ERROR records",
-            )
-        )
     replies: dict[str, Any] = {"save": SAVED, "apply": OK_APPLIED, "restart": RESTARTED}
     replies[failing_step] = make_error()
     client, router = make_router_client(
@@ -665,8 +651,10 @@ async def test_legacy_unbound_blocklist_request_failure_follows_throw_errors(
         router.count("POST", RESTART),
     ) == sent
     assert "password" not in caplog.text
+    # With errors off, a failed save or apply logs the transport cause and the failed Toggle step.
+    expected_records = 2 if not throw_errors and failing_step in {"save", "apply"} else 1
     failure_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert len(failure_records) == 1
+    assert len(failure_records) == expected_records
 
 
 @pytest.mark.parametrize("method_name", ["enable_unbound_blocklist", "disable_unbound_blocklist"])

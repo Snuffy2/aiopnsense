@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 import json
+import logging
 from types import TracebackType
 from typing import Any, Self, cast
-from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
@@ -760,12 +760,6 @@ async def test_stream_interface_traffic_raises_when_probe_timeout_and_throw_erro
         [sample async for sample in client.stream_interface_traffic(poll_interval=1)]
 
 
-# The tests below pin how `_attempt` handles a failing traffic step: its debug log level and
-# which errors it lets through. They inject the failure at the private request methods on
-# purpose. Through the real request path, a timeout is logged at ERROR (snapshot) or WARNING
-# (stream check) by the transport, and every other exception in the queued snapshot read is
-# logged at ERROR by the queue worker, which then maps it to an OPNsenseError. So neither the
-# quiet-log assertion nor the unhandled-error propagation can be observed at the session.
 # Keep factories in the shared immutable cases: pytest reuses parameter values, while
 # raised public errors carry logged state and therefore need a fresh instance per test.
 _TRAFFIC_FAILURE_CASES: tuple[Any, ...] = (
@@ -779,7 +773,13 @@ _TRAFFIC_FAILURE_CASES: tuple[Any, ...] = (
 
 
 @pytest.mark.parametrize("throw_errors", [False, True])
-@pytest.mark.parametrize(("make_error", "expected_error"), _TRAFFIC_FAILURE_CASES)
+@pytest.mark.parametrize(
+    ("make_error", "expected_error"),
+    [
+        *_TRAFFIC_FAILURE_CASES,
+        pytest.param(lambda: KeyError("key"), OPNsenseError, id="keyerror"),
+    ],
+)
 @pytest.mark.asyncio
 async def test_get_interface_traffic_failure_follows_throw_errors_contract(
     make_client: MakeClientFactory,
@@ -788,28 +788,28 @@ async def test_get_interface_traffic_failure_follows_throw_errors_contract(
     make_error: Callable[[], Exception],
     expected_error: type[OPNsenseError],
 ) -> None:
-    """A handled failure yields an empty sample, logged quietly, or a mapped error.
+    """A failed read logs one ERROR and yields an empty sample or a mapped error.
 
     Args:
         make_client (MakeClientFactory): Client factory.
-        caplog (pytest.LogCaptureFixture): Log capture used to check the failure stays at debug.
+        caplog (pytest.LogCaptureFixture): Log capture used to check the failure log level.
         throw_errors (bool): Whether the client raises public errors.
-        make_error (Callable[[], Exception]): Factory for a fresh injected error.
+        make_error (Callable[[], Exception]): Factory for a fresh session error.
         expected_error (type[OPNsenseError]): Public error expected with throw on.
     """
-    client = make_client(throw_errors=throw_errors)
-    try:
-        client._fetch_endpoint_outcome = AsyncMock(side_effect=make_error())
+    client, _router = make_router_client(
+        make_client,
+        {("GET", DIAGNOSTICS_TRAFFIC_ENDPOINT): make_error()},
+        throw_errors=throw_errors,
+    )
 
-        with caplog.at_level("DEBUG", logger="aiopnsense"):
-            if throw_errors:
-                with pytest.raises(expected_error):
-                    await client.get_interface_traffic()
-            else:
-                assert await client.get_interface_traffic() == {"time": None, "interfaces": {}}
-                assert not [r for r in caplog.records if r.levelname in {"WARNING", "ERROR"}]
-    finally:
-        await client.async_close()
+    with caplog.at_level("DEBUG", logger="aiopnsense"):
+        if throw_errors:
+            with pytest.raises(expected_error):
+                await client.get_interface_traffic()
+        else:
+            assert await client.get_interface_traffic() == {"time": None, "interfaces": {}}
+    assert [r.levelname for r in caplog.records if r.levelno >= logging.WARNING] == ["ERROR"]
 
 
 @pytest.mark.parametrize("throw_errors", [False, True])
@@ -822,64 +822,62 @@ async def test_stream_interface_traffic_probe_failure_follows_throw_errors_contr
     make_error: Callable[[], Exception],
     expected_error: type[OPNsenseError],
 ) -> None:
-    """A handled probe failure ends the stream empty, logged quietly, or raises a mapped error.
+    """A failed probe opens no stream, and only a timeout logs a WARNING.
 
     Args:
         make_client (MakeClientFactory): Client factory.
-        caplog (pytest.LogCaptureFixture): Log capture used to check the failure stays at debug.
+        caplog (pytest.LogCaptureFixture): Log capture used to check the failure log level.
         throw_errors (bool): Whether the client raises public errors.
-        make_error (Callable[[], Exception]): Factory for a fresh injected error.
+        make_error (Callable[[], Exception]): Factory for a fresh session error.
         expected_error (type[OPNsenseError]): Public error expected with throw on.
     """
-    client = make_client(throw_errors=throw_errors)
-    try:
-        client._check_endpoint_status = AsyncMock(side_effect=make_error())
-        client._stream_json_events = MagicMock()
+    client, router = make_router_client(
+        make_client, {("GET", STREAM_PATH): make_error()}, throw_errors=throw_errors
+    )
 
-        with caplog.at_level("DEBUG", logger="aiopnsense"):
-            if throw_errors:
-                with pytest.raises(expected_error):
-                    [s async for s in client.stream_interface_traffic(poll_interval=1)]
-            else:
-                assert [s async for s in client.stream_interface_traffic(poll_interval=1)] == []
-                assert not [r for r in caplog.records if r.levelname in {"WARNING", "ERROR"}]
-        client._stream_json_events.assert_not_called()
-    finally:
-        await client.async_close()
+    with caplog.at_level("DEBUG", logger="aiopnsense"):
+        if throw_errors:
+            with pytest.raises(expected_error):
+                [s async for s in client.stream_interface_traffic(poll_interval=1)]
+        else:
+            assert [s async for s in client.stream_interface_traffic(poll_interval=1)] == []
+    expected_levels = ["WARNING"] if expected_error is OPNsenseTimeoutError else []
+    assert [r.levelname for r in caplog.records if r.levelno >= logging.WARNING] == expected_levels
+    assert router.count("GET", STREAM_PATH) == 1
 
 
 @pytest.mark.parametrize("throw_errors", [False, True])
-@pytest.mark.parametrize("method", ["sample", "stream"])
 @pytest.mark.parametrize(
-    "make_error",
-    [lambda: asyncio.CancelledError(), lambda: KeyError("unhandled")],
-    ids=["cancelled", "unhandled-keyerror"],
+    ("method", "make_error"),
+    [
+        pytest.param("sample", lambda: asyncio.CancelledError(), id="sample-cancelled"),
+        pytest.param("stream", lambda: asyncio.CancelledError(), id="stream-cancelled"),
+        pytest.param("stream", lambda: KeyError("unhandled"), id="stream-unhandled-keyerror"),
+    ],
 )
 @pytest.mark.asyncio
-async def test_traffic_probe_propagates_cancellation_and_unhandled_errors(
+async def test_traffic_propagates_cancellation_and_unhandled_stream_errors(
     make_client: MakeClientFactory,
     throw_errors: bool,
     method: str,
     make_error: Callable[[], BaseException],
 ) -> None:
-    """Cancellation and errors outside the handled set propagate in both modes.
+    """Cancellation, and a stream probe error outside the handled set, propagate in both modes.
 
     Args:
         make_client (MakeClientFactory): Client factory.
         throw_errors (bool): Whether the client raises public errors.
         method (str): Which traffic method is called.
-        make_error (Callable[[], BaseException]): Factory for a fresh injected error.
+        make_error (Callable[[], BaseException]): Factory for a fresh session error.
     """
-    client = make_client(throw_errors=throw_errors)
-    try:
-        error = make_error()
-        client._fetch_endpoint_outcome = AsyncMock(side_effect=error)
-        client._check_endpoint_status = AsyncMock(side_effect=error)
+    error = make_error()
+    path = DIAGNOSTICS_TRAFFIC_ENDPOINT if method == "sample" else STREAM_PATH
+    client, _router = make_router_client(
+        make_client, {("GET", path): error}, throw_errors=throw_errors
+    )
 
-        with pytest.raises(type(error)):
-            if method == "sample":
-                await client.get_interface_traffic()
-            else:
-                [s async for s in client.stream_interface_traffic(poll_interval=1)]
-    finally:
-        await client.async_close()
+    with pytest.raises(type(error)):
+        if method == "sample":
+            await client.get_interface_traffic()
+        else:
+            [s async for s in client.stream_interface_traffic(poll_interval=1)]
