@@ -35,6 +35,7 @@
 
 - The main checkout's venv installs `aiopnsense` editable from the main checkout. `pytest` run through it from a worktree imports the worktree's code, but ad-hoc scripts and probes (`python -c`, scratch scripts) import the main checkout. Run them with `PYTHONPATH` set to the worktree root and check `aiopnsense.__file__` before trusting the result.
 - After changing docs, public API docstrings or `docs/source/api`, run `prek run --all-files --hook-stage manual docs-build` (without `--all-files` prek stashes unstaged edits and builds only the staged tree). It builds the docs with warnings as errors, as Read the Docs does, and installs the `docs` extra from `uv.lock` on first use.
+- `pydoclint` is not installed in the venv and runs through prek. Lint docstrings with `prek run pydoclint --all-files`.
 
 ## Error handling & logging
 
