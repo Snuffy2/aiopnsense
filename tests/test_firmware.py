@@ -1,16 +1,21 @@
-"""Tests for `aiopnsense.firmware` behaviors."""
+"""Tests for `aiopnsense.firmware` behaviors.
+
+Polling, endpoint-style and cooldown tests run on the fake Router and check the requests
+that reach the session. Lifecycle tests that serve ordered responses from the session
+mock (``install_client``) exercise the install path directly and keep that setup.
+"""
 
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Collection, Coroutine
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from functools import partial
+from typing import Any
+from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
 
 import aiopnsense
-from aiopnsense._endpoint_outcome import _EndpointOutcome
 from aiopnsense.const import (
     FIRMWARE_CHECK_COOLDOWN_SECONDS,
     OPNSENSE_MIN_FIRMWARE,
@@ -32,16 +37,162 @@ from aiopnsense.system import (
 from tests.conftest import (
     FIRMWARE_VERSION_SHAPES,
     FakeResponse,
-    FirmwareRouter,
+    FakeRouter,
     FirmwareVersionShape,
+    install_fake_router,
     make_mock_session_client,
-    stub_endpoint_outcome,
 )
+
+BASE_URL = "http://localhost"
+STATUS_PATH = firmware_module.FIRMWARE_STATUS_ENDPOINT
+RUNNING_PATH = firmware_module.FIRMWARE_RUNNING_ENDPOINT
+CHECK_PATH = firmware_module.FIRMWARE_CHECK_ENDPOINT
+UPGRADE_STATUS_PATH = firmware_module.FIRMWARE_UPGRADE_STATUS_ENDPOINT
+UPDATE_PATH = "/api/core/firmware/update"
+UPGRADE_PATH = "/api/core/firmware/upgrade"
+CHECK_ACK = {"status": "ok", "msg_uuid": "check"}
+READY = {"status": "ready"}
+
+# Firmware reads may use these requests only. ADR 0002 forbids `/info` on any method and
+# `POST /status`, and only the guarded check path may send `POST /check`.
+_POLL_REQUESTS = {("GET", STATUS_PATH), ("GET", RUNNING_PATH), ("POST", CHECK_PATH)}
+
+
+def _requests(router: FakeRouter) -> list[tuple[str, str]]:
+    """Return the method and path of every request the client sent, in order.
+
+    Args:
+        router (FakeRouter): Router that recorded the client's requests.
+
+    Returns:
+        list[tuple[str, str]]: ``(method, path)`` for each recorded request.
+    """
+    return [(method, url.removeprefix(BASE_URL)) for method, url, _body in router.requests]
+
+
+def _post_paths(router: FakeRouter) -> list[str]:
+    """Return the paths the client sent with POST, in order.
+
+    Args:
+        router (FakeRouter): Router that recorded the client's requests.
+
+    Returns:
+        list[str]: POST request paths.
+    """
+    return [path for method, path in _requests(router) if method == "POST"]
+
+
+def _assert_only_poll_requests(router: FakeRouter) -> None:
+    """Assert that a firmware poll sent nothing outside the ADR 0002 allow-list.
+
+    Args:
+        router (FakeRouter): Router that recorded the client's requests.
+    """
+    assert set(_requests(router)) <= _POLL_REQUESTS
+
+
+def _firmware_client(
+    make_client: Callable[..., Any],
+    routes: dict[tuple[str, str], Any] | None = None,
+    *,
+    throw_errors: bool = False,
+) -> tuple[aiopnsense.OPNsenseClient, FakeRouter]:
+    """Return a client backed by a fake Router that answers only the given routes.
+
+    Args:
+        make_client (Callable[..., Any]): Public client factory.
+        routes (dict[tuple[str, str], Any] | None): Router replies keyed by ``(method, path)``.
+        throw_errors (bool): Whether the client raises public errors.
+
+    Returns:
+        tuple[aiopnsense.OPNsenseClient, FakeRouter]: Client and the Router that answers it.
+    """
+    client, session = make_mock_session_client(partial(make_client, throw_errors=throw_errors))
+    return client, install_fake_router(client, session, routes=routes, explicit_routes=True)
+
+
+def _version_status(version: str | None) -> dict[str, Any]:
+    """Return the status a Router reports for an installed firmware version.
+
+    Args:
+        version (str | None): Installed version, or ``None`` for a status without one.
+
+    Returns:
+        dict[str, Any]: Status payload with ``product.product_version``, or an empty payload.
+    """
+    return {"product": {"product_version": version}} if version else {}
+
+
+class _ScriptedReads(FakeResponse):
+    """200 JSON response that answers successive reads in turn, and can hold chosen reads.
+
+    The last payload answers every read after the list runs out. A held read has already
+    taken its answer when it waits, as a slow Router response does. ``held`` receives one
+    gate per held read, which the test sets to let that read finish.
+
+    Attributes:
+        held (asyncio.Queue[asyncio.Event]): Gates of reads waiting to be released.
+        reads (int): Number of reads answered or held so far.
+    """
+
+    def __init__(self, *payloads: Any, hold: Collection[int] = ()) -> None:
+        """Script the answers.
+
+        Args:
+            *payloads (Any): Answers for the first read, the second read, and so on.
+            hold (Collection[int]): Reads to hold, counted from 1.
+        """
+        super().__init__()
+        self._payloads = list(payloads)
+        self._hold = set(hold)
+        self.held: asyncio.Queue[asyncio.Event] = asyncio.Queue()
+        self.reads = 0
+        self._gates: list[asyncio.Event] = []
+
+    def release_all(self) -> None:
+        """Let every held read finish, including reads that are not waiting yet."""
+        self._hold.clear()
+        for gate in self._gates:
+            gate.set()
+
+    def replace(self, payload: Any) -> None:
+        """Answer every later read with one payload.
+
+        Args:
+            payload (Any): Answer for each read that has not started yet.
+        """
+        self._payloads = [payload]
+
+    async def json(self, content_type: Any = None) -> Any:
+        """Return this read's answer, after the gate opens when the read is held.
+
+        Args:
+            content_type (Any): Unused decoding option.
+
+        Returns:
+            Any: Payload scripted for this read.
+        """
+        del content_type
+        self.reads += 1
+        payload = self._payloads.pop(0) if len(self._payloads) > 1 else self._payloads[0]
+        if self.reads in self._hold:
+            gate = asyncio.Event()
+            self._gates.append(gate)
+            self.held.put_nowait(gate)
+            await gate.wait()
+        return payload
+
 
 _SHAPE_PARAMS = [pytest.param(shape, id=shape.id) for shape in FIRMWARE_VERSION_SHAPES]
 _CACHED_SHAPE_PARAMS = [
     pytest.param(shape, id=shape.id) for shape in FIRMWARE_VERSION_SHAPES if shape.cached
 ]
+
+
+_DISMISS_ROUTES: dict[tuple[str, str], Any] = {
+    ("POST", CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT): {"status": "ok"},
+    ("POST", CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT): {"status": "ok"},
+}
 
 
 @pytest.mark.asyncio
@@ -53,74 +204,52 @@ async def test_get_host_firmware_version_and_fallback(
     Args:
         make_client (Callable[..., Any]): Factory used to create primary and fallback firmware clients.
     """
-    client, session = make_mock_session_client(make_client)
+    client, router = _firmware_client(
+        make_client, {("GET", STATUS_PATH): {"product": {"product_version": "25.8.0"}}}
+    )
+    assert await client.get_host_firmware_version() == "25.8.0"
+    assert _requests(router) == [("GET", STATUS_PATH)]
 
-    stub_endpoint_outcome(client, _EndpointOutcome.data({"product": {"product_version": "25.8.0"}}))
-    firmware = await client.get_host_firmware_version()
-    assert firmware == "25.8.0"
-    await client.async_close()
-
-    fallback_client = make_client(session=session)
-    try:
-        stub_endpoint_outcome(
-            fallback_client,
-            _EndpointOutcome.data(
-                {"product": {"product_version": "weird", "product_series": "seriesX"}}
-            ),
-        )
-        fallback = await fallback_client.get_host_firmware_version()
-        assert fallback == "seriesX"
-    finally:
-        await fallback_client.async_close()
+    fallback_client, fallback_router = _firmware_client(
+        make_client,
+        {
+            ("GET", STATUS_PATH): {
+                "product": {"product_version": "weird", "product_series": "seriesX"}
+            }
+        },
+    )
+    assert await fallback_client.get_host_firmware_version() == "seriesX"
+    assert _requests(fallback_router) == [("GET", STATUS_PATH)]
 
 
 @pytest.mark.asyncio
 async def test_delayed_firmware_read_cannot_overwrite_a_newer_observation(
-    firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
-    monkeypatch: pytest.MonkeyPatch,
+    make_client: Callable[..., Any],
 ) -> None:
     """A delayed old response must not choose the endpoint style after a newer read.
 
     Args:
-        firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
-        monkeypatch (pytest.MonkeyPatch): Enables the fixture's real queue worker.
+        make_client (Callable[..., Any]): Public client factory.
     """
-    client, router = firmware_router
-    monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
-    router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}
-    router.endpoints[CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT] = {"status": "ok"}
-    first_read_started = asyncio.Event()
-    release_first_read = asyncio.Event()
-    firmware_read_count = 0
-
-    async def read_firmware_status(path: str, **_kwargs: Any) -> _EndpointOutcome:
-        nonlocal firmware_read_count
-        if path != firmware_module.FIRMWARE_STATUS_ENDPOINT:
-            return _EndpointOutcome.data({})
-        firmware_read_count += 1
-        if firmware_read_count == 1:
-            first_read_started.set()
-            await release_first_read.wait()
-            return _EndpointOutcome.data({"product": {"product_version": "25.1"}})
-        return _EndpointOutcome.data({"product": {"product_version": "25.7"}})
-
-    client._fetch_endpoint_outcome = read_firmware_status  # type: ignore[assignment]
+    status = _ScriptedReads(_version_status("25.1"), hold={1})
+    client, router = _firmware_client(make_client, {("GET", STATUS_PATH): status} | _DISMISS_ROUTES)
     old_read_call = asyncio.create_task(client.close_notice("old-read"))
     try:
         async with asyncio.timeout(1):
-            await first_read_started.wait()
+            first_read = await status.held.get()
+        status.replace(_version_status("25.7"))
         assert await client.close_notice("new-read") is True
-        release_first_read.set()
+        first_read.set()
         async with asyncio.timeout(1):
             assert await old_read_call is True
     finally:
-        release_first_read.set()
+        status.release_all()
         if not old_read_call.done():
             old_read_call.cancel()
         await asyncio.gather(old_read_call, return_exceptions=True)
 
     assert await client.get_host_firmware_version() == "25.7"
-    assert router.post_paths == [
+    assert _post_paths(router) == [
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
     ]
@@ -128,64 +257,33 @@ async def test_delayed_firmware_read_cannot_overwrite_a_newer_observation(
 
 @pytest.mark.asyncio
 async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
-    firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
-    monkeypatch: pytest.MonkeyPatch,
+    make_client: Callable[..., Any],
 ) -> None:
     """A delayed successful status read must not overwrite a newer lookup that finished first.
 
     Args:
-        firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
-        monkeypatch (pytest.MonkeyPatch): Enables the fixture's real queue worker.
+        make_client (Callable[..., Any]): Public client factory.
     """
-    client, router = firmware_router
-    monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
-    router.firmware = "25.1"
-    router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}
-    router.endpoints[CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT] = {"status": "ok"}
-    first_probe_started = asyncio.Event()
-    release_first_probe = asyncio.Event()
-    firmware_read_count = 0
-    scripted_read = client._queue_request
-
-    async def delay_first_firmware_read(method: str, path: str, payload: Any = None) -> Any:
-        """Hold the first status read after the Router has answered it.
-
-        Args:
-            method (str): Queue operation requested by the client.
-            path (str): API endpoint path requested.
-            payload (Any): Request body, if any.
-
-        Returns:
-            Any: The outcome the Router answered with when the read was sent.
-        """
-        nonlocal firmware_read_count
-        outcome = await scripted_read(method, path, payload)
-        if path == firmware_module.FIRMWARE_STATUS_ENDPOINT:
-            firmware_read_count += 1
-            if firmware_read_count == 1:
-                first_probe_started.set()
-                await release_first_probe.wait()
-        return outcome
-
-    client._queue_request = delay_first_firmware_read  # type: ignore[assignment]
+    status = _ScriptedReads(_version_status("25.1"), hold={1})
+    client, router = _firmware_client(make_client, {("GET", STATUS_PATH): status} | _DISMISS_ROUTES)
     delayed_call = asyncio.create_task(client.close_notice("delayed-probe"))
     try:
         async with asyncio.timeout(1):
-            await first_probe_started.wait()
+            first_read = await status.held.get()
         assert await client.close_notice("second-lookup") is True
-        router.firmware = "25.7"
-        release_first_probe.set()
+        status.replace(_version_status("25.7"))
+        first_read.set()
         async with asyncio.timeout(1):
             assert await delayed_call is True
         assert await client.close_notice("after-recovery") is True
     finally:
-        release_first_probe.set()
+        status.release_all()
         if not delayed_call.done():
             delayed_call.cancel()
         await asyncio.gather(delayed_call, return_exceptions=True)
 
     assert await client.get_host_firmware_version() == "25.7"
-    assert router.post_paths == [
+    assert _post_paths(router) == [
         CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
@@ -198,57 +296,41 @@ async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
     [("payload", "check"), ("payload", "empty-status")],
 )
 async def test_validation_reads_firmware_across_an_empty_cache_observation(
-    firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
-    monkeypatch: pytest.MonkeyPatch,
+    make_client: Callable[..., Any],
     delayed_stage: str,
     interruption: str,
 ) -> None:
     """Keep validation working when a concurrent lookup leaves the cache empty.
 
     Args:
-        firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
-        monkeypatch (pytest.MonkeyPatch): Replaces the firmware status read.
+        make_client (Callable[..., Any]): Public client factory.
         delayed_stage (str): Stage of the lookup to pause; the status read is the only stage.
         interruption (str): Whether a check or an empty status response wins the race.
     """
-    client, router = firmware_router
-    router.firmware = "26.7.8"
-    router.endpoints[firmware_module.FIRMWARE_RUNNING_ENDPOINT] = {"status": "ready"}
-    lookup_started = asyncio.Event()
-    release_lookup = asyncio.Event()
-    request = client._fetch_endpoint_outcome
-
-    async def delay_first_status_request(path: str, **kwargs: Any) -> Any:
-        """Hold the first status request.
-
-        Args:
-            path (str): Requested endpoint.
-            kwargs (Any): Options passed to the status read.
-
-        Returns:
-            Any: The scripted outcome.
-        """
-        response = await request(path, **kwargs)
-        if path == firmware_module.FIRMWARE_STATUS_ENDPOINT and not lookup_started.is_set():
-            lookup_started.set()
-            await release_lookup.wait()
-        return response
-
-    monkeypatch.setattr(client, "_fetch_endpoint_outcome", delay_first_status_request)
+    status = _ScriptedReads(_version_status("26.7.8"), hold={1})
+    client, router = _firmware_client(
+        make_client,
+        {
+            ("GET", STATUS_PATH): status,
+            ("GET", RUNNING_PATH): READY,
+            ("POST", CHECK_PATH): {"status": "ok"},
+        },
+    )
     validation = asyncio.get_running_loop().create_task(client.validate(require_device_id=False))
     try:
         async with asyncio.timeout(1):
-            await lookup_started.wait()
+            first_read = await status.held.get()
             if interruption == "check":
                 await client.get_firmware_update_info()
-                assert router.post_paths == [firmware_module.FIRMWARE_CHECK_ENDPOINT]
+                assert _post_paths(router) == [CHECK_PATH]
             else:
-                router.firmware = None
+                status.replace({})
                 assert await client.get_host_firmware_version() is None
-                router.firmware = "26.7.8"
-            release_lookup.set()
+                status.replace(_version_status("26.7.8"))
+            first_read.set()
             await validation
     finally:
+        status.release_all()
         if not validation.done():
             validation.cancel()
         await asyncio.gather(validation, return_exceptions=True)
@@ -258,103 +340,79 @@ async def test_validation_reads_firmware_across_an_empty_cache_observation(
 
 @pytest.mark.asyncio
 async def test_validation_survives_repeated_automatic_firmware_checks(
-    firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
+    make_client: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An automatic check preserves a fresh read once the old cache is clear.
 
+    Reads of the status endpoint are counted in the order the Router answers them: the
+    first is the cache fill, the second and fourth are the validation reads that are held,
+    and the third and fifth are the polls that send the checks.
+
     Args:
-        firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
-        monkeypatch (pytest.MonkeyPatch): Pauses firmware responses during validation.
+        make_client (Callable[..., Any]): Public client factory.
+        monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
     """
-    client, router = firmware_router
-    router.firmware = "26.7.7"
-    router.endpoints[firmware_module.FIRMWARE_RUNNING_ENDPOINT] = {"status": "ready"}
-    router.endpoints[firmware_module.FIRMWARE_CHECK_ENDPOINT] = {
-        "status": "ok",
-        "msg_uuid": "check",
-    }
+    status = _ScriptedReads(_version_status("26.7.7"), hold={2, 4})
+    client, router = _firmware_client(
+        make_client,
+        {
+            ("GET", STATUS_PATH): status,
+            ("GET", RUNNING_PATH): READY,
+            ("POST", CHECK_PATH): CHECK_ACK,
+        },
+    )
     assert await client.get_host_firmware_version() == "26.7.7"
-
-    pending_reads: asyncio.Queue[asyncio.Event] = asyncio.Queue()
-    request = client._fetch_endpoint_outcome
-
-    async def delay_validation_read(path: str, **kwargs: Any) -> Any:
-        """Hold each validation response until its corresponding check has run.
-
-        Args:
-            path (str): Requested endpoint.
-            kwargs (Any): Options passed to the status read.
-
-        Returns:
-            Any: The scripted Router outcome.
-        """
-        response = await request(path, **kwargs)
-        if (
-            asyncio.current_task() is validation
-            and path == firmware_module.FIRMWARE_STATUS_ENDPOINT
-        ):
-            resume_read = asyncio.Event()
-            pending_reads.put_nowait(resume_read)
-            await resume_read.wait()
-        return response
 
     now = 1000.0
     monkeypatch.setattr(firmware_module, "monotonic", lambda: now)
-    monkeypatch.setattr(client, "_fetch_endpoint_outcome", delay_validation_read)
     validation = asyncio.get_running_loop().create_task(client.validate(require_device_id=False))
     try:
         async with asyncio.timeout(1):
-            first_read = await pending_reads.get()
+            first_read = await status.held.get()
             await client.get_firmware_update_info()
-            router.firmware = "26.7.8"
+            status.replace(_version_status("26.7.8"))
             first_read.set()
-            retry = await pending_reads.get()
+            retry = await status.held.get()
             now += FIRMWARE_CHECK_COOLDOWN_SECONDS
             await client.get_firmware_update_info()
             retry.set()
             await validation
     finally:
+        status.release_all()
         if not validation.done():
             validation.cancel()
         await asyncio.gather(validation, return_exceptions=True)
 
-    assert router.post_paths == [firmware_module.FIRMWARE_CHECK_ENDPOINT] * 2
+    assert router.count("POST", CHECK_PATH) == 2
     assert await client.get_host_firmware_version() == "26.7.8"
 
 
 @pytest.mark.asyncio
 async def test_delayed_firmware_read_cannot_overwrite_verified_install(
-    install_client: Callable[..., Any],
+    make_client: Callable[..., Any],
 ) -> None:
     """A pre-install status response cannot undo the verified installed version.
 
     Args:
-        install_client (Callable[..., Any]): Lifecycle transport factory.
+        make_client (Callable[..., Any]): Public client factory.
     """
     target_version = "26.7.8"
-    client, _session = install_client(
-        [(_install_progress("done", "***DONE***"), "ready", target_version)]
+    status = _ScriptedReads(_version_status("26.1.1"), hold={1})
+    client, _router = _firmware_client(
+        make_client, {**_install_routes(), ("GET", STATUS_PATH): status}
     )
-    old_read_started = asyncio.Event()
-    release_old_read = asyncio.Event()
-
-    async def read_old_firmware(_path: str, **_kwargs: Any) -> _EndpointOutcome:
-        old_read_started.set()
-        await release_old_read.wait()
-        return _EndpointOutcome.data({"product": {"product_version": "26.1.1"}})
-
-    client._fetch_endpoint_outcome = read_old_firmware
     old_read = asyncio.create_task(client.get_host_firmware_version())
     try:
         async with asyncio.timeout(1):
-            await old_read_started.wait()
+            old_read_gate = await status.held.get()
+        status.replace(_version_status(target_version))
         await client.install_firmware(target_version=target_version, poll_interval=0.001)
-        release_old_read.set()
+        old_read_gate.set()
         async with asyncio.timeout(1):
             assert await old_read == target_version
     finally:
-        release_old_read.set()
+        status.release_all()
         if not old_read.done():
             old_read.cancel()
         await asyncio.gather(old_read, return_exceptions=True)
@@ -364,48 +422,21 @@ async def test_delayed_firmware_read_cannot_overwrite_verified_install(
 
 @pytest.mark.asyncio
 async def test_firmware_status_probe_retries_cached_forbidden_endpoint(
-    firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
-    monkeypatch: pytest.MonkeyPatch,
+    make_client: Callable[..., Any],
 ) -> None:
     """A firmware probe denied once must be retried on the next capability lookup.
 
     Args:
-        firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
-        monkeypatch (pytest.MonkeyPatch): Enables the fixture's real queue worker.
+        make_client (Callable[..., Any]): Public client factory.
     """
-    client, router = firmware_router
-    monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
-    router.firmware = "25.1"
-    router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}
-    router.endpoints[CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT] = {"status": "ok"}
-    scripted_read = client._queue_request
-    firmware_read_count = 0
-
-    async def deny_first_firmware_read(method: str, path: str, payload: Any = None) -> Any:
-        """Deny the first status read with a 403 and answer later reads from the Router.
-
-        Args:
-            method (str): Queue operation requested by the client.
-            path (str): API endpoint path requested.
-            payload (Any): Request body, if any.
-
-        Returns:
-            Any: A 403 outcome for the first status read, otherwise the scripted outcome.
-        """
-        nonlocal firmware_read_count
-        if path == firmware_module.FIRMWARE_STATUS_ENDPOINT:
-            firmware_read_count += 1
-            if firmware_read_count == 1:
-                return _EndpointOutcome.from_http_error(403, OPNsenseError("Forbidden"))
-        return await scripted_read(method, path, payload)
-
-    client._queue_request = deny_first_firmware_read  # type: ignore[assignment]
+    client, router = _firmware_client(make_client, {("GET", STATUS_PATH): 403} | _DISMISS_ROUTES)
 
     assert await client.close_notice("before-recovery") is True
+    router.routes[("GET", STATUS_PATH)] = _version_status("25.1")
     assert await client.close_notice("after-recovery") is True
 
-    assert firmware_read_count == 2
-    assert router.post_paths == [
+    assert router.count("GET", STATUS_PATH) == 2
+    assert _post_paths(router) == [
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
         CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
     ]
@@ -420,17 +451,16 @@ async def test_malformed_firmware_series_uses_unknown_capability_fallback(
     Args:
         make_client (Callable[..., Any]): Factory used to create an OPNsense client.
     """
-    client = make_client()
-    stub_endpoint_outcome(client, _EndpointOutcome.data({"product": {"product_series": []}}))
-    client._safe_dict_post = AsyncMock(return_value={"status": "ok"})
-    try:
-        assert await client.close_notice("malformed-series") is True
-        client._safe_dict_post.assert_awaited_once_with(
-            CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
-            payload={"subject": "malformed-series"},
-        )
-    finally:
-        await client.async_close()
+    client, router = _firmware_client(
+        make_client, {("GET", STATUS_PATH): {"product": {"product_series": []}}} | _DISMISS_ROUTES
+    )
+
+    assert await client.close_notice("malformed-series") is True
+
+    assert _post_paths(router) == [CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT]
+    assert [body for method, _url, body in router.requests if method == "POST"] == [
+        {"subject": "malformed-series"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -514,7 +544,6 @@ async def test_malformed_firmware_series_uses_unknown_capability_fallback(
 )
 async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
     product_version: str,
     product_latest: str,
     product_check: dict[str, str],
@@ -525,38 +554,30 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
 
     Args:
         make_client (Callable[..., Any]): Factory used to create the firmware client.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
         product_version (str): Installed firmware version in the status response.
         product_latest (str): Advertised latest firmware version in the status response.
         product_check (dict[str, str]): Firmware check details in the response.
         last_check_age (timedelta | None): Age of the last check, or ``None`` if missing.
         status_msg (str | None): Optional status message from the firmware response.
     """
-    client, session = make_mock_session_client(make_client)
-    try:
-        status: dict[str, object] = {
-            "product": {
-                "product_version": product_version,
-                "product_latest": product_latest,
-                "product_check": product_check,
-            }
+    status: dict[str, object] = {
+        "product": {
+            "product_version": product_version,
+            "product_latest": product_latest,
+            "product_check": product_check,
         }
-        if status_msg is not None:
-            status["status_msg"] = status_msg
-        if last_check_age is not None:
-            status["last_check"] = (datetime.now(UTC) - last_check_age).isoformat()
-        stub_endpoint_outcome(client, _EndpointOutcome.data(status))
-        client._safe_dict_get = AsyncMock(return_value={"status": "ready"})
-        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-        session.post.return_value = fake_response_factory(json_payload={})
+    }
+    if status_msg is not None:
+        status["status_msg"] = status_msg
+    if last_check_age is not None:
+        status["last_check"] = (datetime.now(UTC) - last_check_age).isoformat()
+    client, router = _firmware_client(make_client, _poll_routes(status, check={}))
 
-        result = await client.get_firmware_update_info()
+    result = await client.get_firmware_update_info()
 
-        assert result == status
-        assert session.post.call_count == 1
-        assert session.post.call_args.args[0] == "http://localhost/api/core/firmware/check"
-    finally:
-        await client.async_close()
+    assert result == status
+    assert router.count("POST", CHECK_PATH) == 1
+    _assert_only_poll_requests(router)
 
 
 @pytest.mark.asyncio
@@ -577,7 +598,6 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
 )
 async def test_get_firmware_update_info_does_not_trigger_check_for_recent_healthy_status(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
     product_version: str,
     product_latest: str,
 ) -> None:
@@ -585,32 +605,26 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
 
     Args:
         make_client (Callable[..., Any]): Factory used to configure a healthy recent firmware status.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
         product_version (str): Installed firmware version in the status response.
         product_latest (str): Equal or older advertised firmware version.
     """
-    client, session = make_mock_session_client(make_client)
-    try:
-        status = {
-            "product": {
-                "product_version": product_version,
-                "product_latest": product_latest,
-                "product_check": {"status": "ok"},
-            },
-            "status_msg": "There are no updates available on the selected mirror.",
-            "last_check": datetime.now(UTC).isoformat(),
-        }
-        stub_endpoint_outcome(client, _EndpointOutcome.data(status))
-        client._safe_dict_get = AsyncMock(return_value={"status": "ready"})
-        client._get_opnsense_timezone = AsyncMock(return_value=UTC)
-        session.post.return_value = fake_response_factory(json_payload={})
+    status = {
+        "product": {
+            "product_version": product_version,
+            "product_latest": product_latest,
+            "product_check": {"status": "ok"},
+        },
+        "status_msg": "There are no updates available on the selected mirror.",
+        "last_check": datetime.now(UTC).isoformat(),
+    }
+    client, router = _firmware_client(make_client, {("GET", STATUS_PATH): status})
 
-        for _ in range(3):
-            result = await client.get_firmware_update_info()
-            assert result == status
-        assert session.post.call_count == 0
-    finally:
-        await client.async_close()
+    for _ in range(3):
+        result = await client.get_firmware_update_info()
+        assert result == status
+
+    # Each poll is one status read: no check, no lock read, no `/info` and no `POST /status`.
+    assert _requests(router) == [("GET", STATUS_PATH)] * 3
 
 
 @pytest.mark.asyncio
@@ -620,7 +634,6 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
 )
 async def test_upgrade_firmware_calls_expected_endpoint(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
     upgrade_type: str,
     expected_path: str,
 ) -> None:
@@ -628,51 +641,46 @@ async def test_upgrade_firmware_calls_expected_endpoint(
 
     Args:
         make_client (Callable[..., Any]): Factory used to create the upgrade client.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
         upgrade_type (str): Supported upgrade action supplied to the client.
         expected_path (str): Firmware API path expected for the action.
     """
-    client, session = make_mock_session_client(make_client)
-    try:
-        client._firmware_version = "26.1.1"
-        session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
+    client, router = _firmware_client(
+        make_client,
+        {
+            ("GET", STATUS_PATH): _version_status("26.1.1"),
+            ("POST", UPDATE_PATH): {"status": "ok"},
+            ("POST", UPGRADE_PATH): {"status": "ok"},
+        },
+    )
+    assert await client.get_host_firmware_version() == "26.1.1"
 
-        legacy_upgrade = client.upgrade_firmware  # type: ignore[deprecated]
-        assert "install_firmware(target_version=...)" in legacy_upgrade.__deprecated__  # type: ignore[attr-defined]
-        with pytest.warns(DeprecationWarning, match=r"Use install_firmware\(target_version="):
-            result = await legacy_upgrade(upgrade_type)
+    legacy_upgrade = client.upgrade_firmware  # type: ignore[deprecated]
+    assert "install_firmware(target_version=...)" in legacy_upgrade.__deprecated__  # type: ignore[attr-defined]
+    with pytest.warns(DeprecationWarning, match=r"Use install_firmware\(target_version="):
+        result = await legacy_upgrade(upgrade_type)
 
-        assert result == {"status": "ok"}
-        assert session.post.call_count == 1
-        assert session.post.call_args.args[0] == f"http://localhost{expected_path}"
-        stub_endpoint_outcome(
-            client, _EndpointOutcome.data({"product": {"product_version": "26.1.2"}})
-        )
-        assert await client.get_host_firmware_version() == "26.1.2"
-    finally:
-        await client.async_close()
+    assert result == {"status": "ok"}
+    assert _post_paths(router) == [expected_path]
+    router.routes[("GET", STATUS_PATH)] = _version_status("26.1.2")
+    assert await client.get_host_firmware_version() == "26.1.2"
 
 
 @pytest.mark.asyncio
-async def test_upgrade_firmware_rejects_unknown_type(
-    make_client: Callable[..., Any], fake_response_factory: Callable[..., Any]
-) -> None:
+async def test_upgrade_firmware_rejects_unknown_type(make_client: Callable[..., Any]) -> None:
     """Unknown firmware upgrade types should return `None` without calling the API.
 
     Args:
         make_client (Callable[..., Any]): Factory used to create the client rejecting the action.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
     """
-    client, session = make_mock_session_client(make_client)
-    try:
-        session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
+    client, router = _firmware_client(
+        make_client,
+        {("POST", UPDATE_PATH): {"status": "ok"}, ("POST", UPGRADE_PATH): {"status": "ok"}},
+    )
 
-        result = await client.upgrade_firmware("invalid")  # type: ignore[deprecated]
+    result = await client.upgrade_firmware("invalid")  # type: ignore[deprecated]
 
-        assert result is None
-        assert session.post.call_count == 0
-    finally:
-        await client.async_close()
+    assert result is None
+    assert _requests(router) == []
 
 
 @pytest.mark.asyncio
@@ -737,61 +745,36 @@ async def test_install_firmware_waits_for_legacy_upgrade_response(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("throw_errors", [False, True])
 async def test_firmware_actions_are_rejected_during_install(
-    install_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
+    make_client: Callable[..., Any],
     throw_errors: bool,
 ) -> None:
     """Legacy actions and automatic checks do not dispatch during an install.
 
     Args:
-        install_client (Callable[..., Any]): Firmware lifecycle client factory.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        make_client (Callable[..., Any]): Public client factory.
         throw_errors (bool): Whether public methods propagate OPNsense errors.
     """
-    client, session = install_client([], throw_errors=throw_errors)
-    observing = asyncio.Event()
-    release_progress = asyncio.Event()
-
-    async def held_progress_json(content_type: Any = None) -> dict[str, str]:
-        """Hold a real firmware progress response while the install is active.
-
-        Args:
-            content_type (Any): Unused fake response option.
-
-        Returns:
-            dict[str, str]: Completed firmware progress response.
-        """
-        observing.set()
-        await release_progress.wait()
-        return _install_progress("done", "***DONE***")
-
-    progress_response = fake_response_factory(json_payload={})
-    progress_response.json = held_progress_json
-    session.get.side_effect = [
-        fake_response_factory(json_payload={"status": "ready"}),
-        fake_response_factory(json_payload={"status": "done", "log": "old check"}),
-        progress_response,
-        fake_response_factory(json_payload={"status": "ready"}),
-        fake_response_factory(json_payload={"product": {"product_version": "26.7.8"}}),
-    ]
+    routes = _install_routes(hold={2}) | {("GET", STATUS_PATH): {"status": "error"}}
+    progress_reads = routes[("GET", UPGRADE_STATUS_PATH)]
+    client, router = _firmware_client(make_client, routes, throw_errors=throw_errors)
     install_task = asyncio.create_task(client.install_firmware(target_version="26.7.8"))
     try:
-        await observing.wait()
+        async with asyncio.timeout(1):
+            await progress_reads.held.get()
 
-        stub_endpoint_outcome(client, _EndpointOutcome.data({"status": "error"}))
-        client._safe_dict_get = AsyncMock(return_value={"status": "ready"})
         await client.get_firmware_update_info()
+        router.routes[("GET", STATUS_PATH)] = _version_status("26.7.8")
 
         if throw_errors:
             with pytest.raises(OPNsenseError, match="already active"):
-                await client.upgrade_firmware("upgrade")
+                await client.upgrade_firmware("upgrade")  # type: ignore[deprecated]
         else:
-            assert await client.upgrade_firmware("upgrade") is None
-        assert session.post.call_count == 1
+            assert await client.upgrade_firmware("upgrade") is None  # type: ignore[deprecated]
+        # Only the install's own dispatch reached the Router: no check and no upgrade.
+        assert _post_paths(router) == [UPDATE_PATH]
     finally:
-        release_progress.set()
+        progress_reads.release_all()
         await install_task
-        await client.async_close()
 
 
 @pytest.mark.asyncio
@@ -848,20 +831,21 @@ async def test_upgrade_status_and_changelog(make_client: Callable[..., Any]) -> 
     Args:
         make_client (Callable[..., Any]): Factory used to configure the status and changelog client.
     """
-    client = make_client()
-    try:
-        status_read = stub_endpoint_outcome(client, _EndpointOutcome.data({"status": "running"}))
-        client._safe_dict_post = AsyncMock(return_value={"changelog": "..."})
+    changelog_path = "/api/core/firmware/changelog/26.1.1"
+    client, router = _firmware_client(
+        make_client,
+        {
+            ("GET", UPGRADE_STATUS_PATH): {"status": "running"},
+            ("POST", changelog_path): {"changelog": "..."},
+        },
+    )
 
-        status = await client.upgrade_status()
-        changelog = await client.firmware_changelog("26.1.1")
+    status = await client.upgrade_status()
+    changelog = await client.firmware_changelog("26.1.1")
 
-        assert status == {"status": "running"}
-        assert changelog == {"changelog": "..."}
-        status_read.assert_awaited_once_with("/api/core/firmware/upgradestatus")
-        client._safe_dict_post.assert_awaited_once_with("/api/core/firmware/changelog/26.1.1")
-    finally:
-        await client.async_close()
+    assert status == {"status": "running"}
+    assert changelog == {"changelog": "..."}
+    assert _requests(router) == [("GET", UPGRADE_STATUS_PATH), ("POST", changelog_path)]
 
 
 @pytest.mark.asyncio
@@ -872,27 +856,19 @@ async def test_firmware_helpers_return_defaults_when_endpoints_unavailable(
 
     Args:
         make_client (Callable[..., Any]): Fixture factory used to create client instances.
-
-    Returns:
-        None: This test validates default-return behavior for unavailable firmware endpoints.
     """
-    client = make_client()
-    try:
-        stub_endpoint_outcome(client, _EndpointOutcome.absent())
-        client._safe_dict_get = AsyncMock()
+    client, router = _firmware_client(make_client)
 
-        await client._store_host_firmware_version()
-        host_version = await client.get_host_firmware_version()
-        update_info = await client.get_firmware_update_info()
-        upgrade_status = await client.upgrade_status()
+    host_version = await client.get_host_firmware_version()
+    update_info = await client.get_firmware_update_info()
+    upgrade_status = await client.upgrade_status()
 
-        assert client._firmware_version is None
-        assert host_version is None
-        assert update_info == {}
-        assert upgrade_status == {}
-        client._safe_dict_get.assert_not_awaited()
-    finally:
-        await client.async_close()
+    assert host_version is None
+    assert update_info == {}
+    assert upgrade_status == {}
+    # Nothing was checked or changed: only reads were sent, and none of them the lock.
+    assert {method for method, _path in _requests(router)} == {"GET"}
+    assert ("GET", RUNNING_PATH) not in _requests(router)
 
 
 @pytest.fixture
@@ -970,6 +946,33 @@ def _install_progress(state: str, tail: str = "", *, action: str = "UPDATE") -> 
     return {
         "status": state,
         "log": f"***GOT REQUEST TO {action}***\nCurrently running OPNsense at NEW DATE\n{tail}",
+    }
+
+
+def _install_routes(
+    progress: dict[str, str] | None = None, *, hold: Collection[int] = ()
+) -> dict[tuple[str, str], Any]:
+    """Return Router replies for an idle Router that completes a firmware action.
+
+    Args:
+        progress (dict[str, str] | None): Progress the action reports after it starts, or a
+            completed update when omitted.
+        hold (Collection[int]): Progress-log reads to hold, counted from 1. The first read is
+            the baseline taken before dispatch.
+
+    Returns:
+        dict[tuple[str, str], Any]: Replies for the lock, the progress log and both action
+            POSTs. The status route is left to the caller, because it carries the version.
+    """
+    return {
+        ("GET", RUNNING_PATH): READY,
+        ("GET", UPGRADE_STATUS_PATH): _ScriptedReads(
+            {"status": "done", "log": "old check"},
+            progress or _install_progress("done", "***DONE***"),
+            hold=hold,
+        ),
+        ("POST", UPDATE_PATH): {"status": "ok"},
+        ("POST", UPGRADE_PATH): {"status": "ok"},
     }
 
 
@@ -1266,25 +1269,22 @@ async def test_firmware_update_info_reports_exact_devel_build(
         packages (list[dict[str, str]]): Package rows in the firmware check.
         expected_latest (str): Latest version the caller should receive.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        status = _firmware_status(
-            status="update",
-            status_msg="There are 2 updates available.",
-            product={
-                "product_version": "27.1.b_21",
-                "product_latest": "27.1.b",
-                "product_series": "27.1",
-                "product_check": {"upgrade_packages": packages},
-            },
-        )
-        _configure_firmware_polls(client, status)
+    status = _firmware_status(
+        status="update",
+        status_msg="There are 2 updates available.",
+        product={
+            "product_version": "27.1.b_21",
+            "product_latest": "27.1.b",
+            "product_series": "27.1",
+            "product_check": {"upgrade_packages": packages},
+        },
+    )
+    client, router = _firmware_client(make_client, _poll_routes(status))
 
-        result = await client.get_firmware_update_info(check_for_updates=False)
+    result = await client.get_firmware_update_info(check_for_updates=False)
 
-        assert result["product"]["product_latest"] == expected_latest
-    finally:
-        await client.async_close()
+    assert result["product"]["product_latest"] == expected_latest
+    assert _requests(router) == [("GET", STATUS_PATH)]
 
 
 @pytest.mark.asyncio
@@ -1450,7 +1450,6 @@ async def test_install_firmware_concurrency_and_cancellation(
 )
 async def test_firmware_automatic_check_is_suppressed(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
     check: bool,
     server: str,
 ) -> None:
@@ -1458,19 +1457,17 @@ async def test_firmware_automatic_check_is_suppressed(
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
         check (bool): Whether automatic checking is permitted.
         server (str): Server lock state.
     """
-    client, session = make_mock_session_client(make_client)
-    try:
-        stub_endpoint_outcome(client, _EndpointOutcome.data({}))
-        client._safe_dict_get = AsyncMock(return_value={"status": server})
-        session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
-        await client.get_firmware_update_info(check_for_updates=check)
-        assert session.post.call_count == 0
-    finally:
-        await client.async_close()
+    client, router = _firmware_client(
+        make_client, _poll_routes({}, running={"status": server}, check={"status": "ok"})
+    )
+
+    await client.get_firmware_update_info(check_for_updates=check)
+
+    assert router.count("POST") == 0
+    _assert_only_poll_requests(router)
 
 
 def _firmware_status(**overrides: Any) -> dict[str, Any]:
@@ -1519,33 +1516,27 @@ def _firmware_status_for_shape(shape: FirmwareVersionShape) -> dict[str, Any]:
     )
 
 
-def _configure_firmware_polls(
-    client: Any, status: dict[str, Any], running: list[str] | None = None
-) -> None:
-    """Serve an unchanging firmware status and a sequence of lock states.
+def _poll_routes(
+    status: dict[str, Any],
+    *,
+    running: Any = READY,
+    check: Any = CHECK_ACK,
+) -> dict[tuple[str, str], Any]:
+    """Return Router replies for a firmware poll that may send a check.
 
     Args:
-        client (Any): Client under test.
         status (dict[str, Any]): Status returned on each poll.
-        running (list[str] | None): Lock states to serve, ending on the last one.
+        running (Any): Lock state reply, or a ``_ScriptedReads`` to serve states in turn.
+        check (Any): Reply to the check POST, or a transport exception.
+
+    Returns:
+        dict[tuple[str, str], Any]: Replies for the status read, the lock read and the check.
     """
-    states = list(running or ["ready"])
-
-    def read(path: str) -> dict[str, Any]:
-        """Return the mocked lock state for a firmware lock read.
-
-        Args:
-            path (str): Firmware endpoint path.
-
-        Returns:
-            dict[str, Any]: Lock state.
-        """
-        del path
-        return {"status": states.pop(0) if len(states) > 1 else states[0]}
-
-    stub_endpoint_outcome(client, _EndpointOutcome.data(status))
-    client._safe_dict_get = AsyncMock(side_effect=read)
-    client._get_opnsense_timezone = AsyncMock(return_value=UTC)
+    return {
+        ("GET", STATUS_PATH): status,
+        ("GET", RUNNING_PATH): running,
+        ("POST", CHECK_PATH): check,
+    }
 
 
 @pytest.mark.asyncio
@@ -1567,7 +1558,6 @@ def _configure_firmware_polls(
 )
 async def test_persistent_refresh_condition_checks_once_per_cooldown(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
     status: dict[str, Any],
 ) -> None:
@@ -1575,60 +1565,53 @@ async def test_persistent_refresh_condition_checks_once_per_cooldown(
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
         monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
         status (dict[str, Any]): Status that keeps requesting a refresh.
     """
     now = 1000.0
     monkeypatch.setattr(firmware_module, "monotonic", lambda: now)
-    client, session = make_mock_session_client(make_client)
-    try:
-        _configure_firmware_polls(client, status)
-        session.post.return_value = fake_response_factory(
-            json_payload={"status": "ok", "msg_uuid": "check"}
-        )
+    client, router = _firmware_client(make_client, _poll_routes(status))
 
-        for _ in range(3):
-            await client.get_firmware_update_info()
-        assert session.post.call_count == 1
-
-        now += 3599
+    for _ in range(3):
         await client.get_firmware_update_info()
-        assert session.post.call_count == 1
+    assert router.count("POST", CHECK_PATH) == 1
 
-        now += 1
-        await client.get_firmware_update_info()
-        assert session.post.call_count == 2
-    finally:
-        await client.async_close()
+    now += 3599
+    await client.get_firmware_update_info()
+    assert router.count("POST", CHECK_PATH) == 1
+
+    now += 1
+    await client.get_firmware_update_info()
+    assert router.count("POST", CHECK_PATH) == 2
+    _assert_only_poll_requests(router)
 
 
 @pytest.mark.asyncio
 async def test_busy_router_does_not_start_firmware_check_cooldown(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A poll that finds the Router busy can still check on the next poll.
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
         monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
     """
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, session = make_mock_session_client(make_client)
-    try:
-        _configure_firmware_polls(client, _firmware_status(status="error"), ["busy", "ready"])
-        session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
+    client, router = _firmware_client(
+        make_client,
+        _poll_routes(
+            _firmware_status(status="error"),
+            running=_ScriptedReads({"status": "busy"}, READY),
+            check={"status": "ok"},
+        ),
+    )
 
-        await client.get_firmware_update_info()
-        assert session.post.call_count == 0
+    await client.get_firmware_update_info()
+    assert router.count("POST", CHECK_PATH) == 0
 
-        await client.get_firmware_update_info()
-        assert session.post.call_count == 1
-    finally:
-        await client.async_close()
+    await client.get_firmware_update_info()
+    assert router.count("POST", CHECK_PATH) == 1
 
 
 @pytest.mark.asyncio
@@ -1642,7 +1625,6 @@ async def test_busy_router_does_not_start_firmware_check_cooldown(
 )
 async def test_unacknowledged_firmware_check_does_not_start_cooldown(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
     unacknowledged: Any,
 ) -> None:
@@ -1650,96 +1632,75 @@ async def test_unacknowledged_firmware_check_does_not_start_cooldown(
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
         monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
         unacknowledged (Any): Transport exception or non-ok response payload for the first check.
     """
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, session = make_mock_session_client(make_client)
-    try:
-        _configure_firmware_polls(client, _firmware_status(status="error"))
-        first = (
-            unacknowledged
-            if isinstance(unacknowledged, BaseException)
-            else fake_response_factory(json_payload=unacknowledged)
-        )
-        session.post.side_effect = [
-            first,
-            fake_response_factory(json_payload={"status": "ok", "msg_uuid": "check"}),
-        ]
+    client, router = _firmware_client(
+        make_client, _poll_routes(_firmware_status(status="error"), check=unacknowledged)
+    )
 
-        await client.get_firmware_update_info()
-        assert session.post.call_count == 1
+    await client.get_firmware_update_info()
+    assert router.count("POST", CHECK_PATH) == 1
 
-        await client.get_firmware_update_info()
-        assert session.post.call_count == 2
+    router.routes[("POST", CHECK_PATH)] = CHECK_ACK
+    await client.get_firmware_update_info()
+    assert router.count("POST", CHECK_PATH) == 2
 
-        await client.get_firmware_update_info()
-        assert session.post.call_count == 2
-    finally:
-        await client.async_close()
+    await client.get_firmware_update_info()
+    assert router.count("POST", CHECK_PATH) == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("action", "observations"),
+    ("action", "progress"),
     [
         pytest.param(
-            "verified-install",
-            [(_install_progress("done", "***DONE***"), "ready", "26.7.9")],
-            id="verified-install",
+            "verified-install", _install_progress("done", "***DONE***"), id="verified-install"
         ),
-        pytest.param(
-            "failed-install",
-            [(_install_progress("error"), "ready", "26.7.9")],
-            id="failed-install",
-        ),
-        pytest.param("deprecated-upgrade", [], id="deprecated-upgrade"),
+        pytest.param("failed-install", _install_progress("error"), id="failed-install"),
+        pytest.param("deprecated-upgrade", None, id="deprecated-upgrade"),
     ],
 )
 async def test_dispatched_firmware_action_ends_check_cooldown(
-    install_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
+    make_client: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
     action: str,
-    observations: list[Any],
+    progress: dict[str, str] | None,
 ) -> None:
     """Dispatching an update or upgrade lets the next poll check again, whatever its outcome.
 
     Args:
-        install_client (Callable[..., Any]): Lifecycle transport factory.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        make_client (Callable[..., Any]): Public client factory.
         monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
         action (str): Install outcome or deprecated call that dispatches the action.
-        observations (list[Any]): Progress observations served after dispatch.
+        progress (dict[str, str] | None): Progress the dispatched action reports.
     """
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, session = install_client(observations)
-    try:
-        _configure_firmware_polls(client, _firmware_status(status="error"))
-        session.post.return_value = fake_response_factory(
-            json_payload={"status": "ok", "msg_uuid": "check"}
-        )
+    client, router = _firmware_client(
+        make_client,
+        _install_routes(progress) | _poll_routes(_firmware_status(status="error")),
+    )
 
-        await client.get_firmware_update_info()
-        await client.get_firmware_update_info()
-        assert session.post.call_count == 1
+    await client.get_firmware_update_info()
+    await client.get_firmware_update_info()
+    assert router.count("POST", CHECK_PATH) == 1
 
-        if action == "deprecated-upgrade":
-            with pytest.warns(DeprecationWarning, match=r"Use install_firmware\(target_version="):
-                await client.upgrade_firmware("upgrade")  # type: ignore[deprecated]
-        elif action == "failed-install":
-            with pytest.raises(OPNsenseError, match="reported 'error'"):
-                await client.install_firmware(target_version="26.7.9", poll_interval=0.001)
-        else:
+    if action == "deprecated-upgrade":
+        with pytest.warns(DeprecationWarning, match=r"Use install_firmware\(target_version="):
+            await client.upgrade_firmware("upgrade")  # type: ignore[deprecated]
+        assert router.count("POST", UPGRADE_PATH) == 1
+    elif action == "failed-install":
+        with pytest.raises(OPNsenseError, match="reported 'error'"):
             await client.install_firmware(target_version="26.7.9", poll_interval=0.001)
-        assert session.post.call_count == 2
+        assert router.count("POST", UPDATE_PATH) == 1
+    else:
+        await client.install_firmware(target_version="26.7.9", poll_interval=0.001)
+        assert router.count("POST", UPDATE_PATH) == 1
+    assert router.count("POST", CHECK_PATH) == 1
 
-        await client.get_firmware_update_info()
-        assert session.post.call_count == 3
-        assert session.post.call_args.args[0] == "http://localhost/api/core/firmware/check"
-    finally:
-        await client.async_close()
+    await client.get_firmware_update_info()
+    assert router.count("POST", CHECK_PATH) == 2
 
 
 @pytest.mark.asyncio
@@ -1753,67 +1714,57 @@ async def test_firmware_lookup_handles_router_version_shapes(
         make_client (Callable[..., Any]): Public client factory.
         shape (FirmwareVersionShape): Version form reported by the Router.
     """
-    client, _session = make_mock_session_client(make_client)
-    try:
-        _configure_firmware_polls(client, _firmware_status_for_shape(shape))
-        status_reads = cast(AsyncMock, client._fetch_endpoint_outcome)
+    client, router = _firmware_client(
+        make_client, {("GET", STATUS_PATH): _firmware_status_for_shape(shape)}
+    )
 
-        assert await client.get_host_firmware_version() == shape.lookup_version
-        reads_before = status_reads.await_count
-        assert await client.get_host_firmware_version() == shape.lookup_version
-        assert status_reads.await_count - reads_before == (0 if shape.cached else 1)
-    finally:
-        await client.async_close()
+    assert await client.get_host_firmware_version() == shape.lookup_version
+    reads_before = router.count("GET", STATUS_PATH)
+    assert await client.get_host_firmware_version() == shape.lookup_version
+    assert router.count("GET", STATUS_PATH) - reads_before == (0 if shape.cached else 1)
+    assert set(_requests(router)) == {("GET", STATUS_PATH)}
 
 
 async def _lookup_after_cooldown_poll(
-    client: Any,
-    session: MagicMock,
-    fake_response_factory: Callable[..., Any],
+    client: aiopnsense.OPNsenseClient,
+    router: FakeRouter,
     initial_status: dict[str, Any],
     changed_status: dict[str, Any],
 ) -> tuple[str | None, int]:
     """Change the firmware status during cooldown and run the next version lookup.
 
-    The status object is updated in place, because the poll mock serves that same
-    object. The returned version alone cannot show a wrongly cleared cache, because the
-    next read returns the same value either way, so the status reads are returned as well.
+    The returned version alone cannot show a wrongly cleared cache, because the next read
+    returns the same value either way, so the status reads of the final lookup are returned
+    as well.
 
     Args:
-        client (Any): Client under test.
-        session (MagicMock): Mock session receiving the check POST.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
+        client (aiopnsense.OPNsenseClient): Client under test.
+        router (FakeRouter): Router that answers the client.
         initial_status (dict[str, Any]): Firmware status served before the cooldown poll.
         changed_status (dict[str, Any]): Firmware status that replaces it during cooldown.
 
     Returns:
         tuple[str | None, int]: Version from the final lookup and its status reads.
     """
-    _configure_firmware_polls(client, initial_status)
-    status_reads = cast(AsyncMock, client._fetch_endpoint_outcome)
-    session.post.return_value = fake_response_factory(
-        json_payload={"status": "ok", "msg_uuid": "check"}
-    )
+    router.routes.update(_poll_routes(initial_status))
 
     await client.get_firmware_update_info()
-    assert session.post.call_count == 1
+    assert router.count("POST", CHECK_PATH) == 1
     await client.get_host_firmware_version()
 
-    initial_status.clear()
-    initial_status.update(changed_status)
+    router.routes[("GET", STATUS_PATH)] = changed_status
     assert await client.get_firmware_update_info() == changed_status
 
-    reads_before = status_reads.await_count
+    reads_before = router.count("GET", STATUS_PATH)
     version = await client.get_host_firmware_version()
-    assert session.post.call_count == 1
-    return version, status_reads.await_count - reads_before
+    assert router.count("POST", CHECK_PATH) == 1
+    return version, router.count("GET", STATUS_PATH) - reads_before
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shape", _CACHED_SHAPE_PARAMS)
 async def test_firmware_cooldown_keeps_cache_for_unchanged_version_shape(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
     shape: FirmwareVersionShape,
 ) -> None:
@@ -1821,30 +1772,24 @@ async def test_firmware_cooldown_keeps_cache_for_unchanged_version_shape(
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
         monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
         shape (FirmwareVersionShape): Version form reported by the Router.
     """
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, session = make_mock_session_client(make_client)
-    try:
-        result = await _lookup_after_cooldown_poll(
-            client,
-            session,
-            fake_response_factory,
-            _firmware_status_for_shape(shape),
-            _firmware_status_for_shape(shape),
-        )
-        assert result == (shape.lookup_version, 0)
-    finally:
-        await client.async_close()
+    client, router = _firmware_client(make_client)
+    result = await _lookup_after_cooldown_poll(
+        client,
+        router,
+        _firmware_status_for_shape(shape),
+        _firmware_status_for_shape(shape),
+    )
+    assert result == (shape.lookup_version, 0)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shape", _SHAPE_PARAMS)
 async def test_firmware_cooldown_refreshes_cache_for_new_version_shape(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
     shape: FirmwareVersionShape,
 ) -> None:
@@ -1852,24 +1797,19 @@ async def test_firmware_cooldown_refreshes_cache_for_new_version_shape(
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
         monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
         shape (FirmwareVersionShape): Version form the Router changes to.
     """
     previous_version = "25.7.1"
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, session = make_mock_session_client(make_client)
-    try:
-        result = await _lookup_after_cooldown_poll(
-            client,
-            session,
-            fake_response_factory,
-            _firmware_status(status="error", product={"product_version": previous_version}),
-            _firmware_status_for_shape(shape),
-        )
-        assert result == ((shape.lookup_version, 1) if shape.cached else (previous_version, 0))
-    finally:
-        await client.async_close()
+    client, router = _firmware_client(make_client)
+    result = await _lookup_after_cooldown_poll(
+        client,
+        router,
+        _firmware_status(status="error", product={"product_version": previous_version}),
+        _firmware_status_for_shape(shape),
+    )
+    assert result == ((shape.lookup_version, 1) if shape.cached else (previous_version, 0))
 
 
 @pytest.mark.asyncio
@@ -1894,7 +1834,6 @@ async def test_firmware_cooldown_refreshes_cache_for_new_version_shape(
 )
 async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
     initial_product: dict[str, Any],
     changed_product: dict[str, Any],
@@ -1909,7 +1848,6 @@ async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
         monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
         initial_product (dict[str, Any]): Product fields before the cooldown poll.
         changed_product (dict[str, Any]): Product fields that change during cooldown.
@@ -1917,59 +1855,53 @@ async def test_firmware_cooldown_refreshes_only_comparable_version_changes(
         expected_reads (int): Status reads expected from the final version lookup.
     """
     monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, session = make_mock_session_client(make_client)
-    try:
-        result = await _lookup_after_cooldown_poll(
-            client,
-            session,
-            fake_response_factory,
-            _firmware_status(status="error", product=initial_product),
-            _firmware_status(status="error", product=changed_product),
-        )
-        assert result == (expected_version, expected_reads)
-    finally:
-        await client.async_close()
+    client, router = _firmware_client(make_client)
+    result = await _lookup_after_cooldown_poll(
+        client,
+        router,
+        _firmware_status(status="error", product=initial_product),
+        _firmware_status(status="error", product=changed_product),
+    )
+    assert result == (expected_version, expected_reads)
 
 
 @pytest.mark.asyncio
 async def test_concurrent_firmware_update_info_sends_one_check(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Concurrent polls on a status that stays stale share one acknowledged check.
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
         monkeypatch (pytest.MonkeyPatch): Controls the cooldown clock.
     """
-    monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
-    client, session = make_mock_session_client(make_client)
-    try:
-        _configure_firmware_polls(client, _firmware_status(last_check="not a date"))
-        response = fake_response_factory(json_payload={"status": "ok"})
 
-        async def slow_json(*_args: Any, **_kwargs: Any) -> dict[str, str]:
-            """Yield to the event loop while the check is in flight.
+    class SlowCheckResponse(FakeResponse):
+        """Check acknowledgement that yields to the event loop while the check is in flight."""
+
+        async def json(self, content_type: Any = None) -> dict[str, str]:
+            """Yield to the event loop, then acknowledge the check.
 
             Args:
-                _args (Any): Unused decoding arguments.
-                _kwargs (Any): Unused decoding options.
+                content_type (Any): Unused decoding option.
 
             Returns:
                 dict[str, str]: Check dispatch acknowledgement.
             """
+            del content_type
             await asyncio.sleep(0)
-            return {"status": "ok", "msg_uuid": "check"}
+            return CHECK_ACK
 
-        response.json = slow_json
-        session.post.return_value = response
+    monkeypatch.setattr(firmware_module, "monotonic", lambda: 1000.0)
+    client, router = _firmware_client(
+        make_client,
+        _poll_routes(_firmware_status(last_check="not a date"), check=SlowCheckResponse()),
+    )
 
-        await asyncio.gather(*(client.get_firmware_update_info() for _ in range(5)))
-        assert session.post.call_count == 1
-    finally:
-        await client.async_close()
+    await asyncio.gather(*(client.get_firmware_update_info() for _ in range(5)))
+
+    assert router.count("POST", CHECK_PATH) == 1
 
 
 @pytest.mark.parametrize(
@@ -2095,79 +2027,46 @@ async def test_install_firmware_auth_failure_is_fatal(
 @pytest.mark.asyncio
 async def test_cancelled_firmware_check_does_not_dispatch_later(
     make_client: Callable[..., Any],
-    fake_response_factory: Callable[..., Any],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cancelling a check must not leave a mutating request behind queued work.
 
     Args:
         make_client (Callable[..., Any]): Public client factory.
-        fake_response_factory (Callable[..., Any]): HTTP response factory.
-        monkeypatch (pytest.MonkeyPatch): Controlled worker transport fixture.
     """
-    client, session = make_mock_session_client(make_client)
-    client._max_workers = 1
-    worker_entered = asyncio.Event()
-    release_worker = asyncio.Event()
-    finish_check = asyncio.Event()
-
-    async def blocked_read(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        """Keep the existing request worker occupied.
-
-        Args:
-            args (Any): Unused transport arguments.
-            kwargs (Any): Unused transport options.
-
-        Returns:
-            dict[str, Any]: Completed unrelated read.
-        """
-        worker_entered.set()
-        await release_worker.wait()
-        return {}
-
-    async def check_response(*args: Any, **kwargs: Any) -> dict[str, str]:
-        """Hold the check HTTP response until its caller is cancelled.
-
-        Args:
-            args (Any): Unused decoding arguments.
-            kwargs (Any): Unused decoding options.
-
-        Returns:
-            dict[str, str]: Check dispatch acknowledgement.
-        """
-        await finish_check.wait()
-        return {"status": "ok"}
-
-    monkeypatch.setattr(asyncio, "create_task", asyncio.get_running_loop().create_task)
-    monkeypatch.setattr(client, "_do_get", blocked_read)
-    response = fake_response_factory(json_payload={"status": "ok"})
-    response.json = check_response
-    session.post.return_value = response
-    stub_endpoint_outcome(client, _EndpointOutcome.data({}))
-    client._safe_dict_get = AsyncMock(return_value={"status": "ready"})
-    unrelated = asyncio.create_task(client._get("/unrelated/read"))
-    await worker_entered.wait()
-    check = asyncio.create_task(client.get_firmware_update_info())
+    unrelated_read = _ScriptedReads({"status": "running"}, hold={1})
+    check_response = _ScriptedReads({"status": "ok"}, hold={1})
+    client, router = _firmware_client(
+        make_client,
+        _poll_routes({}, check=check_response) | {("GET", UPGRADE_STATUS_PATH): unrelated_read},
+    )
+    unrelated = asyncio.create_task(client.upgrade_status())
+    check: asyncio.Task[Any] | None = None
     try:
-        # Advance to the first suspended await, either in the queue or HTTP response.
-        await asyncio.sleep(0)
-        requests_before_cancel = session.post.call_count
+        async with asyncio.timeout(1):
+            await unrelated_read.held.get()
+            check = asyncio.create_task(client.get_firmware_update_info())
+            await check_response.held.get()
+        assert router.count("POST", CHECK_PATH) == 1
         check.cancel()
         with pytest.raises(asyncio.CancelledError):
             await check
-        release_worker.set()
-        finish_check.set()
-        await unrelated
-        await client._get("/after-cancel/read")
-        assert session.post.call_count == requests_before_cancel
-        session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
-        dispatches_before_retry = session.post.call_count
+        unrelated_read.release_all()
+        check_response.release_all()
+        assert await unrelated == {"status": "running"}
+        assert await client.upgrade_status() == {"status": "running"}
+        assert router.count("POST", CHECK_PATH) == 1
+
+        # The cancelled check never acknowledged, so the next poll may check again.
         await client.get_firmware_update_info()
-        assert session.post.call_count == dispatches_before_retry + 1
+        assert router.count("POST", CHECK_PATH) == 2
     finally:
-        release_worker.set()
-        finish_check.set()
-        await client.async_close()
+        unrelated_read.release_all()
+        check_response.release_all()
+        pending = [task for task in (unrelated, check) if task is not None]
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 def test_get_firmware_requirements_reports_library_thresholds() -> None:

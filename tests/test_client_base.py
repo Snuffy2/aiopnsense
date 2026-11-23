@@ -25,10 +25,12 @@ from aiopnsense.exceptions import (
 from tests.conftest import (
     FakeClientSession,
     FakeResponse,
-    FirmwareRouter,
     MakeClientFactory,
+    install_fake_router,
     make_mock_session_client,
 )
+
+FIRMWARE_STATUS_PATH = "/api/core/firmware/status"
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):
@@ -445,18 +447,25 @@ async def test_async_context_manager_stays_open_until_exit_when_validation_succe
 @pytest.mark.asyncio
 async def test_validate_can_skip_device_unique_id_requirement(
     monkeypatch: pytest.MonkeyPatch,
-    firmware_router: tuple[OPNsenseClient, FirmwareRouter],
+    make_client: MakeClientFactory,
 ) -> None:
     """Verify validation refreshes firmware while skipping the device ID request.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Fixture for overriding client methods.
-        firmware_router (tuple[OPNsenseClient, FirmwareRouter]): Client and Router.
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
     """
-    client, router = firmware_router
-    router.firmware = "0.0"
+    client, session = make_mock_session_client(make_client)
+    router = install_fake_router(
+        client,
+        session,
+        routes={("GET", FIRMWARE_STATUS_PATH): {"product": {"product_version": "0.0"}}},
+        explicit_routes=True,
+    )
     assert await client.get_host_firmware_version() == "0.0"
-    router.firmware = OPNSENSE_RECOMMENDED_FIRMWARE
+    router.routes[("GET", FIRMWARE_STATUS_PATH)] = {
+        "product": {"product_version": OPNSENSE_RECOMMENDED_FIRMWARE}
+    }
     monkeypatch.setattr(
         client,
         "get_device_unique_id",
