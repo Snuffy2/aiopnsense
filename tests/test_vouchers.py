@@ -195,3 +195,75 @@ async def test_voucher_switched_endpoints_follow_selected_case(
 
     assert router.count("GET", providers_path) == 1
     assert router.bodies("POST", generate_path) == [{}]
+
+
+@pytest.mark.parametrize(
+    ("firmware", "providers_path", "generate_path", "reads_with_server", "reads_without_server"),
+    [
+        pytest.param(
+            SNAKE_CASE_FIRMWARE,
+            "/api/captiveportal/voucher/list_providers",
+            "/api/captiveportal/voucher/generate_vouchers/srv/",
+            1,
+            1,
+            id="snake_case",
+        ),
+        pytest.param(
+            CAMELCASE_FIRMWARE,
+            "/api/captiveportal/voucher/listProviders",
+            "/api/captiveportal/voucher/generateVouchers/srv/",
+            1,
+            1,
+            id="camelCase",
+        ),
+        pytest.param(
+            None,
+            "/api/captiveportal/voucher/list_providers",
+            "/api/captiveportal/voucher/generate_vouchers/srv/",
+            # Ticket 04 reduces this to one: a supplied server needs no provider path.
+            2,
+            2,
+            id="unknown-firmware",
+        ),
+    ],
+)
+@pytest.mark.parametrize("server_supplied", [True, False], ids=["server-supplied", "no-server"])
+async def test_generate_vouchers_request_sequence(
+    make_client: ClientType,
+    firmware: str | None,
+    providers_path: str,
+    generate_path: str,
+    reads_with_server: int,
+    reads_without_server: int,
+    server_supplied: bool,
+) -> None:
+    """Pin every request ``generate_vouchers`` sends, with and without a supplied server.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        firmware (str | None): Firmware version the Router reports, ``None`` when it is unknown.
+        providers_path (str): Provider list endpoint the Router is expected to receive.
+        generate_path (str): Generate endpoint, server segment included.
+        reads_with_server (int): Firmware status reads when the caller names the server.
+        reads_without_server (int): Firmware status reads when the server comes from the list.
+        server_supplied (bool): Whether the caller names the voucher server.
+    """
+    client, router = make_router_client(
+        make_client,
+        {("GET", providers_path): ["srv"], ("POST", generate_path): []},
+        firmware=firmware,
+    )
+
+    assert (
+        await client.generate_vouchers({"voucher_server": "srv"} if server_supplied else {}) == []
+    )
+
+    firmware_read = ("GET", "/api/core/firmware/status")
+    if server_supplied:
+        expected = [firmware_read] * reads_with_server + [("POST", generate_path)]
+    else:
+        expected = [firmware_read] * reads_without_server + [
+            ("GET", providers_path),
+            ("POST", generate_path),
+        ]
+    assert router.calls() == expected
