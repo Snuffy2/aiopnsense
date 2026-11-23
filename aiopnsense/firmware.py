@@ -33,6 +33,7 @@ from .exceptions import (
 from .helpers import (
     _BETA_BASE_VERSION,
     _LOGGER,
+    _public_caller_name,
     dict_get,
     firmware_is_at_least,
     firmware_is_newer,
@@ -426,7 +427,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 self._record_firmware_version(None)
             # Do not queue this mutation: a cancelled queue caller
             # can leave a CHECK that runs after the action lock releases.
-            response = await self._do_post(FIRMWARE_CHECK_ENDPOINT)
+            response = await self._do_post(FIRMWARE_CHECK_ENDPOINT, caller=_public_caller_name())
             # Only an acknowledged check starts the cooldown. OPNsense
             # returns status ok even when configd fails, leaving msg_uuid
             # empty, so an acknowledgement needs a non-empty msg_uuid. A

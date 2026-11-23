@@ -5,6 +5,7 @@ from collections.abc import MutableMapping
 import contextlib
 import json
 import logging
+import re
 from typing import Any, Literal, Never
 from unittest.mock import AsyncMock
 
@@ -14,6 +15,7 @@ from aiopnsense import (
     OPNsenseError,
     OPNsenseInvalidArgument,
     client_queue as aiopnsense_client_queue,
+    helpers as aiopnsense_helpers,
     unbound as aiopnsense_unbound,
     vpn as aiopnsense_vpn,
 )
@@ -385,7 +387,7 @@ async def test_get_uses_unknown_when_caller_frame_is_unavailable(
                 """
                 raise error_type("no frame")
 
-        monkeypatch.setattr(aiopnsense_client_queue, "sys", _BadSys)
+        monkeypatch.setattr(aiopnsense_helpers, "sys", _BadSys)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
@@ -495,7 +497,7 @@ async def test_post_uses_unknown_when_caller_frame_is_unavailable(
                 """
                 raise error_type("no frame")
 
-        monkeypatch.setattr(aiopnsense_client_queue, "sys", _BadSys)
+        monkeypatch.setattr(aiopnsense_helpers, "sys", _BadSys)
 
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
@@ -2090,3 +2092,140 @@ async def test_queued_public_request_cannot_reach_forbidden_firmware_action(
         session.post.assert_not_called()
     finally:
         await client.async_close()
+
+
+async def _enable_blocklist_with_unknown_firmware(client: Any) -> bool:
+    """Call a public method whose first step is the public firmware version read.
+
+    Args:
+        client (Any): Client under test.
+
+    Returns:
+        bool: Result of ``enable_unbound_blocklist``.
+    """
+    client._firmware_version = None
+    return await client.enable_unbound_blocklist()
+
+
+_CALLER_NAMES_PATHS = {
+    "gateways": "/api/routes/gateway/status",
+    "alias_search": "/api/firewall/alias/search_item",
+    "speedtest_show": "/api/speedtest/service/showlog",
+    "firmware_status": "/api/core/firmware/status",
+    "firmware_running": "/api/core/firmware/running",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "routes", "expected_caller"),
+    [
+        pytest.param(
+            lambda client: client.get_gateways(),
+            {},
+            "get_gateways",
+            id="outcome-read",
+        ),
+        pytest.param(
+            lambda client: client.start_service("unbound"),
+            {},
+            "start_service",
+            id="queued-post-through-private-helper",
+        ),
+        pytest.param(
+            lambda client: client.toggle_alias("blocked", "on"),
+            {_CALLER_NAMES_PATHS["alias_search"]: {"rows": [{"name": "blocked", "uuid": "u-1"}]}},
+            "toggle_alias",
+            id="toggle",
+        ),
+        pytest.param(
+            lambda client: client.toggle_vpn_instance("openvpn", "clients", "u-1", "on"),
+            {},
+            "toggle_vpn_instance",
+            id="vpn-toggle",
+        ),
+        pytest.param(
+            lambda client: client.run_speedtest(),
+            {_CALLER_NAMES_PATHS["speedtest_show"]: {"rows": []}},
+            "run_speedtest",
+            id="timed-get",
+        ),
+        pytest.param(
+            lambda client: client.get_firmware_update_info(),
+            {
+                _CALLER_NAMES_PATHS["firmware_status"]: {"status": "error"},
+                _CALLER_NAMES_PATHS["firmware_running"]: {"status": "ready"},
+            },
+            "get_firmware_update_info",
+            id="automatic-firmware-check",
+        ),
+        pytest.param(
+            _enable_blocklist_with_unknown_firmware,
+            {},
+            {"get_host_firmware_version", "enable_unbound_blocklist"},
+            id="nearest-public-method-wins",
+        ),
+        pytest.param(
+            lambda client: client.run_speedtest(),
+            {_CALLER_NAMES_PATHS["speedtest_show"]: 403},
+            "run_speedtest",
+            id="status-check-403",
+        ),
+    ],
+)
+async def test_failure_logs_name_the_public_client_method(
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+    operation: Any,
+    routes: dict[str, Any],
+    expected_caller: str | set[str],
+) -> None:
+    """Name the public method the application called in every request failure log.
+
+    The call goes through the public method, the real queue worker and a fake
+    aiohttp session that answers with HTTP 500 unless a route says otherwise.
+
+    Args:
+        make_client (MakeClientFactory): Factory for clients using a mocked HTTP session.
+        caplog (pytest.LogCaptureFixture): Captured request failure logs.
+        operation (Any): Calls the public client method under test.
+        routes (dict[str, Any]): Replies by path: a JSON body or an HTTP error status.
+        expected_caller (str | set[str]): Public method name, or every public method
+            name, the failure logs must carry. The nested case logs the firmware read
+            under its own name and the outer method's later failure under its own.
+    """
+    client, session = make_mock_session_client(make_client)
+    client._firmware_version = "26.1"
+
+    def answer(_method: str, url: str, **_kwargs: Any) -> FakeResponse:
+        """Answer one request from the routes, or with HTTP 500.
+
+        Args:
+            _method (str): HTTP method of the request.
+            url (str): Full requested URL.
+            _kwargs (Any): Unused request options.
+
+        Returns:
+            FakeResponse: Scripted reply for the path.
+        """
+        reply = routes.get(url.removeprefix(client._url), 500)
+        if isinstance(reply, int):
+            return FakeResponse(status=reply, reason="Failed", ok=False)
+        return FakeResponse(json_payload=reply)
+
+    session.get = lambda url, **kwargs: answer("GET", url, **kwargs)
+    session.post = lambda url, **kwargs: answer("POST", url, **kwargs)
+    try:
+        with caplog.at_level(logging.WARNING, logger="aiopnsense"):
+            await operation(client)
+
+        callers = {
+            name
+            for record in caplog.records
+            for name in re.findall(r"called by (\w+)", record.getMessage())
+        }
+        assert callers == (
+            {expected_caller} if isinstance(expected_caller, str) else expected_caller
+        )
+    finally:
+        await asyncio.wait_for(client.async_close(), timeout=2)

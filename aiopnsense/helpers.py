@@ -5,7 +5,9 @@ from datetime import UTC, datetime, tzinfo
 import ipaddress
 import logging
 import re
+import sys
 import traceback
+from types import FrameType
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -134,6 +136,35 @@ def _mark_request_error_logged(error: BaseException) -> None:
         error (BaseException): Exception passed through queue and public wrappers.
     """
     setattr(error, _REQUEST_ERROR_LOGGED_ATTRIBUTE, True)
+
+
+def _public_caller_name() -> str:
+    """Return the public client method that triggered the current request.
+
+    Walks up the call stack from the caller of this function while the frames
+    belong to the aiopnsense package, and returns the nearest frame that is a
+    public method: its name has no leading underscore and its qualified name has
+    no ``<locals>``. That skips private helpers and the error-policy wrappers, and
+    when a public method calls another public method the nearest one is named. It
+    does not depend on call depth. The walk ends without a name when the stack
+    leaves the package.
+
+    Returns:
+        str: Name of the nearest public method, or ``"Unknown"`` when the call
+            stack leaves the package without reaching one, or frame inspection is
+            unavailable.
+    """
+    package = __name__.partition(".")[0]
+    try:
+        frame: FrameType | None = sys._getframe(1)
+    except ValueError, AttributeError:
+        return "Unknown"
+    while frame is not None and frame.f_globals.get("__name__", "").partition(".")[0] == package:
+        code = frame.f_code
+        if not code.co_name.startswith("_") and "<locals>" not in code.co_qualname:
+            return code.co_name
+        frame = frame.f_back
+    return "Unknown"
 
 
 def _is_request_error_logged(error: BaseException) -> bool:

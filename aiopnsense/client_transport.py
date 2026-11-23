@@ -18,7 +18,7 @@ from ._request_failure import (
     _report_transport_failure,
 )
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
-from .helpers import _LOGGER, _log_request_recovery
+from .helpers import _LOGGER, _log_request_recovery, _public_caller_name
 
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
 
@@ -557,7 +557,7 @@ class ClientTransportMixin:
         """
         result = await self._do_get(
             path=path,
-            caller="_safe_dict_get_with_timeout",
+            caller=_public_caller_name(),
             timeout_seconds=timeout_seconds,
         )
         return dict(result) if isinstance(result, MutableMapping) else {}

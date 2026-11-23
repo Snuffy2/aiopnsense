@@ -3,14 +3,17 @@
 import asyncio
 from collections.abc import MutableMapping
 from dataclasses import dataclass
-import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ._endpoint_outcome import _EndpointOutcome
-from ._error_policy import _attempt
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
-from .helpers import _LOGGER, _is_request_error_logged, _mark_request_error_logged
+from .helpers import (
+    _LOGGER,
+    _is_request_error_logged,
+    _mark_request_error_logged,
+    _public_caller_name,
+)
 
 
 @dataclass(slots=True)
@@ -159,22 +162,6 @@ class ClientQueueMixin:
             raise OPNsenseError("Event loop is not initialized")
         return self._loop
 
-    @staticmethod
-    def _get_caller_name() -> str:
-        """Return the public caller above the queue wrapper.
-
-        Returns:
-            str: Function name used for diagnostics, or ``"Unknown"`` when frame
-            inspection is unavailable.
-        """
-        try:
-            frame = sys._getframe(3)
-            if frame.f_code is _attempt.__code__:
-                frame = frame.f_back or frame
-            return frame.f_code.co_name
-        except ValueError, AttributeError:
-            return "Unknown"
-
     async def _queue_request(
         self,
         method: str,
@@ -196,7 +183,7 @@ class ClientQueueMixin:
         """
         loop = await self._get_active_loop()
         future = loop.create_future()
-        await self._request_queue.put((method, path, payload, future, self._get_caller_name()))
+        await self._request_queue.put((method, path, payload, future, _public_caller_name()))
         return await future
 
     async def _queue_post_with_cancellation(
@@ -231,7 +218,7 @@ class ClientQueueMixin:
                 path,
                 payload,
                 future,
-                self._get_caller_name(),
+                _public_caller_name(),
                 cancellation_state,
             )
         )
