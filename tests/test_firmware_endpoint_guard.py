@@ -196,6 +196,29 @@ async def test_firmware_check_permission_ends_with_its_block(
     _assert_nothing_sent(session)
 
 
+@pytest.mark.parametrize(
+    ("site", "action"),
+    [("get", INFO_ACTION), ("post", INFO_ACTION), ("post", STATUS_ACTION)],
+)
+async def test_firmware_check_permission_lifts_only_the_check_block(
+    make_client: Callable[..., aiopnsense.OPNsenseClient], site: str, action: str
+) -> None:
+    """Keep blocking info and status requests while a firmware check is allowed.
+
+    Args:
+        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
+        site (str): Request site under test.
+        action (str): Forbidden firmware action that the permission must not lift.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.toggle_throwing_errors(True)
+
+    with _allow_firmware_check(), pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
+        await _send_sites(client)[site](f"{BASE}/{action}")
+
+    _assert_nothing_sent(session)
+
+
 @pytest.mark.parametrize("form", PATH_FORMS.values(), ids=PATH_FORMS)
 @pytest.mark.parametrize(
     ("site", "action"),
