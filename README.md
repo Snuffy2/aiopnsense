@@ -20,21 +20,21 @@
 | aiopnsense/const.py                      |       24 |        0 |        0 |        0 |    100% |           |
 | aiopnsense/dhcp.py                       |      328 |        4 |      128 |        4 |     98% |521, 559, 564, 743 |
 | aiopnsense/exceptions.py                 |       45 |        0 |       22 |        1 |     99% | 109-\>111 |
-| aiopnsense/firewall.py                   |      167 |        2 |       46 |        4 |     97% |56, 88-\>90, 90-\>92, 176 |
+| aiopnsense/firewall.py                   |      169 |        2 |       46 |        4 |     97% |56, 88-\>90, 90-\>92, 179 |
 | aiopnsense/firmware.py                   |      316 |       15 |      142 |       15 |     93% |121, 237, 250, 335-336, 376, 401, 480, 484, 549, 587, 621, 629-\>631, 654, 658-\>660, 664, 679-\>683, 684 |
 | aiopnsense/helpers.py                    |      204 |        5 |       86 |        2 |     98% |400, 403-406 |
 | aiopnsense/nut.py                        |       48 |        0 |       20 |        0 |    100% |           |
 | aiopnsense/services.py                   |       71 |        0 |       22 |        0 |    100% |           |
 | aiopnsense/smart.py                      |       38 |        0 |       12 |        0 |    100% |           |
-| aiopnsense/speedtest.py                  |       56 |        0 |       16 |        0 |    100% |           |
+| aiopnsense/speedtest.py                  |       54 |        0 |       14 |        0 |    100% |           |
 | aiopnsense/system.py                     |      401 |        3 |      160 |        7 |     98% |291-\>293, 293-\>295, 296, 301-\>286, 327, 330, 700-\>691 |
 | aiopnsense/telemetry.py                  |      259 |        3 |       70 |        3 |     98% |54, 101, 210 |
 | aiopnsense/traffic.py                    |      112 |        0 |       52 |        1 |     99% | 151-\>154 |
-| aiopnsense/unbound.py                    |       94 |        0 |       38 |        0 |    100% |           |
-| aiopnsense/vnstat.py                     |      215 |        9 |       94 |        9 |     94% |216, 269, 385, 412, 414, 455, 489, 509, 531 |
-| aiopnsense/vouchers.py                   |       51 |        1 |       16 |        3 |     94% |79, 92-\>95, 96-\>100 |
+| aiopnsense/unbound.py                    |       93 |        0 |       36 |        0 |    100% |           |
+| aiopnsense/vnstat.py                     |      217 |        8 |       94 |        8 |     95% |220, 273, 389, 416, 459, 493, 513, 535 |
+| aiopnsense/vouchers.py                   |       54 |        1 |       18 |        3 |     94% |85, 98-\>101, 102-\>106 |
 | aiopnsense/vpn.py                        |      490 |        7 |      224 |       15 |     97% |224, 248, 249-\>exit, 270, 319, 581, 602, 605-\>604, 607-\>600, 637-\>636, 651-\>650, 653-\>652, 709-\>exit, 956, 1250-\>1246 |
-| **TOTAL**                                | **4085** |   **64** | **1524** |   **86** | **97%** |           |
+| **TOTAL**                                | **4089** |   **63** | **1522** |   **85** | **97%** |           |
 
 
 ## Setup coverage badge
