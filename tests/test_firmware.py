@@ -29,10 +29,6 @@ from aiopnsense.exceptions import (
 )
 import aiopnsense.firmware as firmware_module
 from aiopnsense.helpers import firmware_is_at_least
-from aiopnsense.system import (
-    CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
-    CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
-)
 from tests.conftest import (
     FIRMWARE_VERSION_SHAPES,
     FakeResponse,
@@ -44,8 +40,10 @@ from tests.conftest import (
     make_router_client,
 )
 
-STATUS_PATH = firmware_module.FIRMWARE_STATUS_ENDPOINT
-RUNNING_PATH = firmware_module.FIRMWARE_RUNNING_ENDPOINT
+STATUS_PATH = "/api/core/firmware/status"
+RUNNING_PATH = "/api/core/firmware/running"
+DISMISS_SNAKE_PATH = "/api/core/system/dismiss_status"
+DISMISS_CAMELCASE_PATH = "/api/core/system/dismissStatus"
 CHECK_PATH = "/api/core/firmware/check"
 UPGRADE_STATUS_PATH = "/api/core/firmware/upgradestatus"
 UPDATE_PATH = "/api/core/firmware/update"
@@ -74,8 +72,8 @@ _CACHED_SHAPE_PARAMS = [
 
 
 _DISMISS_ROUTES: dict[tuple[str, str], Any] = {
-    ("POST", CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT): {"status": "ok"},
-    ("POST", CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT): {"status": "ok"},
+    ("POST", DISMISS_SNAKE_PATH): {"status": "ok"},
+    ("POST", DISMISS_CAMELCASE_PATH): {"status": "ok"},
 }
 
 
@@ -136,8 +134,8 @@ async def test_delayed_firmware_read_cannot_overwrite_a_newer_observation(
 
     assert await client.get_host_firmware_version() == "25.7"
     assert router.paths("POST") == [
-        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
-        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
+        DISMISS_SNAKE_PATH,
+        DISMISS_SNAKE_PATH,
     ]
 
 
@@ -172,9 +170,9 @@ async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
 
     assert await client.get_host_firmware_version() == "25.7"
     assert router.paths("POST") == [
-        CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
-        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
-        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
+        DISMISS_CAMELCASE_PATH,
+        DISMISS_SNAKE_PATH,
+        DISMISS_SNAKE_PATH,
     ]
 
 
@@ -329,8 +327,8 @@ async def test_firmware_status_probe_retries_cached_forbidden_endpoint(
 
     assert router.count("GET", STATUS_PATH) == 2
     assert router.paths("POST") == [
-        CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
-        CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
+        DISMISS_SNAKE_PATH,
+        DISMISS_CAMELCASE_PATH,
     ]
 
 
@@ -349,10 +347,8 @@ async def test_malformed_firmware_series_uses_unknown_capability_fallback(
 
     assert await client.close_notice("malformed-series") is True
 
-    assert router.paths("POST") == [CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT]
-    assert router.bodies("POST", CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT) == [
-        {"subject": "malformed-series"}
-    ]
+    assert router.paths("POST") == [DISMISS_SNAKE_PATH]
+    assert router.bodies("POST", DISMISS_SNAKE_PATH) == [{"subject": "malformed-series"}]
 
 
 @pytest.mark.asyncio
