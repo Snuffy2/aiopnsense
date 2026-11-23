@@ -18,6 +18,7 @@ from aiopnsense import (
     client_transport as aiopnsense_client_transport,
 )
 from aiopnsense.client_queue import _QueueEntry
+from aiopnsense.client_transport import _RequestKind
 from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import (
     FakeResponse,
@@ -57,7 +58,9 @@ async def test_opnsenseclient_async_close(make_client: MakeClientFactory) -> Non
         client._workers = [worker1, worker2]
         client._request_queue = asyncio.Queue()
         future = loop.create_future()
-        await client._request_queue.put(_QueueEntry("get", "/api/test", None, future, "test"))
+        await client._request_queue.put(
+            _QueueEntry(_RequestKind.PLAIN, "/api/test", None, future, "test")
+        )
         await client.async_close()
         assert worker1.cancelled()
         assert worker2.cancelled()
@@ -87,7 +90,9 @@ async def test_opnsenseclient_async_context_manager_closes_background_tasks(
         client._workers = [worker]
         client._request_queue = asyncio.Queue()
         future = loop.create_future()
-        await client._request_queue.put(_QueueEntry("get", "/api/test", None, future, "test"))
+        await client._request_queue.put(
+            _QueueEntry(_RequestKind.PLAIN, "/api/test", None, future, "test")
+        )
 
         async with client as managed_client:
             assert managed_client is client
@@ -156,9 +161,9 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
         fut_post = loop.create_future()
         fut_stream = loop.create_future()
 
-        await q.put(_QueueEntry("get", "/g", None, fut_get, "t"))
-        await q.put(_QueueEntry("post", "/p", {"x": 1}, fut_post, "t"))
-        await q.put(_QueueEntry("get_from_stream", "/s", None, fut_stream, "t"))
+        await q.put(_QueueEntry(_RequestKind.PLAIN, "/g", None, fut_get, "t"))
+        await q.put(_QueueEntry(_RequestKind.PLAIN, "/p", {"x": 1}, fut_post, "t", method="post"))
+        await q.put(_QueueEntry(_RequestKind.STREAM, "/s", None, fut_stream, "t"))
 
         res1 = await asyncio.wait_for(fut_get, timeout=2)
         res2 = await asyncio.wait_for(fut_post, timeout=2)
@@ -541,7 +546,7 @@ async def test_process_queue_exception_sets_future_exception(
         task = loop.create_task(client._process_queue())
 
         fut = loop.create_future()
-        await q.put(_QueueEntry("get", "/g", None, fut, "t"))
+        await q.put(_QueueEntry(_RequestKind.PLAIN, "/g", None, fut, "t"))
 
         with pytest.raises(OPNsenseError, match="boom") as exc_info:
             await asyncio.wait_for(fut, timeout=2)
@@ -610,7 +615,7 @@ async def test_process_queue_cancelled_sets_future_cancelled_error(
         task = loop.create_task(client._process_queue())
 
         fut = loop.create_future()
-        await q.put(_QueueEntry("get", "/g", None, fut, "t"))
+        await q.put(_QueueEntry(_RequestKind.PLAIN, "/g", None, fut, "t"))
 
         await asyncio.wait_for(started.wait(), timeout=2)
         task.cancel()
@@ -2178,20 +2183,22 @@ async def test_failure_logs_name_the_public_client_method(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("kind", "is_sent"),
+    ("kind", "method", "response_format", "is_sent"),
     [
-        ("get", True),
-        ("get_from_stream", True),
-        ("get_outcome", False),
-        ("get_text_outcome", False),
-        ("post", False),
-        ("post_outcome", False),
+        (_RequestKind.PLAIN, "get", "json", True),
+        (_RequestKind.STREAM, "get", "json", True),
+        (_RequestKind.OUTCOME, "get", "json", False),
+        (_RequestKind.OUTCOME, "get", "text", False),
+        (_RequestKind.PLAIN, "post", "json", False),
+        (_RequestKind.OUTCOME, "post", "json", False),
     ],
 )
 async def test_request_cancelled_before_dispatch_is_skipped_by_kind(
     make_client: MakeClientFactory,
     vpn_queue_tasks: VpnQueueTasks,
-    kind: str,
+    kind: _RequestKind,
+    method: Literal["get", "post"],
+    response_format: Literal["json", "text"],
     is_sent: bool,
 ) -> None:
     """Skip POST and outcome requests cancelled while queued; still send plain GET and streams.
@@ -2199,7 +2206,9 @@ async def test_request_cancelled_before_dispatch_is_skipped_by_kind(
     Args:
         make_client (MakeClientFactory): Client factory fixture.
         vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
-        kind (str): Queued request kind.
+        kind (_RequestKind): How the queued request delivers its result.
+        method (Literal["get", "post"]): HTTP method of the queued request.
+        response_format (Literal["json", "text"]): Body format of the queued request.
         is_sent (bool): Whether the cancelled request is still sent.
     """
     client, session = make_mock_session_client(make_client)
@@ -2208,7 +2217,10 @@ async def test_request_cancelled_before_dispatch_is_skipped_by_kind(
     # An eager start queues the request before the worker runs; cancelling right
     # away cancels it while it is still queued.
     target = vpn_queue_tasks.start(
-        client._queue_request(kind, "/target", {"x": 1}), eager_start=True
+        client._queue_request(
+            kind, "/target", {"x": 1}, method=method, response_format=response_format
+        ),
+        eager_start=True,
     )
     target.cancel()
     with pytest.raises(asyncio.CancelledError):

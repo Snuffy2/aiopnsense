@@ -46,29 +46,34 @@ async def _sse_items(chunks: AsyncIterator[bytes]) -> AsyncGenerator[_SseItem]:
 
 
 class _RequestKind(StrEnum):
-    """Kinds of request the queue worker dispatches through the transport.
+    """How a queued request's result is delivered.
 
-    The values are the strings queued requests have always carried.
+    The HTTP method and response format are separate ``_QueueEntry`` fields.
+    ``PLAIN`` returns the payload (or raises or returns ``None`` under the
+    ``throw_errors`` policy), ``OUTCOME`` returns an ``_EndpointOutcome`` and
+    ``STREAM`` returns a buffered stream read.
     """
 
-    GET = "get"
-    GET_FROM_STREAM = "get_from_stream"
-    GET_OUTCOME = "get_outcome"
-    GET_TEXT_OUTCOME = "get_text_outcome"
-    POST = "post"
-    POST_OUTCOME = "post_outcome"
+    PLAIN = "plain"
+    OUTCOME = "outcome"
+    STREAM = "stream"
 
 
-# Kinds the queue worker skips when cancelled before dispatch. Plain GET and buffered
-# stream reads are still sent. An unknown kind is not a member, so dispatch reports it.
-_SKIPPED_WHEN_CANCELLED = frozenset(
-    {
-        _RequestKind.POST,
-        _RequestKind.GET_OUTCOME,
-        _RequestKind.GET_TEXT_OUTCOME,
-        _RequestKind.POST_OUTCOME,
-    }
-)
+def _is_skipped_when_cancelled(kind: _RequestKind | str, method: str) -> bool:
+    """Return whether the queue worker skips a request cancelled before dispatch.
+
+    ``OUTCOME`` requests and plain POSTs are skipped. Plain GETs and buffered
+    stream reads are still sent. An unknown kind is not skipped, so dispatch
+    reports it.
+
+    Args:
+        kind (_RequestKind | str): Request kind of the queue entry.
+        method (str): HTTP method of the queue entry.
+
+    Returns:
+        bool: True when the worker must not dispatch the cancelled request.
+    """
+    return kind == _RequestKind.OUTCOME or (kind == _RequestKind.PLAIN and method == "post")
 
 
 def _public_caller_name() -> str:
@@ -159,14 +164,18 @@ class ClientTransportMixin:
         path: str,
         payload: MutableMapping[str, Any] | None,
         caller: str,
+        method: Literal["get", "post"] = "get",
+        response_format: Literal["json", "text"] = "json",
     ) -> Any:
         """Send one dequeued request through the transport method for its kind.
 
         Args:
-            kind (_RequestKind): Request kind.
+            kind (_RequestKind): How the result is delivered.
             path (str): API endpoint path to request.
-            payload (MutableMapping[str, Any] | None): Request body for POST kinds.
+            payload (MutableMapping[str, Any] | None): Request body for POST requests.
             caller (str): Calling method name used for diagnostics.
+            method (Literal["get", "post"]): HTTP method of the request.
+            response_format (Literal["json", "text"]): Body format of an outcome GET.
 
         Returns:
             Any: Result of the matching transport method.
@@ -174,18 +183,18 @@ class ClientTransportMixin:
         Raises:
             error: An ``OPNsenseError``, already logged, if ``kind`` is not a known request kind.
         """
-        match kind:
-            case _RequestKind.GET_FROM_STREAM:
+        match kind, method:
+            case _RequestKind.STREAM, _:
                 return await self._do_get_from_stream(path, caller)
-            case _RequestKind.GET:
+            case _RequestKind.PLAIN, "get":
                 return await self._do_get(path, caller)
-            case _RequestKind.GET_OUTCOME:
-                return await self._do_get_outcome(path, caller)
-            case _RequestKind.GET_TEXT_OUTCOME:
-                return await self._do_get_outcome(path, caller, response_format="text")
-            case _RequestKind.POST:
+            case _RequestKind.PLAIN, "post":
                 return await self._do_post(path, payload, caller)
-            case _RequestKind.POST_OUTCOME:
+            case _RequestKind.OUTCOME, "get" if response_format == "text":
+                return await self._do_get_outcome(path, caller, response_format="text")
+            case _RequestKind.OUTCOME, "get":
+                return await self._do_get_outcome(path, caller)
+            case _RequestKind.OUTCOME, "post":
                 return await self._do_post_outcome(path, payload, caller)
         _LOGGER.error("Unknown method to add to Queue: %s", kind)
         error = OPNsenseError(f"Unknown method to add to Queue: {kind}")
