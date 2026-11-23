@@ -130,7 +130,6 @@ async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
     client, _session = make_mock_session_client(make_client)
     try:
         client.get_host_firmware_version = AsyncMock(return_value=firmware_version)
-        client._is_get_endpoint_available = AsyncMock()
         client._safe_dict_get = AsyncMock(
             return_value={
                 "unbound": {
@@ -178,7 +177,6 @@ async def test_get_unbound_blocklist_returns_legacy_payload_for_older_firmware(
                 "wildcards": "wild-a",
             }
         }
-        client._is_get_endpoint_available.assert_not_awaited()
         client._safe_dict_get.assert_awaited_once_with("/api/unbound/settings/get")
     finally:
         await client.async_close()

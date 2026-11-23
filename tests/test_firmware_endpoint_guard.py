@@ -58,23 +58,19 @@ def _send_sites(client: aiopnsense.OPNsenseClient) -> dict[str, Callable[[str], 
         "post": client._do_post,
         "get-from-stream": client._do_get_from_stream,
         "stream-events": stream,
-        "probe-get": lambda path: client._is_endpoint_available(path, method="get"),
-        "probe-post": lambda path: client._is_endpoint_available(path, method="post"),
         "firmware-get": client._firmware_request,
         "firmware-post": lambda path: client._firmware_request(path, post=True),
     }
 
 
-GET_SITES = ("get", "get-from-stream", "stream-events", "probe-get", "firmware-get")
-POST_SITES = ("post", "probe-post", "firmware-post")
+GET_SITES = ("get", "get-from-stream", "stream-events", "firmware-get")
+POST_SITES = ("post", "firmware-post")
 FIRMWARE_SITES = ("firmware-get", "firmware-post")
 EMPTY_RESULTS: dict[str, Any] = {
     "get": None,
     "post": None,
     "get-from-stream": {},
     "stream-events": [],
-    "probe-get": False,
-    "probe-post": False,
 }
 FORBIDDEN = [
     *((site, "info") for site in (*GET_SITES, *POST_SITES)),
@@ -140,6 +136,64 @@ async def test_boundary_returns_empty_for_forbidden_request_without_throwing(
     client, session = make_mock_session_client(make_client)
 
     assert await _send_sites(client)[site](f"{BASE}/{action}") == EMPTY_RESULTS[site]
+
+    _assert_nothing_sent(session)
+
+
+@pytest.mark.parametrize(
+    ("method", "action"), [("get", "info"), ("post", "info"), ("post", "status")]
+)
+async def test_boundary_returns_blocked_outcome_for_forbidden_request(
+    make_client: Callable[..., aiopnsense.OPNsenseClient], method: str, action: str
+) -> None:
+    """Return a transient outcome carrying the blocked error and send nothing.
+
+    The outcome requests report a failed request as an outcome and leave the
+    ``throw_errors`` decision to the endpoint module, so they never raise here.
+
+    Args:
+        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
+        method (str): HTTP method of the immediate outcome request.
+        action (str): Forbidden firmware action.
+    """
+    client, session = make_mock_session_client(make_client)
+    request = client._do_get_outcome if method == "get" else client._do_post_outcome
+
+    outcome = await request(f"{BASE}/{action}")
+
+    assert outcome.is_transient
+    assert isinstance(outcome.error, OPNsenseInvalidArgument)
+    assert "Blocked" in str(outcome.error)
+    _assert_nothing_sent(session)
+
+
+@pytest.mark.parametrize("throw_errors", [True, False], ids=["throw", "empty"])
+async def test_endpoint_availability_alias_blocks_forbidden_request(
+    make_client: Callable[..., aiopnsense.OPNsenseClient], throw_errors: bool
+) -> None:
+    """Raise or return ``False`` for a forbidden firmware path and send nothing.
+
+    Args:
+        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
+        throw_errors (bool): Client ``throw_errors`` setting.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.toggle_throwing_errors(throw_errors)
+
+    async def check() -> bool:
+        """Ask the deprecated alias about a forbidden path.
+
+        Returns:
+            bool: The alias result.
+        """
+        with pytest.warns(DeprecationWarning, match="Endpoint availability probing is internal"):
+            return await client.is_endpoint_available(f"{BASE}/info", force_refresh=True)  # type: ignore[deprecated]
+
+    if throw_errors:
+        with pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
+            await check()
+    else:
+        assert await check() is False
 
     _assert_nothing_sent(session)
 

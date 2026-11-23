@@ -1058,25 +1058,9 @@ class ScriptedRouter:
         client._use_snake_case = True
         client._post = self._post
         client._get = self._get
-        client._is_get_endpoint_available = self._is_get_endpoint_available
         client._queue_request = self._queue_outcome_read
         client._queue_post_with_cancellation = self._post_with_cancellation
         return client
-
-    async def _is_get_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:
-        """Answer an endpoint availability probe from the script.
-
-        An endpoint is available when the script has a GET reply for it, so a test makes
-        an endpoint unavailable by leaving it unscripted.
-
-        Args:
-            path (str): API path being probed.
-            force_refresh (bool): Ignored; the script has no cache.
-
-        Returns:
-            bool: ``True`` when a GET reply is scripted for ``path``.
-        """
-        return ("GET", path) in self._replies
 
     async def _queue_outcome_read(
         self, method: str, path: str, payload: MutableMapping[str, Any] | None = None

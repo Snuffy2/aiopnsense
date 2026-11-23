@@ -1,7 +1,6 @@
 """Tests for `aiopnsense.smart`."""
 
 from collections.abc import Callable
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -199,14 +198,14 @@ async def test_smart_fails_closed_when_endpoint_is_unavailable(
         ),
     ],
 )
-async def test_smart_does_not_probe_post_only_endpoint(
+async def test_smart_reads_post_only_endpoint(
     make_client: ClientType,
     operation: str,
     response: dict[str, object],
     expected: object,
     post_args: tuple[object, ...],
 ) -> None:
-    """SMART operations should not use GET endpoint probes for POST-only APIs.
+    """SMART operations read POST-only APIs.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -216,13 +215,10 @@ async def test_smart_does_not_probe_post_only_endpoint(
         post_args (tuple[object, ...]): Expected arguments for the SMART POST request.
 
     Returns:
-        None: This test validates that SMART POST requests do not depend on GET probes.
+        None: This test validates that SMART POST requests use the POST endpoint.
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(
-            side_effect=AssertionError("GET probe should not run")
-        )
         read = stub_endpoint_outcome(client, _EndpointOutcome.data(response), read="post")
 
         if operation == "list":
@@ -231,7 +227,6 @@ async def test_smart_does_not_probe_post_only_endpoint(
             got = await client.get_smart_info("nvme0")
 
         assert got == expected
-        client._is_get_endpoint_available.assert_not_awaited()
         read.assert_awaited_once_with(*post_args)
     finally:
         await client.async_close()
