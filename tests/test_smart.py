@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import FakeResponse, make_mock_session_client
+from aiopnsense._endpoint_outcome import _EndpointOutcome
+from tests.conftest import install_fake_router, make_mock_session_client, stub_endpoint_outcome
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -23,14 +24,17 @@ async def test_get_smart_returns_device_rows(make_client: ClientType) -> None:
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(
-            return_value={
-                "devices": [
-                    {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
-                    {"ident": "ada0", "device": "ada0", "status": "FAILED"},
-                ]
-            }
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "devices": [
+                        {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
+                        {"ident": "ada0", "device": "ada0", "status": "FAILED"},
+                    ]
+                }
+            ),
+            read="post",
         )
 
         smart_devices = await client.get_smart()
@@ -39,8 +43,7 @@ async def test_get_smart_returns_device_rows(make_client: ClientType) -> None:
             {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
             {"ident": "ada0", "device": "ada0", "status": "FAILED"},
         ]
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
+        read.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
 
@@ -57,21 +60,23 @@ async def test_get_smart_skips_devices_with_blank_ident(make_client: ClientType)
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(
-            return_value={
-                "devices": [
-                    {"ident": "", "device": "nvme0", "status": "PASSED"},
-                    {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
-                ]
-            }
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "devices": [
+                        {"ident": "", "device": "nvme0", "status": "PASSED"},
+                        {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
+                    ]
+                }
+            ),
+            read="post",
         )
 
         smart_devices = await client.get_smart()
 
         assert smart_devices == [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
+        read.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
 
@@ -89,21 +94,23 @@ async def test_get_smart_skips_non_mapping_rows(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(
-            return_value={
-                "devices": [
-                    "unexpected-string-row",
-                    {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
-                ]
-            }
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data(
+                {
+                    "devices": [
+                        "unexpected-string-row",
+                        {"ident": "nvme0", "device": "nvme0", "status": "PASSED"},
+                    ]
+                }
+            ),
+            read="post",
         )
 
         smart_devices = await client.get_smart()
 
         assert smart_devices == [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
+        read.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
 
@@ -120,14 +127,14 @@ async def test_get_smart_returns_empty_list_for_non_list_payload(make_client: Cl
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(return_value={"devices": "ignored"})
+        read = stub_endpoint_outcome(
+            client, _EndpointOutcome.data({"devices": "ignored"}), read="post"
+        )
 
         smart_devices = await client.get_smart()
 
         assert smart_devices == []
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_awaited_once_with("/api/smart/service/list/1")
+        read.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
 
@@ -136,7 +143,7 @@ async def test_get_smart_returns_empty_list_for_non_list_payload(make_client: Cl
 @pytest.mark.parametrize(
     ("operation", "endpoint", "expected"),
     [
-        ("list", "/api/smart/service/list", []),
+        ("list", "/api/smart/service/list/1", []),
         ("info", "/api/smart/service/info", {}),
     ],
 )
@@ -146,12 +153,12 @@ async def test_smart_fails_closed_when_endpoint_is_unavailable(
     endpoint: str,
     expected: object,
 ) -> None:
-    """SMART POST operations should fail closed when endpoint availability checks fail.
+    """SMART POST operations should fail closed when the Router reports the endpoint absent.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         operation (str): SMART operation under test.
-        endpoint (str): Expected endpoint for availability check.
+        endpoint (str): Expected endpoint of the POST request.
         expected (object): Expected fail-closed payload.
 
     Returns:
@@ -159,8 +166,7 @@ async def test_smart_fails_closed_when_endpoint_is_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_post_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_post = AsyncMock(return_value={})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent(), read="post")
 
         if operation == "list":
             got = await client.get_smart()
@@ -168,21 +174,19 @@ async def test_smart_fails_closed_when_endpoint_is_unavailable(
             got = await client.get_smart_info("nvme0")
 
         assert got == expected
-        client._is_post_endpoint_available.assert_awaited_once_with(endpoint)
-        client._safe_dict_post.assert_not_awaited()
+        assert read.await_args.args[0] == endpoint
     finally:
         await client.async_close()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("operation", "response", "expected", "preflight_endpoint", "post_args"),
+    ("operation", "response", "expected", "post_args"),
     [
         pytest.param(
             "list",
             {"devices": [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}]},
             [{"ident": "nvme0", "device": "nvme0", "status": "PASSED"}],
-            "/api/smart/service/list",
             ("/api/smart/service/list/1",),
             id="list",
         ),
@@ -190,7 +194,6 @@ async def test_smart_fails_closed_when_endpoint_is_unavailable(
             "info",
             {"output": {"smart_status": "PASSED"}},
             {"smart_status": "PASSED"},
-            "/api/smart/service/info",
             ("/api/smart/service/info", {"device": "nvme0", "type": "a", "json": True}),
             id="info",
         ),
@@ -201,7 +204,6 @@ async def test_smart_does_not_probe_post_only_endpoint(
     operation: str,
     response: dict[str, object],
     expected: object,
-    preflight_endpoint: str,
     post_args: tuple[object, ...],
 ) -> None:
     """SMART operations should not use GET endpoint probes for POST-only APIs.
@@ -211,7 +213,6 @@ async def test_smart_does_not_probe_post_only_endpoint(
         operation (str): SMART operation under test.
         response (dict[str, object]): Mocked response from the POST request.
         expected (object): Expected result from the SMART operation.
-        preflight_endpoint (str): Expected endpoint for the POST availability check.
         post_args (tuple[object, ...]): Expected arguments for the SMART POST request.
 
     Returns:
@@ -222,8 +223,7 @@ async def test_smart_does_not_probe_post_only_endpoint(
         client._is_get_endpoint_available = AsyncMock(
             side_effect=AssertionError("GET probe should not run")
         )
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(return_value=response)
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data(response), read="post")
 
         if operation == "list":
             got = await client.get_smart()
@@ -232,8 +232,7 @@ async def test_smart_does_not_probe_post_only_endpoint(
 
         assert got == expected
         client._is_get_endpoint_available.assert_not_awaited()
-        client._is_post_endpoint_available.assert_awaited_once_with(preflight_endpoint)
-        client._safe_dict_post.assert_awaited_once_with(*post_args)
+        read.assert_awaited_once_with(*post_args)
     finally:
         await client.async_close()
 
@@ -250,16 +249,16 @@ async def test_get_smart_info_returns_json_output(make_client: ClientType) -> No
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(
-            return_value={"output": {"smart_status": "PASSED", "temperature": 35}}
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data({"output": {"smart_status": "PASSED", "temperature": 35}}),
+            read="post",
         )
 
         smart_info = await client.get_smart_info("nvme0")
 
         assert smart_info == {"smart_status": "PASSED", "temperature": 35}
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
-        client._safe_dict_post.assert_awaited_once_with(
+        read.assert_awaited_once_with(
             "/api/smart/service/info",
             {"device": "nvme0", "type": "a", "json": True},
         )
@@ -279,14 +278,16 @@ async def test_get_smart_info_wraps_non_mapping_output(make_client: ClientType) 
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_post_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_post = AsyncMock(return_value={"output": ["line1", "line2"]})
+        read = stub_endpoint_outcome(
+            client,
+            _EndpointOutcome.data({"output": ["line1", "line2"]}),
+            read="post",
+        )
 
         smart_info = await client.get_smart_info("nvme0", info_type="H")
 
         assert smart_info == {"output": ["line1", "line2"]}
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/info")
-        client._safe_dict_post.assert_awaited_once_with(
+        read.assert_awaited_once_with(
             "/api/smart/service/info",
             {"device": "nvme0", "type": "H", "json": True},
         )
@@ -298,7 +299,7 @@ async def test_get_smart_info_wraps_non_mapping_output(make_client: ClientType) 
 async def test_get_smart_fails_closed_when_list_endpoint_unavailable(
     make_client: ClientType,
 ) -> None:
-    """SMART list queries should use the cheap list preflight.
+    """SMART list queries should fail closed when the Router reports the list absent.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -308,12 +309,10 @@ async def test_get_smart_fails_closed_when_list_endpoint_unavailable(
     """
     client, _session = make_mock_session_client(make_client)
     try:
-        client._is_post_endpoint_available = AsyncMock(return_value=False)
-        client._safe_dict_post = AsyncMock(return_value={})
+        read = stub_endpoint_outcome(client, _EndpointOutcome.absent(), read="post")
 
         assert await client.get_smart() == []
-        client._is_post_endpoint_available.assert_awaited_once_with("/api/smart/service/list")
-        client._safe_dict_post.assert_not_awaited()
+        read.assert_awaited_once_with("/api/smart/service/list/1")
     finally:
         await client.async_close()
 
@@ -322,7 +321,7 @@ async def test_get_smart_fails_closed_when_list_endpoint_unavailable(
 async def test_smart_post_endpoint_availability_caches_missing_plugin(
     make_client: ClientType,
 ) -> None:
-    """Shared POST endpoint availability should cache a 404 SMART probe result.
+    """Shared POST endpoint availability should cache a 404 SMART list result.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -331,26 +330,12 @@ async def test_smart_post_endpoint_availability_caches_missing_plugin(
         None: This test validates quiet missing-plugin caching for SMART polling.
     """
     client, session = make_mock_session_client(make_client)
-    calls = 0
-
-    def _post(*_args: object, **_kwargs: object) -> FakeResponse:
-        """Return a repeated 404 response to emulate a missing plugin probe result.
-
-        Args:
-            _args (object): Positional arguments accepted by `_post`.
-            _kwargs (object): Keyword arguments accepted by `_post`.
-
-        Returns:
-            FakeResponse: A fixed 404 response object used by availability checks.
-        """
-        nonlocal calls
-        calls += 1
-        return FakeResponse(status=404, reason="Not Found", ok=False)
-
-    session.post = _post
+    router = install_fake_router(
+        client, session, routes={("POST", "/api/smart/service/list/1"): 404}
+    )
     try:
-        assert await client._is_post_endpoint_available("/api/smart/service/list") is False
-        assert await client._is_post_endpoint_available("/api/smart/service/list") is False
-        assert calls == 1
+        assert await client.get_smart() == []
+        assert await client.get_smart() == []
+        assert router.count("POST", "/api/smart/service/list/1") == 1
     finally:
         await client.async_close()

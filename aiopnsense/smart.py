@@ -16,17 +16,21 @@ class SmartMixin(AiopnsenseClientProtocol):
     """SMART plugin methods for OPNsenseClient."""
 
     @_log_errors
-    async def get_smart(self) -> list[dict[str, Any]]:
+    async def get_smart(self) -> list[dict[str, Any]] | None:
         """Return SMART device data from the OPNsense SMART plugin.
 
         Returns:
-            list[dict[str, Any]]: SMART device rows returned by the detailed API.
+            list[dict[str, Any]] | None: SMART device rows, or an empty list when the
+                endpoint returns 404. With ``throw_errors`` off, 403 and transient HTTP
+                or transport failures return an empty list, and an undecodable response
+                body returns ``None``. With ``throw_errors`` on, those failures raise
+                ``OPNsenseError``.
         """
-        if not await self._is_post_endpoint_available(SMART_SERVICE_LIST_ENDPOINT):
+        outcome = await self._fetch_post_endpoint_outcome(SMART_SERVICE_DETAIL_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("SMART plugin unavailable")
             return []
-        smart_info = await self._safe_dict_post(SMART_SERVICE_DETAIL_ENDPOINT)
-        devices = smart_info.get("devices", [])
+        devices = outcome.mapping().get("devices", [])
         if not isinstance(devices, list):
             _LOGGER.debug(
                 "Discarding SMART devices payload because devices is not a list: %r", devices
@@ -49,7 +53,7 @@ class SmartMixin(AiopnsenseClientProtocol):
         return smart_devices
 
     @_log_errors
-    async def get_smart_info(self, device: str, info_type: str = "a") -> dict[str, Any]:
+    async def get_smart_info(self, device: str, info_type: str = "a") -> dict[str, Any] | None:
         """Return SMART detail data for a single device.
 
         Args:
@@ -64,15 +68,18 @@ class SmartMixin(AiopnsenseClientProtocol):
                 - ``x``: Extended
 
         Returns:
-            dict[str, Any]: Decoded SMART detail payload. Non-mapping outputs
-                are wrapped under ``output`` to preserve a stable mapping API.
+            dict[str, Any] | None: Decoded SMART details, with non-mapping outputs
+                wrapped under ``output``. A 404 returns an empty dictionary. With
+                ``throw_errors`` off, 403 and transient HTTP or transport failures return
+                an empty dictionary, and an undecodable response body returns ``None``.
+                With ``throw_errors`` on, those failures raise ``OPNsenseError``.
         """
-        if not await self._is_post_endpoint_available(SMART_SERVICE_INFO_ENDPOINT):
-            _LOGGER.debug("SMART plugin unavailable")
-            return {}
-        response = await self._safe_dict_post(
+        outcome = await self._fetch_post_endpoint_outcome(
             SMART_SERVICE_INFO_ENDPOINT,
             {"device": device, "type": info_type, "json": True},
         )
-        output = response.get("output", {})
+        if not outcome.is_data:
+            _LOGGER.debug("SMART plugin unavailable")
+            return {}
+        output = outcome.mapping().get("output", {})
         return dict(output) if isinstance(output, MutableMapping) else {"output": output}
