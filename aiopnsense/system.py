@@ -10,6 +10,7 @@ import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._error_policy import _log_errors, _raise_if_throwing
+from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import ToggleSpec, ToggleStep, ToggleTarget
 from .const import (
@@ -29,8 +30,10 @@ from .helpers import (
 
 SYSTEM_TIME_ENDPOINT = "/api/diagnostics/system/system_time"
 INTERFACE_OVERVIEW_EXPORT_ENDPOINT = "/api/interfaces/overview/export"
-SYSTEM_INFORMATION_SNAKE_ENDPOINT = "/api/diagnostics/system/system_information"
-SYSTEM_INFORMATION_CAMELCASE_ENDPOINT = "/api/diagnostics/system/systemInformation"
+SYSTEM_INFORMATION_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/diagnostics/system/system_information",
+    camel_case="/api/diagnostics/system/systemInformation",
+)
 CARP_VIP_STATUS_ENDPOINT = "/api/diagnostics/interface/get_vip_status"
 VIP_SETTINGS_ENDPOINT = "/api/interfaces/vip_settings/get"
 CORE_SYSTEM_REBOOT_ENDPOINT = "/api/core/system/reboot"
@@ -583,11 +586,7 @@ class SystemMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Mapping containing the OPNsense host ``name`` when
                 the system-information endpoint is available.
         """
-        system_information_endpoint = await self._get_endpoint_path(
-            snake_case_path=SYSTEM_INFORMATION_SNAKE_ENDPOINT,
-            camel_case_path=SYSTEM_INFORMATION_CAMELCASE_ENDPOINT,
-        )
-        system_information_outcome = await self._fetch_endpoint_outcome(system_information_endpoint)
+        system_information_outcome = await self._fetch_endpoint_outcome(SYSTEM_INFORMATION_ENDPOINT)
         if not system_information_outcome.is_data:
             _LOGGER.debug("System information endpoint unavailable")
             return {}

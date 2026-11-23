@@ -15,6 +15,7 @@ import aiohttp
 import pytest
 
 from aiopnsense._endpoint_outcome import _EndpointOutcome
+from aiopnsense._styled_endpoint import _StyledEndpoint
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
@@ -905,3 +906,134 @@ def test_endpoint_outcome_coerces_payload_shape(
     assert outcome.is_data
     assert outcome.mapping() == mapping
     assert outcome.sequence() == sequence
+
+
+STYLED_SNAKE_PATH = "/api/test/styled_read"
+STYLED_CAMEL_PATH = "/api/test/styledRead"
+STYLED_ENDPOINT = _StyledEndpoint(snake_case=STYLED_SNAKE_PATH, camel_case=STYLED_CAMEL_PATH)
+
+
+@pytest.mark.parametrize(
+    ("firmware", "expected_path"),
+    [
+        pytest.param("25.6.4", STYLED_CAMEL_PATH, id="camel-case-firmware"),
+        pytest.param("25.7", STYLED_SNAKE_PATH, id="snake-case-firmware"),
+        pytest.param(None, STYLED_SNAKE_PATH, id="unknown-firmware"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_resolve_endpoint_selects_spelling_for_firmware(
+    make_client: MakeClientFactory, firmware: str | None, expected_path: str
+) -> None:
+    """Verify a styled endpoint resolves to the spelling the Router firmware uses.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+        firmware (str | None): Firmware version the Router reports, if any.
+        expected_path (str): Expected resolved path.
+    """
+    client, _router = make_router_client(make_client, firmware=firmware)
+
+    assert await client._resolve_endpoint(STYLED_ENDPOINT) == expected_path
+
+
+@pytest.mark.asyncio
+async def test_resolve_endpoint_returns_plain_string_without_firmware_read(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify a plain string is returned unchanged and never reads the firmware.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+    """
+    client, router = make_router_client(make_client, firmware="25.6.4")
+
+    assert await client._resolve_endpoint("/api/plain/path?x=1") == "/api/plain/path?x=1"
+    assert router.count() == 0
+
+
+@pytest.mark.parametrize(
+    ("firmware", "expected_path"),
+    [
+        pytest.param("25.6.4", STYLED_CAMEL_PATH, id="camel-case-firmware"),
+        pytest.param("25.7", STYLED_SNAKE_PATH, id="snake-case-firmware"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_fetch_outcomes_resolve_styled_endpoint_for_the_firmware(
+    make_client: MakeClientFactory, firmware: str, expected_path: str
+) -> None:
+    """Verify the GET and POST outcome fetches send the resolved spelling.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+        firmware (str): Firmware version the Router reports.
+        expected_path (str): Spelling the Router must receive.
+    """
+    client, router = make_router_client(
+        make_client,
+        firmware=firmware,
+        routes={
+            ("GET", STYLED_SNAKE_PATH): {"ok": 1},
+            ("GET", STYLED_CAMEL_PATH): {"ok": 1},
+            ("POST", STYLED_SNAKE_PATH): {"ok": 1},
+            ("POST", STYLED_CAMEL_PATH): {"ok": 1},
+        },
+    )
+
+    assert (await client._fetch_endpoint_outcome(STYLED_ENDPOINT)).is_data
+    assert (await client._fetch_post_endpoint_outcome(STYLED_ENDPOINT, {"a": 1})).is_data
+
+    assert router.paths("GET") == [FIRMWARE_STATUS_PATH, expected_path]
+    assert router.paths("POST") == [expected_path]
+
+
+@pytest.mark.asyncio
+async def test_both_spellings_keep_separate_availability_entries(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify a cached absence for one spelling does not hide the other.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+    """
+    client, router = make_router_client(
+        make_client, routes={("GET", STYLED_SNAKE_PATH): 404, ("GET", STYLED_CAMEL_PATH): {"ok": 1}}
+    )
+
+    assert (await client._fetch_endpoint_outcome(STYLED_SNAKE_PATH)).is_absent
+    assert (await client._fetch_endpoint_outcome(STYLED_CAMEL_PATH)).is_data
+    assert (await client._fetch_endpoint_outcome(STYLED_SNAKE_PATH)).is_absent
+    assert router.count("GET", STYLED_SNAKE_PATH) == 1
+    assert router.count("GET", STYLED_CAMEL_PATH) == 1
+
+
+@pytest.mark.asyncio
+async def test_firmware_change_during_styled_fetch_discards_its_answer(
+    make_client: MakeClientFactory,
+) -> None:
+    """Verify a styled fetch overtaken by a firmware change does not cache its answer.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning clients.
+    """
+    client, router = make_router_client(make_client, firmware="26.1.1")
+
+    def change_firmware_then_answer(**_kwargs: Any) -> int:
+        """Reset the endpoint state as a firmware change does, then answer absent.
+
+        Args:
+            _kwargs (Any): Request options passed by the transport.
+
+        Returns:
+            int: HTTP status the Router answers with.
+        """
+        client._reset_endpoint_state()
+        return 404
+
+    router.routes[("GET", STYLED_SNAKE_PATH)] = change_firmware_then_answer
+
+    assert (await client._fetch_endpoint_outcome(STYLED_ENDPOINT)).is_absent
+    router.routes[("GET", STYLED_SNAKE_PATH)] = {"ok": 1}
+    assert (await client._fetch_endpoint_outcome(STYLED_ENDPOINT)).is_data
+    assert router.count("GET", STYLED_SNAKE_PATH) == 2

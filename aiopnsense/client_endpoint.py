@@ -8,6 +8,7 @@ from warnings import deprecated
 from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _raise_if_throwing, _throws_errors
 from ._request_failure import _PROBE_PHASE, _REQUEST_PHASE
+from ._styled_endpoint import _EndpointPath, _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .client_transport import _public_caller_name, _RequestKind
 from .const import SNAKE_CASE_ENDPOINTS_CAPABILITY
@@ -113,18 +114,20 @@ class ClientEndpointMixin:
             SNAKE_CASE_ENDPOINTS_CAPABILITY.minimum,
         )
 
-    async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str:
-        """Return the firmware-appropriate endpoint path.
+    async def _resolve_endpoint(self, endpoint: _EndpointPath) -> str:
+        """Return the firmware-appropriate path for an endpoint.
 
         Args:
-            snake_case_path (str): Endpoint path for newer snake_case firmware.
-            camel_case_path (str): Endpoint path for older camelCase firmware.
+            endpoint (_EndpointPath): A plain path, or a styled endpoint carrying both
+                Endpoint Style spellings.
 
         Returns:
-            str: Selected endpoint path for the active firmware family. While the
-                firmware is unknown this is the capability's unknown answer, which is
-                not remembered.
+            str: A plain path unchanged, with no firmware read. For a styled endpoint,
+                the spelling for the active firmware family. While the firmware is
+                unknown this is the capability's unknown answer, which is not remembered.
         """
+        if isinstance(endpoint, str):
+            return endpoint
         if self._use_snake_case is None:
             await self._set_use_snake_case()
         # _use_snake_case is None until a known firmware version resolves it, so the
@@ -134,7 +137,23 @@ class ClientEndpointMixin:
             if self._use_snake_case is None
             else self._use_snake_case
         )
-        return snake_case_path if use_snake_case else camel_case_path
+        return endpoint.snake_case if use_snake_case else endpoint.camel_case
+
+    async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str:
+        """Return the firmware-appropriate endpoint path.
+
+        Thin delegate to ``_resolve_endpoint`` kept while call sites migrate.
+
+        Args:
+            snake_case_path (str): Endpoint path for newer snake_case firmware.
+            camel_case_path (str): Endpoint path for older camelCase firmware.
+
+        Returns:
+            str: Selected endpoint path for the active firmware family.
+        """
+        return await self._resolve_endpoint(
+            _StyledEndpoint(snake_case=snake_case_path, camel_case=camel_case_path)
+        )
 
     def _reset_endpoint_state(self) -> None:
         """Discard the endpoint style and all cached endpoint availability.
@@ -185,7 +204,7 @@ class ClientEndpointMixin:
 
     async def _fetch_endpoint_outcome(
         self,
-        path: str,
+        path: _EndpointPath,
         response_format: Literal["json", "text"] = "json",
         *,
         force_refresh: bool = False,
@@ -193,8 +212,9 @@ class ClientEndpointMixin:
         """Fetch a GET endpoint once and report whether it returned data, is absent or failed.
 
         Args:
-            path (str): API endpoint path to request. The exact path, including
-                its query string, is used for the availability cache key.
+            path (_EndpointPath): API endpoint path to request, or a styled endpoint
+                resolved here for the Router's firmware. The exact resolved path,
+                including its query string, is used for the availability cache key.
             response_format (Literal["json", "text"], optional): ``"text"`` returns the
                 body text in the ``DATA`` outcome; ``"json"`` returns the decoded body.
             force_refresh (bool): Whether to bypass a cached absent answer.
@@ -203,13 +223,19 @@ class ClientEndpointMixin:
             _EndpointOutcome: The outcome described by ``_fetch_gated_outcome``. A 403 or a
                 transient failure raises instead when ``self._throw_errors`` is ``True``.
         """
+        # Resolve on the calling task, before the cache key, the cache generation and the
+        # queue: resolving a styled endpoint can read the firmware, which may reset the
+        # endpoint state and which must never wait on the request queue.
         return await self._fetch_gated_outcome(
-            "get", path, response_format=response_format, force_refresh=force_refresh
+            "get",
+            await self._resolve_endpoint(path),
+            response_format=response_format,
+            force_refresh=force_refresh,
         )
 
     async def _fetch_post_endpoint_outcome(
         self,
-        path: str,
+        path: _EndpointPath,
         payload: MutableMapping[str, Any] | None = None,
     ) -> _EndpointOutcome:
         """Send one POST with its payload and report whether it returned data, is absent or failed.
@@ -217,14 +243,15 @@ class ClientEndpointMixin:
         The payload is the real request body; no payload-less probe is sent.
 
         Args:
-            path (str): API endpoint path to request.
+            path (_EndpointPath): API endpoint path to request, or a styled endpoint
+                resolved here for the Router's firmware.
             payload (MutableMapping[str, Any] | None): Request body sent with the POST.
 
         Returns:
             _EndpointOutcome: The outcome described by ``_fetch_gated_outcome``. A 403 or a
                 transient failure raises instead when ``self._throw_errors`` is ``True``.
         """
-        return await self._fetch_gated_outcome("post", path, payload)
+        return await self._fetch_gated_outcome("post", await self._resolve_endpoint(path), payload)
 
     async def _check_endpoint_status(
         self,
