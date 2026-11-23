@@ -2158,11 +2158,10 @@ async def test_failure_logs_name_the_public_client_method(
     client, session = make_mock_session_client(make_client)
     client._firmware_version = "26.1"
 
-    def answer(_method: str, url: str, **_kwargs: Any) -> FakeResponse:
+    def answer(url: str, **_kwargs: Any) -> FakeResponse:
         """Answer one request from the routes, or with HTTP 500.
 
         Args:
-            _method (str): HTTP method of the request.
             url (str): Full requested URL.
             _kwargs (Any): Unused request options.
 
@@ -2174,8 +2173,8 @@ async def test_failure_logs_name_the_public_client_method(
             return FakeResponse(status=reply, reason="Failed", ok=False)
         return FakeResponse(json_payload=reply)
 
-    session.get = lambda url, **kwargs: answer("GET", url, **kwargs)
-    session.post = lambda url, **kwargs: answer("POST", url, **kwargs)
+    session.get = lambda url, **kwargs: answer(url, **kwargs)
+    session.post = lambda url, **kwargs: answer(url, **kwargs)
     try:
         with caplog.at_level(logging.WARNING, logger="aiopnsense"):
             await operation(client)
