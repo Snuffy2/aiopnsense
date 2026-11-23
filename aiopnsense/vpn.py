@@ -396,8 +396,10 @@ class VPNMixin(AiopnsenseClientProtocol):
                 ``OPNsenseError``, including a forbidden (403) configuration endpoint.
                 A known missing (404) endpoint is treated as empty for the clients
                 and servers configuration inventories.
-                Structurally malformed required payloads return ``None`` regardless
-                of error mode.
+                An empty list for either configuration inventory means none are
+                configured and yields an empty mapping. Structurally malformed
+                required payloads, including a non-empty inventory list, return
+                ``None`` regardless of error mode.
         """
         data_sources = {
             "summary_raw": WIREGUARD_SUMMARY_ENDPOINT,
@@ -424,6 +426,9 @@ class VPNMixin(AiopnsenseClientProtocol):
         summary = data["summary_raw"].get("rows")
         client_summ = dict_get(data["clients_raw"], "client.clients.client")
         server_summ = dict_get(data["servers_raw"], "server.servers.server")
+        # The Router reports an empty configuration collection as an empty list.
+        client_summ = {} if client_summ == [] else client_summ
+        server_summ = {} if server_summ == [] else server_summ
 
         if (
             not isinstance(summary, list)
