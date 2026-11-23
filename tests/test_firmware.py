@@ -947,6 +947,25 @@ async def _assert_install_can_start_after_cleanup(
 
 
 @pytest.mark.asyncio
+async def test_install_firmware_requests_are_counted(
+    install_client: Callable[..., Any],
+) -> None:
+    """Every request an installation sends adds to the query count.
+
+    Args:
+        install_client (Callable[..., Any]): Lifecycle transport factory.
+    """
+    client, session = install_client([(_install_progress("done", "***DONE***"), "ready", "26.7.8")])
+    await client.reset_query_counts()
+
+    await client.install_firmware(target_version="26.7.8", poll_interval=0.001)
+
+    sent = session.get.call_count + session.post.call_count
+    assert sent > 1
+    assert await client.get_query_counts() == sent
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("throw_errors", [False, True])
 @pytest.mark.parametrize("action", ["update", "upgrade"])
 async def test_install_firmware_waits_for_terminal_idle(

@@ -9,6 +9,7 @@ from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _raise_if_throwing, _throws_errors
 from ._request_failure import _PROBE_PHASE, _REQUEST_PHASE
 from ._typing import AiopnsenseClientProtocol
+from .client_transport import _public_caller_name, _RequestKind
 from .const import SNAKE_CASE_ENDPOINTS_CAPABILITY
 from .exceptions import OPNsenseUnknownFirmware
 from .helpers import _LOGGER
@@ -53,14 +54,15 @@ class ClientEndpointMixin:
 
         async def _queue_request(
             self,
-            method: str,
+            kind: _RequestKind,
+            /,
             path: str,
             payload: MutableMapping[str, Any] | None = None,
         ) -> Any:
             """Queue one API request and return its result.
 
             Args:
-                method (str): Internal request method handled by the queue worker.
+                kind (_RequestKind): Request kind sent by ``_dispatch_request``.
                 path (str): API endpoint path to request.
                 payload (MutableMapping[str, Any] | None): Request body for POST requests.
 
@@ -319,13 +321,13 @@ class ClientEndpointMixin:
         cache_generation = self._endpoint_cache_generation
         if status_only:
             outcome = await self._do_get_outcome(
-                path, "_check_endpoint_status", read_body=False, phase=_PROBE_PHASE
+                path, _public_caller_name(), read_body=False, phase=_PROBE_PHASE
             )
         else:
             queue_method = (
-                "get_text_outcome"
+                _RequestKind.GET_TEXT_OUTCOME
                 if method == "get" and response_format == "text"
-                else f"{method}_outcome"
+                else _RequestKind(f"{method}_outcome")
             )
             outcome = await self._queue_request(queue_method, path, payload)
 

@@ -13,8 +13,8 @@ import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._error_policy import _log_errors
-from ._firmware_request_guard import _send_request
 from ._typing import AiopnsenseClientProtocol
+from .client_transport import _public_caller_name
 from .const import (
     AMBIGUOUS_TZINFOS,
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
@@ -426,7 +426,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 self._record_firmware_version(None)
             # Do not queue this mutation: a cancelled queue caller
             # can leave a CHECK that runs after the action lock releases.
-            response = await self._do_post(FIRMWARE_CHECK_ENDPOINT)
+            response = await self._do_post(FIRMWARE_CHECK_ENDPOINT, caller=_public_caller_name())
             # Only an acknowledged check starts the cooldown. OPNsense
             # returns status ok even when configd fails, leaving msg_uuid
             # empty, so an acknowledgement needs a non-empty msg_uuid. A
@@ -454,15 +454,11 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             _map_opnsense_exception: Mapped transport failure.
             _opnsense_http_error: Non-successful HTTP response.
         """
-        self._rest_api_query_count += 1
         try:
-            async with _send_request(
-                self._session,
+            async with self._open_request(
                 "post" if post else "get",
-                f"{self._url}{path}",
-                auth=aiohttp.BasicAuth(self._username, self._password),
+                path,
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
-                ssl=self._verify_ssl,
             ) as response:
                 if not response.ok:
                     raise _opnsense_http_error(response.status, response.reason)

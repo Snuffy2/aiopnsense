@@ -141,6 +141,36 @@ async def test_boundary_returns_empty_for_forbidden_request_without_throwing(
 
 
 @pytest.mark.parametrize(
+    ("site", "action"), [*FORBIDDEN, ("get-outcome", "info"), ("post-outcome", "info")]
+)
+async def test_blocked_request_is_still_counted(
+    make_client: Callable[..., aiopnsense.OPNsenseClient], site: str, action: str
+) -> None:
+    """Count a request the boundary blocks as one attempted request.
+
+    Args:
+        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
+        site (str): Request site under test.
+        action (str): Forbidden firmware action.
+    """
+    client, session = make_mock_session_client(make_client)
+    sites = {
+        **_send_sites(client),
+        "get-outcome": client._do_get_outcome,
+        "post-outcome": client._do_post_outcome,
+    }
+    await client.reset_query_counts()
+
+    try:
+        await sites[site](f"{BASE}/{action}")
+    except OPNsenseInvalidArgument:
+        pass
+
+    _assert_nothing_sent(session)
+    assert await client.get_query_counts() == 1
+
+
+@pytest.mark.parametrize(
     ("method", "action"), [("get", "info"), ("post", "info"), ("post", "status")]
 )
 async def test_boundary_returns_blocked_outcome_for_forbidden_request(
