@@ -882,6 +882,31 @@ async def test_get_openvpn_routes_request_failure(
         assert "connected_clients" not in server
 
 
+async def test_get_openvpn_routes_unexpected_failure_keeps_partial_data(
+    make_client: ClientType,
+) -> None:
+    """Keep partial data when the optional routes request fails with an unexpected error.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _router = make_vpn_router(
+        make_client,
+        openvpn_routes(
+            sessions={"rows": [{"type": "server", "id": "server", "status": "connected"}]},
+            vpn_routes=ValueError("routes unreadable"),
+            instances={"rows": [{"role": "server", "uuid": "server", "enabled": "1"}]},
+        ),
+    )
+
+    result = await client.get_openvpn()
+
+    assert result is not None
+    server = result["servers"]["server"]
+    assert server["status"] == "up"
+    assert "clients" not in server
+
+
 async def test_get_openvpn_routes_cancellation_propagates(make_client: ClientType) -> None:
     """Never swallow cancellation that arrives while the optional routes request is in flight.
 

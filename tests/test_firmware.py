@@ -287,7 +287,7 @@ async def test_delayed_firmware_read_cannot_overwrite_verified_install(
     """
     target_version = "26.7.8"
     status = SequencedResponse(firmware_status_payload("26.1.1"), hold={1})
-    client, _router = make_router_client(
+    client, router = make_router_client(
         make_client, {**_install_routes(), ("GET", STATUS_PATH): status}
     )
     old_read = asyncio.create_task(client.get_host_firmware_version())
@@ -306,6 +306,8 @@ async def test_delayed_firmware_read_cannot_overwrite_verified_install(
         await asyncio.gather(old_read, return_exceptions=True)
 
     assert await client.get_host_firmware_version() == target_version
+    # The delayed read is discarded and read again, rather than recorded as stale.
+    assert router.count("GET", STATUS_PATH) == 2
 
 
 @pytest.mark.asyncio

@@ -468,6 +468,41 @@ async def test_get_dhcp_leases_combined_structure(make_client: ClientType) -> No
 
 
 @pytest.mark.asyncio
+async def test_get_dhcp_leases_reads_router_timezone_when_omitted(
+    make_client: ClientType,
+) -> None:
+    """Without a timezone argument ISC ``ends`` is localized in the Router's timezone.
+
+    Args:
+        make_client (ClientType): Factory for clients using a mocked HTTP session.
+    """
+    ends_at = (datetime.now(tz=_LEASE_ROUTER_TZ) + timedelta(hours=1)).replace(microsecond=0)
+    client, _router = _dhcp_router(
+        make_client,
+        {
+            _SYSTEM_TIME: {"datetime": "2000-01-15 12:00:00 EST"},
+            _ISC_LEASES4: {
+                "rows": [
+                    {
+                        "state": "active",
+                        "if": "lan",
+                        "if_descr": "LAN",
+                        "type": "dynamic",
+                        "address": "192.0.2.1",
+                        "mac": "cc:00:00:00:00:01",
+                        "ends": ends_at.strftime("%Y/%m/%d %H:%M:%S"),
+                    }
+                ]
+            },
+        },
+    )
+
+    result = await client.get_dhcp_leases()
+
+    assert _leases_by_address(result)["192.0.2.1"]["expires"] == ends_at
+
+
+@pytest.mark.asyncio
 async def test_get_dhcp_leases_includes_empty_dnsmasq_range_interface(
     make_client: ClientType,
 ) -> None:

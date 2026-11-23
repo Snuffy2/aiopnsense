@@ -532,8 +532,8 @@ def make_router_client(
         make_client (Callable[..., aiopnsense.OPNsenseClient]): ``make_client`` fixture factory.
         routes (Mapping[tuple[str, str], Any] | None): Values keyed by ``(method, path)``. They
             override the firmware status route.
-        firmware (str | None): Firmware version the Router reports, an empty string for a
-            status without a version, or ``None`` to leave the firmware status unrouted.
+        firmware (str | None): Firmware version the Router reports, or an empty string
+            or ``None`` to leave the firmware status unrouted, so the Router answers 404.
         throw_errors (bool): Public ``throw_errors`` argument of the client.
         client_kwargs (Any): Other arguments for ``make_client``.
 

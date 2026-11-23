@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from aiopnsense import OPNsenseClient
 from tests.conftest import FakeResponse, FakeRouter, MakeClientFactory, make_router_client
 
 SNAKE_CASE_FIRMWARE = "26.1.1"
@@ -46,7 +47,7 @@ def _router(
     *,
     throw_errors: bool = False,
     firmware: str = SNAKE_CASE_FIRMWARE,
-) -> tuple[Any, FakeRouter]:
+) -> tuple[OPNsenseClient, FakeRouter]:
     """Build a client against a fake Router that answers only the given GET routes.
 
     Args:
@@ -57,7 +58,7 @@ def _router(
         firmware (str): Firmware version the Router reports.
 
     Returns:
-        tuple[Any, FakeRouter]: Client under test and the fake Router recording its requests.
+        tuple[OPNsenseClient, FakeRouter]: Client under test and the fake Router recording its requests.
     """
     return make_router_client(
         make_client,
@@ -270,7 +271,7 @@ async def test_telemetry_system_aware_datetime_boottime_and_load_fallback(
         make_client,
         {
             SYSTEM_PATH: {
-                "datetime": "2026-03-07T12:00:00-05:00",
+                "datetime": "2026-03-07T17:00:00+00:00",
                 "boottime": "2026-03-07T11:00:00-05:00",
                 "uptime": "bad-format",
                 "loadavg": "bad-load",

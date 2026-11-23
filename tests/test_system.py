@@ -283,18 +283,18 @@ async def test_get_opnsense_timezone_supports_known_daylight_abbreviations(
 
 
 @pytest.mark.parametrize(
-    ("reply_status", "expected_reboot"),
+    ("reply_status", "expected_success"),
     [("ok", True), ("failed", False)],
 )
 async def test_system_actions_report_router_status(
-    make_client: ClientType, reply_status: str, expected_reboot: bool
+    make_client: ClientType, reply_status: str, expected_success: bool
 ) -> None:
     """Verify reboot, halt and Wake-on-LAN post to the Router and report its status.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         reply_status (str): ``status`` field of every Router reply.
-        expected_reboot (bool): Whether the actions that report success are expected to.
+        expected_success (bool): Whether the reboot and Wake-on-LAN actions report success.
     """
     reply = {"status": reply_status}
     client, router = make_router_client(
@@ -302,9 +302,9 @@ async def test_system_actions_report_router_status(
         {("POST", REBOOT_PATH): reply, ("POST", HALT_PATH): reply, ("POST", WOL_PATH): reply},
     )
 
-    assert await client.system_reboot() is expected_reboot
+    assert await client.system_reboot() is expected_success
     assert await client.system_halt() is None
-    assert await client.send_wol("em0", "aa:bb:cc") is expected_reboot
+    assert await client.send_wol("em0", "aa:bb:cc") is expected_success
 
     assert router.count("POST", REBOOT_PATH) == 1
     assert router.count("POST", HALT_PATH) == 1

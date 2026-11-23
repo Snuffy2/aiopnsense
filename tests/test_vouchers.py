@@ -12,7 +12,6 @@ from tests.conftest import make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
-ROUTER_URL = "http://localhost"
 PROVIDERS_PATH = "/api/captiveportal/voucher/list_providers"
 GENERATE_PATH = "/api/captiveportal/voucher/generate_vouchers"
 CAMELCASE_PROVIDERS_PATH = "/api/captiveportal/voucher/listProviders"

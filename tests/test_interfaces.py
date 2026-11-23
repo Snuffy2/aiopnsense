@@ -245,8 +245,8 @@ async def test_toggle_interface_cancellation_during_save_leaves_change_pending(
 
         save.release.set()
         await asyncio.wait_for(save.exited.wait(), timeout=2)
-        # Closing the client finishes any work still queued, so a reconfigure queued
-        # by the cancelled caller would reach the Router before the check below.
+        # Closing the client cancels any work still queued, so a reconfigure queued
+        # by the cancelled caller cannot reach the Router after the check below.
         await asyncio.wait_for(client.async_close(), timeout=2)
 
         assert interface_requests(router) == [

@@ -176,7 +176,7 @@ async def test_process_queue_handles_requests(make_client: MakeClientFactory) ->
         q: asyncio.Queue = asyncio.Queue()
         client._request_queue = q
 
-        # start the queue processor as a real task on the running loop (bypass patched asyncio.create_task)
+        # start the queue processor as a real task on the running loop
         task = asyncio.get_running_loop().create_task(client._process_queue())
 
         loop = asyncio.get_running_loop()
