@@ -3,13 +3,14 @@
 import asyncio
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
-from typing import Any, Self, cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
 
 import aiopnsense
+from aiopnsense._endpoint_outcome import _EndpointOutcome
 from aiopnsense.const import (
     FIRMWARE_CHECK_COOLDOWN_SECONDS,
     OPNSENSE_MIN_FIRMWARE,
@@ -34,6 +35,7 @@ from tests.conftest import (
     FirmwareRouter,
     FirmwareVersionShape,
     make_mock_session_client,
+    stub_endpoint_outcome,
 )
 
 _SHAPE_PARAMS = [pytest.param(shape, id=shape.id) for shape in FIRMWARE_VERSION_SHAPES]
@@ -53,17 +55,18 @@ async def test_get_host_firmware_version_and_fallback(
     """
     client, session = make_mock_session_client(make_client)
 
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
-    client._safe_dict_get = AsyncMock(return_value={"product": {"product_version": "25.8.0"}})
+    stub_endpoint_outcome(client, _EndpointOutcome.data({"product": {"product_version": "25.8.0"}}))
     firmware = await client.get_host_firmware_version()
     assert firmware == "25.8.0"
     await client.async_close()
 
     fallback_client = make_client(session=session)
     try:
-        fallback_client._is_get_endpoint_available = AsyncMock(return_value=True)
-        fallback_client._safe_dict_get = AsyncMock(
-            return_value={"product": {"product_version": "weird", "product_series": "seriesX"}}
+        stub_endpoint_outcome(
+            fallback_client,
+            _EndpointOutcome.data(
+                {"product": {"product_version": "weird", "product_series": "seriesX"}}
+            ),
         )
         fallback = await fallback_client.get_host_firmware_version()
         assert fallback == "seriesX"
@@ -90,18 +93,18 @@ async def test_delayed_firmware_read_cannot_overwrite_a_newer_observation(
     release_first_read = asyncio.Event()
     firmware_read_count = 0
 
-    async def read_firmware_status(path: str) -> dict[str, Any]:
+    async def read_firmware_status(path: str, **_kwargs: Any) -> _EndpointOutcome:
         nonlocal firmware_read_count
         if path != firmware_module.FIRMWARE_STATUS_ENDPOINT:
-            return {}
+            return _EndpointOutcome.data({})
         firmware_read_count += 1
         if firmware_read_count == 1:
             first_read_started.set()
             await release_first_read.wait()
-            return {"product": {"product_version": "25.1"}}
-        return {"product": {"product_version": "25.7"}}
+            return _EndpointOutcome.data({"product": {"product_version": "25.1"}})
+        return _EndpointOutcome.data({"product": {"product_version": "25.7"}})
 
-    client._safe_dict_get = read_firmware_status
+    client._fetch_endpoint_outcome = read_firmware_status  # type: ignore[assignment]
     old_read_call = asyncio.create_task(client.close_notice("old-read"))
     try:
         async with asyncio.timeout(1):
@@ -128,7 +131,7 @@ async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
     firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A delayed successful probe must order its later payload request correctly.
+    """A delayed successful status read must not overwrite a newer lookup that finished first.
 
     Args:
         firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
@@ -141,30 +144,30 @@ async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
     router.endpoints[CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT] = {"status": "ok"}
     first_probe_started = asyncio.Event()
     release_first_probe = asyncio.Event()
-    firmware_probe_count = 0
-    session = cast(MagicMock, client._session)
-    router_probe = session.get.side_effect
+    firmware_read_count = 0
+    scripted_read = client._queue_request
 
-    class DelayedProbeResponse(FakeResponse):
-        async def __aenter__(self) -> Self:
-            first_probe_started.set()
-            await release_first_probe.wait()
-            return self
+    async def delay_first_firmware_read(method: str, path: str, payload: Any = None) -> Any:
+        """Hold the first status read after the Router has answered it.
 
-    def delay_first_firmware_probe(url: str, **kwargs: Any) -> FakeResponse:
-        nonlocal firmware_probe_count
-        response = router_probe(url, **kwargs)
-        if url.endswith(firmware_module.FIRMWARE_STATUS_ENDPOINT):
-            firmware_probe_count += 1
-            if firmware_probe_count == 1:
-                return DelayedProbeResponse(
-                    status=response.status,
-                    reason=response.reason,
-                    ok=response.ok,
-                )
-        return response
+        Args:
+            method (str): Queue operation requested by the client.
+            path (str): API endpoint path requested.
+            payload (Any): Request body, if any.
 
-    session.get.side_effect = delay_first_firmware_probe
+        Returns:
+            Any: The outcome the Router answered with when the read was sent.
+        """
+        nonlocal firmware_read_count
+        outcome = await scripted_read(method, path, payload)
+        if path == firmware_module.FIRMWARE_STATUS_ENDPOINT:
+            firmware_read_count += 1
+            if firmware_read_count == 1:
+                first_probe_started.set()
+                await release_first_probe.wait()
+        return outcome
+
+    client._queue_request = delay_first_firmware_read  # type: ignore[assignment]
     delayed_call = asyncio.create_task(client.close_notice("delayed-probe"))
     try:
         async with asyncio.timeout(1):
@@ -192,7 +195,7 @@ async def test_delayed_firmware_probe_reads_version_after_newer_lookup(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("delayed_stage", "interruption"),
-    [("probe", "check"), ("payload", "check"), ("payload", "empty-status")],
+    [("payload", "check"), ("payload", "empty-status")],
 )
 async def test_validation_reads_firmware_across_an_empty_cache_observation(
     firmware_router: tuple[aiopnsense.OPNsenseClient, FirmwareRouter],
@@ -204,8 +207,8 @@ async def test_validation_reads_firmware_across_an_empty_cache_observation(
 
     Args:
         firmware_router (tuple[aiopnsense.OPNsenseClient, FirmwareRouter]): Client and Router.
-        monkeypatch (pytest.MonkeyPatch): Replaces the selected firmware transport stage.
-        delayed_stage (str): Whether to pause the availability probe or the version read.
+        monkeypatch (pytest.MonkeyPatch): Replaces the firmware status read.
+        delayed_stage (str): Stage of the lookup to pause; the status read is the only stage.
         interruption (str): Whether a check or an empty status response wins the race.
     """
     client, router = firmware_router
@@ -213,18 +216,17 @@ async def test_validation_reads_firmware_across_an_empty_cache_observation(
     router.endpoints[firmware_module.FIRMWARE_RUNNING_ENDPOINT] = {"status": "ready"}
     lookup_started = asyncio.Event()
     release_lookup = asyncio.Event()
-    method_name = "_is_get_endpoint_available" if delayed_stage == "probe" else "_get"
-    request = getattr(client, method_name)
+    request = client._fetch_endpoint_outcome
 
     async def delay_first_status_request(path: str, **kwargs: Any) -> Any:
-        """Hold the first status request at the selected stage.
+        """Hold the first status request.
 
         Args:
             path (str): Requested endpoint.
-            kwargs (Any): Options passed to the transport.
+            kwargs (Any): Options passed to the status read.
 
         Returns:
-            Any: The scripted transport result.
+            Any: The scripted outcome.
         """
         response = await request(path, **kwargs)
         if path == firmware_module.FIRMWARE_STATUS_ENDPOINT and not lookup_started.is_set():
@@ -232,7 +234,7 @@ async def test_validation_reads_firmware_across_an_empty_cache_observation(
             await release_lookup.wait()
         return response
 
-    monkeypatch.setattr(client, method_name, delay_first_status_request)
+    monkeypatch.setattr(client, "_fetch_endpoint_outcome", delay_first_status_request)
     validation = asyncio.get_running_loop().create_task(client.validate(require_device_id=False))
     try:
         async with asyncio.timeout(1):
@@ -275,18 +277,19 @@ async def test_validation_survives_repeated_automatic_firmware_checks(
     assert await client.get_host_firmware_version() == "26.7.7"
 
     pending_reads: asyncio.Queue[asyncio.Event] = asyncio.Queue()
-    request = client._get
+    request = client._fetch_endpoint_outcome
 
-    async def delay_validation_read(path: str) -> Any:
+    async def delay_validation_read(path: str, **kwargs: Any) -> Any:
         """Hold each validation response until its corresponding check has run.
 
         Args:
             path (str): Requested endpoint.
+            kwargs (Any): Options passed to the status read.
 
         Returns:
-            Any: The scripted Router response.
+            Any: The scripted Router outcome.
         """
-        response = await request(path)
+        response = await request(path, **kwargs)
         if (
             asyncio.current_task() is validation
             and path == firmware_module.FIRMWARE_STATUS_ENDPOINT
@@ -298,7 +301,7 @@ async def test_validation_survives_repeated_automatic_firmware_checks(
 
     now = 1000.0
     monkeypatch.setattr(firmware_module, "monotonic", lambda: now)
-    monkeypatch.setattr(client, "_get", delay_validation_read)
+    monkeypatch.setattr(client, "_fetch_endpoint_outcome", delay_validation_read)
     validation = asyncio.get_running_loop().create_task(client.validate(require_device_id=False))
     try:
         async with asyncio.timeout(1):
@@ -336,13 +339,12 @@ async def test_delayed_firmware_read_cannot_overwrite_verified_install(
     old_read_started = asyncio.Event()
     release_old_read = asyncio.Event()
 
-    async def read_old_firmware(_path: str) -> dict[str, dict[str, str]]:
+    async def read_old_firmware(_path: str, **_kwargs: Any) -> _EndpointOutcome:
         old_read_started.set()
         await release_old_read.wait()
-        return {"product": {"product_version": "26.1.1"}}
+        return _EndpointOutcome.data({"product": {"product_version": "26.1.1"}})
 
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
-    client._safe_dict_get = read_old_firmware
+    client._fetch_endpoint_outcome = read_old_firmware
     old_read = asyncio.create_task(client.get_host_firmware_version())
     try:
         async with asyncio.timeout(1):
@@ -376,25 +378,33 @@ async def test_firmware_status_probe_retries_cached_forbidden_endpoint(
     router.firmware = "25.1"
     router.endpoints[CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT] = {"status": "ok"}
     router.endpoints[CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT] = {"status": "ok"}
-    session = cast(MagicMock, client._session)
-    session_get = session.get
-    router_probe = session_get.side_effect
-    firmware_probe_count = 0
+    scripted_read = client._queue_request
+    firmware_read_count = 0
 
-    def deny_first_firmware_probe(url: str, **kwargs: Any) -> FakeResponse:
-        nonlocal firmware_probe_count
-        if url.endswith(firmware_module.FIRMWARE_STATUS_ENDPOINT):
-            firmware_probe_count += 1
-            if firmware_probe_count == 1:
-                return FakeResponse(status=403, reason="Forbidden", ok=False)
-        return router_probe(url, **kwargs)
+    async def deny_first_firmware_read(method: str, path: str, payload: Any = None) -> Any:
+        """Deny the first status read with a 403 and answer later reads from the Router.
 
-    session_get.side_effect = deny_first_firmware_probe
+        Args:
+            method (str): Queue operation requested by the client.
+            path (str): API endpoint path requested.
+            payload (Any): Request body, if any.
+
+        Returns:
+            Any: A 403 outcome for the first status read, otherwise the scripted outcome.
+        """
+        nonlocal firmware_read_count
+        if path == firmware_module.FIRMWARE_STATUS_ENDPOINT:
+            firmware_read_count += 1
+            if firmware_read_count == 1:
+                return _EndpointOutcome.from_http_error(403, OPNsenseError("Forbidden"))
+        return await scripted_read(method, path, payload)
+
+    client._queue_request = deny_first_firmware_read  # type: ignore[assignment]
 
     assert await client.close_notice("before-recovery") is True
     assert await client.close_notice("after-recovery") is True
 
-    assert firmware_probe_count == 2
+    assert firmware_read_count == 2
     assert router.post_paths == [
         CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
         CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
@@ -411,8 +421,7 @@ async def test_malformed_firmware_series_uses_unknown_capability_fallback(
         make_client (Callable[..., Any]): Factory used to create an OPNsense client.
     """
     client = make_client()
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
-    client._safe_dict_get = AsyncMock(return_value={"product": {"product_series": []}})
+    stub_endpoint_outcome(client, _EndpointOutcome.data({"product": {"product_series": []}}))
     client._safe_dict_post = AsyncMock(return_value={"status": "ok"})
     try:
         assert await client.close_notice("malformed-series") is True
@@ -525,7 +534,6 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
     """
     client, session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         status: dict[str, object] = {
             "product": {
                 "product_version": product_version,
@@ -537,9 +545,8 @@ async def test_get_firmware_update_info_triggers_check_when_refresh_is_needed(
             status["status_msg"] = status_msg
         if last_check_age is not None:
             status["last_check"] = (datetime.now(UTC) - last_check_age).isoformat()
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: {"status": "ready"} if path.endswith("/running") else status
-        )
+        stub_endpoint_outcome(client, _EndpointOutcome.data(status))
+        client._safe_dict_get = AsyncMock(return_value={"status": "ready"})
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
         session.post.return_value = fake_response_factory(json_payload={})
 
@@ -584,7 +591,6 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
     """
     client, session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
         status = {
             "product": {
                 "product_version": product_version,
@@ -594,9 +600,8 @@ async def test_get_firmware_update_info_does_not_trigger_check_for_recent_health
             "status_msg": "There are no updates available on the selected mirror.",
             "last_check": datetime.now(UTC).isoformat(),
         }
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: {"status": "ready"} if path.endswith("/running") else status
-        )
+        stub_endpoint_outcome(client, _EndpointOutcome.data(status))
+        client._safe_dict_get = AsyncMock(return_value={"status": "ready"})
         client._get_opnsense_timezone = AsyncMock(return_value=UTC)
         session.post.return_value = fake_response_factory(json_payload={})
 
@@ -640,8 +645,9 @@ async def test_upgrade_firmware_calls_expected_endpoint(
         assert result == {"status": "ok"}
         assert session.post.call_count == 1
         assert session.post.call_args.args[0] == f"http://localhost{expected_path}"
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"product": {"product_version": "26.1.2"}})
+        stub_endpoint_outcome(
+            client, _EndpointOutcome.data({"product": {"product_version": "26.1.2"}})
+        )
         assert await client.get_host_firmware_version() == "26.1.2"
     finally:
         await client.async_close()
@@ -772,12 +778,8 @@ async def test_firmware_actions_are_rejected_during_install(
     try:
         await observing.wait()
 
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: (
-                {"status": "ready"} if path.endswith("/running") else {"status": "error"}
-            )
-        )
+        stub_endpoint_outcome(client, _EndpointOutcome.data({"status": "error"}))
+        client._safe_dict_get = AsyncMock(return_value={"status": "ready"})
         await client.get_firmware_update_info()
 
         if throw_errors:
@@ -848,8 +850,7 @@ async def test_upgrade_status_and_changelog(make_client: Callable[..., Any]) -> 
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(return_value={"status": "running"})
+        status_read = stub_endpoint_outcome(client, _EndpointOutcome.data({"status": "running"}))
         client._safe_dict_post = AsyncMock(return_value={"changelog": "..."})
 
         status = await client.upgrade_status()
@@ -857,7 +858,7 @@ async def test_upgrade_status_and_changelog(make_client: Callable[..., Any]) -> 
 
         assert status == {"status": "running"}
         assert changelog == {"changelog": "..."}
-        client._safe_dict_get.assert_awaited_once_with("/api/core/firmware/upgradestatus")
+        status_read.assert_awaited_once_with("/api/core/firmware/upgradestatus")
         client._safe_dict_post.assert_awaited_once_with("/api/core/firmware/changelog/26.1.1")
     finally:
         await client.async_close()
@@ -877,7 +878,7 @@ async def test_firmware_helpers_return_defaults_when_endpoints_unavailable(
     """
     client = make_client()
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=False)
+        stub_endpoint_outcome(client, _EndpointOutcome.absent())
         client._safe_dict_get = AsyncMock()
 
         await client._store_host_firmware_version()
@@ -1463,10 +1464,8 @@ async def test_firmware_automatic_check_is_suppressed(
     """
     client, session = make_mock_session_client(make_client)
     try:
-        client._is_get_endpoint_available = AsyncMock(return_value=True)
-        client._safe_dict_get = AsyncMock(
-            side_effect=lambda path: {"status": server} if path.endswith("/running") else {}
-        )
+        stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        client._safe_dict_get = AsyncMock(return_value={"status": server})
         session.post.return_value = fake_response_factory(json_payload={"status": "ok"})
         await client.get_firmware_update_info(check_for_updates=check)
         assert session.post.call_count == 0
@@ -1533,19 +1532,18 @@ def _configure_firmware_polls(
     states = list(running or ["ready"])
 
     def read(path: str) -> dict[str, Any]:
-        """Return the mocked response for a firmware read.
+        """Return the mocked lock state for a firmware lock read.
 
         Args:
             path (str): Firmware endpoint path.
 
         Returns:
-            dict[str, Any]: Lock state or firmware status.
+            dict[str, Any]: Lock state.
         """
-        if path.endswith("/running"):
-            return {"status": states.pop(0) if len(states) > 1 else states[0]}
-        return status
+        del path
+        return {"status": states.pop(0) if len(states) > 1 else states[0]}
 
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
+    stub_endpoint_outcome(client, _EndpointOutcome.data(status))
     client._safe_dict_get = AsyncMock(side_effect=read)
     client._get_opnsense_timezone = AsyncMock(return_value=UTC)
 
@@ -1758,7 +1756,7 @@ async def test_firmware_lookup_handles_router_version_shapes(
     client, _session = make_mock_session_client(make_client)
     try:
         _configure_firmware_polls(client, _firmware_status_for_shape(shape))
-        status_reads = cast(AsyncMock, client._safe_dict_get)
+        status_reads = cast(AsyncMock, client._fetch_endpoint_outcome)
 
         assert await client.get_host_firmware_version() == shape.lookup_version
         reads_before = status_reads.await_count
@@ -1792,7 +1790,7 @@ async def _lookup_after_cooldown_poll(
         tuple[str | None, int]: Version from the final lookup and its status reads.
     """
     _configure_firmware_polls(client, initial_status)
-    status_reads = cast(AsyncMock, client._safe_dict_get)
+    status_reads = cast(AsyncMock, client._fetch_endpoint_outcome)
     session.post.return_value = fake_response_factory(
         json_payload={"status": "ok", "msg_uuid": "check"}
     )
@@ -2145,10 +2143,8 @@ async def test_cancelled_firmware_check_does_not_dispatch_later(
     response = fake_response_factory(json_payload={"status": "ok"})
     response.json = check_response
     session.post.return_value = response
-    client._is_get_endpoint_available = AsyncMock(return_value=True)
-    client._safe_dict_get = AsyncMock(
-        side_effect=lambda path: {"status": "ready"} if path.endswith("/running") else {}
-    )
+    stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+    client._safe_dict_get = AsyncMock(return_value={"status": "ready"})
     unrelated = asyncio.create_task(client._get("/unrelated/read"))
     await worker_entered.wait()
     check = asyncio.create_task(client.get_firmware_update_info())

@@ -1,6 +1,7 @@
 """Tests for client endpoint availability and endpoint-style selection."""
 
 import asyncio
+from collections.abc import MutableMapping
 from datetime import datetime, timedelta
 import logging
 from typing import Any, Self
@@ -9,6 +10,7 @@ from unittest.mock import AsyncMock
 import aiohttp
 import pytest
 
+import aiopnsense
 from aiopnsense._endpoint_outcome import _EndpointOutcome
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
@@ -33,6 +35,44 @@ NUT_PATH = "/api/nut/diagnostics/upsstatus"
 NUT_DATA = {"status": {"ups.status": "OL"}}
 OUTCOME_PATH = "/api/test/outcome"
 POST_PATH = "/api/test/post"
+
+
+@pytest.fixture(autouse=True)
+def _run_outcome_reads_inline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run queued outcome reads directly, because the shared fixture stops the queue worker here.
+
+    Firmware status reads are queued outcome reads. Only those are dispatched inline;
+    every other queued operation keeps its normal path.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Fixture that replaces the queue entry point.
+    """
+    queue_request = aiopnsense.OPNsenseClient._queue_request
+
+    async def queue_outcome_inline(
+        self: aiopnsense.OPNsenseClient,
+        method: str,
+        path: str,
+        payload: MutableMapping[str, Any] | None = None,
+    ) -> Any:
+        """Dispatch a queued outcome read to its transport method, as the worker would.
+
+        Args:
+            self (aiopnsense.OPNsenseClient): Client whose request is queued.
+            method (str): Queued operation name.
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None): Request body, if any.
+
+        Returns:
+            Any: The outcome the worker would have set.
+        """
+        if method == "get_outcome":
+            return await self._do_get_outcome(path)
+        if method == "get_text_outcome":
+            return await self._do_get_outcome(path, response_format="text")
+        return await queue_request(self, method, path, payload)
+
+    monkeypatch.setattr(aiopnsense.OPNsenseClient, "_queue_request", queue_outcome_inline)
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):

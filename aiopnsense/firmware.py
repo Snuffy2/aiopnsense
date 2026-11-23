@@ -99,14 +99,14 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         firmware module is the only owner of the value. When a known version differs
         from the last known one, everything derived from the old version is discarded.
         Clearing the cached version, a lookup that returns nothing, or a version that
-        cannot be compared is not a change. Failed probes use their probe ID, while
-        successful lookups use an ID allocated immediately before their payload read.
+        cannot be compared is not a change. Failed reads use their request ID, while
+        successful lookups use an ID allocated immediately before their request.
         Explicit clears and verified versions advance the invalidation watermark.
 
         Args:
             version (str | None): Version to cache, or ``None`` to force the next
                 lookup to read it from the Router.
-            observation_id (int | None): Probe or payload request ordering ID, or
+            observation_id (int | None): Request ordering ID, or
                 ``None`` for an explicit state change at the current point.
 
         Returns:
@@ -223,34 +223,28 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         Returns:
             str | None: Firmware version or product series from this response.
         """
-        self._firmware_observation_id += 1
-        probe_id = self._firmware_observation_id
-        force_refresh = self._endpoint_availability.get(FIRMWARE_STATUS_ENDPOINT) is False
-        endpoint_available = await self._is_get_endpoint_available(
-            FIRMWARE_STATUS_ENDPOINT, force_refresh=force_refresh
-        )
-        if not endpoint_available:
-            _LOGGER.debug("Firmware status endpoint unavailable")
-            return self._record_firmware_version(None, observation_id=probe_id)
-
-        if probe_id < self._firmware_invalidation_id and self._firmware_version is not None:
-            return self._firmware_version
-
-        # A superseded read can use a newer cached version. If the newer
-        # observation left the cache empty, make one fresh read instead.
+        # A superseded response is not used. Read again so that a delayed response
+        # cannot stand in for the Router's state after the newer observation.
         for _ in range(2):
             self._firmware_observation_id += 1
-            payload_id = self._firmware_observation_id
-            firmware_info = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
-            if payload_id > self._firmware_version_observation_id:
-                break
-            if self._firmware_version is not None:
+            observation_id = self._firmware_observation_id
+            outcome = await self._fetch_endpoint_outcome(
+                FIRMWARE_STATUS_ENDPOINT, force_refresh=True
+            )
+            if not outcome.is_data:
+                _LOGGER.debug("Firmware status endpoint unavailable")
+                return self._record_firmware_version(None, observation_id=observation_id)
+            if (
+                observation_id < self._firmware_invalidation_id
+                and self._firmware_version is not None
+            ):
                 return self._firmware_version
-        else:
-            return None
+            if observation_id > self._firmware_version_observation_id:
+                break
 
-        firmware = self._status_firmware_version(firmware_info)
-        return self._record_firmware_version(firmware, observation_id=payload_id)
+        # When both reads were superseded, recording below keeps the cached version.
+        firmware = self._status_firmware_version(outcome.mapping())
+        return self._record_firmware_version(firmware, observation_id=observation_id)
 
     @_log_errors
     async def get_host_firmware_version(self) -> None | str:
@@ -290,11 +284,12 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 update metadata when available. Returns an empty mapping when
                 the firmware status endpoint is unavailable.
         """
-        if not await self._is_get_endpoint_available(FIRMWARE_STATUS_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(FIRMWARE_STATUS_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Firmware status endpoint unavailable")
             return {}
 
-        status = await self._safe_dict_get(FIRMWARE_STATUS_ENDPOINT)
+        status = outcome.mapping()
         self._use_devel_package_latest(status)
 
         # if error or too old trigger check (only if check is not already in progress)
@@ -736,10 +731,11 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any]: Upgrade status payload, or an empty
                 mapping when the upgrade-status endpoint is unavailable.
         """
-        if not await self._is_get_endpoint_available(FIRMWARE_UPGRADE_STATUS_ENDPOINT):
+        outcome = await self._fetch_endpoint_outcome(FIRMWARE_UPGRADE_STATUS_ENDPOINT)
+        if not outcome.is_data:
             _LOGGER.debug("Firmware upgrade status endpoint unavailable")
             return {}
-        return await self._safe_dict_get(FIRMWARE_UPGRADE_STATUS_ENDPOINT)
+        return outcome.mapping()
 
     @_log_errors
     async def firmware_changelog(self, version: str) -> MutableMapping[str, Any]:
