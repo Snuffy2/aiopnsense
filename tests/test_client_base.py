@@ -822,25 +822,3 @@ async def test_legacy_unbound_toggle_stops_on_unusable_settings(
             assert result is False
     finally:
         await client.async_close()
-
-
-@pytest.mark.asyncio
-async def test_outcome_read_cancelled_before_dispatch_sends_no_request(
-    make_client: MakeClientFactory,
-) -> None:
-    """Skip a queued outcome read whose caller was cancelled before the worker dispatched it.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    try:
-        loop = await client._get_active_loop()
-        cancelled = loop.create_future()
-        cancelled.cancel()
-        await client._request_queue.put(("get_outcome", "/api/x", None, cancelled, "t"))
-        while not client._request_queue.empty():
-            await asyncio.sleep(0)
-        session.get.assert_not_called()
-    finally:
-        await client.async_close()

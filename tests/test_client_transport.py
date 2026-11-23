@@ -107,11 +107,12 @@ async def test_safe_dict_get_with_timeout(
     try:
         do_get_mock = AsyncMock(return_value={"foo": "bar"})
         monkeypatch.setattr(client, "_do_get", do_get_mock, raising=False)
+        # The test module is outside the package, so no public client method is found.
         result_dict = await client._safe_dict_get_with_timeout("/fake", timeout_seconds=180)
         assert result_dict == {"foo": "bar"}
         do_get_mock.assert_awaited_once_with(
             path="/fake",
-            caller="_safe_dict_get_with_timeout",
+            caller="Unknown",
             timeout_seconds=180,
         )
 

@@ -3,7 +3,10 @@
 import asyncio
 import codecs
 from collections.abc import AsyncGenerator, MutableMapping
+from enum import StrEnum
 import json
+import sys
+from types import FrameType
 from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
@@ -18,9 +21,65 @@ from ._request_failure import (
     _report_transport_failure,
 )
 from .const import DEFAULT_REQUEST_TIMEOUT_SECONDS
-from .helpers import _LOGGER, _log_request_recovery
+from .exceptions import OPNsenseError
+from .helpers import _LOGGER, _log_request_recovery, _mark_request_error_logged
 
 _STREAM_JSON_EVENT_RESET_KEY = "__aiopnsense_internal_stream_json_reset__"
+
+
+class _RequestKind(StrEnum):
+    """Kinds of request the queue worker dispatches through the transport.
+
+    The values are the strings queued requests have always carried.
+    """
+
+    GET = "get"
+    GET_FROM_STREAM = "get_from_stream"
+    GET_OUTCOME = "get_outcome"
+    GET_TEXT_OUTCOME = "get_text_outcome"
+    POST = "post"
+    POST_OUTCOME = "post_outcome"
+
+
+# Kinds the queue worker skips when cancelled before dispatch. Plain GET and buffered
+# stream reads are still sent. An unknown kind is not a member, so dispatch reports it.
+_SKIPPED_WHEN_CANCELLED = frozenset(
+    {
+        _RequestKind.POST,
+        _RequestKind.GET_OUTCOME,
+        _RequestKind.GET_TEXT_OUTCOME,
+        _RequestKind.POST_OUTCOME,
+    }
+)
+
+
+def _public_caller_name() -> str:
+    """Return the public client method that triggered the current request.
+
+    Walks up the call stack from the caller of this function while the frames
+    belong to the aiopnsense package, and returns the nearest frame that is a
+    public method: its name has no leading underscore and its qualified name has
+    no ``<locals>``. That skips private helpers and the error-policy wrappers, and
+    when a public method calls another public method the nearest one is named. It
+    does not depend on call depth. The walk ends without a name when the stack
+    leaves the package.
+
+    Returns:
+        str: Name of the nearest public method, or ``"Unknown"`` when the call
+            stack leaves the package without reaching one, or frame inspection is
+            unavailable.
+    """
+    package = __name__.partition(".")[0]
+    try:
+        frame: FrameType | None = sys._getframe(1)
+    except ValueError, AttributeError:
+        return "Unknown"
+    while frame is not None and frame.f_globals.get("__name__", "").partition(".")[0] == package:
+        code = frame.f_code
+        if not code.co_name.startswith("_") and "<locals>" not in code.co_qualname:
+            return code.co_name
+        frame = frame.f_back
+    return "Unknown"
 
 
 class ClientTransportMixin:
@@ -76,6 +135,82 @@ class ClientTransportMixin:
             """
             ...
 
+    async def _dispatch_request(
+        self,
+        kind: _RequestKind,
+        path: str,
+        payload: MutableMapping[str, Any] | None,
+        caller: str,
+    ) -> Any:
+        """Send one dequeued request through the transport method for its kind.
+
+        Args:
+            kind (_RequestKind): Request kind.
+            path (str): API endpoint path to request.
+            payload (MutableMapping[str, Any] | None): Request body for POST kinds.
+            caller (str): Calling method name used for diagnostics.
+
+        Returns:
+            Any: Result of the matching transport method.
+
+        Raises:
+            error: An ``OPNsenseError``, already logged, if ``kind`` is not a known request kind.
+        """
+        match kind:
+            case _RequestKind.GET_FROM_STREAM:
+                return await self._do_get_from_stream(path, caller)
+            case _RequestKind.GET:
+                return await self._do_get(path, caller)
+            case _RequestKind.GET_OUTCOME:
+                return await self._do_get_outcome(path, caller)
+            case _RequestKind.GET_TEXT_OUTCOME:
+                return await self._do_get_outcome(path, caller, response_format="text")
+            case _RequestKind.POST:
+                return await self._do_post(path, payload, caller)
+            case _RequestKind.POST_OUTCOME:
+                return await self._do_post_outcome(path, payload, caller)
+        _LOGGER.error("Unknown method to add to Queue: %s", kind)
+        error = OPNsenseError(f"Unknown method to add to Queue: {kind}")
+        _mark_request_error_logged(error)
+        raise error
+
+    def _open_request(
+        self,
+        method: Literal["get", "post"],
+        path: str,
+        *,
+        timeout: aiohttp.ClientTimeout,
+        payload: MutableMapping[str, Any] | None = None,
+    ) -> Any:
+        """Count and open one HTTP request to the Router.
+
+        This is the only place that sends a request, supplying its URL, authentication
+        and TLS setting and passing it through the ADR 0002 guard. The count is taken before the
+        guard, so a blocked request is counted as an attempted one. Callers open the
+        returned context inside their own ``try`` so a blocked request reaches their
+        existing error handling.
+
+        Args:
+            method (Literal["get", "post"]): Lowercase HTTP method.
+            path (str): API endpoint path to request.
+            timeout (aiohttp.ClientTimeout): Timeout for this request.
+            payload (MutableMapping[str, Any] | None): JSON body for a POST. ``None``
+                sends an empty body. A GET never sends a body.
+
+        Returns:
+            Any: The session's request context manager. A request the ADR 0002 guard
+                forbids sends nothing and raises ``_BlockedFirmwareRequest``.
+        """
+        self._rest_api_query_count += 1
+        request_kwargs: dict[str, Any] = {
+            "auth": aiohttp.BasicAuth(self._username, self._password),
+            "timeout": timeout,
+            "ssl": self._verify_ssl,
+        }
+        if method == "post":
+            request_kwargs["json"] = payload
+        return _send_request(self._session, method, f"{self._url}{path}", **request_kwargs)
+
     async def _do_get_from_stream(self, path: str, caller: str = "Unknown") -> dict[str, Any]:
         """Execute a streaming GET request immediately.
 
@@ -89,17 +224,13 @@ class ClientTransportMixin:
                 enabled, an HTTP, client or timeout failure is raised as the mapped
                 public ``OPNsenseError`` instead.
         """
-        self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[get_from_stream] path: %s", path)
         try:
-            async with _send_request(
-                self._session,
+            async with self._open_request(
                 "get",
-                url,
-                auth=aiohttp.BasicAuth(self._username, self._password),
+                path,
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
-                ssl=self._verify_ssl,
             ) as response:
                 _LOGGER.debug(
                     "[get_from_stream] Response %s: %s",
@@ -176,21 +307,17 @@ class ClientTransportMixin:
                 an HTTP, client or timeout failure is raised as the mapped public
                 ``OPNsenseError`` instead.
         """
-        self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[stream_json_events] path: %s", path)
         try:
-            async with _send_request(
-                self._session,
+            async with self._open_request(
                 "get",
-                url,
-                auth=aiohttp.BasicAuth(self._username, self._password),
+                path,
                 timeout=aiohttp.ClientTimeout(
                     total=None,
                     sock_connect=DEFAULT_REQUEST_TIMEOUT_SECONDS,
                     sock_read=self._normalize_timeout_seconds(sock_read_timeout_seconds),
                 ),
-                ssl=self._verify_ssl,
             ) as response:
                 if not response.ok:
                     http_error = _report_http_failure(
@@ -341,18 +468,12 @@ class ClientTransportMixin:
                 When ``throw_errors`` is enabled, an HTTP or transport failure is
                 raised as the mapped public ``OPNsenseError`` instead.
         """
-        self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[get] path: %s", path)
         timeout_total: float = self._normalize_timeout_seconds(timeout_seconds)
         try:
-            async with _send_request(
-                self._session,
-                "get",
-                url,
-                auth=aiohttp.BasicAuth(self._username, self._password),
-                timeout=aiohttp.ClientTimeout(total=timeout_total),
-                ssl=self._verify_ssl,
+            async with self._open_request(
+                "get", path, timeout=aiohttp.ClientTimeout(total=timeout_total)
             ) as response:
                 _LOGGER.debug("[get] Response %s: %s", response.status, response.reason)
                 if response.ok:
@@ -423,20 +544,17 @@ class ClientTransportMixin:
                 404 or 403 response, and ``TRANSIENT`` for any other HTTP status, timeout
                 or client error.
         """
-        self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
-        method_name = method.lower()
+        method_name: Literal["get", "post"] = "get" if method == "GET" else "post"
         operation = f"do_{method_name}_outcome"
         _LOGGER.debug("[%s] path: %s (called by %s)", method_name, path, caller)
-        request_kwargs: dict[str, Any] = {
-            "auth": aiohttp.BasicAuth(self._username, self._password),
-            "timeout": aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
-            "ssl": self._verify_ssl,
-        }
         try:
-            if method != "GET":
-                request_kwargs["json"] = payload
-            async with _send_request(self._session, method_name, url, **request_kwargs) as response:
+            async with self._open_request(
+                method_name,
+                path,
+                timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
+                payload=payload,
+            ) as response:
                 _LOGGER.debug("[%s] Response %s: %s", method_name, response.status, response.reason)
                 if response.status == 404:
                     return _EndpointOutcome.absent()
@@ -557,7 +675,7 @@ class ClientTransportMixin:
         """
         result = await self._do_get(
             path=path,
-            caller="_safe_dict_get_with_timeout",
+            caller=_public_caller_name(),
             timeout_seconds=timeout_seconds,
         )
         return dict(result) if isinstance(result, MutableMapping) else {}
@@ -578,18 +696,14 @@ class ClientTransportMixin:
                 an HTTP or transport failure is raised as the mapped public
                 ``OPNsenseError`` instead.
         """
-        self._rest_api_query_count += 1
         url: str = f"{self._url}{path}"
         _LOGGER.debug("[post] path: %s", path)
         try:
-            async with _send_request(
-                self._session,
+            async with self._open_request(
                 "post",
-                url,
-                json=payload,
-                auth=aiohttp.BasicAuth(self._username, self._password),
+                path,
                 timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
-                ssl=self._verify_ssl,
+                payload=payload,
             ) as response:
                 _LOGGER.debug("[post] Response %s: %s", response.status, response.reason)
                 if response.ok:
