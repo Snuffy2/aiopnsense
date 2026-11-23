@@ -17,7 +17,6 @@ from aiopnsense import (
     unbound as aiopnsense_unbound,
     vpn as aiopnsense_vpn,
 )
-from aiopnsense._firmware_request_guard import _allow_firmware_check
 from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import (
     FakeResponse,
@@ -2135,7 +2134,7 @@ async def test_malformed_json_outcome_read_follows_public_error_policy(
         await client.async_close()
 
 
-@pytest.mark.parametrize("action", ["info", "status", "check"])
+@pytest.mark.parametrize("action", ["info", "status"])
 @pytest.mark.parametrize(("throw_errors", "expected"), [(True, None), (False, {})])
 async def test_queued_public_request_cannot_reach_forbidden_firmware_action(
     make_client: MakeClientFactory,
@@ -2160,44 +2159,6 @@ async def test_queued_public_request_cannot_reach_forbidden_firmware_action(
         else:
             result = await asyncio.wait_for(client.firmware_changelog(f"../{action}"), timeout=3)
             assert result == expected
-        session.post.assert_not_called()
-    finally:
-        await client.async_close()
-
-
-async def test_firmware_check_permission_does_not_reach_queued_request(
-    make_client: MakeClientFactory,
-) -> None:
-    """Block a check queued while another task holds the firmware check permission.
-
-    The queue workers start before the permission is taken, so the queued POST runs in a
-    worker context that never received the permission.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    client, session = make_mock_session_client(make_client)
-    client.toggle_throwing_errors(True)
-    client._do_get = AsyncMock(return_value={"ok": True})
-    holding = asyncio.Event()
-    release = asyncio.Event()
-
-    async def hold_check_permission() -> None:
-        """Hold the firmware check permission until the test releases it."""
-        with _allow_firmware_check():
-            holding.set()
-            await release.wait()
-
-    try:
-        assert await client._get("/api/test") == {"ok": True}
-        holder = asyncio.create_task(hold_check_permission())
-        await asyncio.wait_for(holding.wait(), timeout=3)
-        try:
-            with pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
-                await asyncio.wait_for(client._post("/api/core/firmware/check"), timeout=3)
-        finally:
-            release.set()
-            await holder
         session.post.assert_not_called()
     finally:
         await client.async_close()

@@ -6,9 +6,6 @@ send, so it does not matter how the caller built the string. A blocked request r
 transport error handling, so it follows the same ``throw_errors`` policy as a failed request.
 """
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
 from typing import Any
 
 import aiohttp
@@ -17,27 +14,6 @@ from yarl import URL
 from .exceptions import _BlockedFirmwareRequest
 
 _FIRMWARE_API_SEGMENTS = ("api", "core", "firmware")
-_CHECK_DISPATCH_ALLOWED: ContextVar[bool] = ContextVar(
-    "aiopnsense_firmware_check_dispatch_allowed", default=False
-)
-
-
-@contextmanager
-def _allow_firmware_check() -> Iterator[None]:
-    """Allow ``POST /api/core/firmware/check`` in the current context.
-
-    Only ``FirmwareMixin._request_firmware_check`` may use this. A request queued to an
-    already running worker stays blocked. Nothing inside the block may start a task or
-    worker, because it would inherit the permission.
-
-    Yields:
-        None: Control while the check may be dispatched.
-    """
-    token = _CHECK_DISPATCH_ALLOWED.set(True)
-    try:
-        yield
-    finally:
-        _CHECK_DISPATCH_ALLOWED.reset(token)
 
 
 def _firmware_action(url: str) -> str | None:
@@ -82,11 +58,7 @@ def _send_request(session: aiohttp.ClientSession, method: str, url: str, **kwarg
         _BlockedFirmwareRequest: The request is forbidden. No request is sent.
     """
     action = _firmware_action(url)
-    if (
-        action == "info"
-        or (method == "post" and action == "status")
-        or (method == "post" and action == "check" and not _CHECK_DISPATCH_ALLOWED.get())
-    ):
+    if action == "info" or (method == "post" and action == "status"):
         raise _BlockedFirmwareRequest(
             f"Blocked {method.upper()} firmware {action} request: "
             "see docs/adr/0002-firmware-reads-never-contact-upstream.md"

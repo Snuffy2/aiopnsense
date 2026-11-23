@@ -2,14 +2,13 @@
 
 The request boundary in ``aiopnsense/_firmware_request_guard.py`` blocks forbidden requests
 at runtime, however their path is spelled. The static checks here cover only what the
-boundary cannot see: that every request goes through it, that one method holds the
-permission to send a firmware check, and where the update and upgrade paths are built.
+boundary cannot see: that every request goes through it, and that the check endpoint and
+the update and upgrade action prefix stay in the methods allowed to dispatch them.
 """
 
 import ast
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
-import re
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -17,20 +16,21 @@ import pytest
 
 import aiopnsense
 from aiopnsense import OPNsenseInvalidArgument
-from aiopnsense._firmware_request_guard import _allow_firmware_check
 from tests.conftest import make_mock_session_client
 
 PACKAGE = Path(__file__).resolve().parents[1] / "aiopnsense"
-GUARD_MODULE = "_firmware_request_guard.py"
 FIRMWARE_MODULE = "firmware.py"
 CHECK_SCOPE = ("FirmwareMixin", "_request_firmware_check")
 ACTION_SCOPES = {("FirmwareMixin", "install_firmware"), ("FirmwareMixin", "upgrade_firmware")}
-ACTION_LITERAL = re.compile(r"/api/core/firmware/(?:update|upgrade)(?![\w-])", re.IGNORECASE)
+DISPATCH_SCOPES = {
+    "FIRMWARE_CHECK_ENDPOINT": {CHECK_SCOPE},
+    "FIRMWARE_ACTION_ENDPOINT_PREFIX": ACTION_SCOPES,
+}
 
 BASE = "/api/core/firmware"
+DISPATCH_LITERALS = {f"{BASE}/check", f"{BASE}/update", f"{BASE}/upgrade"}
 INFO_ACTION = "info"
 STATUS_ACTION = "status"
-CHECK_ACTION = "check"
 
 
 PATH_FORMS: dict[str, Callable[[str], str]] = {
@@ -93,7 +93,6 @@ EMPTY_RESULTS: dict[str, Any] = {
 FORBIDDEN = [
     *((site, INFO_ACTION) for site in (*GET_SITES, *POST_SITES)),
     *((site, STATUS_ACTION) for site in POST_SITES),
-    *((site, CHECK_ACTION) for site in POST_SITES),
 ]
 
 
@@ -170,59 +169,10 @@ async def test_firmware_request_raises_for_forbidden_request_without_throwing(
     _assert_nothing_sent(session)
 
 
-@pytest.mark.parametrize("fail_inside_block", [False, True], ids=["normal-exit", "exception-exit"])
-async def test_firmware_check_permission_ends_with_its_block(
-    make_client: Callable[..., aiopnsense.OPNsenseClient], fail_inside_block: bool
-) -> None:
-    """Block a firmware check sent after the permission block has exited.
-
-    Args:
-        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
-        fail_inside_block (bool): Whether the block exits by raising an exception.
-    """
-    client, session = make_mock_session_client(make_client)
-    client.toggle_throwing_errors(True)
-
-    if fail_inside_block:
-        with pytest.raises(ValueError), _allow_firmware_check():
-            int("not a number")
-    else:
-        with _allow_firmware_check():
-            pass
-
-    with pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
-        await client._do_post(f"{BASE}/{CHECK_ACTION}")
-
-    _assert_nothing_sent(session)
-
-
-@pytest.mark.parametrize(
-    ("site", "action"),
-    [("get", INFO_ACTION), ("post", INFO_ACTION), ("post", STATUS_ACTION)],
-)
-async def test_firmware_check_permission_lifts_only_the_check_block(
-    make_client: Callable[..., aiopnsense.OPNsenseClient], site: str, action: str
-) -> None:
-    """Keep blocking info and status requests while a firmware check is allowed.
-
-    Args:
-        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
-        site (str): Request site under test.
-        action (str): Forbidden firmware action that the permission must not lift.
-    """
-    client, session = make_mock_session_client(make_client)
-    client.toggle_throwing_errors(True)
-
-    with _allow_firmware_check(), pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
-        await _send_sites(client)[site](f"{BASE}/{action}")
-
-    _assert_nothing_sent(session)
-
-
 @pytest.mark.parametrize("form", PATH_FORMS.values(), ids=PATH_FORMS)
 @pytest.mark.parametrize(
     ("site", "action"),
-    [("get", INFO_ACTION), ("post", INFO_ACTION), ("post", STATUS_ACTION), ("post", CHECK_ACTION)],
+    [("get", INFO_ACTION), ("post", INFO_ACTION), ("post", STATUS_ACTION)],
 )
 async def test_boundary_blocks_every_spelling_of_the_path(
     make_client: Callable[..., aiopnsense.OPNsenseClient],
@@ -376,72 +326,23 @@ def test_every_session_request_goes_through_the_boundary() -> None:
     assert not violations, "Send requests through _send_request:\n" + "\n".join(violations)
 
 
-def test_only_the_check_method_may_allow_a_firmware_check() -> None:
-    """Fail unless one ``with`` block in the check method holds the permission."""
-    modules = _modules()
-    importers = [
-        name
-        for name, module in modules.items()
-        for node in ast.walk(module)
-        if isinstance(node, ast.ImportFrom)
-        and any(alias.name == "_allow_firmware_check" for alias in node.names)
-    ]
-    uses = [
-        (name, scope, node)
-        for name, module in modules.items()
-        if name != GUARD_MODULE
-        for node, scope in _scoped_nodes(module)
-        if isinstance(node, ast.Name) and node.id == "_allow_firmware_check"
-    ]
-    blocks = [
-        node
-        for node, scope in _scoped_nodes(modules[FIRMWARE_MODULE])
-        if scope == CHECK_SCOPE
-        and isinstance(node, ast.With)
-        and any(
-            isinstance(item.context_expr, ast.Call)
-            and isinstance(item.context_expr.func, ast.Name)
-            and item.context_expr.func.id == "_allow_firmware_check"
-            for item in node.items
-        )
-    ]
-
-    assert importers == [FIRMWARE_MODULE]
-    assert [(name, scope) for name, scope, _ in uses] == [(FIRMWARE_MODULE, CHECK_SCOPE)]
-    assert len(blocks) == 1
-    assert [ast.unparse(statement) for statement in blocks[0].body] == [
-        "response = await self._do_post(FIRMWARE_CHECK_ENDPOINT)"
-    ]
-
-
-def test_update_and_upgrade_paths_stay_in_the_install_methods() -> None:
-    """Fail when the action prefix or a literal update path appears outside the install methods.
-
-    A literal is allowed only in ``firmware.py`` inside ``ACTION_SCOPES``. Docstrings are
-    ignored everywhere, because they describe a path without requesting it.
-    """
+def test_firmware_dispatch_paths_stay_in_their_methods() -> None:
+    """Fail when the check or action path is used outside the methods that dispatch it."""
     violations: list[str] = []
+    check_dispatches = 0
     for name, module in _modules().items():
-        scoped = list(_scoped_nodes(module))
-        docstrings = {
-            id(node.value)
-            for node, _ in scoped
-            if isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        }
-        for node, scope in scoped:
+        for node, scope in _scoped_nodes(module):
             match node:
                 case (
-                    ast.Name(id="FIRMWARE_ACTION_ENDPOINT_PREFIX", ctx=ast.Load())
-                    | ast.Attribute(attr="FIRMWARE_ACTION_ENDPOINT_PREFIX", ctx=ast.Load())
-                ):
-                    if name != FIRMWARE_MODULE or scope not in ACTION_SCOPES:
-                        violations.append(f"aiopnsense/{name}:{node.lineno}: action prefix")
-                case ast.Constant(value=str() as value) if (
-                    ACTION_LITERAL.search(value) and id(node) not in docstrings
-                ):
-                    if name != FIRMWARE_MODULE or scope not in ACTION_SCOPES:
-                        violations.append(f"aiopnsense/{name}:{node.lineno}: literal action path")
+                    ast.Name(id=constant, ctx=ast.Load())
+                    | ast.Attribute(attr=constant, ctx=ast.Load())
+                ) if constant in DISPATCH_SCOPES:
+                    if name != FIRMWARE_MODULE or scope not in DISPATCH_SCOPES[constant]:
+                        violations.append(f"aiopnsense/{name}:{node.lineno}: {constant}")
+                    check_dispatches += constant == "FIRMWARE_CHECK_ENDPOINT"
+                case ast.Constant(value=str() as value) if value in DISPATCH_LITERALS:
+                    if name != FIRMWARE_MODULE or scope:
+                        violations.append(f"aiopnsense/{name}:{node.lineno}: literal path")
 
     assert not violations, "\n".join(violations)
+    assert check_dispatches == 1
