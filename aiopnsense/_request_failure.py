@@ -1,7 +1,7 @@
 """Classification and logging of failed HTTP responses and transport errors.
 
-The immediate GET and POST, endpoint availability probe and both streaming reads report failures
-here. Endpoint probes cache HTTP 404 as unavailable. Firmware installation requests use their own
+The immediate GET and POST, endpoint status check and both streaming reads report failures
+here. Endpoint outcomes cache HTTP 404 as unavailable. Firmware installation requests use their own
 polling and error policy. This module maps reported failures to public exceptions, suppresses
 repeated logs and marks raised exceptions as already logged. Callers decide whether to raise or
 return an empty value.
@@ -23,7 +23,7 @@ _REQUEST_PHASE = "request"
 """Request phase of immediate GET and POST data calls."""
 
 _PROBE_PHASE = "probe"
-"""Request phase of endpoint availability probes, which log transient failures as warnings."""
+"""Request phase of endpoint status checks, which log transient failures as warnings."""
 
 _STREAM_PHASE = "stream"
 """Request phase of the streaming reads."""

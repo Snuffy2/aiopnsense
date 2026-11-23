@@ -167,6 +167,37 @@ async def test_boundary_returns_blocked_outcome_for_forbidden_request(
     _assert_nothing_sent(session)
 
 
+@pytest.mark.parametrize("throw_errors", [True, False], ids=["throw", "empty"])
+async def test_endpoint_availability_alias_blocks_forbidden_request(
+    make_client: Callable[..., aiopnsense.OPNsenseClient], throw_errors: bool
+) -> None:
+    """Raise or return ``False`` for a forbidden firmware path and send nothing.
+
+    Args:
+        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
+        throw_errors (bool): Client ``throw_errors`` setting.
+    """
+    client, session = make_mock_session_client(make_client)
+    client.toggle_throwing_errors(throw_errors)
+
+    async def check() -> bool:
+        """Ask the deprecated alias about a forbidden path.
+
+        Returns:
+            bool: The alias result.
+        """
+        with pytest.warns(DeprecationWarning, match="Endpoint availability probing is internal"):
+            return await client.is_endpoint_available(f"{BASE}/info", force_refresh=True)  # type: ignore[deprecated]
+
+    if throw_errors:
+        with pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
+            await check()
+    else:
+        assert await check() is False
+
+    _assert_nothing_sent(session)
+
+
 @pytest.mark.parametrize(
     "path",
     [
