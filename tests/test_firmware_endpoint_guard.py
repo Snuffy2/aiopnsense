@@ -7,7 +7,8 @@ are allowed only through the GET helpers and the ``_endpoint_availability.get`` 
 which sends no request. The check path is allowed only in the one dispatch in
 ``FirmwareMixin._request_firmware_check``, and the action prefix and the ``update`` and
 ``upgrade`` paths only in ``FirmwareMixin.install_firmware`` and
-``FirmwareMixin.upgrade_firmware``.
+``FirmwareMixin.upgrade_firmware``. Each of those two methods must compare ``type`` only
+with exactly ``("update", "upgrade")``, so the action prefix cannot send another action.
 
 Known limits: it does not follow values held in local variables, class attributes, ``+=``
 or values imported from another module, other than the guarded constants. It does not
@@ -32,6 +33,7 @@ CHECK_DISPATCH_SCOPE = ("FirmwareMixin", "_request_firmware_check")
 ACTION_SCOPES = frozenset(
     {("FirmwareMixin", "install_firmware"), ("FirmwareMixin", "upgrade_firmware")}
 )
+ACTION_TYPES = frozenset({"update", "upgrade"})
 ENDPOINT_DEFINITIONS = {
     "FIRMWARE_CHECK_ENDPOINT": "check",
     "FIRMWARE_STATUS_ENDPOINT": "status",
@@ -280,6 +282,67 @@ def _check_dispatch_paths(module: ast.Module, constants: dict[str, str]) -> list
     ]
 
 
+def _type_comparison_values(node: ast.AST) -> list[frozenset[str]]:
+    """Return the string values of each ``type in`` or ``type not in`` tuple below a node.
+
+    Args:
+        node (ast.AST): Node to search, including its descendants.
+
+    Returns:
+        list[frozenset[str]]: One value set per comparison of the Name ``type`` with ``in``
+            or ``not in`` against a tuple of string constants.
+    """
+    values: list[frozenset[str]] = []
+    for candidate in ast.walk(node):
+        match candidate:
+            case ast.Compare(
+                left=ast.Name(id="type"),
+                ops=[ast.In() | ast.NotIn()],  # codespell:ignore
+                comparators=[ast.Tuple(elts=elts)],
+            ):
+                strings = {
+                    elt.value
+                    for elt in elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                }
+                if len(strings) == len(elts):
+                    values.append(frozenset(strings))
+    return values
+
+
+def _action_gate_violations(module: ast.Module) -> list[str]:
+    """Report each present action method whose ``type`` comparison is not update and upgrade.
+
+    A method passes only when it holds exactly one such comparison and its values are
+    exactly ``ACTION_TYPES``. A method missing from the module is not checked.
+
+    Args:
+        module (ast.Module): Parsed firmware module.
+
+    Returns:
+        list[str]: One violation for each action method that allows another value or lacks
+            the comparison.
+    """
+    violations: list[str] = []
+    for class_name, method in sorted(ACTION_SCOPES):
+        methods = [
+            node
+            for node, scope in _scoped_nodes(module)
+            if scope == (class_name,)
+            and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == method
+        ]
+        if not methods:
+            continue
+        values = [value for node in methods for value in _type_comparison_values(node)]
+        if values != [ACTION_TYPES]:
+            violations.append(
+                f"aiopnsense/{FIRMWARE_MODULE}: {class_name}.{method} "
+                "must allow only update and upgrade"
+            )
+    return violations
+
+
 def _module_violations(
     module: ast.Module, relative_path: str, constants: dict[str, str]
 ) -> list[str]:
@@ -322,6 +385,7 @@ def _module_violations(
                 f"aiopnsense/{relative_path}: FirmwareMixin._request_firmware_check "
                 f"must contain exactly one check dispatch, found {len(dispatches)}"
             )
+        violations += _action_gate_violations(module)
 
     violations += [
         f"aiopnsense/{relative_path}:{expression.lineno}: {_violation_label(endpoint)}"
@@ -348,8 +412,30 @@ def _source_violations(sources: dict[str, str]) -> list[str]:
     return violations
 
 
+def _action_gate(method: str, values: str | None) -> str:
+    """Return the ``type`` comparison that an action method holds in the fixture.
+
+    Args:
+        method (str): Action method that receives the comparison.
+        values (str | None): Tuple contents, such as ``'"update", "upgrade"'``, or ``None``
+            for a method without the comparison.
+
+    Returns:
+        str: ``if type not in (...)`` for ``install_firmware`` and ``if type in (...)``
+            otherwise, each with a ``pass`` body; empty when ``values`` is ``None``.
+    """
+    if values is None:
+        return ""
+    operator = "not in" if method == "install_firmware" else "in"
+    return f"if type {operator} ({values}):\n            pass"
+
+
 def _firmware_source(
-    statement: str = "pass", *, method: str = "probe", dispatch: str = CHECK_DISPATCH
+    statement: str = "pass",
+    *,
+    method: str = "probe",
+    dispatch: str = CHECK_DISPATCH,
+    gate: str = "",
 ) -> str:
     """Return a minimal firmware module with a statement in one method.
 
@@ -357,6 +443,7 @@ def _firmware_source(
         statement (str): Body of ``method``, indented to sit inside it.
         method (str): Name of the method that receives ``statement``.
         dispatch (str): Body of ``FirmwareMixin._request_firmware_check``.
+        gate (str): Optional ``type`` comparison placed before ``statement`` in ``method``.
 
     Returns:
         str: Python source of the fixture module.
@@ -372,6 +459,7 @@ class FirmwareMixin:
         {dispatch}
 
     async def {method}(self, value):
+        {gate}
         {statement}
 """
 
@@ -642,9 +730,55 @@ def test_guard_allows_action_prefix_in_install_methods(method: str, statement: s
         method (str): Install method that dispatches the action.
         statement (str): Statement added to the install method.
     """
-    source = _firmware_source(statement, method=method)
+    source = _firmware_source(
+        statement, method=method, gate=_action_gate(method, '"update", "upgrade"')
+    )
 
     assert _source_violations({FIRMWARE_MODULE: source}) == []
+
+
+ACTION_STATEMENT = 'await self._do_post(f"{FIRMWARE_ACTION_ENDPOINT_PREFIX}{type}")'
+
+
+@pytest.mark.parametrize("method", ["install_firmware", "upgrade_firmware"])
+@pytest.mark.parametrize("values", ['"update", "upgrade"', '"upgrade", "update"'])
+def test_guard_allows_exact_update_upgrade_gate(method: str, values: str) -> None:
+    """Accept the action prefix when ``type`` is compared with exactly update and upgrade.
+
+    Args:
+        method (str): Action method that dispatches the action.
+        values (str): Tuple contents of the ``type`` comparison, in either order.
+    """
+    source = _firmware_source(ACTION_STATEMENT, method=method, gate=_action_gate(method, values))
+
+    assert _source_violations({FIRMWARE_MODULE: source}) == []
+
+
+@pytest.mark.parametrize("method", ["install_firmware", "upgrade_firmware"])
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param('"update", "upgrade", "check"', id="check-added"),
+        pytest.param(None, id="comparison-removed"),
+    ],
+)
+def test_guard_rejects_action_method_without_exact_update_upgrade_gate(
+    method: str, values: str | None
+) -> None:
+    """Report an action method whose ``type`` comparison adds a value or is missing.
+
+    The action prefix itself stays exempt, so the gate is the only violation reported.
+
+    Args:
+        method (str): Action method that dispatches the action.
+        values (str | None): Tuple contents of the ``type`` comparison, or ``None`` when
+            the method has no comparison.
+    """
+    source = _firmware_source(ACTION_STATEMENT, method=method, gate=_action_gate(method, values))
+
+    assert _source_violations({FIRMWARE_MODULE: source}) == [
+        f"aiopnsense/firmware.py: FirmwareMixin.{method} must allow only update and upgrade"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -666,7 +800,13 @@ def test_guard_rejects_non_action_paths_in_install_method(statement: str, endpoi
         endpoint (str): Firmware endpoint the statement must be reported for.
     """
     violations = _source_violations(
-        {FIRMWARE_MODULE: _firmware_source(statement, method="install_firmware")}
+        {
+            FIRMWARE_MODULE: _firmware_source(
+                statement,
+                method="install_firmware",
+                gate=_action_gate("install_firmware", '"update", "upgrade"'),
+            )
+        }
     )
 
     assert len(violations) == 1
