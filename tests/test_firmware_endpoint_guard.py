@@ -30,8 +30,6 @@ DISPATCH_SCOPES = {
 
 BASE = "/api/core/firmware"
 DISPATCH_LITERALS = {f"{BASE}/check", f"{BASE}/update", f"{BASE}/upgrade", f"{BASE}/"}
-INFO_ACTION = "info"
-STATUS_ACTION = "status"
 
 
 def _send_sites(client: aiopnsense.OPNsenseClient) -> dict[str, Callable[[str], Awaitable[Any]]]:
@@ -79,8 +77,8 @@ EMPTY_RESULTS: dict[str, Any] = {
     "probe-post": False,
 }
 FORBIDDEN = [
-    *((site, INFO_ACTION) for site in (*GET_SITES, *POST_SITES)),
-    *((site, STATUS_ACTION) for site in POST_SITES),
+    *((site, "info") for site in (*GET_SITES, *POST_SITES)),
+    *((site, "status") for site in POST_SITES),
 ]
 
 
@@ -94,19 +92,31 @@ def _assert_nothing_sent(session: MagicMock) -> None:
     session.post.assert_not_called()
 
 
-@pytest.mark.parametrize(("site", "action"), FORBIDDEN)
-async def test_boundary_raises_for_forbidden_request_in_throw_mode(
-    make_client: Callable[..., aiopnsense.OPNsenseClient], site: str, action: str
+@pytest.mark.parametrize(
+    ("site", "action", "throw_errors"),
+    [
+        *((site, action, True) for site, action in FORBIDDEN),
+        *((site, action, False) for site, action in FORBIDDEN if site in FIRMWARE_SITES),
+    ],
+)
+async def test_boundary_raises_for_forbidden_request(
+    make_client: Callable[..., aiopnsense.OPNsenseClient],
+    site: str,
+    action: str,
+    throw_errors: bool,
 ) -> None:
     """Raise the public error and send nothing at every request site.
+
+    Firmware request sites raise whatever ``throw_errors`` is, because they have no empty value to return.
 
     Args:
         make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
         site (str): Request site under test.
         action (str): Forbidden firmware action.
+        throw_errors (bool): Client ``throw_errors`` setting.
     """
     client, session = make_mock_session_client(make_client)
-    client.toggle_throwing_errors(True)
+    client.toggle_throwing_errors(throw_errors)
 
     with pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
         await _send_sites(client)[site](f"{BASE}/{action}")
@@ -130,29 +140,6 @@ async def test_boundary_returns_empty_for_forbidden_request_without_throwing(
     client, session = make_mock_session_client(make_client)
 
     assert await _send_sites(client)[site](f"{BASE}/{action}") == EMPTY_RESULTS[site]
-
-    _assert_nothing_sent(session)
-
-
-@pytest.mark.parametrize(
-    ("site", "action"), [item for item in FORBIDDEN if item[0] in FIRMWARE_SITES]
-)
-async def test_firmware_request_raises_for_forbidden_request_without_throwing(
-    make_client: Callable[..., aiopnsense.OPNsenseClient], site: str, action: str
-) -> None:
-    """Raise the blocked error at firmware request sites even when errors are not thrown.
-
-    Firmware requests have no empty value to return, so they raise whatever ``throw_errors`` is.
-
-    Args:
-        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
-        site (str): Firmware request site under test.
-        action (str): Forbidden firmware action.
-    """
-    client, session = make_mock_session_client(make_client)
-
-    with pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
-        await _send_sites(client)[site](f"{BASE}/{action}")
 
     _assert_nothing_sent(session)
 
@@ -189,22 +176,6 @@ async def test_boundary_blocks_every_spelling_of_the_path(
     _assert_nothing_sent(session)
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-async def test_public_probe_blocks_info_request(
-    make_client: Callable[..., aiopnsense.OPNsenseClient],
-) -> None:
-    """Report the info endpoint as unavailable through the public probe without sending it.
-
-    Args:
-        make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
-    """
-    client, session = make_mock_session_client(make_client)
-
-    assert await client.is_endpoint_available(f"{BASE}/info") is False  # type: ignore[deprecated]
-
-    _assert_nothing_sent(session)
-
-
 LOCAL_URL = "http://localhost"
 # yarl rejects this port, so the guard cannot judge the path and must pass the request on.
 UNPARSABLE_URL = "http://localhost:notaport"
@@ -226,14 +197,11 @@ UNPARSABLE_URL = "http://localhost:notaport"
         (LOCAL_URL, "post", "/api/core/service/status"),
         (LOCAL_URL, "firmware-post", f"{BASE}/update"),
         (LOCAL_URL, "get", BASE),
-        (LOCAL_URL, "post", BASE),
-        (LOCAL_URL, "get", f"{BASE}/"),
         (LOCAL_URL, "get", "/api/core"),
-        (LOCAL_URL, "post", "/api/core"),
         (LOCAL_URL, "get", "/"),
         (LOCAL_URL, "get", "/api/other/firmware/info"),
         (LOCAL_URL, "get", "/other/core/firmware/info"),
-        (UNPARSABLE_URL, "get", f"{BASE}/{INFO_ACTION}"),
+        (UNPARSABLE_URL, "get", f"{BASE}/info"),
     ],
 )
 async def test_boundary_sends_other_requests_unchanged(

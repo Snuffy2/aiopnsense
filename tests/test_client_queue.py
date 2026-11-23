@@ -2135,20 +2135,20 @@ async def test_malformed_json_outcome_read_follows_public_error_policy(
 
 
 @pytest.mark.parametrize("action", ["info", "status"])
-@pytest.mark.parametrize(("throw_errors", "expected"), [(True, None), (False, {})])
+@pytest.mark.parametrize("throw_errors", [True, False])
 async def test_queued_public_request_cannot_reach_forbidden_firmware_action(
     make_client: MakeClientFactory,
     action: str,
     throw_errors: bool,
-    expected: dict[str, Any] | None,
 ) -> None:
     """Block a changelog version that resolves to a forbidden firmware action.
+
+    The block raises when errors are thrown. Otherwise the call returns an empty dict.
 
     Args:
         make_client (MakeClientFactory): Client factory.
         action (str): Forbidden firmware action reached through a dot segment.
         throw_errors (bool): Whether the client raises public errors.
-        expected (dict[str, Any] | None): Result when the client does not raise.
     """
     client, session = make_mock_session_client(make_client)
     client.toggle_throwing_errors(throw_errors)
@@ -2158,7 +2158,7 @@ async def test_queued_public_request_cannot_reach_forbidden_firmware_action(
                 await asyncio.wait_for(client.firmware_changelog(f"../{action}"), timeout=3)
         else:
             result = await asyncio.wait_for(client.firmware_changelog(f"../{action}"), timeout=3)
-            assert result == expected
+            assert result == {}
         session.post.assert_not_called()
     finally:
         await client.async_close()

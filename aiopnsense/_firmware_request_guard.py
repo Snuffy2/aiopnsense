@@ -13,8 +13,6 @@ from yarl import URL
 
 from .exceptions import _BlockedFirmwareRequest
 
-_FIRMWARE_API_SEGMENTS = ("api", "core", "firmware")
-
 
 def _firmware_action(url: str) -> str | None:
     """Return the lowercase firmware controller action that a URL addresses.
@@ -35,11 +33,10 @@ def _firmware_action(url: str) -> str | None:
         path = URL(url).path
     except ValueError:
         return None
-    segments = [segment for segment in path.lower().split("/") if segment]
-    prefix_length = len(_FIRMWARE_API_SEGMENTS)
-    if len(segments) <= prefix_length or tuple(segments[:prefix_length]) != _FIRMWARE_API_SEGMENTS:
-        return None
-    return segments[prefix_length]
+    match [segment for segment in path.lower().split("/") if segment]:
+        case ["api", "core", "firmware", action, *_]:
+            return action
+    return None
 
 
 def _send_request(session: aiohttp.ClientSession, method: str, url: str, **kwargs: Any) -> Any:
