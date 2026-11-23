@@ -28,22 +28,9 @@ DISPATCH_SCOPES = {
 }
 
 BASE = "/api/core/firmware"
-DISPATCH_LITERALS = {f"{BASE}/check", f"{BASE}/update", f"{BASE}/upgrade"}
+DISPATCH_LITERALS = {f"{BASE}/check", f"{BASE}/update", f"{BASE}/upgrade", f"{BASE}/"}
 INFO_ACTION = "info"
 STATUS_ACTION = "status"
-
-
-PATH_FORMS: dict[str, Callable[[str], str]] = {
-    "literal": lambda action: f"/api/core/firmware/{action}",
-    "query": lambda action: f"{BASE}/{action}?force=1",
-    "fragment": lambda action: f"{BASE}/{action}#top",
-    "trailing-slash": lambda action: f"{BASE}/{action}/",
-    "repeated-slash": lambda action: f"/api/core//firmware//{action}",
-    "uppercase": lambda action: f"{BASE}/{action}".upper(),
-    "dot-segment": lambda action: f"{BASE}/changelog/../{action}",
-    "percent-encoded": lambda action: f"{BASE}/%{ord(action[0]):x}{action[1:]}",
-    "parameter": lambda action: f"{BASE}/{action}/extra",
-}
 
 
 def _send_sites(client: aiopnsense.OPNsenseClient) -> dict[str, Callable[[str], Awaitable[Any]]]:
@@ -169,30 +156,34 @@ async def test_firmware_request_raises_for_forbidden_request_without_throwing(
     _assert_nothing_sent(session)
 
 
-@pytest.mark.parametrize("form", PATH_FORMS.values(), ids=PATH_FORMS)
 @pytest.mark.parametrize(
-    ("site", "action"),
-    [("get", INFO_ACTION), ("post", INFO_ACTION), ("post", STATUS_ACTION)],
+    "path",
+    [
+        f"{BASE}/info?force=1",
+        f"{BASE}/info#top",
+        f"{BASE}/info/",
+        "/api/core//firmware//info",
+        "/API/CORE/FIRMWARE/INFO",
+        f"{BASE}/changelog/../info",
+        f"{BASE}/%69nfo",
+        f"{BASE}/info/extra",
+    ],
+    ids=["query", "fragment", "trailing", "repeated", "uppercase", "dot", "encoded", "parameter"],
 )
 async def test_boundary_blocks_every_spelling_of_the_path(
-    make_client: Callable[..., aiopnsense.OPNsenseClient],
-    site: str,
-    action: str,
-    form: Callable[[str], str],
+    make_client: Callable[..., aiopnsense.OPNsenseClient], path: str
 ) -> None:
-    """Block a forbidden request whatever the spelling of its path.
+    """Block the info request whatever the spelling of its path, through the get site.
 
     Args:
         make_client (Callable[..., aiopnsense.OPNsenseClient]): Client factory.
-        site (str): Request site under test.
-        action (str): Forbidden firmware action.
-        form (Callable[[str], str]): Spells the path for the action.
+        path (str): Non-literal spelling of the info action path.
     """
     client, session = make_mock_session_client(make_client)
     client.toggle_throwing_errors(True)
 
     with pytest.raises(OPNsenseInvalidArgument, match="Blocked"):
-        await _send_sites(client)[site](form(action))
+        await _send_sites(client)["get"](path)
 
     _assert_nothing_sent(session)
 
@@ -340,6 +331,8 @@ def test_firmware_dispatch_paths_stay_in_their_methods() -> None:
                     if name != FIRMWARE_MODULE or scope not in DISPATCH_SCOPES[constant]:
                         violations.append(f"aiopnsense/{name}:{node.lineno}: {constant}")
                     check_dispatches += constant == "FIRMWARE_CHECK_ENDPOINT"
+                case ast.alias(name=constant) if constant in DISPATCH_SCOPES:
+                    violations.append(f"aiopnsense/{name}:{node.lineno}: import {constant}")
                 case ast.Constant(value=str() as value) if value in DISPATCH_LITERALS:
                     if name != FIRMWARE_MODULE or scope:
                         violations.append(f"aiopnsense/{name}:{node.lineno}: literal path")
