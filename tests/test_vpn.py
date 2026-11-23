@@ -703,6 +703,54 @@ async def test_get_wireguard_empty_or_known_missing_inventory(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("throw_errors", [False, True])
+@pytest.mark.parametrize(
+    ("client_rows", "server_rows", "expected"),
+    [
+        ([], [], {"servers": {}, "clients": {}}),
+        ([], {}, {"servers": {}, "clients": {}}),
+        ({}, [], {"servers": {}, "clients": {}}),
+        ([{"name": "client"}], [], None),
+        ([], [{"name": "server"}], None),
+    ],
+)
+async def test_get_wireguard_list_shaped_inventory(
+    make_client: ClientType,
+    client_rows: Any,
+    server_rows: Any,
+    expected: dict[str, dict[str, Any]] | None,
+    throw_errors: bool,
+) -> None:
+    """Treat empty list inventories as empty and non-empty lists as malformed.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        client_rows (Any): Payload at ``client.clients.client``.
+        server_rows (Any): Payload at ``server.servers.server``.
+        expected (dict[str, dict[str, Any]] | None): Expected ``get_wireguard`` result.
+        throw_errors (bool): Whether strict request errors are enabled.
+    """
+    client, _session = make_mock_session_client(make_client)
+    try:
+        client._throw_errors = throw_errors
+        response_by_path = {
+            aiopnsense_vpn.WIREGUARD_SUMMARY_ENDPOINT: {"rows": []},
+            aiopnsense_vpn.WIREGUARD_CLIENTS_ENDPOINT: {
+                "client": {"clients": {"client": client_rows}}
+            },
+            aiopnsense_vpn.WIREGUARD_SERVERS_ENDPOINT: {
+                "server": {"servers": {"server": server_rows}}
+            },
+        }
+        read = stub_endpoint_outcome(client, _EndpointOutcome.data({}))
+        read.side_effect = lambda path: _EndpointOutcome.data(response_by_path[path])
+
+        assert await client.get_wireguard() == expected
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
 async def test_get_wireguard_known_missing_summary_returns_none(make_client: ClientType) -> None:
     """Return None when the WireGuard summary is known missing, since it has no empty fallback.
 
