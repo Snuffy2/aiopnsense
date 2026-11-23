@@ -524,9 +524,11 @@ def make_router_client(
 ) -> tuple[aiopnsense.OPNsenseClient, FakeRouter]:
     """Build a client on the real request queue against a fake Router.
 
-    The Router answers only at the aiohttp session. Every public call then runs
-    through the client's real queue workers, endpoint cache, error policy and
-    transport. Workers stop in the ``make_client`` cleanup.
+    The Router answers only at the aiohttp session. The client's real queue
+    workers, endpoint cache, error policy and transport run. Calls that
+    deliberately bypass the queue (the firmware check and install POSTs and the
+    traffic stream) still reach the same session. Workers stop in the
+    ``make_client`` cleanup.
 
     Args:
         make_client (Callable[..., aiopnsense.OPNsenseClient]): ``make_client`` fixture factory.

@@ -302,8 +302,17 @@ async def test_get_firewall_source_nat_filters_automatic_rows_by_firmware(
 
     firewall = await client.get_firewall()
 
-    assert set(firewall["nat"]["source_nat"]) == (
-        {"manual-src"} if automatic_rows_hidden else {"manual-src", "auto-src"}
+    manual = {"uuid": "manual-src", "description": "Manual", "enabled": "1"}
+    automatic = {
+        "uuid": "auto-src",
+        "description": "Automatic",
+        "enabled": "1",
+        "is_automatic": True,
+    }
+    assert firewall["nat"]["source_nat"] == (
+        {"manual-src": manual}
+        if automatic_rows_hidden
+        else {"manual-src": manual, "auto-src": automatic}
     )
 
 
