@@ -1100,6 +1100,23 @@ async def test_get_wireguard_known_missing_summary_returns_none(make_client: Cli
     assert await client.get_wireguard() is None
 
 
+async def test_get_wireguard_malformed_summary_stops_configuration_reads(
+    make_client: ClientType,
+) -> None:
+    """Stop before configuration reads when the suppressed summary is malformed.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, router = make_vpn_router(
+        make_client,
+        wireguard_routes(summary={"rows": None}, clients=UNAVAILABLE),
+    )
+
+    assert await client.get_wireguard() is None
+    assert sent(router) == [("GET", WIREGUARD_SUMMARY_PATH)]
+
+
 async def test_openvpn_sessions_failure_stops_the_read(make_client: ClientType) -> None:
     """Fail closed without further requests when the OpenVPN sessions endpoint is unavailable.
 

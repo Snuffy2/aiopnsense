@@ -487,6 +487,9 @@ class VPNMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("[get_wireguard] summary endpoint unavailable")
             return None
         summary = summary_outcome.mapping().get("rows")
+        if not isinstance(summary, list) and not _throws_errors(self):
+            _LOGGER.debug("[get_wireguard] status unavailable (malformed rows)")
+            return None
 
         inventories: dict[str, Any] = {}
         access = Access.CONFIGURATION
