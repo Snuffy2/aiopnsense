@@ -1,8 +1,8 @@
 """Pure decoder for the Router's server-sent-event JSON streams.
 
 ``_SseDecoder`` turns bytes chunks into decoded messages and typed rejections. It holds no HTTP
-or client state, does not log and never raises for stream content, so each stream read applies
-its own policy to the items it returns.
+or client state, does not log and reports undecodable content as rejections, so each stream read
+applies its own policy to the items it returns.
 """
 
 import codecs

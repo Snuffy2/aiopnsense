@@ -234,12 +234,8 @@ class ClientTransportMixin:
 
         The stream is decoded like ``_stream_json_events`` decodes it: UTF-8 across chunks,
         CRLF, CR and LF line endings, and ``data:`` lines joined into one message per event.
-        Compared with the earlier line-by-line parser, CR line endings now frame events, a
-        multibyte character or JSON value split across chunks or ``data:`` lines decodes, a
-        final event ended by CR at end of stream counts, and messages are counted per event
-        rather than per ``data:`` line. Only one space after ``data:`` is removed, so other
-        leading whitespace is no longer stripped. Malformed JSON and non-mapping JSON still
-        count as messages, and corrupt input before the second message still fails as before.
+        Malformed JSON and non-mapping JSON count as messages. Invalid or truncated UTF-8
+        before the second message, or a second message that is not valid JSON, fails the read.
 
         Args:
             path (str): API endpoint path to request.
