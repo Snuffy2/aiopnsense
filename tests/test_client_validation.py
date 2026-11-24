@@ -1,6 +1,8 @@
 """Public validation behavior against the FakeRouter."""
 
 import asyncio
+import gc
+from weakref import ReferenceType, ref
 
 import pytest
 
@@ -23,6 +25,10 @@ _SERVICE_SEARCH = "/api/core/service/search"
 _DEVICE_ID = "/api/interfaces/overview/export"
 _UNBOUND_SETTINGS = "/api/unbound/settings/get"
 _TRAFFIC_PROBE = "/api/diagnostics/traffic/stream/1"
+
+
+class _FirmwareStatusPayload(dict[str, dict[str, str]]):
+    """Firmware status payload whose lifetime can be observed at the session boundary."""
 
 
 async def _assert_service_failure(client: OPNsenseClient, *, throw_errors: bool) -> None:
@@ -84,30 +90,40 @@ async def test_session_callback_task_keeps_default_after_validation(
         make_client (MakeClientFactory): Factory for clients with real queue workers.
     """
     client, router = make_router_client(make_client, {("GET", _SERVICE_SEARCH): 503})
-    validation_finished = asyncio.Event()
+    release_poll = asyncio.Event()
+    payload_refs: list[ReferenceType[_FirmwareStatusPayload]] = []
 
     async def poll_after_validation() -> None:
-        """Run a service search independently after validation returns."""
-        await validation_finished.wait()
+        """Run a service search independently after validation and close."""
+        await release_poll.wait()
         assert await client.get_services() == []
 
     async with asyncio.timeout(3), asyncio.TaskGroup() as tasks:
 
-        def firmware_reply(**_request: object) -> dict[str, dict[str, str]]:
+        def firmware_reply(**_request: object) -> _FirmwareStatusPayload:
             """Schedule the poll in the request callback and return firmware status.
 
             Args:
                 _request (object): Unused request parameters.
 
             Returns:
-                dict[str, dict[str, str]]: Firmware status reported by the Router.
+                _FirmwareStatusPayload: Firmware status reported by the Router.
             """
             tasks.create_task(poll_after_validation())
-            return {"product": {"product_version": OPNSENSE_RECOMMENDED_FIRMWARE}}
+            payload = _FirmwareStatusPayload(
+                product={"product_version": OPNSENSE_RECOMMENDED_FIRMWARE}
+            )
+            payload_refs.append(ref(payload))
+            return payload
 
         router.routes[("GET", _FIRMWARE_STATUS)] = firmware_reply
         await client.validate(require_device_id=False)
-        validation_finished.set()
+        await client.async_close()
+        await asyncio.sleep(0)  # Let asyncio release references from the completed close.
+        gc.collect()
+        [firmware_payload] = payload_refs
+        assert firmware_payload() is None
+        release_poll.set()
 
     assert router.count("GET", _SERVICE_SEARCH) == 1
 

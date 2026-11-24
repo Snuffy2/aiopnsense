@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import partial, wraps
 from typing import Any, Protocol
+from weakref import ReferenceType, ref
 
 import aiohttp
 
@@ -36,9 +37,9 @@ _DEFAULT_SCOPED_ERRORS: tuple[type[Exception], ...] = (
     TypeError,
 )
 
-_STRICT_ERROR_OWNER: ContextVar[tuple[object, asyncio.Task[Any] | None] | None] = ContextVar(
-    "_STRICT_ERROR_OWNER", default=None
-)
+_STRICT_ERROR_OWNER: ContextVar[
+    tuple[ReferenceType[object], ReferenceType[asyncio.Task[Any]]] | None
+] = ContextVar("_STRICT_ERROR_OWNER", default=None)
 
 
 class _ThrowErrorsClient(Protocol):
@@ -57,7 +58,8 @@ def _strict_error_scope(client: object | None) -> Iterator[None]:
     Yields:
         None: The override stays in effect until the scope exits.
     """
-    owner = (client, asyncio.current_task()) if client is not None else None
+    task = asyncio.current_task() if client is not None else None
+    owner = (ref(client), ref(task)) if client is not None and task is not None else None
     token = _STRICT_ERROR_OWNER.set(owner)
     try:
         yield
@@ -75,8 +77,11 @@ def _has_strict_error_override(client: object) -> bool:
         bool: Whether this task forces the client to raise errors.
     """
     owner = _STRICT_ERROR_OWNER.get()
-    # New tasks inherit the context, but do not own the operation.
-    return owner is not None and owner[0] is client and owner[1] is asyncio.current_task()
+    if owner is None or owner[0]() is not client:
+        return False
+    # A copied context can outlive the task that owns the operation.
+    task = owner[1]()
+    return task is not None and task is asyncio.current_task()
 
 
 def _handle_error(
