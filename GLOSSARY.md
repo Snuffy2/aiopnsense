@@ -44,6 +44,12 @@ _Avoid_: Instance, interface
 A remote WireGuard endpoint configured on the Router and linked to one or more WireGuard Servers.
 _Avoid_: Peer
 
+### Actions
+
+**Toggle**:
+Switching a Router item, such as a VPN Instance, Firewall Rule or alias, on or off, either to an explicit target state or by flipping its current state. Making the change take effect on the Router is part of the Toggle, never a separate step.
+_Avoid_: Apply, enable/disable (as separate operations)
+
 ### Access
 
 **Status Access**:
@@ -53,12 +59,6 @@ _Avoid_: Read-only, status-only user
 **Configuration Access**:
 The level at which the API user can also read the configured inventory of a category, or of one VPN type, and Toggle its items.
 _Avoid_: Read/write, full access
-
-### Actions
-
-**Toggle**:
-Switching a Router item, such as a VPN Instance, Firewall Rule or alias, on or off, either to an explicit target state or by flipping its current state. Making the change take effect on the Router is part of the Toggle, never a separate step.
-_Avoid_: Apply, enable/disable (as separate operations)
 
 ### Firmware support
 
