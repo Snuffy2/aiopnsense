@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 from warnings import deprecated
 
+from ._endpoint_cache import _CachedAnswer, _EndpointCache
 from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _raise_if_throwing, _throws_errors
 from ._request_failure import _PROBE_PHASE, _REQUEST_PHASE
@@ -19,11 +20,7 @@ class ClientEndpointMixin:
     """Endpoint selection and availability methods for OPNsenseClient."""
 
     if TYPE_CHECKING:
-        _endpoint_availability: dict[str, bool]
-        _endpoint_cache_generation: int
-        _endpoint_cache_ttl_seconds: int
-        _endpoint_checked_at: dict[str, datetime]
-        _endpoint_permission_denied: set[str]
+        _endpoint_cache: _EndpointCache
         _throw_errors: bool
         _url: str
         _use_snake_case: bool | None
@@ -140,48 +137,11 @@ class ClientEndpointMixin:
         """Discard the endpoint style and all cached endpoint availability.
 
         Called when the Router firmware version changes, because both were derived
-        from the old version. The availability, check-time and permission-denied
-        caches are cleared together so they cannot drift apart.
+        from the old version. Requests sent before the reset can no longer record or
+        clear an answer.
         """
-        self._endpoint_cache_generation += 1
         self._use_snake_case = None
-        self._endpoint_availability.clear()
-        self._endpoint_checked_at.clear()
-        self._endpoint_permission_denied.clear()
-
-    def _clear_endpoint_cache_entry(self, cache_key: str) -> None:
-        """Clear all cached endpoint state for a method-aware key.
-
-        Args:
-            cache_key (str): Method-aware endpoint cache key to clear.
-        """
-        self._endpoint_permission_denied.discard(cache_key)
-        self._endpoint_availability.pop(cache_key, None)
-        self._endpoint_checked_at.pop(cache_key, None)
-
-    def _set_endpoint_cache(
-        self,
-        cache_key: str,
-        *,
-        available: bool,
-        checked_at: datetime,
-        permission_denied: bool = False,
-    ) -> None:
-        """Store one availability answer for the endpoint cache TTL.
-
-        Args:
-            cache_key (str): Method-aware endpoint cache key.
-            available (bool): Whether the endpoint answered successfully.
-            checked_at (datetime): Time the request was started, which starts the TTL.
-            permission_denied (bool): Whether the answer is a 403 that is cached outside
-                throw mode.
-        """
-        if permission_denied:
-            self._endpoint_permission_denied.add(cache_key)
-        else:
-            self._endpoint_permission_denied.discard(cache_key)
-        self._endpoint_availability[cache_key] = available
-        self._endpoint_checked_at[cache_key] = checked_at
+        self._endpoint_cache.reset()
 
     async def _fetch_endpoint_outcome(
         self,
@@ -269,9 +229,10 @@ class ClientEndpointMixin:
 
         A dispatched request both checks availability and returns the data. The
         availability status (never the payload) is cached for the endpoint cache
-        TTL, so a known-absent endpoint is answered without a request. Status-only
-        checks also reuse a fresh present answer. GET and POST share this logic;
-        the HTTP method and exact path, including query, distinguish cache entries.
+        TTL, which starts when the Router answers, so a known-absent endpoint is
+        answered without a request. Status-only checks also reuse a fresh present
+        answer. GET and POST share this logic; the HTTP method and exact path,
+        including query, distinguish cache entries.
 
         Args:
             method (Literal["get", "post"]): HTTP method of the data request.
@@ -302,23 +263,17 @@ class ClientEndpointMixin:
             while the request is in flight discards its answer.
         """
         cache_key = f"post:{path}" if method == "post" else path
-        now = datetime.now().astimezone()
-        cache_is_fresh = (
-            cache_key in self._endpoint_checked_at
-            and (now - self._endpoint_checked_at[cache_key]).total_seconds()
-            < self._endpoint_cache_ttl_seconds
-        )
-        if not force_refresh and cache_is_fresh:
-            cached_available = self._endpoint_availability.get(cache_key)
-            if cached_available is False and not (
-                _throws_errors(self) and cache_key in self._endpoint_permission_denied
+        cached, ticket = self._endpoint_cache.lookup(cache_key, datetime.now().astimezone())
+        if not force_refresh:
+            if cached is _CachedAnswer.ABSENT or (
+                cached is _CachedAnswer.PERMISSION_DENIED and not _throws_errors(self)
             ):
-                denied = cache_key in self._endpoint_permission_denied
-                return _EndpointOutcome.absent(403 if denied else 404)
-            if cached_available is True and status_only:
+                return _EndpointOutcome.absent(
+                    403 if cached is _CachedAnswer.PERMISSION_DENIED else 404
+                )
+            if cached is _CachedAnswer.PRESENT and status_only:
                 return _EndpointOutcome.data(None)
 
-        cache_generation = self._endpoint_cache_generation
         if status_only:
             outcome = await self._do_get_outcome(
                 path, _public_caller_name(), read_body=False, phase=_PROBE_PHASE
@@ -331,25 +286,20 @@ class ClientEndpointMixin:
             )
             outcome = await self._queue_request(queue_method, path, payload)
 
-        current = self._endpoint_cache_generation == cache_generation
         # The TTL starts when the Router answers, so a slow request keeps its full TTL.
         checked_at = datetime.now().astimezone()
         if outcome.is_data:
-            if current:
-                self._set_endpoint_cache(cache_key, available=True, checked_at=checked_at)
+            self._endpoint_cache.record(cache_key, _CachedAnswer.PRESENT, checked_at, ticket)
             return outcome
         if outcome.error is None:
-            if current:
-                self._set_endpoint_cache(cache_key, available=False, checked_at=checked_at)
+            self._endpoint_cache.record(cache_key, _CachedAnswer.ABSENT, checked_at, ticket)
             return outcome
         if outcome.is_absent and not _throws_errors(self):
-            if current:
-                self._set_endpoint_cache(
-                    cache_key, available=False, checked_at=checked_at, permission_denied=True
-                )
+            self._endpoint_cache.record(
+                cache_key, _CachedAnswer.PERMISSION_DENIED, checked_at, ticket
+            )
             return outcome
-        if current:
-            self._clear_endpoint_cache_entry(cache_key)
+        self._endpoint_cache.clear(cache_key, ticket)
         _raise_if_throwing(self, outcome.error)
         return outcome
 
