@@ -30,18 +30,6 @@ def _decode(chunks: list[bytes]) -> list[_SseItem]:
     return items
 
 
-def _payloads(items: list[_SseItem]) -> list[dict[str, object]]:
-    """Return the payloads of the message items.
-
-    Args:
-        items (list[_SseItem]): Decoder items.
-
-    Returns:
-        list[dict[str, object]]: Payload of each message, in order.
-    """
-    return [item.payload for item in items if isinstance(item, _SseMessage)]
-
-
 @pytest.mark.parametrize(
     ("chunks", "expected"),
     [
@@ -171,4 +159,4 @@ def test_decoder_preserves_item_order() -> None:
         "_SseRejection",
         "_SseMessage",
     ]
-    assert _payloads(items) == [{"a": 1}, {"a": 3}]
+    assert [item.payload for item in items if isinstance(item, _SseMessage)] == [{"a": 1}, {"a": 3}]
