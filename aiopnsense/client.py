@@ -6,6 +6,7 @@ from typing import Self, TypeVar
 
 import aiohttp
 
+from ._error_policy import _strict_error_scope
 from .client_base import ClientBaseMixin
 from .const import OPNSENSE_MIN_FIRMWARE, OPNSENSE_RECOMMENDED_FIRMWARE
 from .dhcp import DHCPMixin
@@ -115,8 +116,10 @@ class OPNsenseClient(
     async def validate(self, *, require_device_id: bool = True) -> None:
         """Validate connectivity, authentication, and minimum firmware support.
 
-        This raises request failures regardless of ``self._throw_errors``; those
-        failures are mapped to public OPNsense errors by ``_run_validation_request``.
+        Firmware and Device ID requests made by this invocation raise mapped
+        public OPNsense errors regardless of the configured ``throw_errors`` default.
+        Concurrent calls on this client continue to use their own error policy,
+        and changes to the default take effect independently of validation.
 
         Args:
             require_device_id (bool): Whether validation must resolve a physical-device
@@ -126,9 +129,7 @@ class OPNsenseClient(
             OPNsenseUnknownFirmware: Raised when firmware detection returns no version.
             OPNsenseBelowMinFirmware: Raised when the detected firmware is unsupported.
         """
-        orig_throw_errors = self._throw_errors
-        self._throw_errors = True
-        try:
+        with _strict_error_scope(self):
             if require_device_id:
                 fw_ver = await self._run_validation_request(self.get_host_firmware_version)
             else:
@@ -159,5 +160,3 @@ class OPNsenseClient(
 
             if require_device_id:
                 await self._run_validation_request(self.get_device_unique_id)
-        finally:
-            self._throw_errors = orig_throw_errors
