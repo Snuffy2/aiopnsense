@@ -198,13 +198,12 @@ async def test_voucher_switched_endpoints_follow_selected_case(
 
 
 @pytest.mark.parametrize(
-    ("firmware", "providers_path", "generate_path", "reads_with_server", "reads_without_server"),
+    ("firmware", "providers_path", "generate_path", "firmware_reads"),
     [
         pytest.param(
             SNAKE_CASE_FIRMWARE,
             "/api/captiveportal/voucher/list_providers",
             "/api/captiveportal/voucher/generate_vouchers/srv/",
-            1,
             1,
             id="snake_case",
         ),
@@ -213,15 +212,12 @@ async def test_voucher_switched_endpoints_follow_selected_case(
             "/api/captiveportal/voucher/listProviders",
             "/api/captiveportal/voucher/generateVouchers/srv/",
             1,
-            1,
             id="camelCase",
         ),
         pytest.param(
             None,
             "/api/captiveportal/voucher/list_providers",
             "/api/captiveportal/voucher/generate_vouchers/srv/",
-            # A supplied server needs no provider path, so only the generate path is resolved.
-            1,
             2,
             id="unknown-firmware",
         ),
@@ -233,8 +229,7 @@ async def test_generate_vouchers_request_sequence(
     firmware: str | None,
     providers_path: str,
     generate_path: str,
-    reads_with_server: int,
-    reads_without_server: int,
+    firmware_reads: int,
     server_supplied: bool,
 ) -> None:
     """Pin every request ``generate_vouchers`` sends, with and without a supplied server.
@@ -244,8 +239,7 @@ async def test_generate_vouchers_request_sequence(
         firmware (str | None): Firmware version the Router reports, ``None`` when it is unknown.
         providers_path (str): Provider list endpoint the Router is expected to receive.
         generate_path (str): Generate endpoint, server segment included.
-        reads_with_server (int): Firmware status reads when the caller names the server.
-        reads_without_server (int): Firmware status reads when the server comes from the list.
+        firmware_reads (int): Expected firmware status reads.
         server_supplied (bool): Whether the caller names the voucher server.
     """
     client, router = make_router_client(
@@ -259,23 +253,23 @@ async def test_generate_vouchers_request_sequence(
     )
 
     firmware_read = ("GET", "/api/core/firmware/status")
-    if server_supplied:
-        expected = [firmware_read] * reads_with_server + [("POST", generate_path)]
-    else:
-        expected = [firmware_read] * reads_without_server + [
-            ("GET", providers_path),
-            ("POST", generate_path),
-        ]
+    expected = [firmware_read] * firmware_reads
+    if not server_supplied:
+        expected.append(("GET", providers_path))
+    expected.append(("POST", generate_path))
     assert router.calls() == expected
 
 
+@pytest.mark.parametrize("server_supplied", [True, False], ids=["server-supplied", "no-server"])
 async def test_generate_vouchers_when_endpoint_style_becomes_known(
     make_client: ClientType,
+    server_supplied: bool,
 ) -> None:
-    """Keep the provider and generate paths in their original resolution order.
+    """Use the recovered firmware style for generation even with a supplied server.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        server_supplied (bool): Whether the caller names the voucher server.
     """
     firmware_read = ("GET", "/api/core/firmware/status")
     provider_read = ("GET", "/api/captiveportal/voucher/list_providers")
@@ -289,5 +283,10 @@ async def test_generate_vouchers_when_endpoint_style_becomes_known(
         },
     )
 
-    assert await client.generate_vouchers({}) == [{"username": "voucher"}]
-    assert router.calls() == [firmware_read, firmware_read, provider_read, generate]
+    options = {"voucher_server": "srv"} if server_supplied else {}
+    assert await client.generate_vouchers(options) == [{"username": "voucher"}]
+
+    expected = [firmware_read, firmware_read]
+    if not server_supplied:
+        expected.append(provider_read)
+    assert router.calls() == [*expected, generate]
