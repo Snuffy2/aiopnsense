@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
@@ -10,7 +11,13 @@ import aiohttp
 import pytest
 
 import aiopnsense as aiopnsense_module
-from aiopnsense import OPNsenseClient, vpn as aiopnsense_vpn
+from aiopnsense import (
+    Access,
+    OPNsenseClient,
+    OPNsensePrivilegeMissing,
+    result_access,
+    vpn as aiopnsense_vpn,
+)
 from aiopnsense.exceptions import OPNsenseConnectionError
 from tests.conftest import FIRMWARE_STATUS_PATH, FakeRouter, HeldResponse, make_router_client
 
@@ -537,6 +544,7 @@ async def test_get_wireguard_reports_live_details_for_each_configured_view(
     result = await client.get_wireguard()
 
     assert result is not None
+    assert result_access(result) is Access.CONFIGURATION
     server_1 = result["servers"]["server-1"]
     server_2 = result["servers"]["server-2"]
     configured_client = result["clients"]["client-uuid"]
@@ -650,6 +658,103 @@ async def test_get_wireguard_enriches_one_sided_links(
             assert parent["total_bytes_recv"] == 0
             assert parent["total_bytes_sent"] == 0
             assert parent.get("latest_handshake") is None
+
+
+@pytest.mark.parametrize("denied_inventory", ["clients", "servers"])
+async def test_get_wireguard_status_access_links_live_rows(
+    make_client: ClientType, wireguard_now: datetime, denied_inventory: str
+) -> None:
+    """Use public-key identity and live links after either configuration read is denied.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        wireguard_now (datetime): Fixed reference time for handshake status.
+        denied_inventory (str): Configuration inventory returning 403.
+    """
+    handshake = wireguard_now - timedelta(seconds=30)
+    rows = [
+        {
+            "type": "peer",
+            "public-key": "client-public-key",
+            "name": "Client",
+            "if": "wg1",
+            "transfer-rx": "15",
+            "transfer-tx": "20",
+            "latest-handshake": int(handshake.timestamp()),
+        },
+        {
+            "type": "interface",
+            "public-key": "server-public-key",
+            "if": "wg1",
+            "ifname": "Server 1",
+            "status": "up",
+        },
+        {
+            "type": "interface",
+            "public-key": "other-server-public-key",
+            "if": "wg2",
+            "name": "Server 2",
+        },
+        {
+            "type": "peer",
+            "public-key": "client-public-key",
+            "name": "Client",
+            "if": "wg2",
+            "transfer-rx": "5",
+        },
+    ]
+    inventories: dict[str, Any] = {
+        "clients": {"client": {"clients": {"client": {"configured": {}}}}},
+        "servers": {"server": {"servers": {"server": {"configured": {}}}}},
+    }
+    inventories[denied_inventory] = 403
+    client, router = make_vpn_router(
+        make_client, wireguard_routes(summary={"rows": rows}, **inventories)
+    )
+
+    for _ in range(2):
+        result = await client.get_wireguard()
+        assert result is not None
+        assert result_access(result) is Access.STATUS
+        assert set(result["servers"]) == {"006f9c9fb3b751aa", "d3ef32285d74752e"}
+        assert set(result["clients"]) == {"53f6b5178afbdb4e"}
+        for inventory in result.values():
+            for key_hash, entry in inventory.items():
+                assert entry["uuid"] is None
+                assert entry["key_hash"] == key_hash
+                assert {"enabled", "tunnel_addresses", "dns_servers"}.isdisjoint(entry)
+        server = result["servers"]["006f9c9fb3b751aa"]
+        assert server["name"] == "Server 1"
+        assert server["status"] == "up"
+        assert server["connected_clients"] == 1
+        assert server["clients"][0]["latest_handshake"] == handshake
+        peer = result["clients"]["53f6b5178afbdb4e"]
+        assert peer["name"] == "Client"
+        assert peer["total_bytes_recv"] == 20
+        assert peer["total_bytes_sent"] == 20
+        assert peer["connected_servers"] == 1
+        assert {link["name"]: link["connected"] for link in peer["servers"]} == {
+            "Server 1": True,
+            "Server 2": False,
+        }
+    denied_path = f"/api/wireguard/{denied_inventory.removesuffix('s')}/get"
+    assert router.count("GET", denied_path) == 1
+
+    configured_client, _ = make_vpn_router(
+        make_client,
+        wireguard_routes(
+            clients={
+                "client": {"clients": {"client": {"client-id": {"pubkey": "client-public-key"}}}}
+            },
+            servers={
+                "server": {"servers": {"server": {"server-id": {"pubkey": "server-public-key"}}}}
+            },
+        ),
+    )
+    configured = await configured_client.get_wireguard()
+    assert configured is not None
+    assert configured["clients"]["client-id"]["key_hash"] == "53f6b5178afbdb4e"
+    assert configured["servers"]["server-id"]["key_hash"] == "006f9c9fb3b751aa"
 
 
 async def test_get_wireguard_retains_duplicate_and_incomplete_links(
@@ -1048,6 +1153,117 @@ async def test_get_openvpn_missing_or_unavailable_inventory(
     assert await client.get_openvpn() == expected
 
 
+async def test_get_openvpn_status_access_uses_session_inventory(make_client: ClientType) -> None:
+    """Use visible server sessions and skip instance details after a cached denial.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+    """
+    client, router = make_vpn_router(
+        make_client,
+        openvpn_routes(
+            sessions={
+                "rows": [
+                    {"id": "visible", "type": "server", "description": "Visible"},
+                    {"id": "client", "type": "client"},
+                ]
+            },
+            providers={"hidden": {"name": "Export only"}},
+            instances=403,
+        ),
+    )
+
+    for _ in range(2):
+        result = await client.get_openvpn()
+        assert result_access(result) is Access.STATUS
+        assert result == {
+            "servers": {
+                "visible": {
+                    "uuid": "visible",
+                    "name": "Visible",
+                    "status": "down",
+                    "clients": [],
+                    "connected_clients": 0,
+                    "total_bytes_recv": 0,
+                    "total_bytes_sent": 0,
+                }
+            },
+            "clients": {},
+        }
+        assert result_access(deepcopy(result)) is Access.STATUS
+        assert result_access(dict(result)) is None
+    assert router.count("GET", "/api/openvpn/instances/search") == 1
+    assert router.count("GET", "/api/openvpn/instances/get/visible") == 0
+
+
+@pytest.mark.parametrize(
+    ("vpn", "status_path", "config_path"),
+    [
+        ("openvpn", OPENVPN_SESSIONS_SNAKE_PATH, "/api/openvpn/instances/search"),
+        ("openvpn", OPENVPN_SESSIONS_SNAKE_PATH, "/api/openvpn/export/providers"),
+        ("wireguard", WIREGUARD_SUMMARY_PATH, "/api/wireguard/client/get"),
+        ("wireguard", WIREGUARD_SUMMARY_PATH, "/api/wireguard/server/get"),
+        ("ipsec", IPSEC_PHASE1_SESSIONS_SNAKE_PATH, IPSEC_CONNECTIONS_SNAKE_PATH),
+        ("ipsec", IPSEC_PHASE1_SESSIONS_SNAKE_PATH, "/api/ipsec/connections/search_child"),
+    ],
+)
+async def test_vpn_access_preserves_http_error_policy(
+    make_client: ClientType, vpn: str, status_path: str, config_path: str
+) -> None:
+    """Distinguish an absent inventory from strict privilege and status failures.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        vpn (str): VPN getter to exercise.
+        status_path (str): Required status endpoint.
+        config_path (str): Configuration endpoint to deny or remove.
+    """
+    routes = openvpn_routes() | wireguard_routes() | ipsec_routes({"rows": []})
+    strict_client, strict_router = make_vpn_router(make_client, routes, throw_errors=True)
+    client, router = make_vpn_router(make_client, routes)
+    get_vpn = getattr(client, f"get_{vpn}")
+    expected: dict[str, dict[str, Any]] = (
+        {"connections": {}, "children": {}} if vpn == "ipsec" else {"servers": {}, "clients": {}}
+    )
+    result = await get_vpn()
+    assert result == expected
+    assert result_access(result) is Access.CONFIGURATION
+
+    strict_router.routes[("GET", config_path)] = 403
+    with pytest.raises(OPNsensePrivilegeMissing):
+        await getattr(strict_client, f"get_{vpn}")()
+
+    router.routes[("GET", config_path)] = 404
+    result = await get_vpn()
+    assert result == expected
+    assert result_access(result) is Access.CONFIGURATION
+
+    router.routes[("GET", status_path)] = 403
+    assert await get_vpn() is None
+
+
+async def test_openvpn_provider_denial_only_omits_endpoint(make_client: ClientType) -> None:
+    """Preserve Configuration Access when only the provider export is forbidden.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+    """
+    client, router = make_vpn_router(
+        make_client,
+        openvpn_routes(
+            providers=403,
+            instances={"rows": [{"role": "server", "uuid": "server", "enabled": "1"}]},
+        ),
+    )
+    for _ in range(2):
+        result = await client.get_openvpn()
+        assert result is not None
+        assert result_access(result) is Access.CONFIGURATION
+        assert result["servers"]["server"]["enabled"] is True
+        assert "endpoint" not in result["servers"]["server"]
+    assert router.count("GET", "/api/openvpn/export/providers") == 1
+
+
 async def test_get_openvpn_empty_inventories(make_client: ClientType) -> None:
     """Report an empty OpenVPN inventory as empty rather than unavailable.
 
@@ -1398,6 +1614,71 @@ async def test_get_ipsec_known_unavailable_connection_inventory_reports_no_toggl
     assert set(ipsec["connections"]) == {"uuid-up"}
     assert ipsec["connections"]["uuid-up"]["enabled"] is None
     assert router.count("GET", IPSEC_PHASE1_SESSIONS_SNAKE_PATH) == 1
+
+
+async def test_get_ipsec_status_access_only_reports_sessions(make_client: ClientType) -> None:
+    """Return live IKE and child entries without configuration after a cached denial.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+    """
+    client, router = make_vpn_router(
+        make_client,
+        ipsec_routes(
+            {"rows": [{"ikeid": "visible", "name": "session", "connected": True}]},
+            connections=403,
+            children={"rows": [{"uuid": "hidden", "enabled": "1"}]},
+            phase2={
+                "rows": [
+                    {
+                        "name": "active-child",
+                        "ikeid": "visible",
+                        "state": "INSTALLED",
+                        "bytes-in": "418",
+                    }
+                ]
+            },
+        ),
+    )
+
+    for _ in range(2):
+        result = await client.get_ipsec()
+        assert result is not None
+        assert result_access(result) is Access.STATUS
+        assert set(result["connections"]) == {"visible"}
+        assert "enabled" not in result["connections"]["visible"]
+        assert set(result["children"]) == {"active-child"}
+        child = result["children"]["active-child"]
+        assert "enabled" not in child
+        assert child["connection"] == "visible"
+        assert child["installed_sas"] == 1
+        assert child["total_bytes_recv"] == 418
+    assert router.count("GET", IPSEC_CONNECTIONS_SNAKE_PATH) == 1
+
+
+async def test_ipsec_child_denial_preserves_connection_access(make_client: ClientType) -> None:
+    """Retain configured connections and live children when only child inventory is denied.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+    """
+    client, router = make_vpn_router(
+        make_client,
+        ipsec_routes(
+            {"rows": [{"ikeid": "active", "name": "active", "connected": True}]},
+            connections={"rows": [{"uuid": "hidden-from-status", "enabled": "0"}]},
+            children=403,
+            phase2={"rows": [{"name": "live-child", "state": "INSTALLED"}]},
+        ),
+    )
+    for _ in range(2):
+        result = await client.get_ipsec()
+        assert result is not None
+        assert result_access(result) is Access.CONFIGURATION
+        assert result["connections"]["hidden-from-status"]["enabled"] is False
+        assert set(result["children"]) == {"live-child"}
+        assert result["children"]["live-child"]["connected"] is True
+    assert router.count("GET", "/api/ipsec/connections/search_child") == 1
 
 
 async def test_get_ipsec_children_aggregate_phase2_sessions(make_client: ClientType) -> None:

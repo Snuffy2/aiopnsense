@@ -1,5 +1,6 @@
 """aiopnsense package to manage OPNsense."""
 
+from .access import Access, AccessDict, AccessList, result_access
 from .client import OPNsenseClient
 from .exceptions import (
     OPNsenseBelowMinFirmware,
@@ -17,6 +18,9 @@ from .exceptions import (
 )
 
 __all__ = [
+    "Access",
+    "AccessDict",
+    "AccessList",
     "OPNsenseBelowMinFirmware",
     "OPNsenseClient",
     "OPNsenseConnectionError",
@@ -30,4 +34,5 @@ __all__ = [
     "OPNsenseTimeoutError",
     "OPNsenseUnknownFirmware",
     "OPNsenseVoucherServerError",
+    "result_access",
 ]
