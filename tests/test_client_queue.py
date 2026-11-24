@@ -232,7 +232,7 @@ async def test_failed_stream_read_logs_once_through_queue_and_public_wrapper(
     client, session = make_mock_session_client(make_client)
     client._throw_errors = True
     session.get.return_value = FakeResponse(status=500, reason="Server Error", ok=False)
-    client._get_endpoint_path = AsyncMock(return_value="/api/cpu/type")
+    client._use_snake_case = True
     try:
         with caplog.at_level("ERROR"), pytest.raises(OPNsenseConnectionError):
             await client._get_telemetry_cpu()

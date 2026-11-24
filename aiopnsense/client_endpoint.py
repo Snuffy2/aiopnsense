@@ -8,7 +8,7 @@ from warnings import deprecated
 from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _raise_if_throwing, _throws_errors
 from ._request_failure import _PROBE_PHASE, _REQUEST_PHASE
-from ._styled_endpoint import _EndpointPath, _StyledEndpoint
+from ._styled_endpoint import _EndpointPath
 from ._typing import AiopnsenseClientProtocol
 from .client_transport import _public_caller_name, _RequestKind
 from .const import SNAKE_CASE_ENDPOINTS_CAPABILITY
@@ -138,22 +138,6 @@ class ClientEndpointMixin:
             else self._use_snake_case
         )
         return endpoint.snake_case if use_snake_case else endpoint.camel_case
-
-    async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str:
-        """Return the firmware-appropriate endpoint path.
-
-        Thin delegate to ``_resolve_endpoint`` kept while call sites migrate.
-
-        Args:
-            snake_case_path (str): Endpoint path for newer snake_case firmware.
-            camel_case_path (str): Endpoint path for older camelCase firmware.
-
-        Returns:
-            str: Selected endpoint path for the active firmware family.
-        """
-        return await self._resolve_endpoint(
-            _StyledEndpoint(snake_case=snake_case_path, camel_case=camel_case_path)
-        )
 
     def _reset_endpoint_state(self) -> None:
         """Discard the endpoint style and all cached endpoint availability.

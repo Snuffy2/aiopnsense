@@ -245,7 +245,10 @@ async def test_set_use_snake_case_selects_expected_endpoint_style(
 
         assert client._use_snake_case is expected_use_snake_case
         client.get_host_firmware_version.assert_awaited_once_with()
-        assert await client._get_endpoint_path("/snake_case", "/camelCase") == expected_path
+        assert (
+            await client._resolve_endpoint(_StyledEndpoint("/snake_case", "/camelCase"))
+            == expected_path
+        )
     finally:
         await client.async_close()
 
@@ -285,7 +288,7 @@ async def test_set_use_snake_case_initial_raises_unknown_firmware(
 
 
 @pytest.mark.asyncio
-async def test_get_endpoint_path_lazily_initializes_snake_case_state(
+async def test_resolve_endpoint_lazily_initializes_snake_case_state(
     make_client: MakeClientFactory,
 ) -> None:
     """Verify endpoint selection lazily initializes snake-case mode.
@@ -310,7 +313,10 @@ async def test_get_endpoint_path_lazily_initializes_snake_case_state(
         set_use_snake_case = AsyncMock(side_effect=fake_set_use_snake_case)
         client._set_use_snake_case = set_use_snake_case
 
-        assert await client._get_endpoint_path("/snake_case", "/camelCase") == "/camelCase"
+        assert (
+            await client._resolve_endpoint(_StyledEndpoint("/snake_case", "/camelCase"))
+            == "/camelCase"
+        )
         set_use_snake_case.assert_awaited_once_with()
     finally:
         await client.async_close()

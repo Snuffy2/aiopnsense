@@ -88,8 +88,6 @@ class AiopnsenseClientProtocol(Protocol):
 
     async def _resolve_endpoint(self, endpoint: _EndpointPath) -> str: ...
 
-    async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str: ...
-
     async def _fetch_endpoint_outcome(
         self,
         path: _EndpointPath,
