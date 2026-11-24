@@ -44,6 +44,36 @@ _Avoid_: Instance, interface
 A remote WireGuard endpoint configured on the Router and linked to one or more WireGuard Servers.
 _Avoid_: Peer
 
+### DNS
+
+**Query Log**:
+The Router's record of individual Unbound DNS queries, with client, domain, action, blocklist and policy. Only its last 1,000 queries are searchable, so it covers minutes of traffic, not days.
+_Avoid_: DNS log, query history
+
+**Query Stats**:
+Aggregated counts of Unbound DNS queries: per-Bucket counters plus Retention Window totals and top-domain lists.
+_Avoid_: DNS overview, DNS statistics (as a type name)
+
+**Bucket**:
+One fixed-width time slot of Query Stats, keyed by its start time. Buckets are 60 seconds wide when reading the last hour and 600 seconds wide otherwise.
+_Avoid_: Interval, slot
+
+**Complete Bucket**:
+A Bucket whose time slot has ended. The newest Bucket the Router returns is still filling and is never reported as a count.
+_Avoid_: Closed bucket, last bucket
+
+**Retention Window**:
+The span of query history the Router keeps, about a week. Totals and top-domain lists cover this window, so their counts can fall as old queries age out.
+_Avoid_: All time, since boot
+
+**Blocked**:
+A query answered by a DNSBL blocklist policy. Counts of Blocked queries never include Dropped ones.
+_Avoid_: Filtered, denied
+
+**Dropped**:
+A query Unbound discarded for a reason other than a blocklist, such as a rate limit or an access list.
+_Avoid_: Blocked, rejected
+
 ### Actions
 
 **Toggle**:

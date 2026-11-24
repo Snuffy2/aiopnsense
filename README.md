@@ -24,7 +24,7 @@ The client currently includes helpers for:
 - firewall rules, NAT rules, alias toggling, and state killing
 - service status lookup and service start/stop/restart operations
 - SMART device listing and per-device SMART detail queries
-- Unbound blocklist management
+- Unbound blocklist management, DNS query statistics, and query log search
 - OpenVPN and WireGuard status plus VPN instance toggling
 - IPsec phase 1 (IKE) connection status plus connection toggling, and phase 2 (child SA) status
 - vnStat metrics, captive portal vouchers, and speed test data
