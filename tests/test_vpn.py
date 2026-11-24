@@ -807,20 +807,21 @@ async def test_get_wireguard_status_access_aggregates_shared_server_key(
     key_hash, server = next(iter(result["servers"].items()))
     assert server["key_hash"] == key_hash
     assert server["uuid"] is None
-    assert (server["name"], server["interface"], server["status"]) == (
-        "Server 1",
-        "wg1",
-        "down",
-    )
+    interface_status = {"wg0": ("Server 0", "up"), "wg1": ("Server 1", "down")}
+    assert (server["name"], server["status"]) == interface_status[server["interface"]]
     assert (server["total_bytes_recv"], server["total_bytes_sent"]) == (30, 32)
     assert server["connected_clients"] == 2
     assert {link["pubkey"] for link in server["clients"]} == {"client-key-0", "client-key-1"}
-    clients = result["clients"]
-    assert {entry["total_bytes_recv"] for entry in clients.values()} == {10, 20}
-    assert {entry["total_bytes_sent"] for entry in clients.values()} == {11, 21}
-    assert {
-        (link["interface"], link["name"]) for entry in clients.values() for link in entry["servers"]
-    } == {("wg0", "Server 0"), ("wg1", "Server 1")}
+    clients = {entry["pubkey"]: entry for entry in result["clients"].values()}
+    assert set(clients) == {"client-key-0", "client-key-1"}
+    for public_key, interface, received, sent in (
+        ("client-key-0", "wg0", 10, 11),
+        ("client-key-1", "wg1", 20, 21),
+    ):
+        peer = clients[public_key]
+        assert (peer["total_bytes_recv"], peer["total_bytes_sent"]) == (received, sent)
+        (link,) = peer["servers"]
+        assert (link["interface"], link["name"]) == (interface, interface_status[interface][0])
 
 
 async def test_get_wireguard_retains_duplicate_and_incomplete_links(
