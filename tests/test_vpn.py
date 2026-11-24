@@ -194,122 +194,6 @@ def ipsec_routes(
     }
 
 
-@pytest.mark.asyncio
-async def test_wireguard_processing_and_updates() -> None:
-    """Exercise static wireguard status update helpers and peer linking."""
-    # Test static methods for wireguard processing and updates
-    server = {
-        "uuid": "s1",
-        "name": "srv",
-        "pubkey": "pk",
-        "clients": [{"pubkey": "cpk"}],
-        "interface": "wg1",
-        "tunnel_addresses": ["10.0.0.1"],
-        "total_bytes_recv": 0,
-        "total_bytes_sent": 0,
-    }
-    client = {
-        "uuid": "c1",
-        "pubkey": "cpk",
-        "servers": [{"interface": "wg1"}],
-        "tunnel_addresses": ["10.0.0.2"],
-        "total_bytes_recv": 0,
-        "total_bytes_sent": 0,
-    }
-    servers = {"s1": server}
-    clients = {"c1": client}
-
-    # peer entry representing interface update
-    entry_interface = {"type": "interface", "public-key": "pk", "status": "up"}
-    aiopnsense_module.OPNsenseClient._update_wireguard_status([entry_interface], servers, clients)
-    # server status set
-    assert any(s.get("status") == "up" for s in servers.values())
-
-    # peer update representing peer (client) with handshake and transfers
-    entry_peer = {
-        "type": "peer",
-        "public-key": "cpk",
-        "if": "wg1",
-        "endpoint": "1.2.3.4:51820",
-        "transfer-rx": "100",
-        "transfer-tx": "200",
-        "latest-handshake": "0",
-    }
-    aiopnsense_module.OPNsenseClient._update_wireguard_status([entry_peer], servers, clients)
-    # ensure client's server linkage updated: require explicit connected state or measurable traffic
-    srv = clients["c1"]["servers"][0]
-    has_connected_flag = bool(srv.get("connected"))
-    # accept numeric transfer counters set by implementation (bytes_recv/bytes_sent)
-    rx = int(srv.get("bytes_recv") or srv.get("transfer-rx") or 0)
-    tx = int(srv.get("bytes_sent") or srv.get("transfer-tx") or 0)
-    assert has_connected_flag or (rx > 0 or tx > 0)
-
-
-@pytest.mark.asyncio
-async def test_openvpn_client_session_updates_server_stats() -> None:
-    """Ensure that openvpn session with is_client True updates server/client stats appropriately."""
-    # no client/session needed for this static helper test
-
-    # Build servers and clients structures
-    servers: dict = {
-        "s1": {"uuid": "s1", "clients": [], "total_bytes_recv": 0, "total_bytes_sent": 0}
-    }
-    clients: dict = {"c1": {"uuid": "c1", "pubkey": "pk1", "servers": [{"interface": "wg1"}]}}
-
-    # session entry as a peer will update client/server
-    entry = {
-        "type": "peer",
-        "public-key": "pk1",
-        "if": "wg1",
-        "transfer-rx": "100",
-        "transfer-tx": "200",
-        "latest-handshake": int(datetime.now(tz=UTC).timestamp()),
-    }
-
-    aiopnsense_module.OPNsenseClient._update_wireguard_peer_status(entry, servers, clients)
-
-    # ensure totals updated on either server or client as implementation may update parent
-    server_updated = any(
-        s.get("total_bytes_recv", 0) >= 100 or s.get("total_bytes_sent", 0) >= 200
-        for s in servers.values()
-    )
-    client_updated = any(
-        c.get("total_bytes_recv", 0) >= 100 or c.get("total_bytes_sent", 0) >= 200
-        for c in clients.values()
-    )
-    assert server_updated or client_updated
-
-
-@pytest.mark.asyncio
-async def test_get_wireguard_full_processing_and_peer_details() -> None:
-    """Ensure the wireguard peer status helper updates server/client transfer counters."""
-    summary = {
-        "peers": [
-            {
-                "public-key": "pk1",
-                "latest-handshake": int(datetime.now(tz=UTC).timestamp()),
-                "transfer-rx": "100",
-                "transfer-tx": "200",
-                "if": "wg1",
-            }
-        ],
-        "servers": {"s1": {"uuid": "s1"}},
-        "clients": {"c1": {"uuid": "c1", "pubkey": "pk1", "servers": [{"interface": "wg1"}]}},
-    }
-    servers: dict = {
-        "s1": {"uuid": "s1", "clients": [], "total_bytes_recv": 0, "total_bytes_sent": 0}
-    }
-    clients_map: dict = {"c1": {"uuid": "c1", "pubkey": "pk1", "servers": [{"interface": "wg1"}]}}
-
-    entry = summary["peers"][0]
-    aiopnsense_module.OPNsenseClient._update_wireguard_peer_status(entry, servers, clients_map)
-    updated = any(
-        s.get("total_bytes_recv", 0) >= 100 or s.get("total_bytes_sent", 0) >= 200
-        for s in servers.values()
-    )
-    assert updated or any(c.get("total_bytes_recv", 0) >= 100 for c in clients_map.values())
-
-
 @pytest.mark.parametrize(
     "delta_minutes,expected",
     [
@@ -569,75 +453,283 @@ async def test_openvpn_server_details_skip_unavailable_endpoint(make_client: Cli
     assert router.count("GET", details_path) == 1
 
 
-async def test_get_wireguard_success_and_invalid(make_client: ClientType) -> None:
-    """Exercise get_wireguard success path and invalid structure early return.
+@pytest.fixture
+def wireguard_now(monkeypatch: pytest.MonkeyPatch) -> datetime:
+    """Freeze the clock used to classify WireGuard handshakes.
 
     Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-    """
-    now = datetime.now().astimezone()
-    old_handshake = int((now - timedelta(minutes=10)).timestamp())  # disconnected
+        monkeypatch (pytest.MonkeyPatch): Fixture for replacing the VPN clock.
 
-    # Build server/client structures expected by API shape
-    summary_resp = {
-        "rows": [
-            {"type": "interface", "public-key": "spk", "status": "up"},
+    Returns:
+        datetime: Fixed reference time in UTC.
+    """
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    clock = type("Clock", (), {"now": staticmethod(lambda: now)})
+    monkeypatch.setattr(aiopnsense_vpn, "datetime", clock)
+    return now
+
+
+@pytest.mark.parametrize(
+    "handshake_age",
+    [
+        pytest.param(timedelta(seconds=30), id="fresh-handshake"),
+        pytest.param(timedelta(minutes=10), id="stale-handshake"),
+        pytest.param(None, id="empty-summary"),
+    ],
+)
+async def test_get_wireguard_reports_live_details_for_each_configured_view(
+    make_client: ClientType, wireguard_now: datetime, handshake_age: timedelta | None
+) -> None:
+    """Keep live status on the matching link and retain the idle link in both views.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+        wireguard_now (datetime): Fixed reference time for handshake status.
+        handshake_age (timedelta | None): Age of the reported handshake, or no summary rows.
+    """
+    handshake = wireguard_now - handshake_age if handshake_age is not None else None
+    endpoint = "192.0.2.1:51820"
+    rows: list[dict[str, Any]] = []
+    if handshake is not None:
+        rows = [
+            {"type": "interface", "public-key": "server-key-1", "status": "up"},
             {
                 "type": "peer",
-                "public-key": "cpk",
+                "public-key": "client-key",
                 "if": "wg1",
-                "latest-handshake": old_handshake,
-                "transfer-rx": "1",
-                "transfer-tx": "2",
+                "endpoint": endpoint,
+                "transfer-rx": "100",
+                "transfer-tx": "250",
+                "latest-handshake": int(handshake.timestamp()),
             },
         ]
+    client_config = {
+        "name": "Client",
+        "pubkey": "client-key",
+        "servers": {
+            "server-1": {"selected": "1", "value": "Server 1"},
+            "server-2": {"selected": "1", "value": "Server 2"},
+        },
     }
-    clients_resp = {
-        "client": {
-            "clients": {
-                "client": {
-                    "c1": {
-                        "name": "client1",
-                        "pubkey": "cpk",
-                        "enabled": 1,
-                        "tunneladdress": {},
-                        "servers": {"s1": {"selected": "1", "value": "srv1"}},
-                    }
-                }
-            }
-        }
-    }
-    servers_resp = {
-        "server": {
-            "servers": {
-                "server": {
-                    "s1": {
-                        "name": "srv1",
-                        "pubkey": "spk",
-                        "enabled": 1,
-                        "instance": "1",
-                        "tunneladdress": {"0": {"selected": "1", "value": "10.0.0.1"}},
-                        "peers": {"c1": {"selected": "1", "value": "client1"}},
-                    }
-                }
-            }
-        }
+    server_config = {
+        "server-1": {
+            "name": "Server 1",
+            "pubkey": "server-key-1",
+            "instance": "1",
+            "peers": {"client-uuid": {"selected": "1", "value": "Client"}},
+        },
+        "server-2": {
+            "name": "Server 2",
+            "pubkey": "server-key-2",
+            "instance": "2",
+            "peers": {"client-uuid": {"selected": "1", "value": "Client"}},
+        },
     }
     client, router = make_vpn_router(
         make_client,
-        wireguard_routes(summary=summary_resp, clients=clients_resp, servers=servers_resp),
+        wireguard_routes(
+            summary={"rows": rows},
+            clients={"client": {"clients": {"client": {"client-uuid": client_config}}}},
+            servers={"server": {"servers": {"server": server_config}}},
+        ),
     )
 
-    wg = await client.get_wireguard()
+    result = await client.get_wireguard()
 
-    assert wg is not None
-    assert "servers" in wg and "clients" in wg and wg["servers"]["s1"]["uuid"] == "s1"
-    # client peer should reflect disconnected (old handshake)
-    assert wg["clients"]["c1"].get("connected_servers") == 0
+    assert result is not None
+    server_1 = result["servers"]["server-1"]
+    server_2 = result["servers"]["server-2"]
+    configured_client = result["clients"]["client-uuid"]
+    assert server_1["uuid"] == "server-1"
+    assert server_2["uuid"] == "server-2"
+    assert configured_client["uuid"] == "client-uuid"
 
-    # Invalid summary must not report configured peers as disconnected.
+    connected = handshake_age == timedelta(seconds=30)
+    recv, sent = (100, 250) if handshake is not None else (0, 0)
+    server_1_links = {link["uuid"]: link for link in server_1["clients"]}
+    server_2_links = {link["uuid"]: link for link in server_2["clients"]}
+    client_links = {link["uuid"]: link for link in configured_client["servers"]}
+    assert list(client_links) == ["server-1", "server-2"]
+    for link in (server_1_links["client-uuid"], client_links["server-1"]):
+        assert link["connected"] is connected
+        if handshake is not None:
+            assert link["endpoint"] == endpoint
+            assert link["bytes_recv"] == 100
+            assert link["bytes_sent"] == 250
+            assert link["latest_handshake"] == handshake
+        else:
+            assert {"endpoint", "bytes_recv", "bytes_sent", "latest_handshake"}.isdisjoint(link)
+
+    for link in (server_2_links["client-uuid"], client_links["server-2"]):
+        assert link["connected"] is False
+        assert {"endpoint", "bytes_recv", "bytes_sent", "latest_handshake"}.isdisjoint(link)
+
+    assert server_1["connected_clients"] == int(connected)
+    assert configured_client["connected_servers"] == int(connected)
+    for parent in (server_1, configured_client):
+        assert parent["total_bytes_recv"] == recv
+        assert parent["total_bytes_sent"] == sent
+        assert parent.get("latest_handshake") == (handshake if connected else None)
+    assert server_1.get("status") == ("up" if handshake is not None else None)
+    assert server_2["connected_clients"] == 0
+    assert server_2["total_bytes_recv"] == 0
+    assert server_2["total_bytes_sent"] == 0
+    assert server_2.get("latest_handshake") is None
+
     router.routes[("GET", WIREGUARD_SUMMARY_PATH)] = {"rows": {}}
     assert await client.get_wireguard() is None
+
+
+@pytest.mark.parametrize("selecting_view", ["servers", "clients"])
+async def test_get_wireguard_enriches_one_sided_links(
+    make_client: ClientType, wireguard_now: datetime, selecting_view: str
+) -> None:
+    """Enrich only links selected by each view and ignore unmatched rows.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+        wireguard_now (datetime): Fixed reference time for handshake status.
+        selecting_view (str): Parent inventory that selected the link.
+    """
+    handshake = wireguard_now - timedelta(seconds=30)
+    peer_row = {
+        "type": "peer",
+        "public-key": "client-key",
+        "if": "wg1",
+        "endpoint": "192.0.2.1:51820",
+        "transfer-rx": "35",
+        "transfer-tx": "80",
+        "latest-handshake": int(handshake.timestamp()),
+    }
+    client_config = {
+        "pubkey": "client-key",
+        "servers": {
+            "server-uuid": {"selected": str(int(selecting_view == "clients")), "value": "Server"}
+        },
+    }
+    server_config = {
+        "name": "Server",
+        "instance": "1",
+        "peers": {
+            "client-uuid": {"selected": str(int(selecting_view == "servers")), "value": "Client"}
+        },
+    }
+    client, _router = make_vpn_router(
+        make_client,
+        wireguard_routes(
+            summary={"rows": [peer_row, {**peer_row, "public-key": "unconfigured-client"}]},
+            clients={"client": {"clients": {"client": {"client-uuid": client_config}}}},
+            servers={"server": {"servers": {"server": {"server-uuid": server_config}}}},
+        ),
+    )
+
+    result = await client.get_wireguard()
+
+    assert result is not None
+    for parent_view, parent_uuid, link_view, link_uuid in (
+        ("servers", "server-uuid", "clients", "client-uuid"),
+        ("clients", "client-uuid", "servers", "server-uuid"),
+    ):
+        parent = result[parent_view][parent_uuid]
+        links = {link["uuid"]: link for link in parent[link_view]}
+        if selecting_view == parent_view:
+            assert list(links) == [link_uuid]
+            link = links[link_uuid]
+            assert link["endpoint"] == "192.0.2.1:51820"
+            assert link["bytes_recv"] == 35
+            assert link["bytes_sent"] == 80
+            assert link["latest_handshake"] == handshake
+            assert link["connected"] is True
+            assert parent[f"connected_{link_view}"] == 1
+            assert parent["total_bytes_recv"] == 35
+            assert parent["total_bytes_sent"] == 80
+            assert parent["latest_handshake"] == handshake
+        else:
+            assert links == {}
+            assert parent[f"connected_{link_view}"] == 0
+            assert parent["total_bytes_recv"] == 0
+            assert parent["total_bytes_sent"] == 0
+            assert parent.get("latest_handshake") is None
+
+
+async def test_get_wireguard_retains_duplicate_and_incomplete_links(
+    make_client: ClientType,
+) -> None:
+    """Preserve matches for duplicate interfaces and equality of malformed JSON keys.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+    """
+    client_config = {
+        "pubkey": ["malformed", {"number": 1}],
+        "servers": {
+            "server-1": {"selected": "1", "value": "Server 1"},
+            "server-2": {"selected": "1", "value": "Server 2"},
+            "missing-server": {"selected": "1", "value": "Missing server"},
+        },
+    }
+    server_config = {
+        "instance": "1",
+        "peers": {
+            "client-uuid": {"selected": "1", "value": "Client"},
+            "missing-client": {"selected": "1", "value": "Missing client"},
+        },
+    }
+    row = {
+        "type": "peer",
+        "public-key": ["malformed", {"number": True}],
+        "if": "wg1",
+        "transfer-rx": "15",
+        "transfer-tx": "20",
+    }
+    client, _router = make_vpn_router(
+        make_client,
+        wireguard_routes(
+            summary={"rows": [row, {**row, "if": ["wg1"]}]},
+            clients={"client": {"clients": {"client": {"client-uuid": client_config}}}},
+            servers={
+                "server": {
+                    "servers": {
+                        "server": {
+                            "server-1": {**server_config, "name": "Server 1"},
+                            "server-2": {**server_config, "name": "Server 2"},
+                        },
+                    }
+                }
+            },
+        ),
+    )
+
+    result = await client.get_wireguard()
+
+    assert result is not None
+    for server_uuid in ("server-1", "server-2"):
+        server = result["servers"][server_uuid]
+        assert (server["total_bytes_recv"], server["total_bytes_sent"]) == (15, 20)
+        assert [link["uuid"] for link in server["clients"]] == ["client-uuid", "missing-client"]
+        active, missing = server["clients"]
+        assert (active["bytes_recv"], active["bytes_sent"]) == (15, 20)
+        assert missing == {
+            "uuid": "missing-client",
+            "name": "Missing client",
+            "pubkey": None,
+            "connected": False,
+        }
+
+    configured_client = result["clients"]["client-uuid"]
+    assert (configured_client["total_bytes_recv"], configured_client["total_bytes_sent"]) == (
+        30,
+        40,
+    )
+    assert [link["uuid"] for link in configured_client["servers"]] == [
+        "server-1",
+        "server-2",
+        "missing-server",
+    ]
+    first, second, missing = configured_client["servers"]
+    for link in (first, second):
+        assert (link["bytes_recv"], link["bytes_sent"]) == (15, 20)
+    assert missing == {"uuid": "missing-server", "name": "Missing server", "connected": False}
 
 
 @pytest.mark.parametrize("malformed_inventory", ["clients", "servers"])
