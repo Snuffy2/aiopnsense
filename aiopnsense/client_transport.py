@@ -429,13 +429,11 @@ class ClientTransportMixin:
         path: str,
         caller: str = "Unknown",
         timeout_seconds: float | None = None,
-    ) -> MutableMapping[str, Any] | list | None:
+    ) -> MutableMapping[str, Any] | list | str | None:
         """Execute a plain GET request immediately without queueing.
 
-        A thin layer over ``_request_outcome`` in ``PLAIN`` form: it returns the
-        payload of a ``DATA`` outcome and otherwise applies the ``throw_errors``
-        policy to the outcome's error. A 404 is a failed request here, reported with
-        its reason, unlike the unreported absent outcome of ``_do_get_outcome``.
+        ``_request_outcome`` reports failures and applies ``throw_errors`` in
+        ``PLAIN`` form. A plain 404 is reported with its reason.
 
         Args:
             path (str): API endpoint path to request.
@@ -443,7 +441,7 @@ class ClientTransportMixin:
             timeout_seconds (float | None, optional): Request timeout in seconds for this call.
 
         Returns:
-            MutableMapping[str, Any] | list | None: Decoded response payload
+            MutableMapping[str, Any] | list | str | None: Decoded response payload
                 returned by the GET request, or ``None`` after a logged failure.
                 When ``throw_errors`` is enabled, an HTTP or transport failure is
                 raised as the mapped public ``OPNsenseError`` instead.
@@ -456,21 +454,6 @@ class ClientTransportMixin:
             form=_RequestKind.PLAIN,
             timeout_seconds=timeout_seconds,
         )
-        return self._plain_result(outcome)
-
-    def _plain_result(self, outcome: _EndpointOutcome) -> Any:
-        """Convert the outcome of a plain request to its payload or empty value.
-
-        Args:
-            outcome (_EndpointOutcome): Outcome of a ``PLAIN`` request.
-
-        Returns:
-            Any: The decoded JSON payload of a ``DATA`` outcome, unchanged, or ``None``
-                after a logged failure. When ``throw_errors`` is enabled, the outcome's
-                already-reported error is raised instead.
-        """
-        if outcome.error is not None:
-            _raise_if_throwing(self, outcome.error, outcome.error.__cause__)
         return outcome.payload
 
     async def _request_outcome(
@@ -488,22 +471,16 @@ class ClientTransportMixin:
     ) -> _EndpointOutcome:
         """Execute a non-streaming request immediately and classify the response.
 
-        The one request body of the transport. ``_do_get`` and ``_do_post`` call it in
-        ``PLAIN`` form and convert the outcome to a payload, an exception or ``None``;
-        ``_do_get_outcome`` and ``_do_post_outcome`` call it in ``OUTCOME`` form. The
-        form alone selects the operation name (``do_<method>`` or
-        ``do_<method>_outcome``) and the treatment of HTTP 404:
+        The form selects the operation name (``do_<method>`` or
+        ``do_<method>_outcome``) and how failures are delivered:
 
-        - ``OUTCOME``: a 404 is returned as an unreported ``ABSENT`` outcome with no
-          error. Outage state is neither set nor cleared.
-        - ``PLAIN``: a 404 is a failed request. It goes through the failure reporter
-          while the response reason is available and is returned as an ``ABSENT``
-          outcome carrying the reported error.
+        - ``OUTCOME`` returns failures as outcomes. A 404 is unreported and returns
+          ``ABSENT`` with no error. Outage state is neither set nor cleared.
+        - ``PLAIN`` reports every HTTP failure, including 404, and applies
+          ``throw_errors`` before response cleanup can suspend. It also applies
+          the policy after reporting a transport error.
 
-        Any other failed HTTP response or transport error is logged by the shared
-        request reporter and returned as an outcome instead of being raised. The body
-        never reads the ``throw_errors`` policy; the plain layer raises. Undecodable
-        response bodies propagate to the queue worker.
+        Undecodable response bodies propagate to the queue worker.
 
         Args:
             method (Literal["GET", "POST"]): HTTP method to send.
@@ -527,6 +504,7 @@ class ClientTransportMixin:
                 ``read_body`` is ``False``) for a successful response, ``ABSENT`` for a
                 404 or 403 response (with no error for an ``OUTCOME`` 404), and
                 ``TRANSIENT`` for any other HTTP status, timeout or client error.
+                A failed plain request raises the reported error in throw mode.
         """
         url: str = f"{self._url}{path}"
         method_name: Literal["get", "post"] = "get" if method == "GET" else "post"
@@ -556,6 +534,8 @@ class ClientTransportMixin:
                         reason=response.reason,
                         caller=caller,
                     )
+                    if form == _RequestKind.PLAIN:
+                        _raise_if_throwing(self, http_error)
                     return _EndpointOutcome.from_http_error(response.status, http_error)
                 if not read_body:
                     body = None
@@ -576,7 +556,9 @@ class ClientTransportMixin:
                 caller=caller,
             )
             transport_error.__cause__ = e
-            return _EndpointOutcome.transient(transport_error)
+        if form == _RequestKind.PLAIN:
+            _raise_if_throwing(self, transport_error, transport_error.__cause__)
+        return _EndpointOutcome.transient(transport_error)
 
     async def _do_get_outcome(
         self,
@@ -670,12 +652,11 @@ class ClientTransportMixin:
 
     async def _do_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
-    ) -> MutableMapping[str, Any] | list | None:
+    ) -> MutableMapping[str, Any] | list | str | None:
         """Execute a plain POST request immediately without queueing.
 
-        A thin layer over ``_request_outcome`` in ``PLAIN`` form, converting its
-        outcome as ``_do_get`` does. A 404 is a failed request here, reported with its
-        reason, unlike the unreported absent outcome of ``_do_post_outcome``.
+        ``_request_outcome`` reports failures and applies ``throw_errors`` in
+        ``PLAIN`` form. A plain 404 is reported with its reason.
 
         Args:
             path (str): API endpoint path to request.
@@ -683,7 +664,7 @@ class ClientTransportMixin:
             caller (str): Caller name used for diagnostics and logging.
 
         Returns:
-            MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request,
+            MutableMapping[str, Any] | list | str | None: Decoded response payload returned by the POST request,
                 or ``None`` after a logged failure. When ``throw_errors`` is enabled,
                 an HTTP or transport failure is raised as the mapped public
                 ``OPNsenseError`` instead.
@@ -692,7 +673,7 @@ class ClientTransportMixin:
         outcome = await self._request_outcome(
             "POST", path, caller, payload, form=_RequestKind.PLAIN
         )
-        return self._plain_result(outcome)
+        return outcome.payload
 
     async def _do_post_outcome(
         self,

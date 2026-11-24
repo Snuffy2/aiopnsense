@@ -1514,6 +1514,57 @@ def _failure_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord
     return [record for record in caplog.records if record.levelno >= logging.WARNING]
 
 
+@pytest.mark.parametrize("initial_throw", [False, True], ids=["enable", "disable"])
+async def test_plain_http_failure_decides_throw_mode_before_response_cleanup(
+    initial_throw: bool, make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Keep response cleanup from changing the transport's error decision or log.
+
+    Args:
+        initial_throw (bool): Throw mode when the Router responds.
+        make_client (MakeClientFactory): Client factory fixture.
+        caplog (pytest.LogCaptureFixture): Captures the client's logs.
+    """
+
+    class _ModeChangingResponse(FakeResponse):
+        """Model a mode change while aiohttp is finishing the request."""
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            """Change the client's throw mode during response cleanup.
+
+            Args:
+                exc_type (type[BaseException] | None): Exception type from the response body.
+                exc (BaseException | None): Exception from the response body.
+                tb (TracebackType | None): Traceback from the response body.
+
+            Returns:
+                bool: False so the response does not suppress an exception.
+            """
+            client.toggle_throwing_errors(not initial_throw)
+            return await super().__aexit__(exc_type, exc, tb)
+
+    path = "/api/wol/wol/set"
+    response = _ModeChangingResponse(status=404, reason="Not Found", ok=False)
+    client, router = make_router_client(
+        make_client, {("POST", path): response}, throw_errors=initial_throw
+    )
+
+    result = await client.send_wol("lan", "02:00:00:00:00:01")
+
+    # The public wrapper still uses the current mode if the transport raised.
+    assert result is (None if initial_throw else False)
+    assert router.count("POST", path) == 1
+    failures = _failure_records(caplog)
+    assert [record.getMessage() for record in failures] == [
+        f"Error in do_post (called by send_wol). Path: http://localhost{path}. Response 404: Not Found"
+    ]
+
+
 @pytest.mark.parametrize("throw_errors", [False, True], ids=["empty", "throw"])
 @pytest.mark.parametrize("method", ["get", "post"])
 @pytest.mark.parametrize("form", ["plain", "outcome"])
