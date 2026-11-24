@@ -195,6 +195,49 @@ async def test_get_opnsense_timezone_parse_and_fallback(make_client: ClientType)
 
 
 @pytest.mark.parametrize(
+    ("firmware", "time_path", "other_path"),
+    [
+        pytest.param(
+            SNAKE_CASE_FIRMWARE,
+            "/api/diagnostics/system/system_time",
+            "/api/diagnostics/system/systemTime",
+            id="snake-case-firmware",
+        ),
+        pytest.param(
+            CAMEL_CASE_FIRMWARE,
+            "/api/diagnostics/system/systemTime",
+            "/api/diagnostics/system/system_time",
+            id="camel-case-firmware",
+        ),
+    ],
+)
+async def test_get_opnsense_timezone_reads_time_endpoint_of_firmware_style(
+    make_client: ClientType, firmware: str, time_path: str, other_path: str
+) -> None:
+    """Verify the timezone lookup reads the system-time endpoint of the firmware's style.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        firmware (str): Firmware version the Router reports.
+        time_path (str): System-time path the firmware serves.
+        other_path (str): System-time path of the other Endpoint Style, which 404s.
+    """
+    client, router = make_router_client(
+        make_client,
+        {("GET", time_path): {"datetime": "2026-03-07 12:00:00 EST"}},
+        firmware=firmware,
+    )
+
+    parsed_tz = await client._get_opnsense_timezone()
+
+    assert parsed_tz.utcoffset(datetime(2026, 3, 7, 12, 0, 0, tzinfo=parsed_tz)) == timedelta(
+        hours=-5
+    )
+    assert router.count("GET", time_path) == 1
+    assert router.count("GET", other_path) == 0
+
+
+@pytest.mark.parametrize(
     "time_reply",
     [
         pytest.param(aiohttp.ClientConnectionError("transient fetch error"), id="transport-error"),
