@@ -36,7 +36,9 @@ _DEFAULT_SCOPED_ERRORS: tuple[type[Exception], ...] = (
     TypeError,
 )
 
-_STRICT_ERROR_CLIENT: ContextVar[object | None] = ContextVar("_STRICT_ERROR_CLIENT", default=None)
+_STRICT_ERROR_OWNER: ContextVar[tuple[object, asyncio.Task[Any] | None] | None] = ContextVar(
+    "_STRICT_ERROR_OWNER", default=None
+)
 
 
 class _ThrowErrorsClient(Protocol):
@@ -47,7 +49,7 @@ class _ThrowErrorsClient(Protocol):
 
 @contextmanager
 def _strict_error_scope(client: object | None) -> Iterator[None]:
-    """Scope the strict override to one client in the current context.
+    """Scope the strict override to one client in the current task.
 
     Args:
         client (object | None): Client to make strict, or ``None`` to clear the override.
@@ -55,11 +57,12 @@ def _strict_error_scope(client: object | None) -> Iterator[None]:
     Yields:
         None: The override stays in effect until the scope exits.
     """
-    token = _STRICT_ERROR_CLIENT.set(client)
+    owner = (client, asyncio.current_task()) if client is not None else None
+    token = _STRICT_ERROR_OWNER.set(owner)
     try:
         yield
     finally:
-        _STRICT_ERROR_CLIENT.reset(token)
+        _STRICT_ERROR_OWNER.reset(token)
 
 
 def _has_strict_error_override(client: object) -> bool:
@@ -69,9 +72,11 @@ def _has_strict_error_override(client: object) -> bool:
         client (object): Client whose override is being checked.
 
     Returns:
-        bool: Whether this context forces the client to raise errors.
+        bool: Whether this task forces the client to raise errors.
     """
-    return _STRICT_ERROR_CLIENT.get() is client
+    owner = _STRICT_ERROR_OWNER.get()
+    # New tasks inherit the context, but do not own the operation.
+    return owner is not None and owner[0] is client and owner[1] is asyncio.current_task()
 
 
 def _handle_error(

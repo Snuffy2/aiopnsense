@@ -75,6 +75,43 @@ async def test_validation_does_not_change_service_failure_policy(
     assert router.paths("POST") == []
 
 
+async def test_session_callback_task_keeps_default_after_validation(
+    make_client: MakeClientFactory,
+) -> None:
+    """A session callback can schedule ordinary polling during a validation request.
+
+    Args:
+        make_client (MakeClientFactory): Factory for clients with real queue workers.
+    """
+    client, router = make_router_client(make_client, {("GET", _SERVICE_SEARCH): 503})
+    validation_finished = asyncio.Event()
+
+    async def poll_after_validation() -> None:
+        """Run a service search independently after validation returns."""
+        await validation_finished.wait()
+        assert await client.get_services() == []
+
+    async with asyncio.timeout(3), asyncio.TaskGroup() as tasks:
+
+        def firmware_reply(**_request: object) -> dict[str, dict[str, str]]:
+            """Schedule the poll in the request callback and return firmware status.
+
+            Args:
+                _request (object): Unused request parameters.
+
+            Returns:
+                dict[str, dict[str, str]]: Firmware status reported by the Router.
+            """
+            tasks.create_task(poll_after_validation())
+            return {"product": {"product_version": OPNSENSE_RECOMMENDED_FIRMWARE}}
+
+        router.routes[("GET", _FIRMWARE_STATUS)] = firmware_reply
+        await client.validate(require_device_id=False)
+        validation_finished.set()
+
+    assert router.count("GET", _SERVICE_SEARCH) == 1
+
+
 @pytest.mark.parametrize("cancel", [False, True], ids=["completion", "cancellation"])
 async def test_default_change_survives_validation(
     make_client: MakeClientFactory, *, cancel: bool
