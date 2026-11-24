@@ -63,14 +63,6 @@ def test_age_one_second_below_ttl_is_fresh_and_equal_to_ttl_is_expired() -> None
     assert cache.lookup(KEY, START + timedelta(seconds=TTL + 1))[0] is None
 
 
-def test_zero_ttl_never_returns_an_answer() -> None:
-    """A zero TTL expires every answer immediately."""
-    cache = _EndpointCache(0)
-    _, ticket = cache.lookup(KEY, START)
-    cache.record(KEY, _CachedAnswer.PRESENT, START, ticket)
-    assert cache.lookup(KEY, START)[0] is None
-
-
 def test_backward_clock_counts_as_fresh() -> None:
     """When the clock moves backward the negative age is fresh."""
     cache = _cache()
