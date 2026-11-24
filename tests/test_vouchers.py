@@ -8,7 +8,7 @@ import pytest
 import aiopnsense as aiopnsense_module
 from aiopnsense import OPNsenseClient
 from aiopnsense.exceptions import OPNsenseConnectionError
-from tests.conftest import make_router_client
+from tests.conftest import SequencedResponse, firmware_status_payload, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -267,3 +267,27 @@ async def test_generate_vouchers_request_sequence(
             ("POST", generate_path),
         ]
     assert router.calls() == expected
+
+
+async def test_generate_vouchers_when_endpoint_style_becomes_known(
+    make_client: ClientType,
+) -> None:
+    """Keep the provider and generate paths in their original resolution order.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    firmware_read = ("GET", "/api/core/firmware/status")
+    provider_read = ("GET", "/api/captiveportal/voucher/list_providers")
+    generate = ("POST", "/api/captiveportal/voucher/generateVouchers/srv/")
+    client, router = make_router_client(
+        make_client,
+        {
+            firmware_read: SequencedResponse({}, firmware_status_payload(CAMELCASE_FIRMWARE)),
+            provider_read: ["srv"],
+            generate: [{"username": "voucher"}],
+        },
+    )
+
+    assert await client.generate_vouchers({}) == [{"username": "voucher"}]
+    assert router.calls() == [firmware_read, firmware_read, provider_read, generate]

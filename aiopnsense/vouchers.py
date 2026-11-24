@@ -43,13 +43,17 @@ class VouchersMixin(AiopnsenseClientProtocol):
                 errors disabled, the provider list is empty, or the request omits
                 a server while multiple servers are available.
         """
+        server = data.get("voucher_server")
+        providers_endpoint = None
+        if not server:
+            # Resolve in this order so a firmware read that recovers on the second
+            # attempt still selects the same path for each request.
+            providers_endpoint = await self._resolve_endpoint(VOUCHER_LIST_PROVIDERS_ENDPOINT)
         generate_vouchers_endpoint = await self._resolve_endpoint(
             VOUCHER_GENERATE_VOUCHERS_ENDPOINT
         )
-        if data.get("voucher_server", None):
-            server = data.get("voucher_server")
-        else:
-            providers_outcome = await self._fetch_endpoint_outcome(VOUCHER_LIST_PROVIDERS_ENDPOINT)
+        if providers_endpoint is not None:
+            providers_outcome = await self._fetch_endpoint_outcome(providers_endpoint)
             if providers_outcome.is_transient:
                 raise OPNsenseVoucherServerError(
                     "Could not retrieve voucher servers"
