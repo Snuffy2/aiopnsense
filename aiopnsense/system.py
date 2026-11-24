@@ -28,7 +28,10 @@ from .helpers import (
     try_to_int,
 )
 
-SYSTEM_TIME_ENDPOINT = "/api/diagnostics/system/system_time"
+SYSTEM_TIME_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/diagnostics/system/system_time",
+    camel_case="/api/diagnostics/system/systemTime",
+)
 INTERFACE_OVERVIEW_EXPORT_ENDPOINT = "/api/interfaces/overview/export"
 SYSTEM_INFORMATION_ENDPOINT = _StyledEndpoint(
     snake_case="/api/diagnostics/system/system_information",
