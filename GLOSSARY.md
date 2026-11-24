@@ -7,7 +7,7 @@ An async client library that reads state from, and triggers supported actions on
 ### Network devices
 
 **Router**:
-The OPNsense appliance that the library connects to and manages. **Firewall** is an equally acceptable name for it, and the one hass-opnsense uses.
+The OPNsense appliance that the library connects to and manages. **Firewall** is an equally acceptable name for it.
 _Avoid_: Device, box
 
 **Firewall Rule**:
