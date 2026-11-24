@@ -28,8 +28,10 @@ from .helpers import (
     try_to_int,
 )
 
-SYSTEM_TIME_SNAKE_ENDPOINT = "/api/diagnostics/system/system_time"
-SYSTEM_TIME_CAMELCASE_ENDPOINT = "/api/diagnostics/system/systemTime"
+SYSTEM_TIME_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/diagnostics/system/system_time",
+    camel_case="/api/diagnostics/system/systemTime",
+)
 INTERFACE_OVERVIEW_EXPORT_ENDPOINT = "/api/interfaces/overview/export"
 SYSTEM_INFORMATION_ENDPOINT = _StyledEndpoint(
     snake_case="/api/diagnostics/system/system_information",
@@ -510,11 +512,7 @@ class SystemMixin(AiopnsenseClientProtocol):
         """
         if datetime_str is None:
             try:
-                time_endpoint = await self._get_endpoint_path(
-                    snake_case_path=SYSTEM_TIME_SNAKE_ENDPOINT,
-                    camel_case_path=SYSTEM_TIME_CAMELCASE_ENDPOINT,
-                )
-                time_outcome = await self._fetch_endpoint_outcome(time_endpoint)
+                time_outcome = await self._fetch_endpoint_outcome(SYSTEM_TIME_ENDPOINT)
                 if not time_outcome.is_data:
                     _LOGGER.debug("System time endpoint unavailable for timezone resolution")
                     return None
