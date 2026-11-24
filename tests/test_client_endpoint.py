@@ -692,7 +692,7 @@ async def test_absent_endpoint_is_cached_until_ttl_expires(
         assert await client.get_nut_ups_status() == {}
         assert router.count("GET", NUT_PATH) == 1
 
-        # Age the cached answer to exactly the TTL, at which it is expired.
+        # Age the cached answer past the TTL, so it is expired.
         cache = client._endpoint_cache
         now = datetime.now().astimezone()
         answer, ticket = cache.lookup(NUT_PATH, now)
