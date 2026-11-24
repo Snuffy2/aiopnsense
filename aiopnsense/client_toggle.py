@@ -15,6 +15,7 @@ from functools import cached_property
 import logging
 from typing import Any, Literal
 
+from ._styled_endpoint import _EndpointPath, _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .exceptions import OPNsenseInvalidArgument
 from .helpers import _LOGGER
@@ -63,46 +64,52 @@ class ToggleStep:
     value is a string that, stripped and lower-cased, starts with ``ok``.
 
     Attributes:
-        endpoint: API path to request (the snake_case path when the endpoint name
-            depends on the firmware).
+        endpoint: API path to request, or a styled endpoint that resolves to the path
+            for the Router's Endpoint Style.
         response_key: Key of the response mapping that reports the outcome.
         accepted_results: Exact values that mean success, or ``None`` for the apply rule.
         method: HTTP method of the request.
         payload: POST body, if any.
-        camel_case_endpoint: API path on older camelCase firmware, or ``None`` when
-            ``endpoint`` is the same on every firmware.
         failure_log_level: Log level for an unconfirmed response.
     """
 
-    endpoint: str
+    endpoint: _EndpointPath
     response_key: str
     accepted_results: frozenset[str] | None = None
     method: Literal["GET", "POST"] = "POST"
     payload: MutableMapping[str, Any] | None = None
-    camel_case_endpoint: str | None = None
     failure_log_level: int = logging.DEBUG
+
+    @property
+    def log_endpoint(self) -> str:
+        """Return the endpoint as plain text for log messages.
+
+        Returns:
+            str: ``endpoint`` for a plain path, or the snake_case spelling of a styled
+                endpoint.
+        """
+        if isinstance(self.endpoint, _StyledEndpoint):
+            return self.endpoint.snake_case
+        return self.endpoint
 
     @classmethod
     def save(
         cls,
-        endpoint: str,
+        endpoint: _EndpointPath,
         accepted_results: frozenset[str],
         *,
         response_key: str = TOGGLE_RESULT_KEY,
         payload: MutableMapping[str, Any] | None = None,
-        camel_case_endpoint: str | None = None,
         failure_log_level: int = logging.DEBUG,
     ) -> ToggleStep:
         """Describe a POST that saves a change.
 
         Args:
-            endpoint (str): API path to POST (the snake_case path when
-                ``camel_case_endpoint`` is given).
+            endpoint (_EndpointPath): API path to POST, or a styled endpoint.
             accepted_results (frozenset[str]): Values of ``response_key`` that confirm
                 the save.
             response_key (str): Key that reports the outcome.
             payload (MutableMapping[str, Any] | None): POST body, if any.
-            camel_case_endpoint (str | None): API path on older camelCase firmware.
             failure_log_level (int): Log level for an unconfirmed response.
 
         Returns:
@@ -114,14 +121,13 @@ class ToggleStep:
             accepted_results,
             "POST",
             payload,
-            camel_case_endpoint,
             failure_log_level,
         )
 
     @classmethod
     def apply(
         cls,
-        endpoint: str,
+        endpoint: _EndpointPath,
         *,
         response_key: str = "status",
         method: Literal["GET", "POST"] = "POST",
@@ -131,7 +137,7 @@ class ToggleStep:
         """Describe a request that makes a saved change take effect.
 
         Args:
-            endpoint (str): API path to request.
+            endpoint (_EndpointPath): API path to request, or a styled endpoint.
             response_key (str): Key that reports the outcome.
             method (Literal["GET", "POST"]): HTTP method.
             payload (MutableMapping[str, Any] | None): POST body, if any.
@@ -145,21 +151,17 @@ class ToggleStep:
         )
 
     @classmethod
-    def read(
-        cls, endpoint: str, response_key: str, *, camel_case_endpoint: str | None = None
-    ) -> ToggleStep:
+    def read(cls, endpoint: _EndpointPath, response_key: str) -> ToggleStep:
         """Describe a GET that reads an item before it is toggled.
 
         Args:
-            endpoint (str): API path to GET (the snake_case path when
-                ``camel_case_endpoint`` is given).
+            endpoint (_EndpointPath): API path to GET, or a styled endpoint.
             response_key (str): Key of the response that holds the item.
-            camel_case_endpoint (str | None): API path on older camelCase firmware.
 
         Returns:
             ToggleStep: The read step.
         """
-        return cls(endpoint, response_key, None, "GET", None, camel_case_endpoint)
+        return cls(endpoint, response_key, None, "GET")
 
     def succeeded(self, response: MutableMapping[str, Any]) -> bool:
         """Return whether the Router's response confirms this step.
@@ -298,7 +300,7 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
         Returns:
             MutableMapping[str, Any]: Response mapping; empty after a transport failure.
         """
-        endpoint = await self._resolve_toggle_endpoint(step)
+        endpoint = await self._resolve_endpoint(step.endpoint)
         if step.method == "GET":
             return await self._safe_dict_get(endpoint)
         return await self._safe_dict_post(endpoint, payload=step.payload)
@@ -329,26 +331,11 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
                         "[%s] %s step %s not confirmed for target %s",
                         spec.label,
                         phase,
-                        step.endpoint,
+                        step.log_endpoint,
                         spec.target,
                     )
                     return False
         return True
-
-    async def _resolve_toggle_endpoint(self, step: ToggleStep) -> str:
-        """Return the step's endpoint for the Router's firmware.
-
-        Args:
-            step (ToggleStep): Step whose endpoint to resolve.
-
-        Returns:
-            str: ``step.endpoint``, or its camelCase form on older firmware.
-        """
-        if step.camel_case_endpoint is None:
-            return step.endpoint
-        return await self._get_endpoint_path(
-            snake_case_path=step.endpoint, camel_case_path=step.camel_case_endpoint
-        )
 
     # VPN Toggles (ADR 0001): skip a matching apply, retry a known unapplied save,
     # serialise per service, and stop when the client closes.
@@ -424,7 +411,7 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
         (save_step,) = spec.save
         (apply_step,) = spec.apply
         pending = self._vpn_toggle_state.pending_apply[vpn.service]
-        endpoint = await self._resolve_toggle_endpoint(save_step)
+        endpoint = await self._resolve_endpoint(save_step.endpoint)
         if vpn.state_read is not None and spec.target is not ToggleTarget.FLIP:
             matches = await self._vpn_item_matches_target(
                 spec.label, vpn.state_read, spec.target, shutdown_generation
@@ -485,7 +472,7 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
         item = response.get(step.response_key)
         enabled = item.get("enabled") if isinstance(item, MutableMapping) else None
         if enabled not in ("0", "1"):
-            _LOGGER.debug("[%s] item state unavailable: %s", label, step.endpoint)
+            _LOGGER.debug("[%s] item state unavailable: %s", label, step.log_endpoint)
             return None
         return enabled == ("1" if target is ToggleTarget.ON else "0")
 
@@ -611,8 +598,9 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
             cancellation: The caller's ``asyncio.CancelledError``, re-raised after the
                 dispatched apply response was processed.
         """
+        endpoint = await self._resolve_endpoint(step.endpoint)
         response, cancellation = await self._safe_dict_post_with_cancellation(
-            step.endpoint, step.payload
+            endpoint, step.payload
         )
         succeeded = step.succeeded(response)
         if succeeded:
@@ -622,7 +610,7 @@ class ClientToggleMixin(AiopnsenseClientProtocol):
                 "[%s] %s apply %s not confirmed. response: %s",
                 label,
                 vpn.service,
-                step.endpoint,
+                step.log_endpoint,
                 response,
             )
         if cancellation is not None:

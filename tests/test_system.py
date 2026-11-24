@@ -1008,3 +1008,72 @@ async def test_system_switched_endpoints_follow_selected_case(
     assert router.count("GET", expected_info) == 1
     assert router.count("POST", expected_dismiss) == 1
     assert router.count("POST", expected_reload) == 1
+
+
+@pytest.mark.parametrize(
+    ("firmware", "dismiss_path"),
+    [
+        pytest.param(SNAKE_CASE_FIRMWARE, "/api/core/system/dismiss_status", id="snake_case"),
+        pytest.param(CAMEL_CASE_FIRMWARE, "/api/core/system/dismissStatus", id="camelCase"),
+        pytest.param(None, "/api/core/system/dismiss_status", id="unknown-firmware"),
+    ],
+)
+async def test_close_notice_all_reads_the_firmware_once(
+    make_client: ClientType, firmware: str | None, dismiss_path: str
+) -> None:
+    """Closing every notice reads the firmware once, however many notices it dismisses.
+
+    Unknown Firmware is asked again on every resolve, so a firmware read per
+    dismissed notice would show up here as a count above one.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        firmware (str | None): Firmware version the Router reports, ``None`` when it is unknown.
+        dismiss_path (str): Dismiss endpoint the Router is expected to receive.
+    """
+    notices = {key: {"message": key, "statusCode": 0} for key in ("n1", "n2", "n3")}
+    client, router = make_router_client(
+        make_client,
+        {("GET", CORE_STATUS_PATH): notices, ("POST", dismiss_path): {"status": "ok"}},
+        firmware=firmware,
+    )
+
+    assert await client.close_notice("all") is True
+
+    assert router.bodies("POST", dismiss_path) == [{"subject": key} for key in notices]
+    assert router.count("POST") == 3
+    assert router.count("GET", "/api/core/firmware/status") == 1
+
+
+@pytest.mark.parametrize(
+    ("firmware", "expected_path"),
+    [
+        pytest.param(
+            SNAKE_CASE_FIRMWARE, "/api/interfaces/overview/reload_interface/", id="snake_case"
+        ),
+        pytest.param(
+            CAMEL_CASE_FIRMWARE, "/api/interfaces/overview/reloadInterface/", id="camelCase"
+        ),
+    ],
+)
+@pytest.mark.parametrize("if_name", ["opt1", "vlan 0.100", "em0?x=1", "a%2Fb/../c"])
+async def test_reload_interface_sends_the_interface_name_verbatim(
+    make_client: ClientType, firmware: str, expected_path: str, if_name: str
+) -> None:
+    """The caller's interface name follows the endpoint prefix with no encoding added.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        firmware (str): Firmware version the Router reports.
+        expected_path (str): Reload endpoint prefix the Router is expected to receive.
+        if_name (str): Interface name handed to the client.
+    """
+    client, router = make_router_client(
+        make_client,
+        {("POST", f"{expected_path}{if_name}"): {"message": "OK reload"}},
+        firmware=firmware,
+    )
+
+    assert await client.reload_interface(if_name) is True
+
+    assert router.paths("POST") == [f"{expected_path}{if_name}"]

@@ -10,6 +10,7 @@ import aiohttp
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._error_policy import _log_errors, _raise_if_throwing
+from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import ToggleSpec, ToggleStep, ToggleTarget
 from .const import (
@@ -29,22 +30,30 @@ from .helpers import (
 
 SYSTEM_TIME_ENDPOINT = "/api/diagnostics/system/system_time"
 INTERFACE_OVERVIEW_EXPORT_ENDPOINT = "/api/interfaces/overview/export"
-SYSTEM_INFORMATION_SNAKE_ENDPOINT = "/api/diagnostics/system/system_information"
-SYSTEM_INFORMATION_CAMELCASE_ENDPOINT = "/api/diagnostics/system/systemInformation"
+SYSTEM_INFORMATION_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/diagnostics/system/system_information",
+    camel_case="/api/diagnostics/system/systemInformation",
+)
 CARP_VIP_STATUS_ENDPOINT = "/api/diagnostics/interface/get_vip_status"
 VIP_SETTINGS_ENDPOINT = "/api/interfaces/vip_settings/get"
 CORE_SYSTEM_REBOOT_ENDPOINT = "/api/core/system/reboot"
 CORE_SYSTEM_HALT_ENDPOINT = "/api/core/system/halt"
-CARP_STATUS_SNAKE_ENDPOINT = "/api/diagnostics/interface/_carp_status"
+CARP_STATUS_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/diagnostics/interface/_carp_status",
+    camel_case="/api/diagnostics/interface/CarpStatus",
+)
 CARP_STATUS_26_1_11_SNAKE_ENDPOINT = "/api/diagnostics/interface/carp_status"
-CARP_STATUS_CAMELCASE_ENDPOINT = "/api/diagnostics/interface/CarpStatus"
 CARP_MAINTENANCE_ENDPOINT_SUFFIX = "/maintenance"
 WOL_SET_ENDPOINT = "/api/wol/wol/set"
 CORE_SYSTEM_STATUS_ENDPOINT = "/api/core/system/status"
-CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT = "/api/core/system/dismiss_status"
-CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT = "/api/core/system/dismissStatus"
-INTERFACE_OVERVIEW_RELOAD_SNAKE_PREFIX = "/api/interfaces/overview/reload_interface/"
-INTERFACE_OVERVIEW_RELOAD_CAMELCASE_PREFIX = "/api/interfaces/overview/reloadInterface/"
+CORE_SYSTEM_DISMISS_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/core/system/dismiss_status",
+    camel_case="/api/core/system/dismissStatus",
+)
+INTERFACE_OVERVIEW_RELOAD_ENDPOINT_PREFIX = _StyledEndpoint(
+    snake_case="/api/interfaces/overview/reload_interface/",
+    camel_case="/api/interfaces/overview/reloadInterface/",
+)
 CERT_SEARCH_ENDPOINT = "/api/trust/cert/search"
 INTERFACE_ASSIGNMENT_GET_ITEM_ENDPOINT_PREFIX = "/api/interfaces/assignment/get_item/"
 INTERFACE_ASSIGNMENT_SET_ITEM_ENDPOINT_PREFIX = "/api/interfaces/assignment/set_item/"
@@ -583,11 +592,7 @@ class SystemMixin(AiopnsenseClientProtocol):
             dict[str, Any]: Mapping containing the OPNsense host ``name`` when
                 the system-information endpoint is available.
         """
-        system_information_endpoint = await self._get_endpoint_path(
-            snake_case_path=SYSTEM_INFORMATION_SNAKE_ENDPOINT,
-            camel_case_path=SYSTEM_INFORMATION_CAMELCASE_ENDPOINT,
-        )
-        system_information_outcome = await self._fetch_endpoint_outcome(system_information_endpoint)
+        system_information_outcome = await self._fetch_endpoint_outcome(SYSTEM_INFORMATION_ENDPOINT)
         if not system_information_outcome.is_data:
             _LOGGER.debug("System information endpoint unavailable")
             return {}
@@ -756,12 +761,11 @@ class SystemMixin(AiopnsenseClientProtocol):
         Returns:
             bool: True when the operation succeeds; otherwise, False.
         """
-        carp_status_endpoint = await self._get_endpoint_path(
-            CARP_STATUS_SNAKE_ENDPOINT,
-            CARP_STATUS_CAMELCASE_ENDPOINT,
-        )
+        # Resolve explicitly: the path is compared with the snake_case spelling before the
+        # second capability is asked, so the capability order must be preserved.
+        carp_status_endpoint = await self._resolve_endpoint(CARP_STATUS_ENDPOINT)
         if (
-            carp_status_endpoint == CARP_STATUS_SNAKE_ENDPOINT
+            carp_status_endpoint == CARP_STATUS_ENDPOINT.snake_case
             and await self._firmware_capability_enabled(NEW_CARP_STATUS_ENDPOINT_CAPABILITY)
         ):
             carp_status_endpoint = CARP_STATUS_26_1_11_SNAKE_ENDPOINT
@@ -838,10 +842,8 @@ class SystemMixin(AiopnsenseClientProtocol):
         Returns:
             bool: True when the operation succeeds; otherwise, False.
         """
-        dismiss_endpoint = await self._get_endpoint_path(
-            snake_case_path=CORE_SYSTEM_DISMISS_SNAKE_ENDPOINT,
-            camel_case_path=CORE_SYSTEM_DISMISS_CAMELCASE_ENDPOINT,
-        )
+        # Resolve once and reuse the path across the POST loop below.
+        dismiss_endpoint = await self._resolve_endpoint(CORE_SYSTEM_DISMISS_ENDPOINT)
 
         # id = "all" to close all notices
         success = True
@@ -876,9 +878,8 @@ class SystemMixin(AiopnsenseClientProtocol):
         Returns:
             bool: True when the operation succeeds; otherwise, False.
         """
-        reload_endpoint = await self._get_endpoint_path(
-            snake_case_path=f"{INTERFACE_OVERVIEW_RELOAD_SNAKE_PREFIX}{if_name}",
-            camel_case_path=f"{INTERFACE_OVERVIEW_RELOAD_CAMELCASE_PREFIX}{if_name}",
+        reload_endpoint = await self._resolve_endpoint(
+            INTERFACE_OVERVIEW_RELOAD_ENDPOINT_PREFIX.with_suffix(if_name)
         )
         reload = await self._safe_dict_post(reload_endpoint)
         return reload.get("message", "").startswith("OK")

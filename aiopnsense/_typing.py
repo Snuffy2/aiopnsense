@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import aiohttp
 
 from ._endpoint_outcome import _EndpointOutcome
+from ._styled_endpoint import _EndpointPath
 from .const import FirmwareCapability
 
 if TYPE_CHECKING:
@@ -84,18 +85,18 @@ class AiopnsenseClientProtocol(Protocol):
 
     async def _firmware_capability_enabled(self, capability: FirmwareCapability) -> bool: ...
 
-    async def _get_endpoint_path(self, snake_case_path: str, camel_case_path: str) -> str: ...
+    async def _resolve_endpoint(self, endpoint: _EndpointPath) -> str: ...
 
     async def _fetch_endpoint_outcome(
         self,
-        path: str,
+        path: _EndpointPath,
         response_format: Literal["json", "text"] = "json",
         *,
         force_refresh: bool = False,
     ) -> _EndpointOutcome: ...
 
     async def _fetch_post_endpoint_outcome(
-        self, path: str, payload: MutableMapping[str, Any] | None = None
+        self, path: _EndpointPath, payload: MutableMapping[str, Any] | None = None
     ) -> _EndpointOutcome: ...
 
     async def _check_endpoint_status(

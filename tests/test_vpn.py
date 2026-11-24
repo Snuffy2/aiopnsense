@@ -2144,3 +2144,131 @@ async def test_toggle_vpn_instance_wireguard_serializes_concurrent_calls(
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.parametrize(
+    ("firmware", "paths", "firmware_reads"),
+    [
+        pytest.param(
+            SNAKE_CASE_FIRMWARE,
+            (
+                "/api/ipsec/sessions/search_phase1",
+                "/api/ipsec/connections/search_connection",
+                "/api/ipsec/connections/search_child",
+                "/api/ipsec/sessions/search_phase2",
+            ),
+            1,
+            id="snake_case",
+        ),
+        pytest.param(
+            CAMEL_CASE_FIRMWARE,
+            (
+                "/api/ipsec/sessions/searchPhase1",
+                "/api/ipsec/connections/searchConnection",
+                "/api/ipsec/connections/searchChild",
+                "/api/ipsec/sessions/searchPhase2",
+            ),
+            1,
+            id="camelCase",
+        ),
+        pytest.param(
+            None,
+            (
+                "/api/ipsec/sessions/search_phase1",
+                "/api/ipsec/connections/search_connection",
+                "/api/ipsec/connections/search_child",
+                "/api/ipsec/sessions/search_phase2",
+            ),
+            # Phase 1, connections, children and one phase 2 path shared by both sessions.
+            4,
+            id="unknown-firmware",
+        ),
+    ],
+)
+async def test_get_ipsec_requests_follow_the_firmware_style(
+    make_client: ClientType,
+    firmware: str | None,
+    paths: tuple[str, str, str, str],
+    firmware_reads: int,
+) -> None:
+    """Read IPsec through the style the firmware selects, choosing the phase 2 path once.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        firmware (str | None): Firmware version the Router reports, ``None`` when it is unknown.
+        paths (tuple[str, str, str, str]): Phase 1, connections, children and phase 2 paths.
+        firmware_reads (int): Firmware status reads the whole call is expected to make.
+    """
+    phase1, connections, children, phase2 = paths
+    sessions = {
+        "rows": [
+            {"ikeid": "ike-1", "name": "ike-1", "connected": True},
+            {"ikeid": "ike-2", "name": "ike-2", "connected": True},
+        ]
+    }
+    client, router = make_router_client(
+        make_client,
+        {
+            ("GET", phase1): sessions,
+            ("GET", connections): {"rows": []},
+            ("GET", children): {"rows": []},
+            ("POST", phase2): {"rows": []},
+        },
+        firmware=firmware,
+    )
+
+    assert await client.get_ipsec() is not None
+
+    assert sent(router) == [
+        ("GET", phase1),
+        ("GET", connections),
+        ("GET", children),
+        ("POST", phase2),
+        ("POST", phase2),
+    ]
+    assert router.bodies("POST", phase2) == [{"id": "ike-1"}, {"id": "ike-2"}]
+    assert router.count("GET", FIRMWARE_STATUS_PATH) == firmware_reads
+
+
+async def test_get_openvpn_routes_firmware_read_failure_propagates_in_throw_mode(
+    make_client: ClientType,
+) -> None:
+    """A firmware read that fails before the routes read raises instead of being swallowed.
+
+    The first firmware read answers with no version, which leaves the firmware
+    unknown, so the routes read asks again and that second read fails.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    firmware_reads = 0
+
+    def firmware_status(**_kwargs: Any) -> Any:
+        """Answer the first firmware read with no version and fail the next.
+
+        Args:
+            _kwargs (Any): Request parameters passed by the HTTP transport.
+
+        Returns:
+            Any: Router reply for the firmware status read.
+        """
+        nonlocal firmware_reads
+        firmware_reads += 1
+        if firmware_reads == 1:
+            return {}
+        return aiohttp.ClientConnectionError("firmware read failed")
+
+    client, router = make_router_client(
+        make_client,
+        {
+            ("GET", "/api/openvpn/service/search_sessions"): {"rows": []},
+            ("GET", FIRMWARE_STATUS_PATH): firmware_status,
+        },
+        throw_errors=True,
+    )
+
+    with pytest.raises(OPNsenseConnectionError):
+        await client.get_openvpn()
+
+    assert router.count("GET", FIRMWARE_STATUS_PATH) == 2
+    assert router.count("GET", "/api/openvpn/service/search_routes") == 0

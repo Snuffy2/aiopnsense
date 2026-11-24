@@ -18,6 +18,7 @@ from ._dhcp_leases import (
     _normalize_leases,
 )
 from ._error_policy import _log_errors
+from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, api_value_matches, coerce_bool, dict_get, get_ip_key, try_to_int
 
@@ -27,14 +28,20 @@ HOST_OBSERVATIONS_ENDPOINT = "/api/hostdiscovery/service/search"
 KEA_DHCPV4_GET_ENDPOINT = "/api/kea/dhcpv4/get"
 KEA_LEASES4_SEARCH_ENDPOINT = "/api/kea/leases4/search"
 KEA_LEASES6_SEARCH_ENDPOINT = "/api/kea/leases6/search"
-KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT = "/api/kea/dhcpv4/search_reservation"
-KEA_DHCPV4_SEARCH_RESERVATION_CAMELCASE_ENDPOINT = "/api/kea/dhcpv4/searchReservation"
+KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/kea/dhcpv4/search_reservation",
+    camel_case="/api/kea/dhcpv4/searchReservation",
+)
 DNSMASQ_LEASES_SEARCH_ENDPOINT = "/api/dnsmasq/leases/search"
 DNSMASQ_RANGES_SEARCH_ENDPOINT = "/api/dnsmasq/settings/search_range"
-ISC_DHCPV4_LEASES_SEARCH_ENDPOINT = "/api/dhcpv4/leases/search_lease"
-ISC_DHCPV4_LEASES_SEARCH_CAMELCASE_ENDPOINT = "/api/dhcpv4/leases/searchLease"
-ISC_DHCPV6_LEASES_SEARCH_ENDPOINT = "/api/dhcpv6/leases/search_lease"
-ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT = "/api/dhcpv6/leases/searchLease"
+ISC_DHCPV4_LEASES_SEARCH_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/dhcpv4/leases/search_lease",
+    camel_case="/api/dhcpv4/leases/searchLease",
+)
+ISC_DHCPV6_LEASES_SEARCH_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/dhcpv6/leases/search_lease",
+    camel_case="/api/dhcpv6/leases/searchLease",
+)
 
 
 _MAC_PATTERN = re.compile(r"^([0-9a-f]{2}:){5}([0-9a-f]{2})$")
@@ -620,7 +627,6 @@ class DHCPMixin(AiopnsenseClientProtocol):
         return await self._get_kea_dhcp_leases(
             lease_endpoint=KEA_LEASES4_SEARCH_ENDPOINT,
             reservation_endpoint=KEA_DHCPV4_SEARCH_RESERVATION_ENDPOINT,
-            reservation_camelcase_endpoint=KEA_DHCPV4_SEARCH_RESERVATION_CAMELCASE_ENDPOINT,
             require_hardware_address=True,
             service_name="Kea DHCPv4",
         )
@@ -648,8 +654,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         self,
         lease_endpoint: str,
         service_name: str,
-        reservation_endpoint: str | None = None,
-        reservation_camelcase_endpoint: str | None = None,
+        reservation_endpoint: _StyledEndpoint | None = None,
         require_hardware_address: bool = True,
     ) -> list:
         """Return active DHCP leases reported by a Kea lease endpoint.
@@ -657,8 +662,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         Args:
             lease_endpoint (str): Kea lease search endpoint path.
             service_name (str): Display name used for debug logging.
-            reservation_endpoint (str | None, optional): Kea reservation endpoint path.
-            reservation_camelcase_endpoint (str | None, optional): CamelCase reservation endpoint path.
+            reservation_endpoint (_StyledEndpoint | None, optional): Kea reservation endpoint.
             require_hardware_address (bool, optional): Whether to skip rows without ``hwaddr``.
 
         Returns:
@@ -682,18 +686,10 @@ class DHCPMixin(AiopnsenseClientProtocol):
             and not _has_authoritative_reservation_metadata(lease_info.get("is_reserved"))
             for lease_info in leases_info
         )
-        if (
-            reservation_endpoint is None
-            or reservation_camelcase_endpoint is None
-            or not needs_reservation_lookup
-        ):
+        if reservation_endpoint is None or not needs_reservation_lookup:
             res_info = None
         else:
-            selected_reservation_endpoint = await self._get_endpoint_path(
-                snake_case_path=reservation_endpoint,
-                camel_case_path=reservation_camelcase_endpoint,
-            )
-            res_outcome = await self._fetch_endpoint_outcome(selected_reservation_endpoint)
+            res_outcome = await self._fetch_endpoint_outcome(reservation_endpoint)
             if not res_outcome.is_data:
                 _LOGGER.debug("%s reservation endpoint unavailable", service_name)
                 res_info = None
@@ -794,8 +790,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 malformed, and MAC-less rows are omitted.
         """
         return await self._get_isc_dhcp_leases(
-            snake_case_path=ISC_DHCPV4_LEASES_SEARCH_ENDPOINT,
-            camel_case_path=ISC_DHCPV4_LEASES_SEARCH_CAMELCASE_ENDPOINT,
+            lease_endpoint=ISC_DHCPV4_LEASES_SEARCH_ENDPOINT,
             service_name="ISC DHCPv4",
             opnsense_tz=opnsense_tz,
         )
@@ -811,34 +806,27 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 malformed, and MAC-less rows are omitted.
         """
         return await self._get_isc_dhcp_leases(
-            snake_case_path=ISC_DHCPV6_LEASES_SEARCH_ENDPOINT,
-            camel_case_path=ISC_DHCPV6_LEASES_SEARCH_CAMELCASE_ENDPOINT,
+            lease_endpoint=ISC_DHCPV6_LEASES_SEARCH_ENDPOINT,
             service_name="ISC DHCPv6",
             opnsense_tz=opnsense_tz,
         )
 
     async def _get_isc_dhcp_leases(
         self,
-        snake_case_path: str,
-        camel_case_path: str,
+        lease_endpoint: _StyledEndpoint,
         service_name: str,
         opnsense_tz: tzinfo,
     ) -> list:
         """Return active DHCP leases reported by an ISC DHCP lease endpoint.
 
         Args:
-            snake_case_path (str): ISC lease search endpoint path using snake_case.
-            camel_case_path (str): ISC lease search endpoint path using camelCase.
+            lease_endpoint (_StyledEndpoint): ISC lease search endpoint.
             service_name (str): Display name used for debug logging.
             opnsense_tz (tzinfo): Timezone used to localize ISC ``ends`` timestamps.
 
         Returns:
             list: Normalized ISC lease entries for the supplied endpoint.
         """
-        lease_endpoint = await self._get_endpoint_path(
-            snake_case_path=snake_case_path,
-            camel_case_path=camel_case_path,
-        )
         outcome = await self._fetch_endpoint_outcome(lease_endpoint)
         if not outcome.is_data:
             _LOGGER.debug("%s lease endpoint unavailable", service_name)
