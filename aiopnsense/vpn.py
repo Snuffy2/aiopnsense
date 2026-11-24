@@ -442,9 +442,14 @@ class VPNMixin(AiopnsenseClientProtocol):
                 endpoint reports Status Access through ``result_access()``.
                 In that case, entries come from the status summary, are keyed
                 by ``key_hash`` with ``uuid=None``, and omit ``enabled``,
-                ``tunnel_addresses`` and ``dns_servers``. At either level, the
-                ``key_hash`` is the first 16 lowercase hex characters of the
-                SHA-256 of the public key string as reported by the Router.
+                ``tunnel_addresses`` and ``dns_servers``. When interfaces share
+                a server key, the server status is ``up`` if any interface is
+                up, ``down`` if every interface is down, or ``None`` otherwise.
+                The server takes its name and interface from a row that supports
+                that status, choosing the first interface name in lexical order
+                among ties. At either level, ``key_hash`` is the first 16
+                lowercase hex characters of the SHA-256 of the public key
+                string as reported by the Router.
                 A configured entry without a public key has ``key_hash=None``.
                 A valid empty summary under Configuration Access
                 still reports configured peers as disconnected with zero counters.
@@ -575,19 +580,30 @@ class VPNMixin(AiopnsenseClientProtocol):
             }
             if row.get("type") == "interface":
                 server_entry = servers.get(key_hash)
+                status = row.get("status")
                 if server_entry is None:
                     server_entry = {
                         **identity,
                         "interface": interface,
+                        "status": status,
                         "clients": [],
                         "connected_clients": 0,
                     }
                     servers[key_hash] = server_entry
                 else:
-                    server_entry["name"] = identity["name"]
-                    server_entry["pubkey"] = public_key
-                    server_entry["interface"] = interface
-                server_entry["status"] = row.get("status")
+                    current_status = server_entry["status"]
+                    # Prefer up, then missing status, then down. Break ties by interface name.
+                    if (status != "up", status == "down", interface) < (
+                        current_status != "up",
+                        current_status == "down",
+                        server_entry["interface"],
+                    ):
+                        server_entry.update(
+                            name=identity["name"],
+                            pubkey=public_key,
+                            interface=interface,
+                            status=status,
+                        )
                 servers_by_interface[interface] = server_entry
                 server_names_by_interface[interface] = identity["name"]
             elif row.get("type") == "peer":
