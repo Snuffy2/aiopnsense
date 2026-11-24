@@ -8,6 +8,7 @@ from typing import Any
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
 from ._error_policy import _log_errors
+from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
 from .helpers import _LOGGER, dict_get, try_to_float, try_to_int
@@ -15,19 +16,29 @@ from .helpers import _LOGGER, dict_get, try_to_float, try_to_int
 INTERFACE_OVERVIEW_EXPORT_ENDPOINT = "/api/interfaces/overview/export"
 SYSTEM_MBUF_ENDPOINT = "/api/diagnostics/system/system_mbuf"
 FIREWALL_PF_STATES_ENDPOINT = "/api/diagnostics/firewall/pf_states"
-SYSTEM_RESOURCES_SNAKE_ENDPOINT = "/api/diagnostics/system/system_resources"
-SYSTEM_RESOURCES_CAMELCASE_ENDPOINT = "/api/diagnostics/system/systemResources"
+SYSTEM_RESOURCES_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/diagnostics/system/system_resources",
+    camel_case="/api/diagnostics/system/systemResources",
+)
 SYSTEM_SWAP_ENDPOINT = "/api/diagnostics/system/system_swap"
-SYSTEM_TIME_SNAKE_ENDPOINT = "/api/diagnostics/system/system_time"
-SYSTEM_TIME_CAMELCASE_ENDPOINT = "/api/diagnostics/system/systemTime"
-CPU_TYPE_SNAKE_ENDPOINT = "/api/diagnostics/cpu_usage/get_c_p_u_type"
-CPU_TYPE_CAMELCASE_ENDPOINT = "/api/diagnostics/cpu_usage/getCPUType"
+SYSTEM_TIME_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/diagnostics/system/system_time",
+    camel_case="/api/diagnostics/system/systemTime",
+)
+CPU_TYPE_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/diagnostics/cpu_usage/get_c_p_u_type",
+    camel_case="/api/diagnostics/cpu_usage/getCPUType",
+)
 CPU_STREAM_ENDPOINT = "/api/diagnostics/cpu_usage/stream"
-SYSTEM_DISK_SNAKE_ENDPOINT = "/api/diagnostics/system/system_disk"
-SYSTEM_DISK_CAMELCASE_ENDPOINT = "/api/diagnostics/system/systemDisk"
+SYSTEM_DISK_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/diagnostics/system/system_disk",
+    camel_case="/api/diagnostics/system/systemDisk",
+)
 GATEWAY_STATUS_ENDPOINT = "/api/routes/gateway/status"
-SYSTEM_TEMPERATURE_SNAKE_ENDPOINT = "/api/diagnostics/system/system_temperature"
-SYSTEM_TEMPERATURE_CAMELCASE_ENDPOINT = "/api/diagnostics/system/systemTemperature"
+SYSTEM_TEMPERATURE_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/diagnostics/system/system_temperature",
+    camel_case="/api/diagnostics/system/systemTemperature",
+)
 
 
 class TelemetryMixin(AiopnsenseClientProtocol):
@@ -179,11 +190,7 @@ class TelemetryMixin(AiopnsenseClientProtocol):
                 memory used, and ``used_percent``. Adds swap totals and usage
                 percentage when swap telemetry is available.
         """
-        memory_endpoint = await self._get_endpoint_path(
-            snake_case_path=SYSTEM_RESOURCES_SNAKE_ENDPOINT,
-            camel_case_path=SYSTEM_RESOURCES_CAMELCASE_ENDPOINT,
-        )
-        memory_outcome = await self._fetch_endpoint_outcome(memory_endpoint)
+        memory_outcome = await self._fetch_endpoint_outcome(SYSTEM_RESOURCES_ENDPOINT)
         if not memory_outcome.is_data:
             _LOGGER.debug("Telemetry memory endpoint unavailable")
             return {
@@ -223,11 +230,7 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any]: Mapping containing boot time, uptime, and
                 one-, five-, and fifteen-minute load averages when parseable.
         """
-        time_endpoint = await self._get_endpoint_path(
-            snake_case_path=SYSTEM_TIME_SNAKE_ENDPOINT,
-            camel_case_path=SYSTEM_TIME_CAMELCASE_ENDPOINT,
-        )
-        time_outcome = await self._fetch_endpoint_outcome(time_endpoint)
+        time_outcome = await self._fetch_endpoint_outcome(SYSTEM_TIME_ENDPOINT)
         if not time_outcome.is_data:
             _LOGGER.debug("Telemetry system time endpoint unavailable")
             return {}
@@ -311,11 +314,7 @@ class TelemetryMixin(AiopnsenseClientProtocol):
                 total/user/nice/system/interrupt/idle usage percentages when
                 available.
         """
-        cpu_type_endpoint = await self._get_endpoint_path(
-            snake_case_path=CPU_TYPE_SNAKE_ENDPOINT,
-            camel_case_path=CPU_TYPE_CAMELCASE_ENDPOINT,
-        )
-        cpu_type_outcome = await self._fetch_endpoint_outcome(cpu_type_endpoint)
+        cpu_type_outcome = await self._fetch_endpoint_outcome(CPU_TYPE_ENDPOINT)
         if not cpu_type_outcome.is_data:
             _LOGGER.debug("Telemetry CPU type endpoint unavailable")
             return {}
@@ -348,11 +347,7 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             list: Filesystem device rows from OPNsense disk diagnostics, or an
                 empty list when the endpoint is unavailable.
         """
-        filesystems_endpoint = await self._get_endpoint_path(
-            snake_case_path=SYSTEM_DISK_SNAKE_ENDPOINT,
-            camel_case_path=SYSTEM_DISK_CAMELCASE_ENDPOINT,
-        )
-        filesystems_outcome = await self._fetch_endpoint_outcome(filesystems_endpoint)
+        filesystems_outcome = await self._fetch_endpoint_outcome(SYSTEM_DISK_ENDPOINT)
         if not filesystems_outcome.is_data:
             _LOGGER.debug("Telemetry filesystem endpoint unavailable")
             return []
@@ -391,11 +386,7 @@ class TelemetryMixin(AiopnsenseClientProtocol):
                 with each value containing the numeric temperature, display
                 name, and original device id.
         """
-        temperature_endpoint = await self._get_endpoint_path(
-            snake_case_path=SYSTEM_TEMPERATURE_SNAKE_ENDPOINT,
-            camel_case_path=SYSTEM_TEMPERATURE_CAMELCASE_ENDPOINT,
-        )
-        temps_outcome = await self._fetch_endpoint_outcome(temperature_endpoint)
+        temps_outcome = await self._fetch_endpoint_outcome(SYSTEM_TEMPERATURE_ENDPOINT)
         if not temps_outcome.is_data:
             _LOGGER.debug("Telemetry temperature endpoint unavailable")
             return {}

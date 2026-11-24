@@ -4,14 +4,19 @@ from collections.abc import MutableMapping
 from typing import Any
 from urllib.parse import quote
 
+from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .exceptions import OPNsenseConnectionError, OPNsenseVoucherServerError
 from .helpers import _LOGGER, human_friendly_duration, timestamp_to_datetime, try_to_int
 
-VOUCHER_LIST_PROVIDERS_ENDPOINT = "/api/captiveportal/voucher/list_providers"
-VOUCHER_LIST_PROVIDERS_CAMELCASE_ENDPOINT = "/api/captiveportal/voucher/listProviders"
-VOUCHER_GENERATE_VOUCHERS_ENDPOINT = "/api/captiveportal/voucher/generate_vouchers"
-VOUCHER_GENERATE_VOUCHERS_CAMELCASE_ENDPOINT = "/api/captiveportal/voucher/generateVouchers"
+VOUCHER_LIST_PROVIDERS_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/captiveportal/voucher/list_providers",
+    camel_case="/api/captiveportal/voucher/listProviders",
+)
+VOUCHER_GENERATE_VOUCHERS_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/captiveportal/voucher/generate_vouchers",
+    camel_case="/api/captiveportal/voucher/generateVouchers",
+)
 
 
 class VouchersMixin(AiopnsenseClientProtocol):
@@ -38,18 +43,13 @@ class VouchersMixin(AiopnsenseClientProtocol):
                 errors disabled, the provider list is empty, or the request omits
                 a server while multiple servers are available.
         """
-        list_providers_endpoint = await self._get_endpoint_path(
-            snake_case_path=VOUCHER_LIST_PROVIDERS_ENDPOINT,
-            camel_case_path=VOUCHER_LIST_PROVIDERS_CAMELCASE_ENDPOINT,
-        )
-        generate_vouchers_endpoint = await self._get_endpoint_path(
-            snake_case_path=VOUCHER_GENERATE_VOUCHERS_ENDPOINT,
-            camel_case_path=VOUCHER_GENERATE_VOUCHERS_CAMELCASE_ENDPOINT,
+        generate_vouchers_endpoint = await self._resolve_endpoint(
+            VOUCHER_GENERATE_VOUCHERS_ENDPOINT
         )
         if data.get("voucher_server", None):
             server = data.get("voucher_server")
         else:
-            providers_outcome = await self._fetch_endpoint_outcome(list_providers_endpoint)
+            providers_outcome = await self._fetch_endpoint_outcome(VOUCHER_LIST_PROVIDERS_ENDPOINT)
             if providers_outcome.is_transient:
                 raise OPNsenseVoucherServerError(
                     "Could not retrieve voucher servers"
