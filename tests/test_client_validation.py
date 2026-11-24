@@ -2,6 +2,7 @@
 
 import asyncio
 import gc
+import logging
 from weakref import ReferenceType, ref
 
 import pytest
@@ -203,7 +204,9 @@ async def test_overlapping_validations_keep_their_error_policy(
 
     assert router.count("GET", _FIRMWARE_STATUS) == 2
     [failure] = [
-        record.getMessage() for record in caplog.records if record.name.startswith("aiopnsense")
+        record.getMessage()
+        for record in caplog.records
+        if record.name.startswith("aiopnsense") and record.levelno == logging.ERROR
     ]
     assert _FIRMWARE_STATUS in failure
     assert "401" in failure
