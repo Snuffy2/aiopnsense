@@ -1,8 +1,10 @@
 """Classification and logging of failed HTTP responses and transport errors.
 
-The immediate GET and POST, endpoint status check and both streaming reads report failures
-here. Endpoint outcomes cache HTTP 404 as unavailable. Firmware installation requests use their own
-polling and error policy. This module maps reported failures to public exceptions, suppresses
+The one non-streaming request body (``_request_outcome``, behind the plain and outcome
+requests) and both streaming reads report failures here. An outcome request returns an HTTP 404
+as an absent endpoint without reporting it, so the availability layer can cache it; a plain
+request reports its 404 as a failure. Firmware installation requests use their own polling and
+error policy. This module maps reported failures to public exceptions, suppresses
 repeated logs and marks raised exceptions as already logged. Callers decide whether to raise or
 return an empty value.
 """

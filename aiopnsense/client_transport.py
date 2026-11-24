@@ -51,7 +51,10 @@ class _RequestKind(StrEnum):
     The HTTP method and response format are separate ``_QueueEntry`` fields.
     ``PLAIN`` returns the payload (or raises or returns ``None`` under the
     ``throw_errors`` policy), ``OUTCOME`` returns an ``_EndpointOutcome`` and
-    ``STREAM`` returns a buffered stream read.
+    ``STREAM`` returns a buffered stream read. ``PLAIN`` and ``OUTCOME`` are also the
+    request form of ``_request_outcome``, the one non-streaming request body, where
+    the form selects the operation name and whether a 404 is a reported failure
+    (``PLAIN``) or an unreported absent endpoint (``OUTCOME``).
     """
 
     PLAIN = "plain"
@@ -427,7 +430,12 @@ class ClientTransportMixin:
         caller: str = "Unknown",
         timeout_seconds: float | None = None,
     ) -> MutableMapping[str, Any] | list | None:
-        """Execute a GET request immediately without queueing.
+        """Execute a plain GET request immediately without queueing.
+
+        A thin layer over ``_request_outcome`` in ``PLAIN`` form: it returns the
+        payload of a ``DATA`` outcome and otherwise applies the ``throw_errors``
+        policy to the outcome's error. A 404 is a failed request here, reported with
+        its reason, unlike the unreported absent outcome of ``_do_get_outcome``.
 
         Args:
             path (str): API endpoint path to request.
@@ -440,43 +448,31 @@ class ClientTransportMixin:
                 When ``throw_errors`` is enabled, an HTTP or transport failure is
                 raised as the mapped public ``OPNsenseError`` instead.
         """
-        url: str = f"{self._url}{path}"
         _LOGGER.debug("[get] path: %s", path)
-        timeout_total: float = self._normalize_timeout_seconds(timeout_seconds)
-        try:
-            async with self._open_request(
-                "get", path, timeout=aiohttp.ClientTimeout(total=timeout_total)
-            ) as response:
-                _LOGGER.debug("[get] Response %s: %s", response.status, response.reason)
-                if response.ok:
-                    result = await response.json(content_type=None)
-                    _log_request_recovery(self, "get", path, _REQUEST_PHASE)
-                    return result
-                http_error = _report_http_failure(
-                    self,
-                    method="get",
-                    path=path,
-                    phase=_REQUEST_PHASE,
-                    operation="do_get",
-                    url=url,
-                    status=response.status,
-                    reason=response.reason,
-                    caller=caller,
-                )
-                _raise_if_throwing(self, http_error)
-        except (aiohttp.ClientError, TimeoutError) as e:
-            transport_error = _report_transport_failure(
-                self,
-                method="get",
-                path=path,
-                phase=_REQUEST_PHASE,
-                operation="do_get",
-                exc=e,
-                caller=caller,
-            )
-            _raise_if_throwing(self, transport_error, e)
+        outcome = await self._request_outcome(
+            "GET",
+            path,
+            caller,
+            form=_RequestKind.PLAIN,
+            timeout_seconds=timeout_seconds,
+        )
+        return self._plain_result(outcome)
 
-        return None
+    def _plain_result(self, outcome: _EndpointOutcome) -> MutableMapping[str, Any] | list | None:
+        """Convert the outcome of a plain request to its payload or empty value.
+
+        Args:
+            outcome (_EndpointOutcome): Outcome of a ``PLAIN`` request.
+
+        Returns:
+            MutableMapping[str, Any] | list | None: The decoded payload of a ``DATA``
+                outcome, or ``None`` after a logged failure. When ``throw_errors`` is
+                enabled, the outcome's already-reported error is raised instead.
+        """
+        if outcome.error is not None:
+            _raise_if_throwing(self, outcome.error, outcome.error.__cause__)
+        payload = outcome.payload
+        return None if isinstance(payload, str) else payload
 
     async def _request_outcome(
         self,
@@ -485,16 +481,30 @@ class ClientTransportMixin:
         caller: str,
         payload: MutableMapping[str, Any] | None = None,
         *,
+        form: Literal[_RequestKind.PLAIN, _RequestKind.OUTCOME],
+        timeout_seconds: float | None = None,
         phase: str = _REQUEST_PHASE,
         read_body: bool = True,
         response_format: Literal["json", "text"] = "json",
     ) -> _EndpointOutcome:
-        """Execute an endpoint request immediately and classify the response.
+        """Execute a non-streaming request immediately and classify the response.
 
-        Shared body of ``_do_get_outcome`` and ``_do_post_outcome``. A 404 is returned
-        as an absent outcome. Any other failed HTTP response or transport error is
-        logged by the shared request reporter and returned as an outcome instead of
-        being raised. Undecodable response bodies propagate to the queue worker.
+        The one request body of the transport. ``_do_get`` and ``_do_post`` call it in
+        ``PLAIN`` form and convert the outcome to a payload, an exception or ``None``;
+        ``_do_get_outcome`` and ``_do_post_outcome`` call it in ``OUTCOME`` form. The
+        form alone selects the operation name (``do_<method>`` or
+        ``do_<method>_outcome``) and the treatment of HTTP 404:
+
+        - ``OUTCOME``: a 404 is returned as an unreported ``ABSENT`` outcome with no
+          error. Outage state is neither set nor cleared.
+        - ``PLAIN``: a 404 is a failed request. It goes through the failure reporter
+          while the response reason is available and is returned as an ``ABSENT``
+          outcome carrying the reported error.
+
+        Any other failed HTTP response or transport error is logged by the shared
+        request reporter and returned as an outcome instead of being raised. The body
+        never reads the ``throw_errors`` policy; the plain layer raises. Undecodable
+        response bodies propagate to the queue worker.
 
         Args:
             method (Literal["GET", "POST"]): HTTP method to send.
@@ -502,6 +512,9 @@ class ClientTransportMixin:
             caller (str): Caller name used for diagnostics.
             payload (MutableMapping[str, Any] | None, optional): Request payload sent
                 with a POST request; ignored for GET.
+            form (Literal[_RequestKind.PLAIN, _RequestKind.OUTCOME]): Request form.
+            timeout_seconds (float | None, optional): Request timeout in seconds for
+                this call. Omitting it, or an unusable value, gives the default.
             phase (str): Request phase for outage logging, ``probe`` for status-only
                 checks or ``request`` for data reads.
             read_body (bool): Whether to decode the body of a successful response.
@@ -513,22 +526,24 @@ class ClientTransportMixin:
         Returns:
             _EndpointOutcome: ``DATA`` with the decoded payload or body text (``None`` when
                 ``read_body`` is ``False``) for a successful response, ``ABSENT`` for a
-                404 or 403 response, and ``TRANSIENT`` for any other HTTP status, timeout
-                or client error.
+                404 or 403 response (with no error for an ``OUTCOME`` 404), and
+                ``TRANSIENT`` for any other HTTP status, timeout or client error.
         """
         url: str = f"{self._url}{path}"
         method_name: Literal["get", "post"] = "get" if method == "GET" else "post"
-        operation = f"do_{method_name}_outcome"
-        _LOGGER.debug("[%s] path: %s (called by %s)", method_name, path, caller)
+        operation = (
+            f"do_{method_name}" if form == _RequestKind.PLAIN else f"do_{method_name}_outcome"
+        )
+        timeout_total: float = self._normalize_timeout_seconds(timeout_seconds)
         try:
             async with self._open_request(
                 method_name,
                 path,
-                timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
+                timeout=aiohttp.ClientTimeout(total=timeout_total),
                 payload=payload,
             ) as response:
                 _LOGGER.debug("[%s] Response %s: %s", method_name, response.status, response.reason)
-                if response.status == 404:
+                if response.status == 404 and form == _RequestKind.OUTCOME:
                     return _EndpointOutcome.absent()
                 if not response.ok:
                     http_error = _report_http_failure(
@@ -593,10 +608,12 @@ class ClientTransportMixin:
         Returns:
             _EndpointOutcome: The outcome described by ``_request_outcome``.
         """
+        _LOGGER.debug("[get] path: %s (called by %s)", path, caller)
         return await self._request_outcome(
             "GET",
             path,
             caller,
+            form=_RequestKind.OUTCOME,
             phase=phase,
             read_body=read_body,
             response_format=response_format,
@@ -655,7 +672,11 @@ class ClientTransportMixin:
     async def _do_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None, caller: str = "Unknown"
     ) -> MutableMapping[str, Any] | list | None:
-        """Execute a POST request immediately without queueing.
+        """Execute a plain POST request immediately without queueing.
+
+        A thin layer over ``_request_outcome`` in ``PLAIN`` form, converting its
+        outcome as ``_do_get`` does. A 404 is a failed request here, reported with its
+        reason, unlike the unreported absent outcome of ``_do_post_outcome``.
 
         Args:
             path (str): API endpoint path to request.
@@ -668,45 +689,11 @@ class ClientTransportMixin:
                 an HTTP or transport failure is raised as the mapped public
                 ``OPNsenseError`` instead.
         """
-        url: str = f"{self._url}{path}"
         _LOGGER.debug("[post] path: %s", path)
-        try:
-            async with self._open_request(
-                "post",
-                path,
-                timeout=aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT_SECONDS),
-                payload=payload,
-            ) as response:
-                _LOGGER.debug("[post] Response %s: %s", response.status, response.reason)
-                if response.ok:
-                    response_json: dict[str, Any] | list = await response.json(content_type=None)
-                    _log_request_recovery(self, "post", path, _REQUEST_PHASE)
-                    return response_json
-                http_error = _report_http_failure(
-                    self,
-                    method="post",
-                    path=path,
-                    phase=_REQUEST_PHASE,
-                    operation="do_post",
-                    url=url,
-                    status=response.status,
-                    reason=response.reason,
-                    caller=caller,
-                )
-                _raise_if_throwing(self, http_error)
-        except (aiohttp.ClientError, TimeoutError) as e:
-            transport_error = _report_transport_failure(
-                self,
-                method="post",
-                path=path,
-                phase=_REQUEST_PHASE,
-                operation="do_post",
-                exc=e,
-                caller=caller,
-            )
-            _raise_if_throwing(self, transport_error, e)
-
-        return None
+        outcome = await self._request_outcome(
+            "POST", path, caller, payload, form=_RequestKind.PLAIN
+        )
+        return self._plain_result(outcome)
 
     async def _do_post_outcome(
         self,
@@ -729,7 +716,8 @@ class ClientTransportMixin:
         Returns:
             _EndpointOutcome: The outcome described by ``_request_outcome``.
         """
-        return await self._request_outcome("POST", path, caller, payload)
+        _LOGGER.debug("[post] path: %s (called by %s)", path, caller)
+        return await self._request_outcome("POST", path, caller, payload, form=_RequestKind.OUTCOME)
 
     async def _safe_dict_post(
         self, path: str, payload: MutableMapping[str, Any] | None = None

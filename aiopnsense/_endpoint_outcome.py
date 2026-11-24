@@ -66,13 +66,16 @@ class _EndpointOutcome:
         """Classify a failed HTTP response that the request already reported.
 
         Args:
-            status (int): HTTP response status, not 2xx or 404.
+            status (int): HTTP response status, not 2xx. A 404 reaches here only from a
+                plain request, which reports it as a failure; an outcome request returns
+                its unreported 404 through ``absent`` instead.
             error (OPNsenseError): Public exception mapped from the response.
 
         Returns:
-            _EndpointOutcome: ``ABSENT`` for 403, otherwise ``TRANSIENT``.
+            _EndpointOutcome: ``ABSENT`` with its error attached for 403 or 404,
+                otherwise ``TRANSIENT``.
         """
-        if status == 403:
+        if status in (403, 404):
             return cls(_EndpointStatus.ABSENT, http_status=status, error=error)
         return cls(_EndpointStatus.TRANSIENT, http_status=status, error=error)
 
