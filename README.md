@@ -16,10 +16,10 @@
 | aiopnsense/\_typing.py                   |        9 |        0 |        0 |        0 |    100% |           |
 | aiopnsense/client.py                     |       66 |        0 |       16 |        0 |    100% |           |
 | aiopnsense/client\_base.py               |       67 |        0 |       14 |        0 |    100% |           |
-| aiopnsense/client\_endpoint.py           |       73 |        0 |       24 |        0 |    100% |           |
-| aiopnsense/client\_queue.py              |      124 |        7 |       42 |        4 |     92% |170-\>166, 172-173, 229-231, 249-\>256, 281, 291-\>287, 296 |
+| aiopnsense/client\_endpoint.py           |       72 |        0 |       24 |        0 |    100% |           |
+| aiopnsense/client\_queue.py              |      126 |        7 |       42 |        4 |     92% |192-\>188, 194-195, 251-253, 278-\>285, 310, 320-\>316, 325 |
 | aiopnsense/client\_toggle.py             |      190 |        1 |       62 |        1 |     99% |       390 |
-| aiopnsense/client\_transport.py          |      222 |        0 |       74 |        1 |     99% | 396-\>372 |
+| aiopnsense/client\_transport.py          |      201 |        0 |       74 |        1 |     99% | 408-\>384 |
 | aiopnsense/const.py                      |       24 |        0 |        0 |        0 |    100% |           |
 | aiopnsense/dhcp.py                       |      322 |        3 |      126 |        3 |     99% |566, 571, 739 |
 | aiopnsense/exceptions.py                 |       45 |        0 |       22 |        1 |     99% | 109-\>111 |
@@ -37,7 +37,7 @@
 | aiopnsense/vnstat.py                     |      217 |        8 |       94 |        8 |     95% |220, 273, 389, 416, 459, 493, 513, 535 |
 | aiopnsense/vouchers.py                   |       53 |        1 |       18 |        1 |     97% |        87 |
 | aiopnsense/vpn.py                        |      476 |        7 |      224 |       15 |     97% |240, 264, 265-\>exit, 286, 335, 602, 623, 626-\>625, 628-\>621, 658-\>657, 672-\>671, 674-\>673, 730-\>exit, 966, 1245-\>1241 |
-| **TOTAL**                                | **4002** |   **53** | **1460** |   **65** | **98%** |           |
+| **TOTAL**                                | **3982** |   **53** | **1460** |   **65** | **98%** |           |
 
 
 ## Setup coverage badge
