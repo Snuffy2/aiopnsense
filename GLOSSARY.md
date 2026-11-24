@@ -1,6 +1,6 @@
 # aiopnsense
 
-An async client library that reads state from, and triggers supported actions on, an OPNsense firewall appliance over its REST API. Applications such as Home Assistant use it to monitor and control that appliance.
+An async client library that reads state from, and triggers supported actions on, an OPNsense firewall appliance over its REST API. Applications such as Home Assistant use it to monitor and control that appliance. Its main consumer, hass-opnsense, keeps a glossary of its own Home Assistant terms and uses the terms below with the same meaning.
 
 ## Language
 
@@ -15,12 +15,12 @@ A rule on the Router that permits or blocks traffic. Always called a rule, so th
 _Avoid_: Filter, ACL
 
 **Host**:
-A LAN endpoint, identified by its MAC address, that the Router knows about through ARP/NDP Entries, DHCP Leases, or Host Observations. No single record is the main record of a Host; each is evidence about it.
+A LAN endpoint, identified by its MAC address (hass-opnsense calls a Host it tracks a Tracked client), that the Router knows about through Neighbor Entries, DHCP Leases, or Host Observations. No single record is the main record of a Host; each is evidence about it.
 _Avoid_: Device, machine
 
-**ARP/NDP Entry**:
-A MAC and IP pairing in the Router's IPv4 (ARP) or IPv6 (NDP) neighbor table, showing a Host the Router has recently exchanged traffic with.
-_Avoid_: Neighbor, ARP row
+**Neighbor Entry**:
+A MAC and IP pairing in the Router's IPv4 (ARP) or IPv6 (NDP) neighbor table, showing a Host the Router has recently exchanged traffic with. It shows an address was seen, not that the Host is present.
+_Avoid_: ARP/NDP Entry, ARP row
 
 **DHCP Lease**:
 An address the Router's DHCP server assigned to a Host, with its hostname and expiry when known. It does not show that the Host is present.
