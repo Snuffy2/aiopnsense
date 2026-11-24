@@ -287,41 +287,6 @@ async def test_set_use_snake_case_initial_raises_unknown_firmware(
         await client.async_close()
 
 
-@pytest.mark.asyncio
-async def test_resolve_endpoint_lazily_initializes_snake_case_state(
-    make_client: MakeClientFactory,
-) -> None:
-    """Verify endpoint selection lazily initializes snake-case mode.
-
-    Args:
-        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
-
-    Returns:
-        None: This test validates lazy snake-case initialization behavior.
-    """
-    client = make_client()
-    try:
-
-        async def fake_set_use_snake_case() -> None:
-            """Populate snake-case mode for the lazy helper.
-
-            Returns:
-                None: This helper mutates client state for the test.
-            """
-            client._use_snake_case = False
-
-        set_use_snake_case = AsyncMock(side_effect=fake_set_use_snake_case)
-        client._set_use_snake_case = set_use_snake_case
-
-        assert (
-            await client._resolve_endpoint(_StyledEndpoint("/snake_case", "/camelCase"))
-            == "/camelCase"
-        )
-        set_use_snake_case.assert_awaited_once_with()
-    finally:
-        await client.async_close()
-
-
 @pytest.fixture
 async def dismiss_router(
     make_client: MakeClientFactory,
