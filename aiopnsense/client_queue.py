@@ -3,9 +3,9 @@
 import asyncio
 from collections.abc import MutableMapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
-from .client_transport import _SKIPPED_WHEN_CANCELLED, _public_caller_name, _RequestKind
+from .client_transport import _is_skipped_when_cancelled, _public_caller_name, _RequestKind
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
 from .helpers import _LOGGER, _is_request_error_logged, _mark_request_error_logged
@@ -29,6 +29,8 @@ class _QueueEntry:
     future: asyncio.Future[Any]
     caller: str
     cancellation_state: _CancellablePostState | None = None
+    method: Literal["get", "post"] = "get"
+    response_format: Literal["json", "text"] = "json"
 
 
 class ClientQueueMixin:
@@ -51,14 +53,18 @@ class ClientQueueMixin:
             path: str,
             payload: MutableMapping[str, Any] | None,
             caller: str,
+            method: Literal["get", "post"] = "get",
+            response_format: Literal["json", "text"] = "json",
         ) -> Any:
             """Send one dequeued request through the transport method for its kind.
 
             Args:
-                kind (_RequestKind): Request kind.
+                kind (_RequestKind): How the result is delivered.
                 path (str): API endpoint path to request.
-                payload (MutableMapping[str, Any] | None): Request body for POST kinds.
+                payload (MutableMapping[str, Any] | None): Request body for POST requests.
                 caller (str): Calling method name used for diagnostics.
+                method (Literal["get", "post"]): HTTP method of the request.
+                response_format (Literal["json", "text"]): Body format of an outcome GET.
 
             Returns:
                 Any: Result of the matching transport method.
@@ -100,16 +106,23 @@ class ClientQueueMixin:
         kind: _RequestKind,
         path: str,
         payload: MutableMapping[str, Any] | None = None,
+        *,
+        method: Literal["get", "post"] = "get",
+        response_format: Literal["json", "text"] = "json",
     ) -> Any:
         """Queue one API request and return its future result.
 
-        Cancelling the caller before dispatch causes the worker to skip a queued POST.
+        Cancelling the caller before dispatch causes the worker to skip a queued
+        ``OUTCOME`` request or plain POST.
 
         Args:
-            kind (_RequestKind): Request kind sent by ``_dispatch_request``.
+            kind (_RequestKind): How the result is delivered, sent by ``_dispatch_request``.
             path (str): API endpoint path to request.
             payload (MutableMapping[str, Any] | None, optional): Request payload
                 sent with POST requests.
+            method (Literal["get", "post"], optional): HTTP method of the request.
+            response_format (Literal["json", "text"], optional): Body format of an
+                outcome GET.
 
         Returns:
             Any: Result set by the queue processor.
@@ -117,7 +130,15 @@ class ClientQueueMixin:
         loop = await self._get_active_loop()
         future = loop.create_future()
         await self._request_queue.put(
-            _QueueEntry(kind, path, payload, future, _public_caller_name())
+            _QueueEntry(
+                kind,
+                path,
+                payload,
+                future,
+                _public_caller_name(),
+                method=method,
+                response_format=response_format,
+            )
         )
         return await future
 
@@ -149,12 +170,13 @@ class ClientQueueMixin:
         cancellation_state = _CancellablePostState(waiter)
         await self._request_queue.put(
             _QueueEntry(
-                _RequestKind.POST,
+                _RequestKind.PLAIN,
                 path,
                 payload,
                 future,
                 _public_caller_name(),
                 cancellation_state,
+                method="post",
             )
         )
         try:
@@ -181,7 +203,7 @@ class ClientQueueMixin:
         Returns:
             dict[str, Any]: Decoded payload extracted from the streaming API response.
         """
-        return cast(dict[str, Any], await self._queue_request(_RequestKind.GET_FROM_STREAM, path))
+        return cast(dict[str, Any], await self._queue_request(_RequestKind.STREAM, path))
 
     async def _get(self, path: str) -> MutableMapping[str, Any] | list | None:
         """Queue a GET request and return the result.
@@ -192,7 +214,7 @@ class ClientQueueMixin:
         Returns:
             MutableMapping[str, Any] | list | None: Decoded response payload returned by the GET request.
         """
-        return await self._queue_request(_RequestKind.GET, path)
+        return await self._queue_request(_RequestKind.PLAIN, path)
 
     async def _post(
         self, path: str, payload: MutableMapping[str, Any] | None = None
@@ -206,7 +228,7 @@ class ClientQueueMixin:
         Returns:
             MutableMapping[str, Any] | list | None: Decoded response payload returned by the POST request.
         """
-        return await self._queue_request(_RequestKind.POST, path, payload)
+        return await self._queue_request(_RequestKind.PLAIN, path, payload, method="post")
 
     async def _process_queue(self) -> None:
         """Continuously process queued API requests and resolve waiting futures.
@@ -221,7 +243,7 @@ class ClientQueueMixin:
                 entry: _QueueEntry = await self._request_queue.get()
                 future = entry.future
                 caller = entry.caller
-                if entry.kind in _SKIPPED_WHEN_CANCELLED and future.cancelled():
+                if _is_skipped_when_cancelled(entry.kind, entry.method) and future.cancelled():
                     continue
                 cancellation_state = entry.cancellation_state
                 if cancellation_state is not None:
@@ -230,7 +252,14 @@ class ClientQueueMixin:
                             future.cancel()
                         continue
                     cancellation_state.started = True
-                result = await self._dispatch_request(entry.kind, entry.path, entry.payload, caller)
+                result = await self._dispatch_request(
+                    entry.kind,
+                    entry.path,
+                    entry.payload,
+                    caller,
+                    entry.method,
+                    entry.response_format,
+                )
                 if not future.done():
                     future.set_result(result)
             except asyncio.CancelledError:

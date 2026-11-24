@@ -56,13 +56,18 @@ class ClientEndpointMixin:
             /,
             path: str,
             payload: MutableMapping[str, Any] | None = None,
+            *,
+            method: Literal["get", "post"] = "get",
+            response_format: Literal["json", "text"] = "json",
         ) -> Any:
             """Queue one API request and return its result.
 
             Args:
-                kind (_RequestKind): Request kind sent by ``_dispatch_request``.
+                kind (_RequestKind): How the result is delivered.
                 path (str): API endpoint path to request.
                 payload (MutableMapping[str, Any] | None): Request body for POST requests.
+                method (Literal["get", "post"]): HTTP method of the request.
+                response_format (Literal["json", "text"]): Body format of an outcome GET.
 
             Returns:
                 Any: Result set by the queue worker.
@@ -290,12 +295,13 @@ class ClientEndpointMixin:
                 path, _public_caller_name(), read_body=False, phase=_PROBE_PHASE
             )
         else:
-            queue_method = (
-                _RequestKind.GET_TEXT_OUTCOME
-                if method == "get" and response_format == "text"
-                else _RequestKind(f"{method}_outcome")
+            outcome = await self._queue_request(
+                _RequestKind.OUTCOME,
+                path,
+                payload,
+                method=method,
+                response_format=response_format,
             )
-            outcome = await self._queue_request(queue_method, path, payload)
 
         # The TTL starts when the Router answers, so a slow request keeps its full TTL.
         checked_at = datetime.now().astimezone()

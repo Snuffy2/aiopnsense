@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from functools import partial
+import logging
 
 import pytest
 
@@ -141,25 +142,44 @@ async def test_generate_vouchers_posts_to_named_provider_without_listing_provide
     assert router.bodies("POST", generate_path) == [{}]
 
 
-async def test_generate_vouchers_returns_empty_on_404_generate_endpoint_with_throw_errors(
-    make_client: ClientType,
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["empty", "throw"])
+async def test_generate_vouchers_returns_empty_on_404_generate_endpoint(
+    make_client: ClientType, throw_errors: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A missing voucher-generation endpoint returns no vouchers even with errors on.
+    """A missing voucher-generation endpoint returns no vouchers and logs the failed POST once.
+
+    The POST is a plain request, so its 404 is reported as an error. With errors on,
+    the method catches the resulting 404 and says the endpoint is unavailable.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Client ``throw_errors`` setting.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
     """
     generate_path = f"{GENERATE_PATH}/srv/"
     client, router = _voucher_client(
         make_client,
         {("GET", PROVIDERS_PATH): [], ("POST", generate_path): 404},
-        throw_errors=True,
+        throw_errors=throw_errors,
     )
 
-    assert await client.generate_vouchers({"voucher_server": "srv"}) == []
+    with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+        assert await client.generate_vouchers({"voucher_server": "srv"}) == []
 
     assert router.count("GET", PROVIDERS_PATH) == 0
     assert router.bodies("POST", generate_path) == [{}]
+    records = [(r.levelno, r.getMessage()) for r in caplog.records if r.levelno != logging.DEBUG]
+    assert records == [
+        (
+            logging.ERROR,
+            (
+                "Error in do_post (called by generate_vouchers). "
+                f"Path: http://localhost{generate_path}. Response 404: ERR"
+            ),
+        )
+    ]
+    unavailable = f"Voucher generation endpoint unavailable: {generate_path}"
+    assert (unavailable in caplog.messages) is throw_errors
 
 
 @pytest.mark.parametrize(

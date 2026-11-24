@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from functools import partial
 import logging
+import re
 from typing import Any
 
 import aiohttp
@@ -371,6 +372,54 @@ async def test_toggle_apply_transport_error_raises_with_throw_errors(
     async with asyncio.timeout(2):
         with pytest.raises(OPNsenseConnectionError):
             await case.toggle(client, "on")
+
+
+@pytest.mark.parametrize("case", _CASE_PARAMS)
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["empty", "throw"])
+async def test_toggle_save_step_404_is_a_failed_request(
+    case: ToggleCase,
+    throw_errors: bool,
+    make_client: MakeClientFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A 404 on a Toggle's save step is logged as an error, unlike an absent optional endpoint.
+
+    Without ``throw_errors`` the Toggle returns ``False``. With it the Toggle raises a
+    connection error with status 404. Either way the Router receives only the save,
+    and the failure is logged once as a failed ``do_post``.
+
+    Args:
+        case (ToggleCase): Toggle under test.
+        throw_errors (bool): Client ``throw_errors`` setting.
+        make_client (MakeClientFactory): Client factory fixture.
+        caplog (pytest.LogCaptureFixture): Fixture capturing the client's log records.
+    """
+    client, router = _client_for_router(
+        make_client,
+        {**case.routes("on"), ("POST", case.save_paths["on"]): 404},
+        throw_errors=throw_errors,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
+        if throw_errors:
+            with pytest.raises(OPNsenseConnectionError) as raised:
+                await case.toggle(client, "on")
+            assert raised.value.status == 404
+        else:
+            assert await case.toggle(client, "on") is False
+
+    assert router.paths("POST") == [case.save_paths["on"]]
+    failures = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert [r.levelno for r in failures] == [logging.ERROR]
+    assert re.fullmatch(
+        r"Error in do_post \(called by toggle_\w+\)\. "
+        rf"Path: http://localhost{re.escape(case.save_paths['on'])}\. Response 404: ERR",
+        failures[0].getMessage(),
+    )
+    if not case.name.startswith("vpn"):
+        # A VPN Toggle follows ADR 0001 and logs its own unconfirmed-response record.
+        not_confirmed = [r for r in caplog.records if "not confirmed" in r.getMessage()]
+        assert bool(not_confirmed) is not throw_errors
 
 
 @pytest.mark.parametrize(
