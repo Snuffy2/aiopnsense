@@ -91,16 +91,22 @@ class FirmwareMixin(AiopnsenseClientProtocol):
         )
 
     def _record_firmware_version(
-        self, version: str | None, *, observation_id: int | None = None
+        self,
+        version: str | None,
+        *,
+        observation_id: int | None = None,
+        verified_install: bool = False,
     ) -> str | None:
         """Set or clear the cached firmware version.
 
         Every write of the cached version goes through this method so that the
         firmware module is the only owner of the value. When a known version differs
         from the last known one, everything derived from the old version is discarded.
+        A verified install also discards that state, even when capability gating
+        cannot distinguish the installed build from the previous one.
         Clearing the cached version, a lookup that returns nothing, or a version that
-        cannot be compared is not a change. Failed reads use their request ID, while
-        successful lookups use an ID allocated immediately before their request.
+        cannot be compared does not by itself discard that state. Failed reads use their
+        request ID, while successful lookups use an ID allocated before their request.
         Explicit clears and verified versions advance the invalidation watermark.
 
         Args:
@@ -108,6 +114,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 lookup to read it from the Router.
             observation_id (int | None): Request ordering ID, or
                 ``None`` for an explicit state change at the current point.
+            verified_install (bool): Whether this version comes from a verified install.
 
         Returns:
             str | None: The observation's value when current, or the established
@@ -121,6 +128,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
             return self._firmware_version
         self._firmware_version_observation_id = observation_id
 
+        reset_endpoints = verified_install
         if version is not None and firmware_is_at_least(version, "0") is not None:
             last_known = self._last_known_firmware_version
             if last_known is not None and version != last_known:
@@ -129,11 +137,13 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                     last_known,
                     version,
                 )
-                self._reset_endpoint_state()
+                reset_endpoints = True
             self._last_known_firmware_version = version
             self._firmware_version = version
         else:
             self._firmware_version = None
+        if reset_endpoints:
+            self._reset_endpoint_state()
         return version
 
     async def _firmware_capability(self, capability: FirmwareCapability) -> bool | None:
@@ -665,7 +675,7 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                         installed = dict_get(status, "product.product_version")
                         target_is_newer = firmware_is_newer(target, installed)
                         if target_is_newer is False:
-                            self._record_firmware_version(installed)
+                            self._record_firmware_version(installed, verified_install=True)
                             return
                         if not reboot:
                             raise OPNsenseError(

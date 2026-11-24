@@ -1203,24 +1203,43 @@ async def test_firmware_update_info_reports_exact_devel_build(
     ],
 )
 async def test_install_firmware_verifies_beta_target(
-    install_client: Callable[..., Any], installed: str, error: str | None
+    make_client: Callable[..., Any], installed: str, error: str | None
 ) -> None:
-    """A beta target installs and succeeds only once its build is on the Router.
+    """Only a verified beta build refreshes endpoint availability within the same series.
 
     Args:
-        install_client (Callable[..., Any]): Lifecycle transport factory.
+        make_client (Callable[..., Any]): Public client factory.
         installed (str): Firmware version reported after the action.
         error (str | None): Expected failure text, if any.
     """
-    client, session = install_client(
-        [(_install_progress("done", "***DONE***"), "ready", installed)]
+    status = SequencedResponse(
+        {"product": {"product_version": "27.1.b_21", "product_series": "27.1"}},
+        {"product": {"product_version": installed, "product_series": "27.1"}},
     )
+    system_info_path = "/api/diagnostics/system/system_information"
+    client, router = make_router_client(
+        make_client, _install_routes() | {("GET", STATUS_PATH): status}
+    )
+    assert await client.get_host_firmware_version() == "27.1"
+    assert await client.get_system_info() == {}
+    assert await client.get_system_info() == {}
+    assert router.count("GET", system_info_path) == 1
+
     if error:
         with pytest.raises(OPNsenseError, match=error):
             await client.install_firmware(target_version="27.1.b_22", poll_interval=0.001)
     else:
         await client.install_firmware(target_version="27.1.b_22", poll_interval=0.001)
-    session.post.assert_called_once()
+    assert router.count("POST", UPDATE_PATH) == 1
+
+    router.routes["GET", system_info_path] = {"name": "router"}
+    assert await client.get_host_firmware_version() == "27.1"
+    if error:
+        assert await client.get_system_info() == {}
+        assert router.count("GET", system_info_path) == 1
+    else:
+        assert await client.get_system_info() == {"name": "router"}
+        assert router.count("GET", system_info_path) == 2
 
 
 @pytest.mark.asyncio
