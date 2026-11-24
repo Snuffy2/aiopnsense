@@ -1,6 +1,8 @@
 """OpenVPN, WireGuard, and IPsec methods for OPNsenseClient."""
 
-from collections.abc import MutableMapping
+from collections import defaultdict
+from collections.abc import Hashable, MutableMapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import partial
 import logging
@@ -69,6 +71,27 @@ WIREGUARD_SERVER_GET_ENDPOINT_PREFIX = _StyledEndpoint(
     camel_case="/api/wireguard/server/getServer/",
 )
 WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT = "/api/wireguard/service/reconfigure"
+
+
+@dataclass(frozen=True, slots=True)
+class _WireGuardLinkKey:
+    """Identify a live link by Server interface and Client public key."""
+
+    interface: str | None
+    public_key: Any
+
+    def __hash__(self) -> int:
+        """Hash the link while retaining equality for malformed JSON public keys.
+
+        Returns:
+            int: Link hash, using only the interface for an unhashable public key.
+        """
+        if isinstance(self.public_key, Hashable):
+            return hash((self.interface, self.public_key))
+        return hash(self.interface)
+
+
+type _WireGuardLinkTarget = tuple[MutableMapping[str, Any], MutableMapping[str, Any], str]
 
 
 class VPNMixin(AiopnsenseClientProtocol):
@@ -618,6 +641,16 @@ class VPNMixin(AiopnsenseClientProtocol):
             servers (MutableMapping[str, Any]): Server mapping keyed by server identifier.
             clients (MutableMapping[str, Any]): Client mapping keyed by client identifier.
         """
+        links: defaultdict[_WireGuardLinkKey, list[_WireGuardLinkTarget]] = defaultdict(list)
+        for server in servers.values():
+            for link in server["clients"]:
+                key = _WireGuardLinkKey(server["interface"], link["pubkey"])
+                links[key].append((link, server, "connected_clients"))
+        for client in clients.values():
+            for link in client["servers"]:
+                key = _WireGuardLinkKey(link.get("interface"), client["pubkey"])
+                links[key].append((link, client, "connected_servers"))
+
         for entry in summary:
             if not isinstance(entry, MutableMapping):
                 continue
@@ -626,21 +659,20 @@ class VPNMixin(AiopnsenseClientProtocol):
                     if server.get("pubkey") == entry.get("public-key"):
                         server["status"] = entry.get("status")
             elif entry.get("type") == "peer":
-                VPNMixin._update_wireguard_peer_status(entry, servers, clients)
+                VPNMixin._update_wireguard_peer_status(entry, links)
 
     @staticmethod
     def _update_wireguard_peer_status(
         entry: MutableMapping[str, Any],
-        servers: MutableMapping[str, Any],
-        clients: MutableMapping[str, Any],
+        links: MutableMapping[_WireGuardLinkKey, list[_WireGuardLinkTarget]],
     ) -> None:
-        """Update the WireGuard peer status for clients and servers.
+        """Apply a summary row to the configured views of its WireGuard link.
 
         Args:
             entry (MutableMapping[str, Any]): WireGuard summary peer row from
                 ``/api/wireguard/service/show``.
-            servers (MutableMapping[str, Any]): Server mapping keyed by server identifier.
-            clients (MutableMapping[str, Any]): Client mapping keyed by client identifier.
+            links (MutableMapping[_WireGuardLinkKey, list[_WireGuardLinkTarget]]):
+                Configured link records and their parents grouped by relationship key.
         """
         pubkey = entry.get("public-key", "-")
         interface = entry.get("if", "-")
@@ -651,37 +683,20 @@ class VPNMixin(AiopnsenseClientProtocol):
         handshake_time = timestamp_to_datetime(latest_handshake)
         is_connected = VPNMixin._wireguard_is_connected(handshake_time)
 
-        # Update servers
-        for server in servers.values():
-            if server.get("interface") == interface:
-                for client in server.get("clients", []):
-                    if client.get("pubkey") == pubkey:
-                        VPNMixin._update_wireguard_peer_details(
-                            peer=client,
-                            server_or_client=server,
-                            endpoint=endpoint,
-                            transfer_rx=transfer_rx,
-                            transfer_tx=transfer_tx,
-                            handshake_time=handshake_time,
-                            is_connected=is_connected,
-                            connection_counter_key="connected_clients",
-                        )
-
-        # Update clients
-        for client in clients.values():
-            if client.get("pubkey") == pubkey:
-                for server in client.get("servers", []):
-                    if server.get("interface") == interface:
-                        VPNMixin._update_wireguard_peer_details(
-                            peer=server,
-                            server_or_client=client,
-                            endpoint=endpoint,
-                            transfer_rx=transfer_rx,
-                            transfer_tx=transfer_tx,
-                            handshake_time=handshake_time,
-                            is_connected=is_connected,
-                            connection_counter_key="connected_servers",
-                        )
+        # Configured interfaces are strings, or absent for an incomplete reference.
+        if interface is not None and not isinstance(interface, str):
+            return
+        for link, parent, counter_key in links.get(_WireGuardLinkKey(interface, pubkey), []):
+            VPNMixin._update_wireguard_peer_details(
+                peer=link,
+                server_or_client=parent,
+                endpoint=endpoint,
+                transfer_rx=transfer_rx,
+                transfer_tx=transfer_tx,
+                handshake_time=handshake_time,
+                is_connected=is_connected,
+                connection_counter_key=counter_key,
+            )
 
     @staticmethod
     def _update_wireguard_peer_details(
