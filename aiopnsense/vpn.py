@@ -9,7 +9,7 @@ from hashlib import sha256
 import logging
 from typing import Any
 
-from ._error_policy import _attempt, _log_boolean_errors, _log_errors
+from ._error_policy import _attempt, _log_boolean_errors, _log_errors, _throws_errors
 from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .access import Access, AccessDict
@@ -138,14 +138,16 @@ class VPNMixin(AiopnsenseClientProtocol):
                 session, route, tunnel-address, DNS, status, byte-counter, and
                 connected-client data when available. With the default
                 ``throw_errors=False``, returns ``None`` when the sessions endpoint
-                is unavailable or its rows are missing or malformed, or when the
-                instance or provider inventory cannot be read reliably. A known
+                is unavailable or its rows are missing or malformed. A known
                 missing (404) inventory endpoint is treated as empty. A forbidden
                 (403) instance inventory reports Status Access through
                 ``result_access()``, with servers from sessions, no ``enabled``
-                fields or instance details, and an empty ``clients`` inventory.
-                Otherwise the result reports Configuration Access. A forbidden
-                provider inventory only omits its enrichment.
+                fields, and an empty ``clients`` inventory. Provider export and
+                instance details are skipped under Status Access. Without an
+                instance denial, the inventory reads must succeed or report
+                absence for this method to return a Configuration Access result.
+                A transient failure or malformed inventory returns ``None``.
+                A forbidden provider inventory only omits its enrichment.
                 Route-derived ``clients`` and ``connected_clients`` are omitted
                 when routes cannot be fetched or have missing or malformed rows,
                 rather than reporting zero clients.
@@ -186,26 +188,12 @@ class VPNMixin(AiopnsenseClientProtocol):
         else:
             routes_info = routes_outcome.mapping()
 
-        providers_outcome = await self._fetch_endpoint_outcome(OPENVPN_PROVIDERS_ENDPOINT)
-        if providers_outcome.is_transient:
-            _LOGGER.debug("[get_openvpn] providers inventory unavailable")
-            return None
-        # Preserve the distinction between a valid empty mapping and a failed request.
-        providers_info = providers_outcome.payload
-        if providers_outcome.is_absent:
-            _LOGGER.debug("OpenVPN providers endpoint unavailable")
-            providers_info = {}
-        elif providers_info == []:
-            providers_info = {}
-        if not isinstance(providers_info, MutableMapping):
-            _LOGGER.debug("[get_openvpn] providers inventory unavailable")
-            return None
-        if any(
-            not isinstance(uuid, str) or not uuid or not isinstance(vpn_info, MutableMapping)
-            for uuid, vpn_info in providers_info.items()
-        ):
-            _LOGGER.debug("[get_openvpn] providers inventory unavailable (malformed entry)")
-            return None
+        providers_info = None
+        if _throws_errors(self):
+            # Preserve which failure is reported first in strict mode.
+            providers_info = await self._get_openvpn_providers()
+            if providers_info is None:
+                return None
 
         instances_outcome = await self._fetch_endpoint_outcome(OPENVPN_INSTANCES_SEARCH_ENDPOINT)
         if instances_outcome.is_transient:
@@ -237,6 +225,10 @@ class VPNMixin(AiopnsenseClientProtocol):
 
         access = Access.STATUS if instances_outcome.http_status == 403 else Access.CONFIGURATION
         if access is Access.CONFIGURATION:
+            if providers_info is None:
+                providers_info = await self._get_openvpn_providers()
+                if providers_info is None:
+                    return None
             self._process_openvpn_instances(instances_info, openvpn)
             self._process_openvpn_providers(providers_info, openvpn)
         self._process_openvpn_sessions(sessions_info, openvpn)
@@ -260,6 +252,36 @@ class VPNMixin(AiopnsenseClientProtocol):
             len(openvpn["clients"]),
         )
         return AccessDict(openvpn, access=access)
+
+    async def _get_openvpn_providers(self) -> MutableMapping[str, Any] | None:
+        """Read the OpenVPN provider inventory used to enrich server entries.
+
+        Returns:
+            MutableMapping[str, Any] | None: Providers keyed by UUID, an empty
+                mapping for an absent endpoint, or ``None`` for an unreadable
+                inventory. Request errors propagate in strict mode.
+        """
+        providers_outcome = await self._fetch_endpoint_outcome(OPENVPN_PROVIDERS_ENDPOINT)
+        if providers_outcome.is_transient:
+            _LOGGER.debug("[get_openvpn] providers inventory unavailable")
+            return None
+        # Preserve the distinction between a valid empty mapping and a failed request.
+        providers_info = providers_outcome.payload
+        if providers_outcome.is_absent:
+            _LOGGER.debug("OpenVPN providers endpoint unavailable")
+            providers_info = {}
+        elif providers_info == []:
+            providers_info = {}
+        if not isinstance(providers_info, MutableMapping):
+            _LOGGER.debug("[get_openvpn] providers inventory unavailable")
+            return None
+        if any(
+            not isinstance(uuid, str) or not uuid or not isinstance(vpn_info, MutableMapping)
+            for uuid, vpn_info in providers_info.items()
+        ):
+            _LOGGER.debug("[get_openvpn] providers inventory unavailable (malformed entry)")
+            return None
+        return providers_info
 
     @staticmethod
     def _process_openvpn_instances(
@@ -437,10 +459,12 @@ class VPNMixin(AiopnsenseClientProtocol):
                 byte counters, and connected peer counts where available. With the
                 default ``throw_errors=False``, returns ``None`` when the
                 summary endpoint is unavailable or its rows are missing or
-                malformed, or either configuration inventory cannot be read
-                reliably. A forbidden (403) client or server configuration
-                endpoint reports Status Access through ``result_access()``.
-                In that case, entries come from the status summary, are keyed
+                malformed. A forbidden (403) client or server configuration
+                endpoint reports Status Access through ``result_access()`` even
+                when the other configuration inventory fails or is malformed.
+                Without a denial, both inventories must be readable or missing
+                (404) for this method to return a result.
+                Under Status Access, entries come from the status summary, are keyed
                 by ``key_hash`` with ``uuid=None``, and omit ``enabled``,
                 ``tunnel_addresses`` and ``dns_servers``. At either level, the
                 ``key_hash`` is the first 16 lowercase hex characters of the
@@ -458,54 +482,56 @@ class VPNMixin(AiopnsenseClientProtocol):
                 required payloads, including a non-empty inventory list, return
                 ``None`` regardless of error mode.
         """
-        data_sources = {
-            "summary_raw": WIREGUARD_SUMMARY_ENDPOINT,
-            "clients_raw": WIREGUARD_CLIENTS_ENDPOINT,
-            "servers_raw": WIREGUARD_SERVERS_ENDPOINT,
-        }
-        data: dict[str, dict[str, Any]] = {}
+        summary_outcome = await self._fetch_endpoint_outcome(WIREGUARD_SUMMARY_ENDPOINT)
+        if not summary_outcome.is_data:
+            _LOGGER.debug("[get_wireguard] summary endpoint unavailable")
+            return None
+        summary = summary_outcome.mapping().get("rows")
+        if not isinstance(summary, list) and not _throws_errors(self):
+            _LOGGER.debug("[get_wireguard] status unavailable (malformed rows)")
+            return None
+
+        inventories: dict[str, Any] = {}
         access = Access.CONFIGURATION
-        for key, path in data_sources.items():
-            outcome = await self._fetch_endpoint_outcome(path)
-            if outcome.is_data:
-                data[key] = outcome.mapping()
+        for path, inventory_key in (
+            (WIREGUARD_CLIENTS_ENDPOINT, "client.clients.client"),
+            (WIREGUARD_SERVERS_ENDPOINT, "server.servers.server"),
+        ):
+            outcome = await _attempt(
+                self,
+                partial(self._fetch_endpoint_outcome, path),
+                empty=None,
+                name=f"get_wireguard configuration at {path}",
+                errors=(OPNsenseError,),
+            )
+            # A failed read does not establish access. The other endpoint may still deny it.
+            if outcome is None or outcome.is_transient:
                 continue
-            _LOGGER.debug("WireGuard endpoint unavailable: %s", path)
-            if outcome.is_transient:
-                return None
             if outcome.http_status == 403:
                 access = Access.STATUS
-            # An absent configuration endpoint contributes no configuration entries.
-            if key == "clients_raw":
-                data[key] = {"client": {"clients": {"client": {}}}}
-            elif key == "servers_raw":
-                data[key] = {"server": {"servers": {"server": {}}}}
-            else:
-                return None
+                break
+            inventory = dict_get(outcome.mapping(), inventory_key) if outcome.is_data else {}
+            # The Router reports an empty configuration collection as an empty list.
+            inventories[path] = {} if inventory == [] else inventory
 
-        summary = data["summary_raw"].get("rows")
-        client_summ = dict_get(data["clients_raw"], "client.clients.client")
-        server_summ = dict_get(data["servers_raw"], "server.servers.server")
-        # The Router reports an empty configuration collection as an empty list.
-        client_summ = {} if client_summ == [] else client_summ
-        server_summ = {} if server_summ == [] else server_summ
-
-        if (
-            not isinstance(summary, list)
-            or not isinstance(client_summ, MutableMapping)
-            or not isinstance(server_summ, MutableMapping)
-        ):
-            _LOGGER.debug("[get_wireguard] status unavailable (malformed payload)")
+        if not isinstance(summary, list):
+            _LOGGER.debug("[get_wireguard] status unavailable (malformed rows)")
             return None
-        if any(not isinstance(client, MutableMapping) for client in client_summ.values()) or any(
-            not isinstance(server, MutableMapping) for server in server_summ.values()
-        ):
-            _LOGGER.debug("[get_wireguard] configuration unavailable (malformed entry)")
-            return None
-
         if access is Access.STATUS:
             servers, clients = self._wireguard_status_inventory(summary)
         else:
+            client_summ = inventories.get(WIREGUARD_CLIENTS_ENDPOINT)
+            server_summ = inventories.get(WIREGUARD_SERVERS_ENDPOINT)
+            if not isinstance(client_summ, MutableMapping) or not isinstance(
+                server_summ, MutableMapping
+            ):
+                _LOGGER.debug("[get_wireguard] configuration unavailable (missing or malformed)")
+                return None
+            if any(
+                not isinstance(client, MutableMapping) for client in client_summ.values()
+            ) or any(not isinstance(server, MutableMapping) for server in server_summ.values()):
+                _LOGGER.debug("[get_wireguard] configuration unavailable (malformed entry)")
+                return None
             servers = {
                 uid: self._process_wireguard_server(uid, srv, client_summ)
                 for uid, srv in server_summ.items()
@@ -1257,18 +1283,17 @@ class VPNMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, dict[str, Any]] | None: Children seen in the sessions API,
                 plus configured children under Configuration Access, with installed SA
-                counts and aggregated counters. ``None`` when the child
-                configuration or any phase 2 session list could not be read this
-                time, so a missing reply is never reported as a down child. When
-                ``self._throw_errors`` is ``True``, a failed phase 2 sessions
-                request, for example a reply that is not valid JSON, raises
-                ``OPNsenseError`` instead.
+                counts and aggregated counters. Returns ``None`` if a phase 2
+                session list is unreadable or child configuration is unreadable
+                under Configuration Access. A missing reply is never reported as a
+                down child. When ``self._throw_errors`` is ``True``, failed phase 2
+                requests and invalid JSON replies raise ``OPNsenseError``.
         """
-        configured = await self._get_ipsec_configured_rows(IPSEC_CHILDREN_ENDPOINT)
-        if configured is None:
-            return None
         children: dict[str, dict[str, Any]] = {}
         if access is Access.CONFIGURATION:
+            configured = await self._get_ipsec_configured_rows(IPSEC_CHILDREN_ENDPOINT)
+            if configured is None:
+                return None
             children = {uuid: self._new_ipsec_child(uuid, row) for uuid, row in configured.items()}
         if not connected_session_names:
             return children
@@ -1330,16 +1355,19 @@ class VPNMixin(AiopnsenseClientProtocol):
                 with Configuration Access. A forbidden (403) connections endpoint
                 reports Status Access through ``result_access()`` and includes only
                 phase 1 connections and phase 2 children visible in sessions,
-                without ``enabled`` fields. A forbidden child configuration endpoint
+                without ``enabled`` fields. Child configuration is skipped under
+                Status Access. A forbidden child configuration endpoint
                 on its own only removes configured-only children from the result.
                 Configured connections without a session, including disabled
                 ones, are reported as disconnected. ``children`` holds phase 2
                 status keyed by child UUID, with ``install_time`` as the age of
-                the oldest installed SA. A transient child-configuration or phase 2
-                read failure, or a decoded response without a valid ``rows`` list,
-                omits ``children``. Invalid JSON from the child-configuration
-                endpoint instead makes this method return ``None`` by default and
-                raise ``OPNsenseError`` when ``self._throw_errors`` is ``True``.
+                the oldest installed SA. A transient phase 2 read failure or a
+                decoded phase 2 response without a valid ``rows`` list omits
+                ``children``. Under Configuration Access, a transient or structurally
+                malformed child configuration reply also omits ``children``.
+                Invalid JSON from the child configuration endpoint makes this
+                method return ``None`` by default and raise ``OPNsenseError``
+                when ``self._throw_errors`` is ``True``.
                 Returns ``None`` when the phase 1 sessions endpoint is unavailable
                 or its rows are missing or malformed. A valid empty session list
                 still reports configured connections and children as disconnected
