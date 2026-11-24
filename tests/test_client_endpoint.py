@@ -3,10 +3,12 @@
 Public behavior runs through ``make_router_client``. Tests that call
 ``_fetch_endpoint_outcome``, ``_check_endpoint_status``, ``_set_use_snake_case`` or
 ``_reset_endpoint_state`` target the endpoint availability layer itself, which has no
-public equivalent for an outcome read, a status-only check or a cache reset.
+public equivalent for an outcome read, a status-only check or a cache reset. Cache state
+is read and set only through the cache interface (``client._endpoint_cache``).
 """
 
 import asyncio
+from datetime import datetime, timedelta
 import logging
 from typing import Any
 from unittest.mock import AsyncMock
@@ -14,8 +16,11 @@ from unittest.mock import AsyncMock
 import aiohttp
 import pytest
 
+from aiopnsense import OPNsenseClient
+from aiopnsense._endpoint_cache import _CachedAnswer
 from aiopnsense._endpoint_outcome import _EndpointOutcome
 from aiopnsense._styled_endpoint import _StyledEndpoint
+from aiopnsense.const import DEFAULT_CACHE_TTL_SECONDS
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsenseError,
@@ -40,6 +45,19 @@ NUT_PATH = "/api/nut/diagnostics/upsstatus"
 NUT_DATA = {"status": {"ups.status": "OL"}}
 OUTCOME_PATH = "/api/test/outcome"
 POST_PATH = "/api/test/post"
+
+
+def _cached_answer(client: OPNsenseClient, key: str) -> _CachedAnswer | None:
+    """Return the fresh cached availability answer for a key.
+
+    Args:
+        client (OPNsenseClient): Client whose endpoint cache is read.
+        key (str): Method-aware endpoint cache key.
+
+    Returns:
+        _CachedAnswer | None: The fresh answer, or ``None`` when there is none.
+    """
+    return client._endpoint_cache.lookup(key, datetime.now().astimezone())[0]
 
 
 class _TestClientSSLError(aiohttp.ClientSSLError):
@@ -98,17 +116,14 @@ async def test_validate_reprobes_cached_403_in_throw_mode(
     try:
         path = FIRMWARE_STATUS_PATH
         assert (await client._check_endpoint_status(path)).is_absent
-        assert client._endpoint_availability[path] is False
-        assert path in client._endpoint_permission_denied
+        assert _cached_answer(client, path) is _CachedAnswer.PERMISSION_DENIED
 
         with pytest.raises(OPNsensePrivilegeMissing):
             await client.validate(require_device_id=False)
 
         assert router.count("GET", path) == 2
         assert client._throw_errors is False
-        assert path not in client._endpoint_availability
-        assert path not in client._endpoint_checked_at
-        assert path not in client._endpoint_permission_denied
+        assert _cached_answer(client, path) is None
     finally:
         await client.async_close()
 
@@ -172,8 +187,7 @@ async def test_validate_maps_endpoint_probe_http_errors_to_public_exceptions(
             await client.validate()
         assert router.count("GET", path) == 1
         assert client._throw_errors is False
-        assert path not in client._endpoint_checked_at
-        assert path not in client._endpoint_availability
+        assert _cached_answer(client, path) is None
     finally:
         await client.async_close()
 
@@ -650,7 +664,12 @@ async def test_absent_endpoint_is_cached_until_ttl_expires(
         assert await client.get_nut_ups_status() == {}
         assert router.count("GET", NUT_PATH) == 1
 
-        client._endpoint_cache_ttl_seconds = 0
+        # Age the cached answer past the TTL, so it is expired.
+        cache = client._endpoint_cache
+        now = datetime.now().astimezone()
+        answer, ticket = cache.lookup(NUT_PATH, now)
+        assert answer is _CachedAnswer.ABSENT
+        cache.record(NUT_PATH, answer, now - timedelta(seconds=DEFAULT_CACHE_TTL_SECONDS), ticket)
         router.routes[("GET", NUT_PATH)] = NUT_DATA
         assert await client.get_nut_ups_status() == NUT_DATA
         assert router.count("GET", NUT_PATH) == 2
@@ -781,20 +800,23 @@ async def test_forbidden_in_throw_mode_clears_cached_present_status(
         await client.async_close()
 
 
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["default-mode", "throw-mode"])
 @pytest.mark.parametrize(
     "status", [200, 404, 403, 500], ids=["present", "absent", "forbidden", "transient"]
 )
 @pytest.mark.asyncio
 async def test_reset_during_request_discards_its_cache_answer(
-    make_client: MakeClientFactory, status: int
+    make_client: MakeClientFactory, status: int, throw_errors: bool
 ) -> None:
-    """An answer that arrives after an endpoint cache reset is not cached.
+    """An answer that arrives after a reset is not cached, but its caller still gets the outcome.
 
     Args:
         make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
         status (int): HTTP status the Router answers with.
+        throw_errors (bool): Whether the client raises public errors.
     """
     client, router = make_router_client(make_client)
+    client.toggle_throwing_errors(throw_errors)
 
     def reset_then_answer(**_kwargs: Any) -> int:
         """Reset the endpoint cache before the client reads the answer.
@@ -808,12 +830,117 @@ async def test_reset_during_request_discards_its_cache_answer(
         client._reset_endpoint_state()
         return status
 
+    async def fetch() -> _EndpointOutcome | None:
+        """Read the endpoint, returning ``None`` when the call raises its mapped exception.
+
+        Returns:
+            _EndpointOutcome | None: Outcome of the read, or ``None`` after the expected raise.
+        """
+        if throw_errors and status == 403:
+            with pytest.raises(OPNsensePrivilegeMissing):
+                await client._fetch_endpoint_outcome(NUT_PATH)
+            return None
+        if throw_errors and status == 500:
+            with pytest.raises(OPNsenseError):
+                await client._fetch_endpoint_outcome(NUT_PATH)
+            return None
+        return await client._fetch_endpoint_outcome(NUT_PATH)
+
     router.routes[("GET", NUT_PATH)] = reset_then_answer
     try:
-        await client._fetch_endpoint_outcome(NUT_PATH)
+        outcome = await fetch()
+        if outcome is not None:
+            assert (outcome.is_data, outcome.is_absent, outcome.is_transient) == {
+                200: (True, False, False),
+                404: (False, True, False),
+                403: (False, True, False),
+                500: (False, False, True),
+            }[status]
         router.routes[("GET", NUT_PATH)] = status
-        await client._fetch_endpoint_outcome(NUT_PATH)
+        if status == 200:
+            # A data fetch always sends a request, so a cached present answer shows only
+            # through the status-only check, which would otherwise skip the request.
+            await client._check_endpoint_status(NUT_PATH)
+        else:
+            await fetch()
         assert router.count("GET", NUT_PATH) == 2
+    finally:
+        await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_failure_from_before_a_reset_keeps_the_newer_cached_answer(
+    make_client: MakeClientFactory,
+) -> None:
+    """A failure from a request sent before a reset does not remove a newer cached answer.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    held = HeldResponse(status=500, ok=False)
+    client, router = make_router_client(make_client, routes={("GET", NUT_PATH): held})
+    old_task = asyncio.create_task(client._check_endpoint_status(NUT_PATH))
+    try:
+        await asyncio.wait_for(held.entered.wait(), timeout=1)
+        client._reset_endpoint_state()
+        router.routes[("GET", NUT_PATH)] = NUT_DATA
+        assert (await client._check_endpoint_status(NUT_PATH)).is_data
+        assert router.count("GET", NUT_PATH) == 2
+
+        held.release.set()
+        assert (await old_task).is_transient
+        assert (await client._check_endpoint_status(NUT_PATH)).is_data
+        assert router.count("GET", NUT_PATH) == 2
+    finally:
+        held.release.set()
+        if not old_task.done():
+            await asyncio.gather(old_task, return_exceptions=True)
+        await client.async_close()
+
+
+@pytest.mark.parametrize(
+    ("cached_method", "other_method"),
+    [("GET", "POST"), ("POST", "GET")],
+    ids=["get-absent-then-post", "post-absent-then-get"],
+)
+@pytest.mark.asyncio
+async def test_absent_answer_for_one_method_does_not_block_the_other(
+    make_client: MakeClientFactory, cached_method: str, other_method: str
+) -> None:
+    """A cached absent answer for one method on a path does not stop the other method's request.
+
+    Args:
+        make_client (MakeClientFactory): Fixture factory returning ``OPNsenseClient`` instances.
+        cached_method (str): Method whose absent answer is cached first.
+        other_method (str): Method sent afterwards on the same path.
+    """
+    client, router = make_router_client(
+        make_client,
+        routes={(cached_method, POST_PATH): 404, (other_method, POST_PATH): {"ok": True}},
+    )
+
+    async def fetch(method: str) -> _EndpointOutcome:
+        """Read the path with one method.
+
+        Args:
+            method (str): HTTP method to send.
+
+        Returns:
+            _EndpointOutcome: Outcome of the read.
+        """
+        if method == "GET":
+            return await client._fetch_endpoint_outcome(POST_PATH)
+        return await client._fetch_post_endpoint_outcome(POST_PATH, {"device": "ada0"})
+
+    try:
+        assert (await fetch(cached_method)).is_absent
+        assert (await fetch(cached_method)).is_absent
+        assert router.count(cached_method, POST_PATH) == 1
+
+        assert (await fetch(other_method)).is_data
+        assert router.count(other_method, POST_PATH) == 1
+        assert (await fetch(cached_method)).is_absent
+        assert router.count(cached_method, POST_PATH) == 1
     finally:
         await client.async_close()
 

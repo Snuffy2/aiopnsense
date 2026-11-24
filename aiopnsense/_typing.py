@@ -23,7 +23,6 @@ class AiopnsenseClientProtocol(Protocol):
     _firmware_check_requested_at: float | None
     _active_close_count: int
     _throw_errors: bool
-    _endpoint_availability: dict[str, bool]
 
     def _open_request(
         self,

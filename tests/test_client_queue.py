@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import MutableMapping
 import contextlib
+from datetime import datetime
 import json
 import logging
 import re
@@ -1269,7 +1270,8 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
             assert result is None
         recovered = True
         # A forbidden answer is cached outside throw mode; drop it as the cache TTL would.
-        client._clear_endpoint_cache_entry(endpoint)
+        cache = client._endpoint_cache
+        cache.clear(endpoint, cache.lookup(endpoint, datetime.now().astimezone())[1])
         result = await getattr(client, f"get_{vpn}")()
         assert result is not None
         assert "disabled" in result[collection]
