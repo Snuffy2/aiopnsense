@@ -44,6 +44,16 @@ _Avoid_: Instance, interface
 A remote WireGuard endpoint configured on the Router and linked to one or more WireGuard Servers.
 _Avoid_: Peer
 
+### Access
+
+**Status Access**:
+The level at which the Router lets the API user read the live status of a category, or of one VPN type, but not its configured inventory. Under Status Access, items the status does not show, such as disabled VPN Instances, are not visible, and nothing can be Toggled. The Router's answers decide the level, not a user setting.
+_Avoid_: Read-only, status-only user
+
+**Configuration Access**:
+The level at which the API user can also read the configured inventory of a category, or of one VPN type, and Toggle its items.
+_Avoid_: Read/write, full access
+
 ### Actions
 
 **Toggle**:
