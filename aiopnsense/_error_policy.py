@@ -10,9 +10,12 @@ outer report. Outer handlers report newly detected failures.
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import partial, wraps
 from typing import Any, Protocol
+from weakref import ReferenceType, ref
 
 import aiohttp
 
@@ -34,11 +37,51 @@ _DEFAULT_SCOPED_ERRORS: tuple[type[Exception], ...] = (
     TypeError,
 )
 
+_STRICT_ERROR_OWNER: ContextVar[
+    tuple[ReferenceType[object], ReferenceType[asyncio.Task[Any]]] | None
+] = ContextVar("_STRICT_ERROR_OWNER", default=None)
+
 
 class _ThrowErrorsClient(Protocol):
     """Client state the error policy reads."""
 
     _throw_errors: bool
+
+
+@contextmanager
+def _strict_error_scope(client: object | None) -> Iterator[None]:
+    """Scope the strict override to one client in the current task.
+
+    Args:
+        client (object | None): Client to make strict, or ``None`` to clear the override.
+
+    Yields:
+        None: The override stays in effect until the scope exits.
+    """
+    task = asyncio.current_task() if client is not None else None
+    owner = (ref(client), ref(task)) if client is not None and task is not None else None
+    token = _STRICT_ERROR_OWNER.set(owner)
+    try:
+        yield
+    finally:
+        _STRICT_ERROR_OWNER.reset(token)
+
+
+def _has_strict_error_override(client: object) -> bool:
+    """Return the scoped override separately from the client's configured default.
+
+    Args:
+        client (object): Client whose override is being checked.
+
+    Returns:
+        bool: Whether this task forces the client to raise errors.
+    """
+    owner = _STRICT_ERROR_OWNER.get()
+    if owner is None or owner[0]() is not client:
+        return False
+    # A copied context can outlive the task that owns the operation.
+    task = owner[1]()
+    return task is not None and task is asyncio.current_task()
 
 
 def _handle_error(
@@ -47,7 +90,7 @@ def _handle_error(
     """Log one failure and raise its public form when the client throws errors.
 
     Args:
-        client (_ThrowErrorsClient): Client whose ``_throw_errors`` setting selects
+        client (_ThrowErrorsClient): Client whose effective error mode selects
             between raising and returning to the caller.
         error (Exception): Caught failure to report.
         name (str): Operation name used in the log message.
@@ -57,7 +100,7 @@ def _handle_error(
 
     Raises:
         public_error: The failure itself when it is already an ``OPNsenseError``,
-            otherwise its mapped ``OPNsenseError``, when ``_throw_errors`` is true.
+            otherwise its mapped ``OPNsenseError``, in strict mode.
             Unless ``log_level`` is given, it is marked as logged so wrappers
             further up do not log it again.
     """
@@ -70,7 +113,7 @@ def _handle_error(
             )
         else:
             _LOGGER.error("Error in %s. %s", name, _ExceptionLogDetails(error))
-    if not client._throw_errors:
+    if not _throws_errors(client):
         return
     public_error = _map_opnsense_exception(error)
     if log_level is None:
@@ -83,28 +126,28 @@ def _handle_error(
 
 
 def _throws_errors(client: _ThrowErrorsClient) -> bool:
-    """Return whether the client raises public errors instead of returning empty values.
+    """Resolve the strict override or read the client's current default.
 
     Args:
-        client (_ThrowErrorsClient): Client holding the ``_throw_errors`` setting.
+        client (_ThrowErrorsClient): Client whose effective error mode is used.
 
     Returns:
         bool: ``True`` when failures are raised as ``OPNsenseError`` subclasses.
     """
-    return client._throw_errors
+    return _has_strict_error_override(client) or client._throw_errors
 
 
 def _error_if_throwing(client: _ThrowErrorsClient, error: OPNsenseError) -> OPNsenseError | None:
     """Return the error a request will raise, for marking it as already logged.
 
     Args:
-        client (_ThrowErrorsClient): Client holding the ``_throw_errors`` setting.
+        client (_ThrowErrorsClient): Client whose effective error mode is used.
         error (OPNsenseError): Public error the request raises when throwing.
 
     Returns:
         OPNsenseError | None: ``error`` when the client throws errors, otherwise ``None``.
     """
-    return error if client._throw_errors else None
+    return error if _throws_errors(client) else None
 
 
 def _raise_if_throwing(
@@ -119,16 +162,16 @@ def _raise_if_throwing(
     was already logged.
 
     Args:
-        client (_ThrowErrorsClient): Client whose ``_throw_errors`` setting selects
+        client (_ThrowErrorsClient): Client whose effective error mode selects
             between raising and returning to the caller.
         error (OPNsenseError): Public error to raise.
         cause (BaseException | None): Original failure that ``error`` was mapped
             from, chained as the cause.
 
     Raises:
-        error: ``error`` itself when ``_throw_errors`` is true.
+        error: ``error`` itself in strict mode.
     """
-    if client._throw_errors:
+    if _throws_errors(client):
         if cause is None:
             raise error
         raise error from cause
@@ -153,7 +196,7 @@ def _log_errors(func: Callable[..., Any], *, fallback: bool | None = None) -> Ca
         """Execute wrapped coroutine with shared timeout/exception logging.
 
         Args:
-            self (Any): Client instance whose ``_throw_errors`` setting controls
+            self (Any): Client instance whose effective error mode controls
                 whether caught errors are mapped and propagated or logged and
                 suppressed.
             args (Any): Positional arguments forwarded to the wrapped coroutine.
@@ -161,7 +204,7 @@ def _log_errors(func: Callable[..., Any], *, fallback: bool | None = None) -> Ca
 
         Returns:
             Any: Wrapped coroutine result, or the fallback when an error is
-                suppressed. When ``_throw_errors`` is true, caught errors are
+                suppressed. In strict mode, caught errors are
                 raised as ``OPNsenseError`` subclasses instead.
 
         Raises:
@@ -196,7 +239,7 @@ async def _attempt[T, E](
     """Run one step of a public method that has its own documented empty value.
 
     Args:
-        client (_ThrowErrorsClient): Client whose ``_throw_errors`` setting selects
+        client (_ThrowErrorsClient): Client whose effective error mode selects
             between raising and returning ``empty``.
         call (Callable[[], Awaitable[T]]): Zero-argument callable that performs the step.
         empty (E): Value returned after logging when the step fails and the client
@@ -210,7 +253,7 @@ async def _attempt[T, E](
 
     Returns:
         T | E: The step result, or ``empty`` when the step fails and
-            ``_throw_errors`` is false. When ``_throw_errors`` is true, a failure
+            errors are suppressed. In strict mode, a failure
             is raised as an ``OPNsenseError`` subclass instead.
     """
     try:

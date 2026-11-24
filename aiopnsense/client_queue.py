@@ -5,6 +5,7 @@ from collections.abc import MutableMapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from ._error_policy import _has_strict_error_override, _strict_error_scope
 from .client_transport import _is_skipped_when_cancelled, _public_caller_name, _RequestKind
 from .const import QUEUE_REQUEST_INTERVAL_SECONDS
 from .exceptions import OPNsenseError, _map_opnsense_exception
@@ -31,6 +32,7 @@ class _QueueEntry:
     cancellation_state: _CancellablePostState | None = None
     method: Literal["get", "post"] = "get"
     response_format: Literal["json", "text"] = "json"
+    strict_errors: bool = False
 
 
 class ClientQueueMixin:
@@ -82,8 +84,10 @@ class ClientQueueMixin:
         self._loop = asyncio.get_running_loop()
 
         self._workers = [worker for worker in self._workers if not worker.done()]
-        while len(self._workers) < self._max_workers:
-            self._workers.append(asyncio.create_task(self._process_queue()))
+        # A worker can outlive the validation that started it.
+        with _strict_error_scope(None):
+            while len(self._workers) < self._max_workers:
+                self._workers.append(asyncio.create_task(self._process_queue()))
 
     async def _get_active_loop(self) -> asyncio.AbstractEventLoop:
         """Ensure workers are started and return the active event loop.
@@ -138,6 +142,7 @@ class ClientQueueMixin:
                 _public_caller_name(),
                 method=method,
                 response_format=response_format,
+                strict_errors=_has_strict_error_override(self),
             )
         )
         return await future
@@ -177,6 +182,7 @@ class ClientQueueMixin:
                 _public_caller_name(),
                 cancellation_state,
                 method="post",
+                strict_errors=_has_strict_error_override(self),
             )
         )
         try:
@@ -252,14 +258,16 @@ class ClientQueueMixin:
                             future.cancel()
                         continue
                     cancellation_state.started = True
-                result = await self._dispatch_request(
-                    entry.kind,
-                    entry.path,
-                    entry.payload,
-                    caller,
-                    entry.method,
-                    entry.response_format,
-                )
+                # Ordinary requests still read the current default at failure time.
+                with _strict_error_scope(self if entry.strict_errors else None):
+                    result = await self._dispatch_request(
+                        entry.kind,
+                        entry.path,
+                        entry.payload,
+                        caller,
+                        entry.method,
+                        entry.response_format,
+                    )
                 if not future.done():
                     future.set_result(result)
             except asyncio.CancelledError:
