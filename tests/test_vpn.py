@@ -750,6 +750,79 @@ async def test_get_wireguard_status_access_links_live_rows(
     assert router.count("GET", denied_path) == 2
 
 
+async def test_get_wireguard_status_access_aggregates_shared_server_key(
+    make_client: ClientType, wireguard_now: datetime
+) -> None:
+    """Aggregate links and counters when status interfaces share a public key.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        wireguard_now (datetime): Fixed reference time for handshake status.
+    """
+    handshake = int((wireguard_now - timedelta(seconds=30)).timestamp())
+    rows = [
+        {
+            "type": "interface",
+            "public-key": "shared-server-key",
+            "if": "wg0",
+            "ifname": "Server 0",
+            "status": "up",
+        },
+        {
+            "type": "peer",
+            "public-key": "client-key-0",
+            "name": "Client 0",
+            "if": "wg0",
+            "transfer-rx": "10",
+            "transfer-tx": "11",
+            "latest-handshake": handshake,
+        },
+        {
+            "type": "interface",
+            "public-key": "shared-server-key",
+            "if": "wg1",
+            "ifname": "Server 1",
+            "status": "down",
+        },
+        {
+            "type": "peer",
+            "public-key": "client-key-1",
+            "name": "Client 1",
+            "if": "wg1",
+            "transfer-rx": "20",
+            "transfer-tx": "21",
+            "latest-handshake": handshake,
+        },
+    ]
+    client, _router = make_vpn_router(
+        make_client,
+        wireguard_routes(summary={"rows": rows}, clients=403, servers=403),
+    )
+
+    result = await client.get_wireguard()
+
+    assert result is not None
+    assert result_access(result) is Access.STATUS
+    assert len(result["servers"]) == 1
+    key_hash, server = next(iter(result["servers"].items()))
+    assert server["key_hash"] == key_hash
+    assert server["uuid"] is None
+    assert (server["name"], server["interface"], server["status"]) == (
+        "Server 1",
+        "wg1",
+        "down",
+    )
+    assert (server["total_bytes_recv"], server["total_bytes_sent"]) == (30, 32)
+    assert server["connected_clients"] == 2
+    assert {link["pubkey"] for link in server["clients"]} == {"client-key-0", "client-key-1"}
+    clients = result["clients"]
+    assert {entry["total_bytes_recv"] for entry in clients.values()} == {10, 20}
+    assert {entry["total_bytes_sent"] for entry in clients.values()} == {11, 21}
+    assert {
+        (link["interface"], link["name"]) for entry in clients.values() for link in entry["servers"]
+    } == {("wg0", "Server 0"), ("wg1", "Server 1")}
+
+
 async def test_get_wireguard_retains_duplicate_and_incomplete_links(
     make_client: ClientType,
 ) -> None:
