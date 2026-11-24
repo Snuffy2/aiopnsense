@@ -220,8 +220,8 @@ async def test_voucher_switched_endpoints_follow_selected_case(
             None,
             "/api/captiveportal/voucher/list_providers",
             "/api/captiveportal/voucher/generate_vouchers/srv/",
-            # Ticket 04 reduces this to one: a supplied server needs no provider path.
-            2,
+            # A supplied server needs no provider path, so only the generate path is resolved.
+            1,
             2,
             id="unknown-firmware",
         ),

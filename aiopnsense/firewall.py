@@ -6,6 +6,7 @@ from io import StringIO
 from typing import Any
 
 from ._error_policy import _log_boolean_errors, _log_errors
+from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import TOGGLE_ITEM_RESULTS, ToggleSpec, ToggleStep
 from .const import SOURCE_NAT_AUTOMATIC_ROW_FILTER_CAPABILITY, UNIFIED_NAT_TEMPLATE_CAPABILITY
@@ -21,10 +22,14 @@ FIREWALL_FILTER_APPLY_ENDPOINT = "/api/firewall/filter/apply"
 FIREWALL_NAT_TOGGLE_RULE_ENDPOINT_PREFIX = "/api/firewall/"
 FIREWALL_NAT_APPLY_ENDPOINT_SUFFIX = "/apply"
 FIREWALL_KILL_STATES_ENDPOINT = "/api/diagnostics/firewall/kill_states/"
-FIREWALL_ALIAS_SEARCH_ENDPOINT = "/api/firewall/alias/search_item"
-FIREWALL_ALIAS_SEARCH_CAMELCASE_ENDPOINT = "/api/firewall/alias/searchItem"
-FIREWALL_ALIAS_TOGGLE_ENDPOINT_PREFIX = "/api/firewall/alias/toggle_item/"
-FIREWALL_ALIAS_TOGGLE_CAMELCASE_ENDPOINT_PREFIX = "/api/firewall/alias/toggleItem/"
+FIREWALL_ALIAS_SEARCH_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/firewall/alias/search_item",
+    camel_case="/api/firewall/alias/searchItem",
+)
+FIREWALL_ALIAS_TOGGLE_ENDPOINT_PREFIX = _StyledEndpoint(
+    snake_case="/api/firewall/alias/toggle_item/",
+    camel_case="/api/firewall/alias/toggleItem/",
+)
 FIREWALL_ALIAS_SET_ENDPOINT = "/api/firewall/alias/set"
 FIREWALL_ALIAS_RECONFIGURE_ENDPOINT = "/api/firewall/alias/reconfigure"
 
@@ -402,11 +407,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 ``OPNsenseError``.
         """
         target = self._parse_toggle_target(toggle_on_off)
-        alias_search_endpoint = await self._get_endpoint_path(
-            snake_case_path=FIREWALL_ALIAS_SEARCH_ENDPOINT,
-            camel_case_path=FIREWALL_ALIAS_SEARCH_CAMELCASE_ENDPOINT,
-        )
-        alias_search_outcome = await self._fetch_endpoint_outcome(alias_search_endpoint)
+        alias_search_outcome = await self._fetch_endpoint_outcome(FIREWALL_ALIAS_SEARCH_ENDPOINT)
         if not alias_search_outcome.is_data:
             _LOGGER.debug("Firewall alias search endpoint unavailable")
             return False
@@ -424,9 +425,8 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 break
         if not uuid:
             return False
-        url: str = await self._get_endpoint_path(
-            snake_case_path=f"{FIREWALL_ALIAS_TOGGLE_ENDPOINT_PREFIX}{uuid}",
-            camel_case_path=f"{FIREWALL_ALIAS_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}",
+        url: str = await self._resolve_endpoint(
+            FIREWALL_ALIAS_TOGGLE_ENDPOINT_PREFIX.with_suffix(uuid)
         )
         url = f"{url}{target.endpoint_suffix()}"
         _LOGGER.debug(
