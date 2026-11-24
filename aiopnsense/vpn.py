@@ -515,7 +515,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 for uid, clnt in client_summ.items()
             }
 
-        self._update_wireguard_status(summary, servers, clients)
+            self._update_wireguard_status(summary, servers, clients)
 
         _LOGGER.debug(
             "[get_wireguard] servers: %s, clients: %s",
@@ -555,7 +555,8 @@ class VPNMixin(AiopnsenseClientProtocol):
         servers: dict[str, MutableMapping[str, Any]] = {}
         clients: dict[str, MutableMapping[str, Any]] = {}
         servers_by_interface: dict[str, MutableMapping[str, Any]] = {}
-        peers: list[tuple[str, MutableMapping[str, Any]]] = []
+        server_names_by_interface: dict[str, Any] = {}
+        peers: list[tuple[str, MutableMapping[str, Any], MutableMapping[str, Any]]] = []
         for row in summary:
             if not isinstance(row, MutableMapping):
                 continue
@@ -573,41 +574,54 @@ class VPNMixin(AiopnsenseClientProtocol):
                 "total_bytes_sent": 0,
             }
             if row.get("type") == "interface":
-                server_entry: MutableMapping[str, Any] = {
-                    **identity,
-                    "interface": interface,
-                    "clients": [],
-                    "connected_clients": 0,
-                }
-                servers[key_hash] = server_entry
+                server_entry = servers.get(key_hash)
+                if server_entry is None:
+                    server_entry = {
+                        **identity,
+                        "interface": interface,
+                        "clients": [],
+                        "connected_clients": 0,
+                    }
+                    servers[key_hash] = server_entry
+                else:
+                    server_entry["name"] = identity["name"]
+                    server_entry["pubkey"] = public_key
+                    server_entry["interface"] = interface
+                server_entry["status"] = row.get("status")
                 servers_by_interface[interface] = server_entry
+                server_names_by_interface[interface] = identity["name"]
             elif row.get("type") == "peer":
                 client = clients.setdefault(
                     key_hash, {**identity, "servers": [], "connected_servers": 0}
                 )
-                peers.append((interface, client))
+                peers.append((interface, client, row))
 
-        for interface, client in peers:
+        for interface, client, row in peers:
             server = servers_by_interface.get(interface)
             if server is None:
                 continue
-            server["clients"].append(
-                {
-                    "uuid": None,
-                    "name": client["name"],
-                    "pubkey": client["pubkey"],
-                    "connected": False,
-                }
-            )
-            client["servers"].append(
-                {
-                    "uuid": None,
-                    "name": server["name"],
-                    "pubkey": server["pubkey"],
-                    "interface": interface,
-                    "connected": False,
-                }
-            )
+            server_link: MutableMapping[str, Any] = {
+                "uuid": None,
+                "name": client["name"],
+                "pubkey": client["pubkey"],
+                "connected": False,
+            }
+            server["clients"].append(server_link)
+            client_link: MutableMapping[str, Any] = {
+                "uuid": None,
+                "name": server_names_by_interface[interface],
+                "pubkey": server["pubkey"],
+                "interface": interface,
+                "connected": False,
+            }
+            client["servers"].append(client_link)
+            links = {
+                _WireGuardLinkKey(interface, client["pubkey"]): [
+                    (server_link, server, "connected_clients"),
+                    (client_link, client, "connected_servers"),
+                ]
+            }
+            VPNMixin._update_wireguard_peer_status(row, links)
         return servers, clients
 
     @staticmethod
