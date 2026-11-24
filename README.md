@@ -8,16 +8,16 @@
 | aiopnsense/\_dhcp\_leases.py             |      109 |        0 |       38 |        0 |    100% |           |
 | aiopnsense/\_endpoint\_cache.py          |       31 |        0 |        6 |        0 |    100% |           |
 | aiopnsense/\_endpoint\_outcome.py        |       43 |        0 |        2 |        0 |    100% |           |
-| aiopnsense/\_error\_policy.py            |       52 |        0 |       16 |        0 |    100% |           |
+| aiopnsense/\_error\_policy.py            |       70 |        0 |       18 |        0 |    100% |           |
 | aiopnsense/\_firmware\_request\_guard.py |       18 |        0 |        4 |        0 |    100% |           |
 | aiopnsense/\_request\_failure.py         |       41 |        0 |        8 |        0 |    100% |           |
 | aiopnsense/\_sse\_decoder.py             |       66 |        0 |       12 |        0 |    100% |           |
 | aiopnsense/\_styled\_endpoint.py         |        7 |        0 |        0 |        0 |    100% |           |
 | aiopnsense/\_typing.py                   |        9 |        0 |        0 |        0 |    100% |           |
-| aiopnsense/client.py                     |       66 |        0 |       16 |        0 |    100% |           |
+| aiopnsense/client.py                     |       64 |        0 |       16 |        0 |    100% |           |
 | aiopnsense/client\_base.py               |       67 |        0 |       14 |        0 |    100% |           |
 | aiopnsense/client\_endpoint.py           |       72 |        0 |       24 |        0 |    100% |           |
-| aiopnsense/client\_queue.py              |      126 |        7 |       42 |        4 |     92% |192-\>188, 194-195, 251-253, 278-\>285, 310, 320-\>316, 325 |
+| aiopnsense/client\_queue.py              |      130 |        7 |       42 |        4 |     92% |198-\>194, 200-201, 257-259, 286-\>293, 318, 328-\>324, 333 |
 | aiopnsense/client\_toggle.py             |      190 |        1 |       62 |        1 |     99% |       390 |
 | aiopnsense/client\_transport.py          |      201 |        0 |       74 |        1 |     99% | 408-\>384 |
 | aiopnsense/const.py                      |       24 |        0 |        0 |        0 |    100% |           |
@@ -37,7 +37,7 @@
 | aiopnsense/vnstat.py                     |      217 |        8 |       94 |        8 |     95% |220, 273, 389, 416, 459, 493, 513, 535 |
 | aiopnsense/vouchers.py                   |       53 |        1 |       18 |        1 |     97% |        87 |
 | aiopnsense/vpn.py                        |      488 |        6 |      222 |       10 |     98% |263, 287, 288-\>exit, 309, 358, 656, 661-\>654, 745-\>exit, 981, 1260-\>1256 |
-| **TOTAL**                                | **3994** |   **52** | **1458** |   **60** | **98%** |           |
+| **TOTAL**                                | **4014** |   **52** | **1460** |   **60** | **98%** |           |
 
 
 ## Setup coverage badge
