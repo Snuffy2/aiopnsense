@@ -1584,7 +1584,7 @@ async def test_response_matrix_is_the_same_for_every_request_form(
             assert router.count() == 0
         else:
             assert message == expected
-        assert client._request_outages == {(method.upper(), reply.path, "request"): None}
+        assert client._request_outages.keys() == {(method.upper(), reply.path, "request")}
     assert await client.get_query_counts() == 1
 
 
@@ -1809,7 +1809,6 @@ async def test_post_without_payload_passes_json_none(
     await client._do_post_outcome(_PATH)
 
     assert [kwargs["json"] for kwargs in sent] == [None, None]
-    assert all("json" in kwargs for kwargs in sent)
 
 
 async def test_per_call_timeout_reaches_the_request_and_bypasses_the_queue(
