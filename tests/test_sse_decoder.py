@@ -67,6 +67,11 @@ def _payloads(items: list[_SseItem]) -> list[dict[str, object]]:
             id="crlf-split-across-chunks",
         ),
         pytest.param(
+            [b'data: {"a": 1}\r', b'\rdata: {"a": 2}\r\r'],
+            [{"a": 1}, {"a": 2}],
+            id="bare-cr-after-chunk-ending-cr",
+        ),
+        pytest.param(
             [b'data: {"a": "x\xc3', b'\xa9"}\n\n'],
             [{"a": "xé"}],
             id="multibyte-character-split-across-chunks",

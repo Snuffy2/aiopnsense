@@ -236,6 +236,9 @@ class ClientTransportMixin:
         CRLF, CR and LF line endings, and ``data:`` lines joined into one message per event.
         Malformed JSON and non-mapping JSON count as messages. Invalid or truncated UTF-8
         before the second message, or a second message that is not valid JSON, fails the read.
+        Only one space after ``data:`` is removed, so other whitespace around the JSON is no
+        longer stripped: a second message whose value starts with a non-breaking space fails
+        with a JSON decode error.
 
         Args:
             path (str): API endpoint path to request.
