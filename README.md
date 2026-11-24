@@ -4,7 +4,7 @@
 
 | Name                                     |    Stmts |     Miss |   Branch |   BrPart |   Cover |   Missing |
 |----------------------------------------- | -------: | -------: | -------: | -------: | ------: | --------: |
-| aiopnsense/\_\_init\_\_.py               |        3 |        0 |        0 |        0 |    100% |           |
+| aiopnsense/\_\_init\_\_.py               |        4 |        0 |        0 |        0 |    100% |           |
 | aiopnsense/\_dhcp\_leases.py             |      109 |        0 |       38 |        0 |    100% |           |
 | aiopnsense/\_endpoint\_cache.py          |       31 |        0 |        6 |        0 |    100% |           |
 | aiopnsense/\_endpoint\_outcome.py        |       43 |        0 |        2 |        0 |    100% |           |
@@ -14,6 +14,7 @@
 | aiopnsense/\_sse\_decoder.py             |       66 |        0 |       12 |        0 |    100% |           |
 | aiopnsense/\_styled\_endpoint.py         |        7 |        0 |        0 |        0 |    100% |           |
 | aiopnsense/\_typing.py                   |        9 |        0 |        0 |        0 |    100% |           |
+| aiopnsense/access.py                     |       17 |        0 |        2 |        0 |    100% |           |
 | aiopnsense/client.py                     |       64 |        0 |       16 |        0 |    100% |           |
 | aiopnsense/client\_base.py               |       67 |        0 |       14 |        0 |    100% |           |
 | aiopnsense/client\_endpoint.py           |       72 |        0 |       24 |        0 |    100% |           |
@@ -36,8 +37,8 @@
 | aiopnsense/unbound.py                    |       93 |        0 |       36 |        0 |    100% |           |
 | aiopnsense/vnstat.py                     |      217 |        8 |       94 |        8 |     95% |220, 273, 389, 416, 459, 493, 513, 535 |
 | aiopnsense/vouchers.py                   |       53 |        1 |       18 |        1 |     97% |        87 |
-| aiopnsense/vpn.py                        |      488 |        6 |      222 |       10 |     98% |263, 287, 288-\>exit, 309, 358, 656, 661-\>654, 745-\>exit, 981, 1260-\>1256 |
-| **TOTAL**                                | **4017** |   **52** | **1462** |   **60** | **98%** |           |
+| aiopnsense/vpn.py                        |      551 |        9 |      256 |       13 |     97% |276, 300, 301-\>exit, 322, 371, 562, 567, 593-\>560, 602, 781, 786-\>779, 1106, 1395-\>1391 |
+| **TOTAL**                                | **4098** |   **55** | **1498** |   **63** | **98%** |           |
 
 
 ## Setup coverage badge
