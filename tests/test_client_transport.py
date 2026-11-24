@@ -1781,7 +1781,7 @@ async def test_request_shape_is_the_same_for_every_request_form(
         assert "json" not in kwargs
 
 
-async def test_post_without_payload_sends_an_explicit_empty_json_body(
+async def test_post_without_payload_passes_json_none(
     make_client: MakeClientFactory,
 ) -> None:
     """A POST with no payload still passes ``json=None`` to the session.
