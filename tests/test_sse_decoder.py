@@ -154,9 +154,8 @@ def test_decoder_preserves_item_order() -> None:
     """Messages and rejections come back in stream order."""
     items = _decode([b'data: {"a": 1}\n\ndata: nope\n\ndata: {"a": 3}\n\n'])
 
-    assert [type(item).__name__ for item in items] == [
-        "_SseMessage",
-        "_SseRejection",
-        "_SseMessage",
-    ]
-    assert [item.payload for item in items if isinstance(item, _SseMessage)] == [{"a": 1}, {"a": 3}]
+    first, rejection, last = items
+    assert first == _SseMessage({"a": 1})
+    assert isinstance(rejection, _SseRejection)
+    assert rejection.reason is _SseRejectionReason.MALFORMED_JSON
+    assert last == _SseMessage({"a": 3})
