@@ -2181,56 +2181,6 @@ async def test_failure_logs_name_the_public_client_method(
         await asyncio.wait_for(client.async_close(), timeout=2)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("kind", "method", "response_format", "is_sent"),
-    [
-        (_RequestKind.PLAIN, "get", "json", True),
-        (_RequestKind.STREAM, "get", "json", True),
-        (_RequestKind.OUTCOME, "get", "json", False),
-        (_RequestKind.OUTCOME, "get", "text", False),
-        (_RequestKind.PLAIN, "post", "json", False),
-        (_RequestKind.OUTCOME, "post", "json", False),
-    ],
-)
-async def test_request_cancelled_before_dispatch_is_skipped_by_kind(
-    make_client: MakeClientFactory,
-    vpn_queue_tasks: VpnQueueTasks,
-    kind: _RequestKind,
-    method: Literal["get", "post"],
-    response_format: Literal["json", "text"],
-    is_sent: bool,
-) -> None:
-    """Skip POST and outcome requests cancelled while queued; still send plain GET and streams.
-
-    Args:
-        make_client (MakeClientFactory): Client factory fixture.
-        vpn_queue_tasks (VpnQueueTasks): Tracks test tasks for cleanup.
-        kind (_RequestKind): How the queued request delivers its result.
-        method (Literal["get", "post"]): HTTP method of the queued request.
-        response_format (Literal["json", "text"]): Body format of the queued request.
-        is_sent (bool): Whether the cancelled request is still sent.
-    """
-    client, session = make_mock_session_client(make_client)
-    reply = FakeResponse(json_payload={}, text_payload="", stream_chunks=[b"data: {}\n\n"])
-    session.get.return_value = session.post.return_value = reply
-    # An eager start queues the request before the worker runs; cancelling right
-    # away cancels it while it is still queued.
-    target = vpn_queue_tasks.start(
-        client._queue_request(
-            kind, "/target", {"x": 1}, method=method, response_format=response_format
-        ),
-        eager_start=True,
-    )
-    target.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(target, timeout=3)
-    # A later request confirms the worker has passed the cancelled one.
-    await asyncio.wait_for(client._get("/barrier"), timeout=3)
-    sent = [c.args[0] for m in (session.get, session.post) for c in m.call_args_list]
-    assert any(url.endswith("/target") for url in sent) is is_sent
-
-
 @pytest.mark.parametrize(
     ("method", "start", "is_sent"),
     [

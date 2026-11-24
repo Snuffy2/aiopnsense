@@ -27,8 +27,9 @@ class _EndpointOutcome:
         payload (MutableMapping[str, Any] | list | str | None): Decoded response
             body when ``status`` is ``DATA``: JSON, or the body text for a text read.
         http_status (int | None): HTTP status of a failed response, when known.
-        error (OPNsenseError | None): Public exception describing a 403 or a
-            transient failure. Absent 404 outcomes carry none.
+        error (OPNsenseError | None): Public exception describing a reported failure:
+            a 403, a transient failure or a plain request's 404. The unreported 404 of
+            an outcome request carries none.
     """
 
     status: _EndpointStatus

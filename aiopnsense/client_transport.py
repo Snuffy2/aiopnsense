@@ -458,21 +458,20 @@ class ClientTransportMixin:
         )
         return self._plain_result(outcome)
 
-    def _plain_result(self, outcome: _EndpointOutcome) -> MutableMapping[str, Any] | list | None:
+    def _plain_result(self, outcome: _EndpointOutcome) -> Any:
         """Convert the outcome of a plain request to its payload or empty value.
 
         Args:
             outcome (_EndpointOutcome): Outcome of a ``PLAIN`` request.
 
         Returns:
-            MutableMapping[str, Any] | list | None: The decoded payload of a ``DATA``
-                outcome, or ``None`` after a logged failure. When ``throw_errors`` is
-                enabled, the outcome's already-reported error is raised instead.
+            Any: The decoded JSON payload of a ``DATA`` outcome, unchanged, or ``None``
+                after a logged failure. When ``throw_errors`` is enabled, the outcome's
+                already-reported error is raised instead.
         """
         if outcome.error is not None:
             _raise_if_throwing(self, outcome.error, outcome.error.__cause__)
-        payload = outcome.payload
-        return None if isinstance(payload, str) else payload
+        return outcome.payload
 
     async def _request_outcome(
         self,
