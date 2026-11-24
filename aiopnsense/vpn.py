@@ -7,44 +7,67 @@ import logging
 from typing import Any
 
 from ._error_policy import _attempt, _log_boolean_errors, _log_errors
+from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import TOGGLE_ITEM_RESULTS, ToggleSpec, ToggleStep, ToggleTarget, VpnInstance
 from .exceptions import OPNsenseError
 from .helpers import _LOGGER, api_value_matches, dict_get, timestamp_to_datetime, try_to_int
 
-OPENVPN_SESSIONS_SNAKE_ENDPOINT = "/api/openvpn/service/search_sessions"
-OPENVPN_SESSIONS_CAMELCASE_ENDPOINT = "/api/openvpn/service/searchSessions"
-OPENVPN_ROUTES_SNAKE_ENDPOINT = "/api/openvpn/service/search_routes"
-OPENVPN_ROUTES_CAMELCASE_ENDPOINT = "/api/openvpn/service/searchRoutes"
+OPENVPN_SESSIONS_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/openvpn/service/search_sessions",
+    camel_case="/api/openvpn/service/searchSessions",
+)
+OPENVPN_ROUTES_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/openvpn/service/search_routes",
+    camel_case="/api/openvpn/service/searchRoutes",
+)
 OPENVPN_PROVIDERS_ENDPOINT = "/api/openvpn/export/providers"
 OPENVPN_INSTANCES_SEARCH_ENDPOINT = "/api/openvpn/instances/search"
 OPENVPN_INSTANCE_DETAILS_ENDPOINT_PREFIX = "/api/openvpn/instances/get/"
 WIREGUARD_SUMMARY_ENDPOINT = "/api/wireguard/service/show"
 WIREGUARD_CLIENTS_ENDPOINT = "/api/wireguard/client/get"
 WIREGUARD_SERVERS_ENDPOINT = "/api/wireguard/server/get"
-IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT = "/api/ipsec/sessions/search_phase1"
-IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT = "/api/ipsec/sessions/searchPhase1"
-IPSEC_CONNECTIONS_SNAKE_ENDPOINT = "/api/ipsec/connections/search_connection"
-IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT = "/api/ipsec/connections/searchConnection"
-IPSEC_CHILDREN_SNAKE_ENDPOINT = "/api/ipsec/connections/search_child"
-IPSEC_CHILDREN_CAMELCASE_ENDPOINT = "/api/ipsec/connections/searchChild"
-IPSEC_PHASE2_SESSIONS_SNAKE_ENDPOINT = "/api/ipsec/sessions/search_phase2"
-IPSEC_PHASE2_SESSIONS_CAMELCASE_ENDPOINT = "/api/ipsec/sessions/searchPhase2"
+IPSEC_PHASE1_SESSIONS_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/ipsec/sessions/search_phase1",
+    camel_case="/api/ipsec/sessions/searchPhase1",
+)
+IPSEC_CONNECTIONS_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/ipsec/connections/search_connection",
+    camel_case="/api/ipsec/connections/searchConnection",
+)
+IPSEC_CHILDREN_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/ipsec/connections/search_child",
+    camel_case="/api/ipsec/connections/searchChild",
+)
+IPSEC_PHASE2_SESSIONS_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/ipsec/sessions/search_phase2",
+    camel_case="/api/ipsec/sessions/searchPhase2",
+)
 IPSEC_CHILD_SA_INSTALLED_STATE = "INSTALLED"
-IPSEC_CONNECTION_TOGGLE_SNAKE_ENDPOINT_PREFIX = "/api/ipsec/connections/toggle_connection/"
-IPSEC_CONNECTION_TOGGLE_CAMELCASE_ENDPOINT_PREFIX = "/api/ipsec/connections/toggleConnection/"
+IPSEC_CONNECTION_TOGGLE_ENDPOINT_PREFIX = _StyledEndpoint(
+    snake_case="/api/ipsec/connections/toggle_connection/",
+    camel_case="/api/ipsec/connections/toggleConnection/",
+)
 IPSEC_SERVICE_RECONFIGURE_ENDPOINT = "/api/ipsec/service/reconfigure"
 IPSEC_CONFIGURED_VERSIONS: dict[str, str] = {"1": "IKEv1", "2": "IKEv2"}
 OPENVPN_INSTANCE_TOGGLE_ENDPOINT_PREFIX = "/api/openvpn/instances/toggle/"
 OPENVPN_SERVICE_RECONFIGURE_ENDPOINT = "/api/openvpn/service/reconfigure"
-WIREGUARD_CLIENT_TOGGLE_SNAKE_ENDPOINT_PREFIX = "/api/wireguard/client/toggle_client/"
-WIREGUARD_CLIENT_TOGGLE_CAMELCASE_ENDPOINT_PREFIX = "/api/wireguard/client/toggleClient/"
-WIREGUARD_SERVER_TOGGLE_SNAKE_ENDPOINT_PREFIX = "/api/wireguard/server/toggle_server/"
-WIREGUARD_SERVER_TOGGLE_CAMELCASE_ENDPOINT_PREFIX = "/api/wireguard/server/toggleServer/"
-WIREGUARD_CLIENT_GET_SNAKE_ENDPOINT_PREFIX = "/api/wireguard/client/get_client/"
-WIREGUARD_CLIENT_GET_CAMELCASE_ENDPOINT_PREFIX = "/api/wireguard/client/getClient/"
-WIREGUARD_SERVER_GET_SNAKE_ENDPOINT_PREFIX = "/api/wireguard/server/get_server/"
-WIREGUARD_SERVER_GET_CAMELCASE_ENDPOINT_PREFIX = "/api/wireguard/server/getServer/"
+WIREGUARD_CLIENT_TOGGLE_ENDPOINT_PREFIX = _StyledEndpoint(
+    snake_case="/api/wireguard/client/toggle_client/",
+    camel_case="/api/wireguard/client/toggleClient/",
+)
+WIREGUARD_SERVER_TOGGLE_ENDPOINT_PREFIX = _StyledEndpoint(
+    snake_case="/api/wireguard/server/toggle_server/",
+    camel_case="/api/wireguard/server/toggleServer/",
+)
+WIREGUARD_CLIENT_GET_ENDPOINT_PREFIX = _StyledEndpoint(
+    snake_case="/api/wireguard/client/get_client/",
+    camel_case="/api/wireguard/client/getClient/",
+)
+WIREGUARD_SERVER_GET_ENDPOINT_PREFIX = _StyledEndpoint(
+    snake_case="/api/wireguard/server/get_server/",
+    camel_case="/api/wireguard/server/getServer/",
+)
 WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT = "/api/wireguard/service/reconfigure"
 
 
@@ -110,11 +133,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         openvpn: dict[str, Any] = {"servers": {}, "clients": {}}
 
         # Fetch data
-        sessions_endpoint = await self._get_endpoint_path(
-            snake_case_path=OPENVPN_SESSIONS_SNAKE_ENDPOINT,
-            camel_case_path=OPENVPN_SESSIONS_CAMELCASE_ENDPOINT,
-        )
-        sessions_outcome = await self._fetch_endpoint_outcome(sessions_endpoint)
+        sessions_outcome = await self._fetch_endpoint_outcome(OPENVPN_SESSIONS_ENDPOINT)
         if not sessions_outcome.is_data:
             _LOGGER.debug("OpenVPN sessions endpoint unavailable")
             return None
@@ -123,10 +142,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("[get_openvpn] sessions unavailable (malformed rows)")
             return None
 
-        routes_endpoint = await self._get_endpoint_path(
-            snake_case_path=OPENVPN_ROUTES_SNAKE_ENDPOINT,
-            camel_case_path=OPENVPN_ROUTES_CAMELCASE_ENDPOINT,
-        )
+        routes_endpoint = await self._resolve_endpoint(OPENVPN_ROUTES_ENDPOINT)
         routes_outcome = await _attempt(
             self,
             lambda: self._fetch_endpoint_outcome(routes_endpoint),
@@ -800,9 +816,8 @@ class VPNMixin(AiopnsenseClientProtocol):
         elif vpn_type == "ipsec" and clients_servers == "connections":
             item = ("connections", uuid)
             save = ToggleStep.save(
-                f"{IPSEC_CONNECTION_TOGGLE_SNAKE_ENDPOINT_PREFIX}{uuid}{suffix}",
+                IPSEC_CONNECTION_TOGGLE_ENDPOINT_PREFIX.with_suffix(f"{uuid}{suffix}"),
                 TOGGLE_ITEM_RESULTS,
-                camel_case_endpoint=f"{IPSEC_CONNECTION_TOGGLE_CAMELCASE_ENDPOINT_PREFIX}{uuid}{suffix}",
             )
             apply = ToggleStep.apply(IPSEC_SERVICE_RECONFIGURE_ENDPOINT)
         else:
@@ -834,31 +849,21 @@ class VPNMixin(AiopnsenseClientProtocol):
             return None
         if clients_servers == "clients":
             item_key = "client"
-            toggle_snake = WIREGUARD_CLIENT_TOGGLE_SNAKE_ENDPOINT_PREFIX
-            toggle_camel = WIREGUARD_CLIENT_TOGGLE_CAMELCASE_ENDPOINT_PREFIX
-            get_snake = WIREGUARD_CLIENT_GET_SNAKE_ENDPOINT_PREFIX
-            get_camel = WIREGUARD_CLIENT_GET_CAMELCASE_ENDPOINT_PREFIX
+            toggle_prefix = WIREGUARD_CLIENT_TOGGLE_ENDPOINT_PREFIX
+            get_prefix = WIREGUARD_CLIENT_GET_ENDPOINT_PREFIX
         elif clients_servers == "servers":
             item_key = "server"
-            toggle_snake = WIREGUARD_SERVER_TOGGLE_SNAKE_ENDPOINT_PREFIX
-            toggle_camel = WIREGUARD_SERVER_TOGGLE_CAMELCASE_ENDPOINT_PREFIX
-            get_snake = WIREGUARD_SERVER_GET_SNAKE_ENDPOINT_PREFIX
-            get_camel = WIREGUARD_SERVER_GET_CAMELCASE_ENDPOINT_PREFIX
+            toggle_prefix = WIREGUARD_SERVER_TOGGLE_ENDPOINT_PREFIX
+            get_prefix = WIREGUARD_SERVER_GET_ENDPOINT_PREFIX
         else:
             return None
         suffix = target.endpoint_suffix()
-        save = ToggleStep.save(
-            f"{toggle_snake}{uuid}{suffix}",
-            TOGGLE_ITEM_RESULTS,
-            camel_case_endpoint=f"{toggle_camel}{uuid}{suffix}",
-        )
+        save = ToggleStep.save(toggle_prefix.with_suffix(f"{uuid}{suffix}"), TOGGLE_ITEM_RESULTS)
         apply = ToggleStep.apply(WIREGUARD_SERVICE_RECONFIGURE_ENDPOINT, response_key="result")
         vpn = VpnInstance(
             "wireguard",
             (clients_servers, uuid),
-            state_read=ToggleStep.read(
-                f"{get_snake}{uuid}", item_key, camel_case_endpoint=f"{get_camel}{uuid}"
-            ),
+            state_read=ToggleStep.read(get_prefix.with_suffix(uuid), item_key),
             corrects_wrong_direction=True,
         )
         return ToggleSpec("toggle_vpn_instance", target, (save,), (apply,), vpn=vpn)
@@ -983,13 +988,12 @@ class VPNMixin(AiopnsenseClientProtocol):
         return connection
 
     async def _get_ipsec_configured_rows(
-        self, snake_case_path: str, camel_case_path: str
+        self, endpoint: _StyledEndpoint
     ) -> dict[str, MutableMapping[str, Any]] | None:
         """Return IPsec configuration rows keyed by UUID.
 
         Args:
-            snake_case_path (str): Snake case search endpoint for the configuration items.
-            camel_case_path (str): Camel case search endpoint for the configuration items.
+            endpoint (_StyledEndpoint): Search endpoint for the configuration items.
 
         Returns:
             dict[str, MutableMapping[str, Any]] | None: Raw configuration rows
@@ -998,30 +1002,27 @@ class VPNMixin(AiopnsenseClientProtocol):
                 could not be read this time (transient failure or malformed
                 payload).
         """
-        endpoint = await self._get_endpoint_path(
-            snake_case_path=snake_case_path,
-            camel_case_path=camel_case_path,
-        )
-        outcome = await self._fetch_endpoint_outcome(endpoint)
+        resolved = await self._resolve_endpoint(endpoint)
+        outcome = await self._fetch_endpoint_outcome(resolved)
         if outcome.is_absent:
-            _LOGGER.debug("IPsec configuration endpoint missing or not permitted: %s", endpoint)
+            _LOGGER.debug("IPsec configuration endpoint missing or not permitted: %s", resolved)
             return {}
         if outcome.is_transient:
-            _LOGGER.debug("IPsec configuration endpoint temporarily unavailable: %s", endpoint)
+            _LOGGER.debug("IPsec configuration endpoint temporarily unavailable: %s", resolved)
             return None
         rows = outcome.mapping().get("rows")
         if not isinstance(rows, list):
-            _LOGGER.debug("[get_ipsec] configuration unavailable (malformed rows): %s", endpoint)
+            _LOGGER.debug("[get_ipsec] configuration unavailable (malformed rows): %s", resolved)
             return None
         configured: dict[str, MutableMapping[str, Any]] = {}
         for row in rows:
             if not isinstance(row, MutableMapping):
-                _LOGGER.debug("[get_ipsec] configuration unavailable (malformed row): %s", endpoint)
+                _LOGGER.debug("[get_ipsec] configuration unavailable (malformed row): %s", resolved)
                 return None
             uuid = row.get("uuid")
             if not isinstance(uuid, str) or not uuid:
                 _LOGGER.debug(
-                    "[get_ipsec] configuration unavailable (malformed identity): %s", endpoint
+                    "[get_ipsec] configuration unavailable (malformed identity): %s", resolved
                 )
                 return None
             configured[uuid] = row
@@ -1120,9 +1121,7 @@ class VPNMixin(AiopnsenseClientProtocol):
                 request, for example a reply that is not valid JSON, raises
                 ``OPNsenseError`` instead.
         """
-        configured = await self._get_ipsec_configured_rows(
-            IPSEC_CHILDREN_SNAKE_ENDPOINT, IPSEC_CHILDREN_CAMELCASE_ENDPOINT
-        )
+        configured = await self._get_ipsec_configured_rows(IPSEC_CHILDREN_ENDPOINT)
         if configured is None:
             return None
         children: dict[str, dict[str, Any]] = {
@@ -1130,10 +1129,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         }
         if not connected_session_names:
             return children
-        phase2_endpoint = await self._get_endpoint_path(
-            snake_case_path=IPSEC_PHASE2_SESSIONS_SNAKE_ENDPOINT,
-            camel_case_path=IPSEC_PHASE2_SESSIONS_CAMELCASE_ENDPOINT,
-        )
+        phase2_endpoint = await self._resolve_endpoint(IPSEC_PHASE2_SESSIONS_ENDPOINT)
         for session_name in connected_session_names:
             # A failed request returns None for the whole read, so a missing reply is
             # never reported as a down child.
@@ -1209,11 +1205,7 @@ class VPNMixin(AiopnsenseClientProtocol):
         """
         # https://docs.opnsense.org/development/api/core/ipsec.html
         ipsec: dict[str, Any] = {"connections": {}, "children": {}}
-        sessions_endpoint = await self._get_endpoint_path(
-            snake_case_path=IPSEC_PHASE1_SESSIONS_SNAKE_ENDPOINT,
-            camel_case_path=IPSEC_PHASE1_SESSIONS_CAMELCASE_ENDPOINT,
-        )
-        sessions_outcome = await self._fetch_endpoint_outcome(sessions_endpoint)
+        sessions_outcome = await self._fetch_endpoint_outcome(IPSEC_PHASE1_SESSIONS_ENDPOINT)
         if not sessions_outcome.is_data:
             _LOGGER.debug("IPsec phase 1 sessions endpoint unavailable")
             return None
@@ -1223,9 +1215,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("[get_ipsec] phase 1 sessions unavailable (malformed rows)")
             return None
 
-        configured = await self._get_ipsec_configured_rows(
-            IPSEC_CONNECTIONS_SNAKE_ENDPOINT, IPSEC_CONNECTIONS_CAMELCASE_ENDPOINT
-        )
+        configured = await self._get_ipsec_configured_rows(IPSEC_CONNECTIONS_ENDPOINT)
         if configured is None:
             _LOGGER.debug("[get_ipsec] connections inventory unavailable")
             return None

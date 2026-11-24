@@ -8,7 +8,7 @@ import pytest
 import aiopnsense as aiopnsense_module
 from aiopnsense import OPNsenseClient
 from aiopnsense.exceptions import OPNsenseConnectionError
-from tests.conftest import make_router_client
+from tests.conftest import SequencedResponse, firmware_status_payload, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -195,3 +195,98 @@ async def test_voucher_switched_endpoints_follow_selected_case(
 
     assert router.count("GET", providers_path) == 1
     assert router.bodies("POST", generate_path) == [{}]
+
+
+@pytest.mark.parametrize(
+    ("firmware", "providers_path", "generate_path", "firmware_reads"),
+    [
+        pytest.param(
+            SNAKE_CASE_FIRMWARE,
+            "/api/captiveportal/voucher/list_providers",
+            "/api/captiveportal/voucher/generate_vouchers/srv/",
+            1,
+            id="snake_case",
+        ),
+        pytest.param(
+            CAMELCASE_FIRMWARE,
+            "/api/captiveportal/voucher/listProviders",
+            "/api/captiveportal/voucher/generateVouchers/srv/",
+            1,
+            id="camelCase",
+        ),
+        pytest.param(
+            None,
+            "/api/captiveportal/voucher/list_providers",
+            "/api/captiveportal/voucher/generate_vouchers/srv/",
+            2,
+            id="unknown-firmware",
+        ),
+    ],
+)
+@pytest.mark.parametrize("server_supplied", [True, False], ids=["server-supplied", "no-server"])
+async def test_generate_vouchers_request_sequence(
+    make_client: ClientType,
+    firmware: str | None,
+    providers_path: str,
+    generate_path: str,
+    firmware_reads: int,
+    server_supplied: bool,
+) -> None:
+    """Pin every request ``generate_vouchers`` sends, with and without a supplied server.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        firmware (str | None): Firmware version the Router reports, ``None`` when it is unknown.
+        providers_path (str): Provider list endpoint the Router is expected to receive.
+        generate_path (str): Generate endpoint, server segment included.
+        firmware_reads (int): Expected firmware status reads.
+        server_supplied (bool): Whether the caller names the voucher server.
+    """
+    client, router = make_router_client(
+        make_client,
+        {("GET", providers_path): ["srv"], ("POST", generate_path): []},
+        firmware=firmware,
+    )
+
+    assert (
+        await client.generate_vouchers({"voucher_server": "srv"} if server_supplied else {}) == []
+    )
+
+    firmware_read = ("GET", "/api/core/firmware/status")
+    expected = [firmware_read] * firmware_reads
+    if not server_supplied:
+        expected.append(("GET", providers_path))
+    expected.append(("POST", generate_path))
+    assert router.calls() == expected
+
+
+@pytest.mark.parametrize("server_supplied", [True, False], ids=["server-supplied", "no-server"])
+async def test_generate_vouchers_when_endpoint_style_becomes_known(
+    make_client: ClientType,
+    server_supplied: bool,
+) -> None:
+    """Use the recovered firmware style for generation even with a supplied server.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        server_supplied (bool): Whether the caller names the voucher server.
+    """
+    firmware_read = ("GET", "/api/core/firmware/status")
+    provider_read = ("GET", "/api/captiveportal/voucher/list_providers")
+    generate = ("POST", "/api/captiveportal/voucher/generateVouchers/srv/")
+    client, router = make_router_client(
+        make_client,
+        {
+            firmware_read: SequencedResponse({}, firmware_status_payload(CAMELCASE_FIRMWARE)),
+            provider_read: ["srv"],
+            generate: [{"username": "voucher"}],
+        },
+    )
+
+    options = {"voucher_server": "srv"} if server_supplied else {}
+    assert await client.generate_vouchers(options) == [{"username": "voucher"}]
+
+    expected = [firmware_read, firmware_read]
+    if not server_supplied:
+        expected.append(provider_read)
+    assert router.calls() == [*expected, generate]

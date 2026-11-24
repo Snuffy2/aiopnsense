@@ -9,6 +9,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from functools import partial
+import logging
 from typing import Any
 
 import aiohttp
@@ -486,6 +487,32 @@ async def test_wireguard_toggle_matching_target_skips_save_and_applies_only_pend
     router.requests.clear()
     assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "on") is True
     assert router.paths("POST") == []
+
+
+async def test_wireguard_toggle_logs_plain_endpoint_text_on_camel_case_firmware(
+    make_client: MakeClientFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Toggle logs show the snake_case path text, never a styled endpoint value.
+
+    Args:
+        make_client (MakeClientFactory): Client factory fixture.
+        caplog (pytest.LogCaptureFixture): Log capture fixture.
+    """
+    client, router = _client_for_router(
+        make_client,
+        {
+            ("GET", "/api/wireguard/client/getClient/uuid1"): {"client": {}},
+            ("POST", "/api/wireguard/client/toggleClient/uuid1/1"): {"result": "Enabled"},
+        },
+        firmware="25.1.0",
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        assert await client.toggle_vpn_instance("wireguard", "clients", "uuid1", "on") is False
+
+    assert router.paths("POST") == []
+    assert "[toggle_vpn_instance] item state unavailable: " + _WG_GET in caplog.text
+    assert "_StyledEndpoint" not in caplog.text
 
 
 async def test_wireguard_toggle_wrong_direction_is_corrected_once_and_kept_pending(
