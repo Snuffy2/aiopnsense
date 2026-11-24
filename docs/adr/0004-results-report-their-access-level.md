@@ -1,8 +1,18 @@
 # Results report their access level on the result object, detected from the Router
 
-An API user may have Status Access to a category, or to one VPN type, without Configuration Access. A forbidden (403) configuration read then means "this user may not see the configured inventory", not "nothing is configured". A caller such as hass-opnsense, which deletes entities missing from an inventory it believes complete, must be able to tell the two apart. aiopnsense therefore returns the data that Status Access allows and reports the access level with it: a getter that supports access reporting returns a `dict` or `list` subclass carrying the level (Status Access or Configuration Access), read through an exported `result_access()` helper. The level is detected from the Router's answers, never set by the caller. A 403 on a configuration endpoint means Status Access; a 404 still means the endpoint is missing and its inventory is empty; a 403 or other failure on the status endpoint itself still returns `None`, with no level.
+An API user may have Status Access to a category, or to one VPN type, without Configuration Access. A forbidden (403) configuration read then means "this user may not see the configured inventory", not "nothing is configured". A caller such as hass-opnsense, which deletes entities missing from an inventory it believes complete, must be able to tell the two apart. aiopnsense therefore returns the data that Status Access allows and reports the access level with it: a getter that supports access reporting returns a `dict` or `list` subclass carrying the level (Status Access or Configuration Access), read through an exported `result_access()` helper. The level is detected from the Router's answers, never set by the caller. A 403 on an access-determining configuration endpoint means Status Access. A 404 on a configuration endpoint still means the endpoint is missing and its inventory is empty. A 403 or other failure on the primary status endpoint returns `None`, with no level.
 
 The first getters to report are `get_openvpn`, `get_wireguard` and `get_ipsec`. Other categories adopt the same shape when they gain Status Access support.
+
+## Mixed VPN configuration failures
+
+The original VPN Status Access spec preserved the old behavior for all transient failures and malformed payloads. With `throw_errors=False`, that rule now applies only to data required for the result. A definitive configuration denial, including a cached 403, lets a getter use the status payload even if another configuration read fails or is malformed. A transient failure or malformed payload alone cannot establish Status Access.
+
+- OpenVPN determines access from `instances/search`. After a 403, the getter skips provider export and instance details. Routes remain optional. A provider 403 alone omits provider enrichment and leaves Configuration Access.
+- Either WireGuard configuration endpoint can establish Status Access. The getter checks the other endpoint after a suppressed failure to look for a 403. Readable summary rows are required at either access level.
+- IPsec determines access from `connections/search_connection`. After a 403, the getter skips child configuration and builds `children` from phase 2 sessions. If any required phase 2 session list is unreadable, the result still includes readable phase 1 `connections` and omits `children`. A child configuration 403 alone leaves Configuration Access.
+
+A configuration 404 still supplies an empty inventory. Strict mode still propagates request errors in the original order.
 
 ## Considered Options
 

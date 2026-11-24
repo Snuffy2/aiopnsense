@@ -19,7 +19,13 @@ from aiopnsense import (
     vpn as aiopnsense_vpn,
 )
 from aiopnsense.exceptions import OPNsenseConnectionError
-from tests.conftest import FIRMWARE_STATUS_PATH, FakeRouter, HeldResponse, make_router_client
+from tests.conftest import (
+    FIRMWARE_STATUS_PATH,
+    FakeRouter,
+    HeldResponse,
+    MalformedJSONResponse,
+    make_router_client,
+)
 
 IPSEC_CONNECTIONS_SNAKE_PATH = "/api/ipsec/connections/search_connection"
 IPSEC_PHASE1_SESSIONS_CAMELCASE_PATH = "/api/ipsec/sessions/searchPhase1"
@@ -957,26 +963,80 @@ async def test_get_wireguard_rejects_malformed_inventory_entries(
     assert await client.get_wireguard() is None
 
 
-@pytest.mark.parametrize("status", [NOT_FOUND, UNAVAILABLE])
+@pytest.mark.parametrize("bad_reply", [UNAVAILABLE, {}, MalformedJSONResponse()])
+@pytest.mark.parametrize("denied_inventory", ["clients", "servers"])
+async def test_get_wireguard_status_access_with_failed_other_inventory(
+    make_client: ClientType, denied_inventory: str, bad_reply: Any
+) -> None:
+    """Reconcile live WireGuard rows when configuration is denied and the other read fails.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        denied_inventory (str): Inventory that answers 403.
+        bad_reply (Any): Failing or malformed reply for the other inventory.
+    """
+    inventories = {"clients": bad_reply, "servers": bad_reply, denied_inventory: 403}
+    client, router = make_vpn_router(
+        make_client,
+        wireguard_routes(
+            summary={
+                "rows": [
+                    {
+                        "type": "interface",
+                        "public-key": "server-public-key",
+                        "if": "wg1",
+                        "status": "up",
+                    }
+                ]
+            },
+            **inventories,
+        ),
+    )
+
+    result = await client.get_wireguard()
+
+    assert result is not None
+    assert result_access(result) is Access.STATUS
+    assert set(result["servers"]) == {"006f9c9fb3b751aa"}
+    assert result["servers"]["006f9c9fb3b751aa"]["status"] == "up"
+    assert result["servers"]["006f9c9fb3b751aa"]["uuid"] is None
+
+    cached = await client.get_wireguard()
+    assert cached == result
+    assert result_access(cached) is Access.STATUS
+    denied_path = (
+        "/api/wireguard/client/get"
+        if denied_inventory == "clients"
+        else "/api/wireguard/server/get"
+    )
+    assert router.count("GET", denied_path) == 1
+
+    router.routes[("GET", WIREGUARD_SUMMARY_PATH)] = {}
+    assert await client.get_wireguard() is None
+
+
+@pytest.mark.parametrize("reply", [NOT_FOUND, UNAVAILABLE, MalformedJSONResponse()])
 @pytest.mark.parametrize("unavailable_inventory", ["clients", "servers"])
 async def test_get_wireguard_missing_or_unavailable_inventory(
-    make_client: ClientType, unavailable_inventory: str, status: int
+    make_client: ClientType, unavailable_inventory: str, reply: Any
 ) -> None:
-    """Keep a missing configuration inventory empty, and a transient failure unavailable.
+    """Keep a 404 inventory empty and fail closed on other errors without a denial.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         unavailable_inventory (str): Configuration endpoint that fails.
-        status (int): HTTP status the failing endpoint answers with.
+        reply (Any): HTTP failure or invalid JSON reply from the inventory endpoint.
     """
     client, _router = make_vpn_router(
-        make_client, wireguard_routes(**{unavailable_inventory: status})
+        make_client, wireguard_routes(**{unavailable_inventory: reply})
     )
 
-    expected: dict[str, Any] | None = (
-        None if status == UNAVAILABLE else {"servers": {}, "clients": {}}
-    )
-    assert await client.get_wireguard() == expected
+    result = await client.get_wireguard()
+    if reply == NOT_FOUND:
+        assert result == {"servers": {}, "clients": {}}
+        assert result_access(result) is Access.CONFIGURATION
+    else:
+        assert result is None
 
 
 @pytest.mark.parametrize("throw_errors", [False, True])
@@ -1220,11 +1280,17 @@ async def test_get_openvpn_missing_or_unavailable_inventory(
     assert await client.get_openvpn() == expected
 
 
-async def test_get_openvpn_status_access_uses_session_inventory(make_client: ClientType) -> None:
-    """Use visible server sessions and skip instance details after a cached denial.
+@pytest.mark.parametrize(
+    "providers", [{"hidden": {"name": "Export only"}}, UNAVAILABLE, [None], MalformedJSONResponse()]
+)
+async def test_get_openvpn_status_access_uses_session_inventory(
+    make_client: ClientType, providers: Any
+) -> None:
+    """Use visible server sessions after a cached denial regardless of the provider reply.
 
     Args:
         make_client (ClientType): Fixture factory returning client instances.
+        providers (Any): Provider reply available on the Router.
     """
     client, router = make_vpn_router(
         make_client,
@@ -1235,7 +1301,7 @@ async def test_get_openvpn_status_access_uses_session_inventory(make_client: Cli
                     {"id": "client", "type": "client"},
                 ]
             },
-            providers={"hidden": {"name": "Export only"}},
+            providers=providers,
             instances=403,
         ),
     )
@@ -1260,7 +1326,26 @@ async def test_get_openvpn_status_access_uses_session_inventory(make_client: Cli
         assert result_access(deepcopy(result)) is Access.STATUS
         assert result_access(dict(result)) is None
     assert router.count("GET", "/api/openvpn/instances/search") == 1
+    assert router.count("GET", "/api/openvpn/export/providers") == 0
     assert router.count("GET", "/api/openvpn/instances/get/visible") == 0
+
+
+async def test_openvpn_strict_provider_failure_precedes_instance_denial(
+    make_client: ClientType,
+) -> None:
+    """Raise the first OpenVPN configuration request failure in strict mode.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+    """
+    client, _router = make_vpn_router(
+        make_client,
+        openvpn_routes(providers=aiohttp.ClientConnectionError("provider failed"), instances=403),
+        throw_errors=True,
+    )
+
+    with pytest.raises(OPNsenseConnectionError):
+        await client.get_openvpn()
 
 
 @pytest.mark.parametrize(
@@ -1683,18 +1768,25 @@ async def test_get_ipsec_known_unavailable_connection_inventory_reports_no_toggl
     assert router.count("GET", IPSEC_PHASE1_SESSIONS_SNAKE_PATH) == 1
 
 
-async def test_get_ipsec_status_access_only_reports_sessions(make_client: ClientType) -> None:
-    """Return live IKE and child entries without configuration after a cached denial.
+@pytest.mark.parametrize(
+    "children",
+    [{"rows": [{"uuid": "hidden", "enabled": "1"}]}, UNAVAILABLE, {}, MalformedJSONResponse()],
+)
+async def test_get_ipsec_status_access_only_reports_sessions(
+    make_client: ClientType, children: Any
+) -> None:
+    """Return live IKE and child entries after a cached connection configuration denial.
 
     Args:
         make_client (ClientType): Client factory fixture.
+        children (Any): Child configuration reply available on the Router.
     """
     client, router = make_vpn_router(
         make_client,
         ipsec_routes(
             {"rows": [{"ikeid": "visible", "name": "session", "connected": True}]},
             connections=403,
-            children={"rows": [{"uuid": "hidden", "enabled": "1"}]},
+            children=children,
             phase2={
                 "rows": [
                     {
@@ -1721,6 +1813,35 @@ async def test_get_ipsec_status_access_only_reports_sessions(make_client: Client
         assert child["installed_sas"] == 1
         assert child["total_bytes_recv"] == 418
     assert router.count("GET", IPSEC_CONNECTIONS_SNAKE_PATH) == 1
+    assert router.count("GET", "/api/ipsec/connections/search_child") == 0
+
+
+@pytest.mark.parametrize("phase2", [403, {"rows": None}, MalformedJSONResponse()])
+async def test_ipsec_status_access_omits_unreadable_phase2(
+    make_client: ClientType, phase2: Any
+) -> None:
+    """Return readable phase 1 status when phase 2 status cannot be read.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        phase2 (Any): Unavailable or malformed phase 2 status reply.
+    """
+    client, router = make_vpn_router(
+        make_client,
+        ipsec_routes(
+            {"rows": [{"ikeid": "live", "name": "session", "connected": True}]},
+            connections=403,
+            phase2=phase2,
+        ),
+    )
+
+    result = await client.get_ipsec()
+
+    assert result is not None
+    assert result_access(result) is Access.STATUS
+    assert set(result["connections"]) == {"live"}
+    assert "children" not in result
+    assert router.bodies("POST", IPSEC_PHASE2_SESSIONS_SNAKE_PATH) == [{"id": "session"}]
 
 
 async def test_ipsec_child_denial_preserves_connection_access(make_client: ClientType) -> None:
