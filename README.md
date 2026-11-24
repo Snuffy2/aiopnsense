@@ -30,7 +30,7 @@
 | aiopnsense/services.py                   |       71 |        0 |       22 |        0 |    100% |           |
 | aiopnsense/smart.py                      |       38 |        0 |       12 |        0 |    100% |           |
 | aiopnsense/speedtest.py                  |       54 |        0 |       14 |        0 |    100% |           |
-| aiopnsense/system.py                     |      397 |        3 |      160 |        7 |     98% |300-\>302, 302-\>304, 305, 310-\>295, 336, 339, 705-\>696 |
+| aiopnsense/system.py                     |      397 |        3 |      160 |        7 |     98% |303-\>305, 305-\>307, 308, 313-\>298, 339, 342, 708-\>699 |
 | aiopnsense/telemetry.py                  |      250 |        3 |       70 |        3 |     98% |65, 112, 217 |
 | aiopnsense/traffic.py                    |      112 |        0 |       52 |        1 |     99% | 151-\>154 |
 | aiopnsense/unbound.py                    |       93 |        0 |       36 |        0 |    100% |           |
