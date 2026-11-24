@@ -85,7 +85,8 @@ class ToggleStep:
         """Return the endpoint as plain text for log messages.
 
         Returns:
-            str: ``endpoint`` for a plain path, or the snake_case spelling of a styled\n                endpoint.
+            str: ``endpoint`` for a plain path, or the snake_case spelling of a styled
+                endpoint.
         """
         if isinstance(self.endpoint, _StyledEndpoint):
             return self.endpoint.snake_case
