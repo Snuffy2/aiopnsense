@@ -1,5 +1,98 @@
 # Changelog
 
+## [1.5.0](https://github.com/Snuffy2/aiopnsense/compare/v1.4.1...v1.5.0) (2026-11-24)
+
+
+### Features
+
+* expose firmware requirements via get_firmware_requirements ([#188](https://github.com/Snuffy2/aiopnsense/issues/188)) ([f9fb9a6](https://github.com/Snuffy2/aiopnsense/commit/f9fb9a65018bd1c44f4de8d5e481e096a5e4d549))
+
+
+### Bug Fixes
+
+* block forbidden firmware requests at the HTTP boundary ([#212](https://github.com/Snuffy2/aiopnsense/issues/212)) ([3205b7a](https://github.com/Snuffy2/aiopnsense/commit/3205b7a313542ae6bf59c166059b0f545321c862))
+* close the client when validation fails in __aenter__ ([#190](https://github.com/Snuffy2/aiopnsense/issues/190)) ([ecdc6f3](https://github.com/Snuffy2/aiopnsense/commit/ecdc6f308f55f07363ee75b2067bf7bb9b0e0406))
+* compare beta firmware builds and test real version shapes ([#209](https://github.com/Snuffy2/aiopnsense/issues/209)) ([334434c](https://github.com/Snuffy2/aiopnsense/commit/334434c04187c8f95e117a510dbd43500f6ea3f8))
+* give firmware gating one policy for unknown firmware ([#195](https://github.com/Snuffy2/aiopnsense/issues/195)) ([91769ad](https://github.com/Snuffy2/aiopnsense/commit/91769adbaae2f5ee6fa5bba29475cb031879a2c5))
+* guard legacy Unbound writes against incomplete settings ([#199](https://github.com/Snuffy2/aiopnsense/issues/199)) ([0925dbd](https://github.com/Snuffy2/aiopnsense/commit/0925dbdc2fc59d7d8ffb966251f95b1f717e62fa))
+* keep validation’s error mode local ([#240](https://github.com/Snuffy2/aiopnsense/issues/240)) ([ebfb771](https://github.com/Snuffy2/aiopnsense/commit/ebfb7715ea5ec130daf9ec9d53d03576c717804b))
+* limit automatic firmware checks to one per hour ([#205](https://github.com/Snuffy2/aiopnsense/issues/205)) ([e5f92d5](https://github.com/Snuffy2/aiopnsense/commit/e5f92d5855dad48ae2cf86c6b016c6f687268295))
+* name public methods in request failure logs and give dispatch one home ([#227](https://github.com/Snuffy2/aiopnsense/issues/227)) ([9eac267](https://github.com/Snuffy2/aiopnsense/commit/9eac2678b72a849d80fd271a27c87000e678e427))
+* raise Unbound blocklist errors when throw_errors is on ([#194](https://github.com/Snuffy2/aiopnsense/issues/194)) ([1cb9b51](https://github.com/Snuffy2/aiopnsense/commit/1cb9b51f792be329f7dc0d3575a683e1687481a5))
+* read the system time endpoint of the firmware's Endpoint Style ([#238](https://github.com/Snuffy2/aiopnsense/issues/238)) ([360e01a](https://github.com/Snuffy2/aiopnsense/commit/360e01a7f8af0a7826fcb1c54a14d07d97eb1ff3))
+* report every HTTP request failure through one shared classification ([#196](https://github.com/Snuffy2/aiopnsense/issues/196)) ([c26612f](https://github.com/Snuffy2/aiopnsense/commit/c26612f77cd2e965d7756ffcac721a6cc76d4ef6))
+* reset endpoint state after verified firmware install ([#242](https://github.com/Snuffy2/aiopnsense/issues/242)) ([a1c46de](https://github.com/Snuffy2/aiopnsense/commit/a1c46de9ac3167992906d45360e561c9b41c0b7a))
+* run every Toggle through one Toggle module and stop reporting unsaved changes as success ([#197](https://github.com/Snuffy2/aiopnsense/issues/197)) ([a4226f3](https://github.com/Snuffy2/aiopnsense/commit/a4226f3105c4f4ed3b8b5d7676f459be29f2eac1))
+* skip queued POSTs cancelled before dispatch ([#200](https://github.com/Snuffy2/aiopnsense/issues/200)) ([36cb432](https://github.com/Snuffy2/aiopnsense/commit/36cb43266f388fd6ed503d194c62363e7cce5c47))
+* support explicit VPN toggle target states ([#185](https://github.com/Snuffy2/aiopnsense/issues/185)) ([e52757c](https://github.com/Snuffy2/aiopnsense/commit/e52757cf22dcb29ad70a6caa655cbc394b191d11))
+* treat empty WireGuard inventory lists as empty ([#229](https://github.com/Snuffy2/aiopnsense/issues/229)) ([85bdb4c](https://github.com/Snuffy2/aiopnsense/commit/85bdb4cce80d6387037f21eeec4a23a37d14f221))
+* treat trailing zero version components as equal in firmware_is_at_least ([#189](https://github.com/Snuffy2/aiopnsense/issues/189)) ([13e7244](https://github.com/Snuffy2/aiopnsense/commit/13e7244efe947447d7834e2eaef965554ec97bcb))
+
+
+### Dependencies
+
+* bump astral-sh/setup-uv from 10.3.2 to 10.3.3 in the github-actions group ([#177](https://github.com/Snuffy2/aiopnsense/issues/177)) ([2f33a4e](https://github.com/Snuffy2/aiopnsense/commit/2f33a4eba5364a2c47bb9a223cab7bcbce36eb3e))
+* bump py-cov-action/python-coverage-comment-action from 4.5 to 4.6 in the github-actions group ([#183](https://github.com/Snuffy2/aiopnsense/issues/183)) ([ceb59d0](https://github.com/Snuffy2/aiopnsense/commit/ceb59d0f61b1a14477e8f5d265454a5efb1d8a1a))
+* bump the python-dependencies group with 10 updates ([#178](https://github.com/Snuffy2/aiopnsense/issues/178)) ([048cab5](https://github.com/Snuffy2/aiopnsense/commit/048cab577bd9dc5cc2b26a51b840e9ef1df8fe01))
+* bump the python-dependencies group with 10 updates ([#181](https://github.com/Snuffy2/aiopnsense/issues/181)) ([ac34f6c](https://github.com/Snuffy2/aiopnsense/commit/ac34f6ce4e2f16113c87f6e0e9edd09194650b15))
+* bump the python-dependencies group with 6 updates ([#184](https://github.com/Snuffy2/aiopnsense/issues/184)) ([dd33af2](https://github.com/Snuffy2/aiopnsense/commit/dd33af24ce15e765bdfd0eb96e56182d9aad6bda))
+* update prek hooks ([#179](https://github.com/Snuffy2/aiopnsense/issues/179)) ([f091275](https://github.com/Snuffy2/aiopnsense/commit/f09127559e0caa61fafa0ee566fa814c0ad87b63))
+* update prek hooks ([#182](https://github.com/Snuffy2/aiopnsense/issues/182)) ([f39ff84](https://github.com/Snuffy2/aiopnsense/commit/f39ff84a14ba9bde248fdbb9b08d5fd0a7db024b))
+* update prek hooks ([#226](https://github.com/Snuffy2/aiopnsense/issues/226)) ([64a6b40](https://github.com/Snuffy2/aiopnsense/commit/64a6b40278e0ace71213a72de42da5b858760fcb))
+
+
+### Documentation
+
+* document worktree imports and test conventions for agents ([#192](https://github.com/Snuffy2/aiopnsense/issues/192)) ([6d8cb6c](https://github.com/Snuffy2/aiopnsense/commit/6d8cb6c2bac6ca8ead3f9324f5fa5d5aff4bc163))
+* note that pydoclint runs through prek ([#211](https://github.com/Snuffy2/aiopnsense/issues/211)) ([ab7c9dc](https://github.com/Snuffy2/aiopnsense/commit/ab7c9dcd898ec0c76e7ffd9addca047840990be9))
+* record read-only tests and endpoint tracing ([#223](https://github.com/Snuffy2/aiopnsense/issues/223)) ([3a35a3b](https://github.com/Snuffy2/aiopnsense/commit/3a35a3bc43d785e46794b71e27b9ff9984f4fd36))
+* require tracing Router failure paths before trusting responses ([#207](https://github.com/Snuffy2/aiopnsense/issues/207)) ([d61bb11](https://github.com/Snuffy2/aiopnsense/commit/d61bb111f9615853caa946ec42b6c42e0affa347))
+* say how to find the main checkout venv ([#230](https://github.com/Snuffy2/aiopnsense/issues/230)) ([919b4d5](https://github.com/Snuffy2/aiopnsense/commit/919b4d5517d376c46435ceb84007787ed902664b))
+* show how to run live Router scripts from worktrees ([#206](https://github.com/Snuffy2/aiopnsense/issues/206)) ([0a6aec1](https://github.com/Snuffy2/aiopnsense/commit/0a6aec1a1596491f8d25c3e072a957bc45fa29d1))
+* specify public behavior in refactor specs ([#203](https://github.com/Snuffy2/aiopnsense/issues/203)) ([badd29b](https://github.com/Snuffy2/aiopnsense/commit/badd29b9c7321d3fa8be70b0771ef7ed01ff40b5))
+
+
+### Miscellaneous Chores
+
+* add domain glossary, coding standards, Toggle ADR, and rename recommended firmware constant ([#187](https://github.com/Snuffy2/aiopnsense/issues/187)) ([fe1fba2](https://github.com/Snuffy2/aiopnsense/commit/fe1fba25407e57bc07720e55aa1b26c959c9f6ed))
+* document API placement and add a manual docs build hook ([#191](https://github.com/Snuffy2/aiopnsense/issues/191)) ([4b88e41](https://github.com/Snuffy2/aiopnsense/commit/4b88e416b2cfcc86004af415df1ec1a2c7dacce2))
+* set up mattpocock agent skills config ([#186](https://github.com/Snuffy2/aiopnsense/issues/186)) ([4a261f2](https://github.com/Snuffy2/aiopnsense/commit/4a261f285e10afeeafe678f69e74bee8072aa08c))
+
+
+### Code Refactoring
+
+* add endpoint outcome reads beside the probe path ([#213](https://github.com/Snuffy2/aiopnsense/issues/213)) ([14df796](https://github.com/Snuffy2/aiopnsense/commit/14df796407310d8b828684cda8545906be14f126))
+* decode server-sent events in one pure module ([#235](https://github.com/Snuffy2/aiopnsense/issues/235)) ([c2d2892](https://github.com/Snuffy2/aiopnsense/commit/c2d289245db1f930405487111b55b3c9233b72cc))
+* give the endpoint availability cache one home ([#234](https://github.com/Snuffy2/aiopnsense/issues/234)) ([e9b2b9a](https://github.com/Snuffy2/aiopnsense/commit/e9b2b9adf5f7af340c2cb2ed51bcc451e46e4060))
+* give the transport one request body ([#236](https://github.com/Snuffy2/aiopnsense/issues/236)) ([adb02c8](https://github.com/Snuffy2/aiopnsense/commit/adb02c86d4c83b2e1862e958833910d54d098479))
+* match each WireGuard link once ([#239](https://github.com/Snuffy2/aiopnsense/issues/239)) ([6bb6565](https://github.com/Snuffy2/aiopnsense/commit/6bb65657435c4e96406c6b09f004f92036c420f8))
+* read DHCP and SMART endpoints in one request ([#215](https://github.com/Snuffy2/aiopnsense/issues/215)) ([0fd5dc0](https://github.com/Snuffy2/aiopnsense/commit/0fd5dc01efd918bb1315ae458780fbe1ab8ec3ea))
+* read firewall, unbound, vouchers, vnstat, traffic and speedtest in one request ([#217](https://github.com/Snuffy2/aiopnsense/issues/217)) ([abd84d0](https://github.com/Snuffy2/aiopnsense/commit/abd84d06ba7b8a5384b4f9290eeec2e1b5cb820d))
+* read firmware status in one request ([#218](https://github.com/Snuffy2/aiopnsense/issues/218)) ([18f30d6](https://github.com/Snuffy2/aiopnsense/commit/18f30d6c4a929463575005874a416732944851bc))
+* read telemetry and system endpoints in one request ([#216](https://github.com/Snuffy2/aiopnsense/issues/216)) ([b3ed5b9](https://github.com/Snuffy2/aiopnsense/commit/b3ed5b96c1fe212cdab83d6dbc3fdabb63221c4d))
+* read VPN inventories in one request ([#214](https://github.com/Snuffy2/aiopnsense/issues/214)) ([e4209b1](https://github.com/Snuffy2/aiopnsense/commit/e4209b1fdccbb70056a1cb5a602cfe3b867158f2))
+* remove the legacy endpoint probe path ([#219](https://github.com/Snuffy2/aiopnsense/issues/219)) ([aa82631](https://github.com/Snuffy2/aiopnsense/commit/aa82631ccf71b6facb5500378de50eb6d7ecacd0))
+* resolve Endpoint Style inside the fetch ([#237](https://github.com/Snuffy2/aiopnsense/issues/237)) ([6491bd2](https://github.com/Snuffy2/aiopnsense/commit/6491bd2c59675e60ded6ebd45cf2c12189c57c48))
+* share DHCP Lease normalization across backends ([#193](https://github.com/Snuffy2/aiopnsense/issues/193)) ([933c40b](https://github.com/Snuffy2/aiopnsense/commit/933c40b1b616e9ebe6375782b7739994987aa651))
+
+
+### Tests
+
+* count only validation error logs ([#241](https://github.com/Snuffy2/aiopnsense/issues/241)) ([7df252f](https://github.com/Snuffy2/aiopnsense/commit/7df252fd6ccc82676da322b2830ac3baaf17e472))
+* cover queued failures from the PR [#194](https://github.com/Snuffy2/aiopnsense/issues/194) retrospective ([#201](https://github.com/Snuffy2/aiopnsense/issues/201)) ([9ec3ae3](https://github.com/Snuffy2/aiopnsense/commit/9ec3ae38efa61047091d161fdd27e7c0b6cdb3be))
+* enforce private names in private modules ([#202](https://github.com/Snuffy2/aiopnsense/issues/202)) ([a385763](https://github.com/Snuffy2/aiopnsense/commit/a38576323fa2eec272d3cf0704458c21f287fde5))
+* enforce the firmware endpoint rule from ADR 0002 ([#208](https://github.com/Snuffy2/aiopnsense/issues/208)) ([5bec4d4](https://github.com/Snuffy2/aiopnsense/commit/5bec4d4b62f55e686ce1b5f2afdd66763345a6f1))
+* fail fast on unanswered queued requests ([#222](https://github.com/Snuffy2/aiopnsense/issues/222)) ([8ca65c2](https://github.com/Snuffy2/aiopnsense/commit/8ca65c25a5d3dba76720fda26e1d69f254738261))
+* guard request logs against URL credential leaks ([#204](https://github.com/Snuffy2/aiopnsense/issues/204)) ([0837c63](https://github.com/Snuffy2/aiopnsense/commit/0837c6343115180fdd545eb1fbd9885234ff9849))
+* make the aiohttp session the one test seam ([#228](https://github.com/Snuffy2/aiopnsense/issues/228)) ([bd8a460](https://github.com/Snuffy2/aiopnsense/commit/bd8a4609c2c1255adba035445e34e39ae7d41871))
+* pin endpoint paths as literals in every test module ([#233](https://github.com/Snuffy2/aiopnsense/issues/233)) ([e9b8f38](https://github.com/Snuffy2/aiopnsense/commit/e9b8f38114f2cd854f9df3bbe93e2de52ac523b6))
+* pin firmware endpoint paths as literals ([#232](https://github.com/Snuffy2/aiopnsense/issues/232)) ([cfe686f](https://github.com/Snuffy2/aiopnsense/commit/cfe686f522e0a3a94aa3e1283ba8e22a837e1812))
+
+
+### Continuous Integration
+
+* run pytest under a second timezone ([#231](https://github.com/Snuffy2/aiopnsense/issues/231)) ([ffc2ffa](https://github.com/Snuffy2/aiopnsense/commit/ffc2ffa650c7162ca487a67687fa3eee62c22891))
+
 ## [1.4.1](https://github.com/Snuffy2/aiopnsense/compare/v1.4.0...v1.4.1) (2026-11-06)
 
 
