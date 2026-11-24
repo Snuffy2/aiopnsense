@@ -660,16 +660,16 @@ async def test_get_wireguard_enriches_one_sided_links(
             assert parent.get("latest_handshake") is None
 
 
-@pytest.mark.parametrize("denied_inventory", ["clients", "servers"])
+@pytest.mark.parametrize("denied_path", ["/api/wireguard/client/get", "/api/wireguard/server/get"])
 async def test_get_wireguard_status_access_links_live_rows(
-    make_client: ClientType, wireguard_now: datetime, denied_inventory: str
+    make_client: ClientType, wireguard_now: datetime, denied_path: str
 ) -> None:
     """Use public-key identity and live links after either configuration read is denied.
 
     Args:
         make_client (ClientType): Client factory fixture.
         wireguard_now (datetime): Fixed reference time for handshake status.
-        denied_inventory (str): Configuration inventory returning 403.
+        denied_path (str): Configuration endpoint that starts returning 403.
     """
     handshake = wireguard_now - timedelta(seconds=30)
     rows = [
@@ -703,15 +703,25 @@ async def test_get_wireguard_status_access_links_live_rows(
             "transfer-rx": "5",
         },
     ]
-    inventories: dict[str, Any] = {
-        "clients": {"client": {"clients": {"client": {"configured": {}}}}},
-        "servers": {"server": {"servers": {"server": {"configured": {}}}}},
-    }
-    inventories[denied_inventory] = 403
     client, router = make_vpn_router(
-        make_client, wireguard_routes(summary={"rows": rows}, **inventories)
+        make_client,
+        wireguard_routes(
+            summary={"rows": rows},
+            clients={
+                "client": {"clients": {"client": {"client-id": {"pubkey": "client-public-key"}}}}
+            },
+            servers={
+                "server": {"servers": {"server": {"server-id": {"pubkey": "server-public-key"}}}}
+            },
+        ),
     )
+    configured = await client.get_wireguard()
+    assert configured is not None
+    assert result_access(configured) is Access.CONFIGURATION
+    assert configured["clients"]["client-id"]["key_hash"] == "53f6b5178afbdb4e"
+    assert configured["servers"]["server-id"]["key_hash"] == "006f9c9fb3b751aa"
 
+    router.routes[("GET", denied_path)] = 403
     for _ in range(2):
         result = await client.get_wireguard()
         assert result is not None
@@ -737,24 +747,7 @@ async def test_get_wireguard_status_access_links_live_rows(
             "Server 1": True,
             "Server 2": False,
         }
-    denied_path = f"/api/wireguard/{denied_inventory.removesuffix('s')}/get"
-    assert router.count("GET", denied_path) == 1
-
-    configured_client, _ = make_vpn_router(
-        make_client,
-        wireguard_routes(
-            clients={
-                "client": {"clients": {"client": {"client-id": {"pubkey": "client-public-key"}}}}
-            },
-            servers={
-                "server": {"servers": {"server": {"server-id": {"pubkey": "server-public-key"}}}}
-            },
-        ),
-    )
-    configured = await configured_client.get_wireguard()
-    assert configured is not None
-    assert configured["clients"]["client-id"]["key_hash"] == "53f6b5178afbdb4e"
-    assert configured["servers"]["server-id"]["key_hash"] == "006f9c9fb3b751aa"
+    assert router.count("GET", denied_path) == 2
 
 
 async def test_get_wireguard_retains_duplicate_and_incomplete_links(
