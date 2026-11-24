@@ -13,9 +13,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiopnsense import (
+    Access,
     OPNsenseError,
     OPNsenseInvalidArgument,
     client_transport as aiopnsense_client_transport,
+    result_access,
 )
 from aiopnsense.client_queue import _QueueEntry
 from aiopnsense.client_transport import _RequestKind
@@ -1028,6 +1030,7 @@ async def test_vpn_status_unavailable_vs_empty(
     [
         pytest.param(False, "empty", id="empty_without_session"),
         pytest.param(True, "empty", id="empty_with_session"),
+        pytest.param(True, "forbidden", id="forbidden_with_session"),
         pytest.param(False, "malformed", id="malformed_without_session"),
         pytest.param(True, "malformed", id="malformed_with_session"),
         pytest.param(True, "http", id="http_with_session"),
@@ -1075,6 +1078,8 @@ async def test_ipsec_connection_inventory_failure_and_recovery(
                 return FakeResponse(json_payload={"rows": [{"uuid": "disabled", "enabled": "0"}]})
             if reply == "timeout":
                 raise TimeoutError("connections unavailable")
+            if reply == "forbidden":
+                return FakeResponse(status=403, reason="Forbidden", ok=False)
             response = FakeResponse(
                 status=503 if reply == "http" else 200,
                 ok=reply != "http",
@@ -1088,17 +1093,28 @@ async def test_ipsec_connection_inventory_failure_and_recovery(
     session.get = fake_get
     try:
         result = await client.get_ipsec()
-        if reply == "empty":
+        if reply in {"empty", "forbidden"}:
             assert result is not None
+            assert result_access(result) is (
+                Access.STATUS if reply == "forbidden" else Access.CONFIGURATION
+            )
             assert set(result["connections"]) == ({"active"} if has_session else set())
             if has_session:
-                assert result["connections"]["active"]["enabled"] is None
+                active = result["connections"]["active"]
+                if reply == "forbidden":
+                    assert "enabled" not in active
+                else:
+                    assert active["enabled"] is None
         else:
             assert result is None
 
         recovered = True
+        cache = client._endpoint_cache
+        endpoint = "/api/ipsec/connections/search_connection"
+        cache.clear(endpoint, cache.lookup(endpoint, datetime.now().astimezone())[1])
         result = await client.get_ipsec()
         assert result is not None
+        assert result_access(result) is Access.CONFIGURATION
         assert result["connections"]["disabled"]["enabled"] is False
         assert result["connections"]["disabled"]["status"] == "disconnected"
     finally:
@@ -1179,7 +1195,7 @@ async def test_vpn_status_propagates_errors(
             ("clients", WIREGUARD_CLIENTS_PATH, "clients"),
             ("servers", WIREGUARD_SERVERS_PATH, "servers"),
         )
-        for reply in ("http", "timeout", "decode", "missing", "malformed", "empty")
+        for reply in ("http", "timeout", "decode", "missing", "malformed", "empty", "forbidden")
     ],
 )
 async def test_vpn_configuration_inventory_failure_and_recovery(
@@ -1269,6 +1285,11 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
         result = await getattr(client, f"get_{vpn}")()
         if reply in {"empty", "forbidden"}:
             assert result is not None
+            assert result_access(result) is (
+                Access.STATUS
+                if reply == "forbidden" and endpoint != OPENVPN_PROVIDERS_PATH
+                else Access.CONFIGURATION
+            )
             assert "disabled" not in result[collection]
             if vpn == "openvpn" and has_session:
                 assert result["servers"]["active"]["status"] == "up"
@@ -1280,6 +1301,7 @@ async def test_vpn_configuration_inventory_failure_and_recovery(
         cache.clear(endpoint, cache.lookup(endpoint, datetime.now().astimezone())[1])
         result = await getattr(client, f"get_{vpn}")()
         assert result is not None
+        assert result_access(result) is Access.CONFIGURATION
         assert "disabled" in result[collection]
         if endpoint != OPENVPN_PROVIDERS_PATH:
             assert result[collection]["disabled"]["enabled"] is False
