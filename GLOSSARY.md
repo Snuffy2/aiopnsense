@@ -50,6 +50,16 @@ _Avoid_: Peer
 Switching a Router item, such as a VPN Instance, Firewall Rule or alias, on or off, either to an explicit target state or by flipping its current state. Making the change take effect on the Router is part of the Toggle, never a separate step.
 _Avoid_: Apply, enable/disable (as separate operations)
 
+### Access
+
+**Status Access**:
+The level at which the Router lets the API user read the live status of a category, or of one VPN type, but not its configured inventory. Under Status Access, items the status does not show, such as disabled VPN Instances, are not visible, and nothing can be Toggled. The Router's answers decide the level, not a user setting.
+_Avoid_: Read-only, status-only user
+
+**Configuration Access**:
+The level at which the API user can also read the configured inventory of a category, or of one VPN type, and Toggle its items.
+_Avoid_: Read/write, full access
+
 ### Firmware support
 
 **Minimum Firmware**:
