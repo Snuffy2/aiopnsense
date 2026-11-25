@@ -15,7 +15,7 @@
 ## Agent permissions and venv policy
 
 - Agents may create a repository-local venv at `./.venv`.
-- The project uses `pyproject.toml` dependency groups (`lint`, `pytest`, `dev`). Installing packages from repo manifests into `./.venv` is allowed for running tests or local tooling after approval; avoid unrelated network operations without explicit consent.
+- The project uses `pyproject.toml` dependency groups (`lint`, `pytest`, `dev`). Installing packages from repo manifests into `./.venv` is allowed for running tests or local tooling.
 
 ## Folder structure (repo-specific)
 
@@ -61,10 +61,10 @@
 - Every pull request title must begin with a Conventional Commit prefix, such as `fix:`,
   `feat:`, or `chore(deps):`.
 
-## Network / install consent
+## Network access
 
-- Obtain explicit consent before any network operations outside the repository not strictly needed to run local tests.
-- Package installs required for running tests are allowed when user approves.
+- Run read-only lookups that inform the task without asking: GitHub, OPNsense docs and source, and PyPI.
+- Ask first for package installs beyond the repo manifests and for any write to an external service that this file does not already authorize.
 
 ## Live OPNsense testing
 
