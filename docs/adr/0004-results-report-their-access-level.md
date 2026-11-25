@@ -23,12 +23,12 @@ With `throw_errors=False`:
 - A 404 on the endpoint that supplies an inventory means the feature is missing. The getter returns an empty inventory, or the feature's existing missing marker, such as `{"available": False}` from `get_speedtest`.
 - A 403 on that endpoint, including a cached 403, a transient failure, and an undecodable or wrongly shaped body all make the inventory unknown. The getter returns `None`. Callers treat `None` as unknown and defer reconciliation.
 - When several endpoints each contribute items to one inventory, as the vnStat periods do, each must return data or a 404. Otherwise the inventory is `None`.
-- When a getter returns independent inventories in one result, the rule applies to each one. `get_telemetry` sets only the affected `filesystems` or `temps` to `None` and leaves the other values unchanged.
+- When a getter returns independent inventories in one result, the rule applies to each one. `get_telemetry` sets only the affected `filesystems` or `temps` to `None` and leaves the other values unchanged. `get_firewall` does the same for each rule group: `rules` and each NAT type under `nat` (`d_nat`, `one_to_one`, `source_nat`, `npt`) come from their own configuration endpoint, so one group can be `None` while the others keep their rules. OPNsense grants these as separate privileges (Firewall: Rules, and Firewall: NAT: Destination NAT, 1:1, Source NAT and NPTv6 in its ACL definitions), so an API user can be denied one group and not the others.
 - A read that only adds detail to items already listed does not make the inventory unknown. Its fields stay unset, as with Speedtest averages from `showstat`, or the failed item's detail is `None`, as with one device's `get_smart_info` result under its key in `smart_info`.
 
 Strict mode keeps each getter's existing exceptions and their order.
 
-Getters that follow this rule: `get_services`, `get_unbound_blocklist`, `get_interfaces`, `get_gateways`, the `filesystems` and `temps` values of `get_telemetry`, `get_smart`, `get_smart_info`, `get_nut_ups_status`, `get_speedtest` and `get_vnstat`. Other inventory getters adopt it when they are next changed.
+Getters that follow this rule: `get_services`, `get_unbound_blocklist`, `get_interfaces`, `get_gateways`, the `filesystems` and `temps` values of `get_telemetry`, `get_smart`, `get_smart_info`, `get_nut_ups_status`, `get_speedtest`, `get_vnstat` and the rule groups of `get_firewall`. Other inventory getters adopt it when they are next changed.
 
 ## Considered Options
 
