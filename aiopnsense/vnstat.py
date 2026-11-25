@@ -56,7 +56,7 @@ VNSTAT_MONTHLY_ENDPOINT = f"{VNSTAT_SERVICE_ENDPOINT_PREFIX}monthly"
 class VnstatMixin(AiopnsenseClientProtocol):
     """vnStat methods for OPNsenseClient."""
 
-    async def _fetch_vnstat_for(self, endpoint: str, expected_period: str) -> dict[str, Any]:
+    async def _fetch_vnstat_for(self, endpoint: str, expected_period: str) -> dict[str, Any] | None:
         """Fetch and parse vnStat payload for a specific endpoint and period.
 
         Args:
@@ -64,12 +64,15 @@ class VnstatMixin(AiopnsenseClientProtocol):
             expected_period (str): Expected period label for parser validation.
 
         Returns:
-            dict[str, Any]: Parsed payload or fallback empty mapping when endpoint is unavailable.
+            dict[str, Any] | None: Parsed payload, an empty inventory for a 404,
+                or ``None`` for a suppressed request failure.
         """
         outcome = await self._fetch_endpoint_outcome(endpoint)
         if not outcome.is_data:
             _LOGGER.debug("vnStat %s endpoint unavailable", expected_period)
-            return {"period": expected_period, "interfaces": {}}
+            if outcome.http_status == 404:
+                return {"period": expected_period, "interfaces": {}}
+            return None
 
         return self._parse_vnstat_payload(
             outcome.mapping(),
@@ -96,27 +99,31 @@ class VnstatMixin(AiopnsenseClientProtocol):
 
         endpoint = f"{VNSTAT_SERVICE_ENDPOINT_PREFIX}{requested_period}"
         payload = await self._fetch_vnstat_for(endpoint, requested_period)
-        if not payload.get("interfaces"):
+        if payload is None or not payload.get("interfaces"):
             return {}
         return payload
 
     @_log_errors
-    async def get_vnstat(self) -> MutableMapping[str, Any]:
+    async def get_vnstat(self) -> MutableMapping[str, Any] | None:
         """Collect summarized vnStat usage data across available interfaces.
 
         Returns:
-            MutableMapping[str, Any]: Mapping with ``interfaces`` keyed by
+            MutableMapping[str, Any] | None: Mapping with ``interfaces`` keyed by
                 interface name and ``interface_count``. Each interface contains
                 parsed ``hourly``, ``daily``, and ``monthly`` rows plus
                 convenience byte counters for today, this month, yesterday,
-                last month, and the last complete hour. With errors disabled,
-                a transient hourly failure leaves hourly data empty and the
-                daily and monthly reads still run.
+                last month, and the last complete hour. An hourly 404 returns
+                an empty summary. A daily or monthly 404 supplies empty rows
+                for that period. Other failed or undecodable period reads
+                return ``None`` with ``throw_errors`` disabled and raise an
+                ``OPNsenseError`` with it enabled.
         """
         hourly_outcome = await self._fetch_endpoint_outcome(VNSTAT_HOURLY_ENDPOINT)
-        if hourly_outcome.is_absent:
+        if not hourly_outcome.is_data:
             _LOGGER.debug("[get_vnstat] Hourly endpoint unavailable")
-            return {"interfaces": {}, "interface_count": 0}
+            if hourly_outcome.http_status == 404:
+                return {"interfaces": {}, "interface_count": 0}
+            return None
 
         opnsense_tz = await self._get_opnsense_timezone()
         hourly = self._parse_vnstat_payload(
@@ -125,6 +132,9 @@ class VnstatMixin(AiopnsenseClientProtocol):
         )
         daily = await self._fetch_vnstat_for(VNSTAT_DAILY_ENDPOINT, "daily")
         monthly = await self._fetch_vnstat_for(VNSTAT_MONTHLY_ENDPOINT, "monthly")
+        # Each period can contribute interfaces missing from the other periods.
+        if daily is None or monthly is None:
+            return None
         interface_names = self._collect_vnstat_interfaces(hourly, daily, monthly)
         interface_data: dict[str, Any] = {}
 
