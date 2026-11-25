@@ -29,7 +29,6 @@ The client currently includes helpers for:
 - IPsec phase 1 (IKE) connection status plus connection toggling, and phase 2 (child SA) status
 - vnStat metrics, captive portal vouchers, and speed test data
 
-
 ## Requirements
 
 * ### Requires OPNsense Firmware >= 25.1
