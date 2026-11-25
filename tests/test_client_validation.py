@@ -217,7 +217,7 @@ async def test_overlapping_validations_keep_their_error_policy(
 async def test_queued_and_direct_failures_during_validation(
     make_client: MakeClientFactory, *, throw_errors: bool
 ) -> None:
-    """A queued plain request and a direct status probe keep their failure behavior.
+    """A queued DNSBL read and a direct status probe keep their own error modes.
 
     Args:
         make_client (MakeClientFactory): Factory for clients with real queue workers.
@@ -244,19 +244,7 @@ async def test_queued_and_direct_failures_during_validation(
                 with pytest.raises(OPNsenseConnectionError):
                     _ = [sample async for sample in client.stream_interface_traffic()]
             else:
-                assert await client.get_unbound_blocklist() == {
-                    "legacy": {
-                        "enabled": "",
-                        "safesearch": "",
-                        "nxdomain": "",
-                        "address": "",
-                        "type": "",
-                        "lists": "",
-                        "whitelists": "",
-                        "blocklists": "",
-                        "wildcards": "",
-                    }
-                }
+                assert await client.get_unbound_blocklist() is None
                 assert [sample async for sample in client.stream_interface_traffic()] == []
         finally:
             firmware.release.set()
