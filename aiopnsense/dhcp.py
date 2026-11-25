@@ -20,6 +20,7 @@ from ._dhcp_leases import (
 from ._error_policy import _log_errors
 from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
+from .access import Access, AccessDict
 from .helpers import _LOGGER, api_value_matches, coerce_bool, dict_get, get_ip_key, try_to_int
 
 ARP_TABLE_ENDPOINT = "/api/diagnostics/interface/search_arp"
@@ -503,6 +504,22 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 include address, hostname, interface, type, MAC,
                 and expiration when available. Hostnames made only of dots
                 are reported as None, like empty or missing hostnames.
+                ``lease_interfaces`` also lists interfaces that Kea DHCPv4 or
+                Dnsmasq is configured to serve, including those without leases.
+                The result reports its access level through ``result_access()``.
+                A forbidden (403) Kea DHCPv4 settings or Dnsmasq range endpoint,
+                including a cached denial, reports Status Access: the leases the
+                Router shows are returned, but configured interfaces without
+                leases may be missing. Otherwise the result reports Configuration
+                Access. A missing (404) configuration endpoint contributes no
+                interfaces, and a forbidden Kea reservation endpoint only drops
+                reservation detail. With the default ``throw_errors=False``,
+                lease and configuration endpoints that fail or are malformed
+                contribute nothing, so every lease endpoint failing still returns
+                a result without leases. When ``self._throw_errors`` is ``True``,
+                a failed request raises ``OPNsenseError`` instead, specifically
+                ``OPNsensePrivilegeMissing`` for a forbidden (403) endpoint; a
+                404 never raises.
         """
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
@@ -517,8 +534,14 @@ class DHCPMixin(AiopnsenseClientProtocol):
         # and OPNsense has no ISC configuration endpoint that lists enabled DHCP interfaces.
         # Therefore, zero-lease ISC scopes cannot be discovered without incorrectly treating
         # every assigned interface as DHCP-capable.
-        lease_interfaces: dict[str, Any] = await self._get_kea_interfaces()
-        lease_interfaces.update(await self._get_dnsmasq_interfaces())
+        kea_interfaces = await self._get_kea_interfaces()
+        dnsmasq_interfaces = await self._get_dnsmasq_interfaces()
+        access = (
+            Access.STATUS
+            if Access.STATUS in (kea_interfaces.access, dnsmasq_interfaces.access)
+            else Access.CONFIGURATION
+        )
+        lease_interfaces: dict[str, Any] = {**kea_interfaces, **dnsmasq_interfaces}
         for lease in leases_raw:
             if (
                 not isinstance(lease, MutableMapping)
@@ -541,58 +564,79 @@ class DHCPMixin(AiopnsenseClientProtocol):
             if_subnet = leases[if_name]
             sorted_leases[if_name] = sorted(if_subnet, key=get_ip_key)
 
-        dhcp_leases: dict[str, Any] = {
-            "lease_interfaces": sorted_lease_interfaces,
-            "leases": sorted_leases,
-        }
+        dhcp_leases = AccessDict(
+            {"lease_interfaces": sorted_lease_interfaces, "leases": sorted_leases},
+            access=access,
+        )
+        _LOGGER.debug(
+            "[get_dhcp_leases] interfaces: %s, access: %s", len(sorted_lease_interfaces), access
+        )
         return dhcp_leases
 
-    async def _get_kea_interfaces(self) -> dict[str, Any]:
+    @staticmethod
+    def _unreadable_interfaces(http_status: int | None) -> AccessDict[str, Any]:
+        """Return the empty interface inventory of an unreadable configuration endpoint.
+
+        Args:
+            http_status (int | None): HTTP status of the failed read, or ``None``.
+
+        Returns:
+            AccessDict[str, Any]: Empty inventory with Status Access after a forbidden
+                (403) read, including a cached denial, and Configuration Access otherwise.
+        """
+        access = Access.STATUS if http_status == 403 else Access.CONFIGURATION
+        return AccessDict({}, access=access)
+
+    async def _get_kea_interfaces(self) -> AccessDict[str, Any]:
         """Return interfaces selected for Kea DHCPv4.
 
         Returns:
-            dict[str, Any]: Mapping of Kea interface identifiers to display
-                names when Kea DHCPv4 is enabled; otherwise an empty mapping.
+            AccessDict[str, Any]: Mapping of Kea interface identifiers to display
+                names when Kea DHCPv4 is enabled; otherwise an empty mapping. A
+                forbidden (403) settings endpoint gives an empty mapping with Status
+                Access; every other result has Configuration Access.
         """
         outcome = await self._fetch_endpoint_outcome(KEA_DHCPV4_GET_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("Kea DHCP interface endpoint unavailable")
-            return {}
+            return self._unreadable_interfaces(outcome.http_status)
 
         response = outcome.mapping()
         lease_interfaces: dict[str, Any] = {}
         general = dict_get(response, "dhcpv4.general", {})
         if not isinstance(general, MutableMapping):
-            return {}
+            return AccessDict({}, access=Access.CONFIGURATION)
         if not api_value_matches(general.get("enabled", "0"), "1"):
-            return {}
+            return AccessDict({}, access=Access.CONFIGURATION)
         interfaces = general.get("interfaces", {})
         if not isinstance(interfaces, MutableMapping):
-            return {}
+            return AccessDict({}, access=Access.CONFIGURATION)
         for if_name, iface in interfaces.items():
             if not isinstance(iface, MutableMapping):
                 continue
             if api_value_matches(iface.get("selected", 0), "1") and iface.get("value", None):
                 lease_interfaces[if_name] = iface.get("value")
-        return lease_interfaces
+        return AccessDict(lease_interfaces, access=Access.CONFIGURATION)
 
-    async def _get_dnsmasq_interfaces(self) -> dict[str, Any]:
+    async def _get_dnsmasq_interfaces(self) -> AccessDict[str, Any]:
         """Return interfaces with configured Dnsmasq DHCP ranges.
 
         Returns:
-            dict[str, Any]: Mapping of Dnsmasq range interface identifiers to
-                display names, including interfaces without active leases.
+            AccessDict[str, Any]: Mapping of Dnsmasq range interface identifiers to
+                display names, including interfaces without active leases. A
+                forbidden (403) range endpoint gives an empty mapping with Status
+                Access; every other result has Configuration Access.
         """
         outcome = await self._fetch_endpoint_outcome(DNSMASQ_RANGES_SEARCH_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("Dnsmasq DHCP range endpoint unavailable")
-            return {}
+            return self._unreadable_interfaces(outcome.http_status)
 
         response = outcome.mapping()
         ranges = response.get("rows", [])
         if not isinstance(ranges, list):
             _LOGGER.debug("Dnsmasq DHCP range lookup returned invalid rows payload")
-            return {}
+            return AccessDict({}, access=Access.CONFIGURATION)
 
         lease_interfaces: dict[str, Any] = {}
         for range_info in ranges:
@@ -609,7 +653,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
                     lease_interfaces[if_name] = (
                         if_descr if isinstance(if_descr, str) and if_descr else if_name
                     )
-        return lease_interfaces
+        return AccessDict(lease_interfaces, access=Access.CONFIGURATION)
 
     async def _get_kea_dhcpv4_leases(self, opnsense_tz: tzinfo | None = None) -> list:
         """Return active IPv4 DHCP leases reported by Kea.
