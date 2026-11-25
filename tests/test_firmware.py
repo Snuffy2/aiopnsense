@@ -1889,6 +1889,64 @@ async def test_install_firmware_reboot_marker_survives_following_outage(
 
 
 @pytest.mark.asyncio
+async def test_install_firmware_survives_empty_lock_state(
+    install_client: Callable[..., Any],
+) -> None:
+    """An empty lock reply mid-install is unknown, so polling continues until ready.
+
+    OPNsense returns ``{"status": ""}`` when configd cannot answer, as it did
+    while an update replaced the lock script.
+
+    Args:
+        install_client (Callable[..., Any]): Lifecycle transport factory.
+    """
+    done = _install_progress("done", "***DONE***")
+    client, session = install_client(
+        [
+            (_install_progress("running"), "", "26.7.7"),
+            # DONE with an unknown lock is not terminal.
+            (done, "", "26.7.8"),
+            (done, "ready", "26.7.8"),
+        ]
+    )
+
+    await client.install_firmware(target_version="26.7.8", poll_interval=0.001)
+
+    assert await client.get_host_firmware_version() == "26.7.8"
+    session.post.assert_called_once()
+    # Preflight lock and baseline, then three progress/lock/status observations.
+    assert session.get.call_count == 2 + 3 * 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lock", "timeout", "error"),
+    [
+        pytest.param("", 0.01, "deadline", id="empty-never-clears"),
+        pytest.param("unknown", 1, "Unknown firmware lock state", id="unrecognized"),
+    ],
+)
+async def test_install_firmware_unusable_lock_state_fails(
+    install_client: Callable[..., Any], lock: str, timeout: float, error: str
+) -> None:
+    """A lock that never reports ready times out, and an unrecognized one fails at once.
+
+    Args:
+        install_client (Callable[..., Any]): Lifecycle transport factory.
+        lock (str): Lock state reported after a completed action log.
+        timeout (float): Overall installation deadline.
+        error (str): Expected failure text.
+    """
+    client, session = install_client([(_install_progress("done", "***DONE***"), lock, "26.7.8")])
+
+    with pytest.raises(OPNsenseError, match=error):
+        await client.install_firmware(target_version="26.7.8", timeout=timeout, poll_interval=0.1)
+
+    session.post.assert_called_once()
+    assert await client.get_host_firmware_version() is None
+
+
+@pytest.mark.asyncio
 async def test_install_firmware_rejects_replaced_same_action_log(
     install_client: Callable[..., Any],
 ) -> None:
