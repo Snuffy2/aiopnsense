@@ -361,21 +361,31 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         return filesystems
 
     @_log_errors
-    async def get_gateways(self) -> MutableMapping[str, Any]:
+    async def get_gateways(self) -> MutableMapping[str, Any] | None:
         """Return OPNsense gateway status details.
 
         Returns:
-            MutableMapping[str, Any]: Mapping keyed by gateway name, with each
+            MutableMapping[str, Any] | None: Mapping keyed by gateway name, with each
                 gateway row preserved from OPNsense and ``status`` normalized
-                from the translated status when available.
+                from the translated status when available. HTTP 404 returns an
+                empty mapping. Other request or decoding failures return ``None``
+                when ``throw_errors`` is off and raise an ``OPNsenseError`` when it is on.
+                With ``throw_errors`` off, a decoded response with a missing or
+                invalid ``items`` list or a failed backend status also returns ``None``.
         """
         gateways_outcome = await self._fetch_endpoint_outcome(GATEWAY_STATUS_ENDPOINT)
         if not gateways_outcome.is_data:
             _LOGGER.debug("Gateway status endpoint unavailable")
-            return {}
+            return {} if gateways_outcome.http_status == 404 else None
         gateways_info = gateways_outcome.mapping()
+        items = gateways_info.get("items", ())
+        if not _throws_errors(self) and (
+            not isinstance(items, list) or gateways_info.get("status") == "failed"
+        ):
+            _LOGGER.debug("[get_gateways] Gateway response did not report an inventory")
+            return None
         gateways: dict[str, Any] = {}
-        for gw_info in gateways_info.get("items", []):
+        for gw_info in items:
             if isinstance(gw_info, MutableMapping) and "name" in gw_info:
                 gateways[gw_info["name"]] = gw_info
         for gateway in gateways.values():
