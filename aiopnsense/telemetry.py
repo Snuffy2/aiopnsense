@@ -356,18 +356,20 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         return filesystems
 
     @_log_errors
-    async def get_gateways(self) -> MutableMapping[str, Any]:
+    async def get_gateways(self) -> MutableMapping[str, Any] | None:
         """Return OPNsense gateway status details.
 
         Returns:
-            MutableMapping[str, Any]: Mapping keyed by gateway name, with each
+            MutableMapping[str, Any] | None: Mapping keyed by gateway name, with each
                 gateway row preserved from OPNsense and ``status`` normalized
-                from the translated status when available.
+                from the translated status when available. HTTP 404 returns an
+                empty mapping. Other request or decoding failures return ``None``
+                when ``throw_errors`` is off and raise an ``OPNsenseError`` when it is on.
         """
         gateways_outcome = await self._fetch_endpoint_outcome(GATEWAY_STATUS_ENDPOINT)
         if not gateways_outcome.is_data:
             _LOGGER.debug("Gateway status endpoint unavailable")
-            return {}
+            return {} if gateways_outcome.http_status == 404 else None
         gateways_info = gateways_outcome.mapping()
         gateways: dict[str, Any] = {}
         for gw_info in gateways_info.get("items", []):

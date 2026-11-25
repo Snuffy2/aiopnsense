@@ -9,7 +9,14 @@ from typing import Any
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import FakeResponse, FakeRouter, MakeClientFactory, make_router_client
+from aiopnsense.exceptions import OPNsenseError, OPNsensePrivilegeMissing, OPNsenseTimeoutError
+from tests.conftest import (
+    FakeResponse,
+    FakeRouter,
+    MakeClientFactory,
+    MalformedJSONResponse,
+    make_router_client,
+)
 
 SNAKE_CASE_FIRMWARE = "26.1.1"
 CAMELCASE_FIRMWARE = "25.1"
@@ -457,8 +464,58 @@ async def test_get_gateways_skips_rows_without_name(make_client: MakeClientFacto
 
     gateways = await client.get_gateways()
 
-    assert list(gateways) == ["gw1"]
-    assert gateways["gw1"]["status"] == "online"
+    assert gateways == {"gw1": {"name": "gw1", "status": "online"}}
+
+
+async def test_get_gateways_forbidden_remains_unavailable_when_cached(
+    make_client: MakeClientFactory,
+) -> None:
+    """A forbidden gateway read has no inventory, including on a cache hit.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+    """
+    client, router = _router(make_client, {GATEWAYS_PATH: 403})
+
+    first = await client.get_gateways()
+    cached = await client.get_gateways()
+
+    assert router.calls() == [("GET", GATEWAYS_PATH)]
+    assert first is None
+    assert cached is None
+
+
+@pytest.mark.parametrize(
+    ("reply", "error_type"),
+    [
+        pytest.param(403, OPNsensePrivilegeMissing, id="forbidden"),
+        pytest.param(TimeoutError(), OPNsenseTimeoutError, id="timeout"),
+        pytest.param(MalformedJSONResponse(), OPNsenseError, id="invalid-json"),
+    ],
+)
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_gateways_read_failure(
+    make_client: MakeClientFactory,
+    reply: int | TimeoutError | FakeResponse,
+    error_type: type[OPNsenseError],
+    throw_errors: bool,
+) -> None:
+    """Gateway read failures suppress the inventory or raise in strict mode.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        reply (int | TimeoutError | FakeResponse): Failure from the fake Router.
+        error_type (type[OPNsenseError]): Error raised in strict mode.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+    """
+    client, _ = _router(make_client, {GATEWAYS_PATH: reply}, throw_errors=throw_errors)
+
+    if throw_errors:
+        with pytest.raises(error_type) as raised:
+            await client.get_gateways()
+        assert type(raised.value) is error_type
+    else:
+        assert await client.get_gateways() is None
 
 
 @pytest.mark.parametrize("throw_errors", [False, True])
