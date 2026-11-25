@@ -85,20 +85,22 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         return telemetry
 
     @_log_errors
-    async def get_interfaces(self) -> MutableMapping[str, Any]:
+    async def get_interfaces(self) -> MutableMapping[str, Any] | None:
         """Return normalized interface status and counters.
 
         Returns:
-            MutableMapping[str, Any]: Mapping keyed by OPNsense interface
+            MutableMapping[str, Any] | None: Mapping keyed by OPNsense interface
                 identifier. Each interface includes packet and byte counters,
                 error counters, status, addresses, media, gateway and route
                 metadata, MAC address, enabled flag, and VLAN tag when
-                available.
+                available. HTTP 404 returns an empty mapping. Forbidden reads,
+                transient failures, and undecodable responses return ``None``
+                when ``throw_errors`` is disabled and raise when enabled.
         """
         outcome = await self._fetch_endpoint_outcome(INTERFACE_OVERVIEW_EXPORT_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("Interface overview endpoint unavailable")
-            return {}
+            return {} if outcome.http_status == 404 else None
         interface_info = outcome.sequence()
         if not len(interface_info) > 0:
             return {}

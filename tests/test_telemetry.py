@@ -8,8 +8,14 @@ from typing import Any
 
 import pytest
 
-from aiopnsense import OPNsenseClient
-from tests.conftest import FakeResponse, FakeRouter, MakeClientFactory, make_router_client
+from aiopnsense import OPNsenseClient, OPNsenseError, OPNsensePrivilegeMissing, OPNsenseTimeoutError
+from tests.conftest import (
+    FakeResponse,
+    FakeRouter,
+    MakeClientFactory,
+    MalformedJSONResponse,
+    make_router_client,
+)
 
 SNAKE_CASE_FIRMWARE = "26.1.1"
 CAMELCASE_FIRMWARE = "25.1"
@@ -402,6 +408,7 @@ async def test_get_interfaces_status_variants(make_client: MakeClientFactory) ->
 
     interfaces = await client.get_interfaces()
 
+    assert interfaces is not None
     assert interfaces["em0"]["status"] == "down"
     assert interfaces["em1"]["status"] == "up"
     assert "mac" not in interfaces["em1"]
@@ -432,8 +439,60 @@ async def test_get_interfaces_empty_and_invalid_rows(make_client: MakeClientFact
 
     interfaces = await client.get_interfaces()
 
+    assert interfaces is not None
     assert list(interfaces) == ["em0"]
     assert interfaces["em0"]["status"] == ""
+
+
+async def test_get_interfaces_forbidden_stays_unknown_while_cached(
+    make_client: MakeClientFactory,
+) -> None:
+    """A forbidden inventory is unknown on the first call and on a cache hit.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+    """
+    client, router = _router(make_client, {INTERFACES_PATH: 403})
+
+    first_result = await client.get_interfaces()
+    cached_result = await client.get_interfaces()
+
+    assert router.count("GET", INTERFACES_PATH) == 1
+    assert (first_result, cached_result) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("response", "strict_error"),
+    [
+        (403, OPNsensePrivilegeMissing),
+        (TimeoutError("interface overview timed out"), OPNsenseTimeoutError),
+        (MalformedJSONResponse(), OPNsenseError),
+    ],
+    ids=["forbidden", "timeout", "undecodable"],
+)
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["suppress", "strict"])
+async def test_get_interfaces_failed_read(
+    make_client: MakeClientFactory,
+    response: int | TimeoutError | FakeResponse,
+    strict_error: type[OPNsenseError],
+    throw_errors: bool,
+) -> None:
+    """A failed read yields no inventory in suppressing mode or raises in strict mode.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        response (int | TimeoutError | FakeResponse): Fake Router response or transport error.
+        strict_error (type[OPNsenseError]): Public error type expected in strict mode.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+    """
+    client, _ = _router(make_client, {INTERFACES_PATH: response}, throw_errors=throw_errors)
+
+    if throw_errors:
+        with pytest.raises(strict_error) as exc_info:
+            await client.get_interfaces()
+        assert type(exc_info.value) is strict_error
+    else:
+        assert await client.get_interfaces() is None
 
 
 async def test_get_gateways_skips_rows_without_name(make_client: MakeClientFactory) -> None:
