@@ -27,6 +27,14 @@ A configuration 404 still supplies an empty inventory. Strict mode still propaga
 
 In the stock OPNsense ACL definitions, one privilege grants both the settings and the lease endpoints of each backend: "Services: DHCP: Kea(v4)" covers `api/kea/dhcpv4/*` and `api/kea/leases4/*` (25.1 through 26.7), and "Services: Dnsmasq DNS/DHCP: Settings" covers all of `api/dnsmasq/*` (25.7, which added that API, through 26.7). A user who can read Kea DHCPv4 or Dnsmasq leases can therefore read that backend's configuration too, so Status Access does not occur for a backend whose leases are visible. It occurs when the API user lacks a backend's privilege entirely, such as a user with only the Kea(v6) privilege, whose DHCPv4 interfaces are then unknown.
 
+## CARP
+
+`get_carp` reports its access level too. OPNsense grants the two CARP reads through separate privileges: `diagnostics/interface/get_vip_status` under "Interfaces: Virtual IPs: Status" and `interfaces/vip_settings/*` under "Interfaces: Virtual IPs: Settings".
+
+- The VIP inventory comes from `get_vip_status` at both levels. That endpoint lists every configured CARP VIP, including disabled ones, so a Status Access result is not missing VIPs.
+- `interfaces/vip_settings/get` determines access. A 403, including a cached 403, means Status Access, and the result omits the settings enrichment of each VIP: fields the status rows lack, such as `descr` and `subnet_bits`. Data or a 404 means Configuration Access. A transient settings failure leaves Configuration Access with status-only VIP data, because a failure alone cannot establish Status Access.
+- A failed `get_vip_status` read, or a reply without a `rows` list, returns `None` with no level, instead of an empty snapshot that a caller could take for "no VIPs". Strict mode raises the status error first, then the settings error.
+
 ## Unknown inventories
 
 The 404-versus-failure rule applies to every getter whose result is an inventory a caller reconciles, whether or not the category supports Status Access. hass-opnsense removes entities missing from an inventory it believes complete, so an empty result must mean the Router has nothing to report, never that the read failed.
@@ -41,7 +49,7 @@ With `throw_errors=False`:
 
 Strict mode keeps each getter's existing exceptions and their order.
 
-Getters that follow this rule: `get_services`, `get_unbound_blocklist`, `get_interfaces`, `get_gateways`, the `filesystems` and `temps` values of `get_telemetry`, `get_smart`, `get_smart_info`, `get_nut_ups_status`, `get_speedtest`, `get_vnstat`, the rule groups of `get_firewall` and `get_dhcp_leases` (see DHCP leases). Other inventory getters adopt it when they are next changed.
+Getters that follow this rule: `get_services`, `get_unbound_blocklist`, `get_interfaces`, `get_gateways`, the `filesystems` and `temps` values of `get_telemetry`, `get_smart`, `get_smart_info`, `get_nut_ups_status`, `get_speedtest`, `get_vnstat`, `get_carp`, the rule groups of `get_firewall` and `get_dhcp_leases` (see DHCP leases). Other inventory getters adopt it when they are next changed.
 
 ## Considered Options
 

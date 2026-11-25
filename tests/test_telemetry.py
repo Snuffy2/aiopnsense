@@ -363,15 +363,153 @@ async def test_telemetry_memory_returns_base_payload_when_swap_endpoint_missing(
     assert router.count("GET", SWAP_PATH) == 1
 
 
-async def test_telemetry_temps_empty_returns_empty_mapping(make_client: MakeClientFactory) -> None:
-    """Temperature telemetry is an empty mapping when the Router reports no sensors.
+async def test_telemetry_accepts_empty_inventory_payloads(make_client: MakeClientFactory) -> None:
+    """The Router can positively report that both inventories are empty.
 
     Args:
         make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
     """
-    client, _ = _router(make_client, {TEMPERATURE_PATH: []})
+    client, _ = _router(
+        make_client, {"/api/diagnostics/system/system_disk": {"devices": []}, TEMPERATURE_PATH: []}
+    )
 
-    assert (await client.get_telemetry())["temps"] == {}
+    telemetry = await client.get_telemetry()
+    assert telemetry["filesystems"] == []
+    assert telemetry["temps"] == {}
+
+
+@pytest.mark.parametrize(
+    ("path", "section", "reply", "strict_result"),
+    [
+        ("/api/diagnostics/system/system_disk", "filesystems", [], []),
+        ("/api/diagnostics/system/system_disk", "filesystems", {}, []),
+        ("/api/diagnostics/system/system_disk", "filesystems", {"devices": {}}, {}),
+        ("/api/diagnostics/system/system_temperature", "temps", {"status": "error"}, {}),
+    ],
+    ids=["disk-backend-failure", "missing-devices", "non-list-devices", "temperature-object"],
+)
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["suppress", "strict"])
+async def test_telemetry_inventory_with_wrong_body_shape(
+    make_client: MakeClientFactory,
+    path: str,
+    section: str,
+    reply: list | dict,
+    strict_result: list | dict,
+    throw_errors: bool,
+) -> None:
+    """Unreadable inventory bodies yield None in suppressing mode.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        path (str): Endpoint returning a wrongly shaped body.
+        section (str): Telemetry key for that inventory.
+        reply (list | dict): Decoded body returned by the Router.
+        strict_result (list | dict): Existing inventory value in strict mode.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+    """
+    client, _ = _router(make_client, {path: reply}, throw_errors=throw_errors)
+
+    assert (await client.get_telemetry())[section] == (strict_result if throw_errors else None)
+
+
+@pytest.mark.parametrize(
+    ("section", "path", "other_section", "other_path", "other_reply", "other_result"),
+    [
+        (
+            "filesystems",
+            "/api/diagnostics/system/system_disk",
+            "temps",
+            "/api/diagnostics/system/system_temperature",
+            [{"device": "cpu.0", "temperature": "45"}],
+            {"cpu_0": {"device_id": "cpu.0", "name": "Num 0", "temperature": 45.0}},
+        ),
+        (
+            "temps",
+            "/api/diagnostics/system/system_temperature",
+            "filesystems",
+            "/api/diagnostics/system/system_disk",
+            {"devices": [{"mountpoint": "/"}]},
+            [{"mountpoint": "/"}],
+        ),
+    ],
+    ids=["filesystems", "temps"],
+)
+@pytest.mark.parametrize(
+    ("reply", "requests"),
+    [(403, 1), (TimeoutError(), 2), (MalformedJSONResponse(), 2)],
+    ids=["forbidden", "timeout", "undecodable"],
+)
+async def test_telemetry_inventory_failure_preserves_the_other_inventory(
+    make_client: MakeClientFactory,
+    section: str,
+    path: str,
+    other_section: str,
+    other_path: str,
+    other_reply: list | dict,
+    other_result: list | dict,
+    reply: int | TimeoutError | MalformedJSONResponse,
+    requests: int,
+) -> None:
+    """An unreadable inventory is absent from reconciliation on successive reads.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        section (str): Unreadable telemetry section.
+        path (str): Endpoint for the unreadable inventory.
+        other_section (str): Readable telemetry section.
+        other_path (str): Endpoint for the readable inventory.
+        other_reply (list | dict): Router response for the readable inventory.
+        other_result (list | dict): Expected normalized value of the readable inventory.
+        reply (int | TimeoutError | MalformedJSONResponse): Failure from the Router.
+        requests (int): Number of HTTP reads of the unreadable inventory across both calls.
+    """
+    client, router = _router(make_client, {path: reply, other_path: other_reply})
+
+    for _ in range(2):
+        telemetry = await client.get_telemetry()
+        assert telemetry[section] is None
+        assert telemetry[other_section] == other_result
+
+    assert router.count("GET", path) == requests
+    assert router.count("GET", other_path) == 2
+
+
+@pytest.mark.parametrize(
+    ("disk_reply", "temp_reply", "error", "temp_requests"),
+    [
+        (403, TimeoutError(), OPNsensePrivilegeMissing, 0),
+        (404, TimeoutError(), OPNsenseTimeoutError, 1),
+        (MalformedJSONResponse(), 403, OPNsenseError, 0),
+    ],
+    ids=["forbidden-before-timeout", "missing-before-timeout", "undecodable-before-forbidden"],
+)
+async def test_telemetry_strict_mode_raises_first_inventory_error(
+    make_client: MakeClientFactory,
+    disk_reply: int | MalformedJSONResponse,
+    temp_reply: int | TimeoutError,
+    error: type[OPNsenseError],
+    temp_requests: int,
+) -> None:
+    """Strict reads stop at the first error and continue past a 404.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        disk_reply (int | MalformedJSONResponse): Router reply to the filesystem read.
+        temp_reply (int | TimeoutError): Router reply to the temperature read.
+        error (type[OPNsenseError]): Public error expected from the strict call.
+        temp_requests (int): Number of temperature reads before the error.
+    """
+    client, router = _router(
+        make_client,
+        {"/api/diagnostics/system/system_disk": disk_reply, TEMPERATURE_PATH: temp_reply},
+        throw_errors=True,
+    )
+
+    with pytest.raises(error) as exc_info:
+        await client.get_telemetry()
+
+    assert type(exc_info.value) is error
+    assert router.count("GET", TEMPERATURE_PATH) == temp_requests
 
 
 async def test_get_interfaces_status_variants(make_client: MakeClientFactory) -> None:
@@ -536,8 +674,87 @@ async def test_get_gateways_skips_rows_without_name(make_client: MakeClientFacto
 
     gateways = await client.get_gateways()
 
-    assert list(gateways) == ["gw1"]
-    assert gateways["gw1"]["status"] == "online"
+    assert gateways == {"gw1": {"name": "gw1", "status": "online"}}
+
+
+@pytest.mark.parametrize(
+    ("reply", "inventory"),
+    [
+        pytest.param({}, None, id="missing-items"),
+        pytest.param({"items": {}}, None, id="wrong-items-shape"),
+        pytest.param({"items": [], "status": "failed"}, None, id="backend-failure"),
+        pytest.param({"items": [], "status": "ok"}, {}, id="valid-empty-inventory"),
+    ],
+)
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_gateways_decoded_inventory(
+    make_client: MakeClientFactory,
+    reply: dict[str, Any],
+    inventory: dict[str, Any] | None,
+    throw_errors: bool,
+) -> None:
+    """Only a valid empty inventory signals absence when errors are suppressed.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        reply (dict[str, Any]): Decoded gateway status response from the Router.
+        inventory (dict[str, Any] | None): Expected inventory in non-strict mode.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+    """
+    client, _ = _router(make_client, {GATEWAYS_PATH: reply}, throw_errors=throw_errors)
+
+    assert await client.get_gateways() == ({} if throw_errors else inventory)
+
+
+async def test_get_gateways_forbidden_remains_unavailable_when_cached(
+    make_client: MakeClientFactory,
+) -> None:
+    """A forbidden gateway read has no inventory, including on a cache hit.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+    """
+    client, router = _router(make_client, {GATEWAYS_PATH: 403})
+
+    first = await client.get_gateways()
+    cached = await client.get_gateways()
+
+    assert router.calls() == [("GET", GATEWAYS_PATH)]
+    assert first is None
+    assert cached is None
+
+
+@pytest.mark.parametrize(
+    ("reply", "error_type"),
+    [
+        pytest.param(403, OPNsensePrivilegeMissing, id="forbidden"),
+        pytest.param(TimeoutError(), OPNsenseTimeoutError, id="timeout"),
+        pytest.param(MalformedJSONResponse(), OPNsenseError, id="invalid-json"),
+    ],
+)
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_gateways_read_failure(
+    make_client: MakeClientFactory,
+    reply: int | TimeoutError | FakeResponse,
+    error_type: type[OPNsenseError],
+    throw_errors: bool,
+) -> None:
+    """Gateway read failures suppress the inventory or raise in strict mode.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        reply (int | TimeoutError | FakeResponse): Failure from the fake Router.
+        error_type (type[OPNsenseError]): Error raised in strict mode.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+    """
+    client, _ = _router(make_client, {GATEWAYS_PATH: reply}, throw_errors=throw_errors)
+
+    if throw_errors:
+        with pytest.raises(error_type) as raised:
+            await client.get_gateways()
+        assert type(raised.value) is error_type
+    else:
+        assert await client.get_gateways() is None
 
 
 @pytest.mark.parametrize("throw_errors", [False, True])
