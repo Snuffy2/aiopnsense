@@ -72,7 +72,11 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any]: Mapping containing ``mbuf``,
                 ``pfstate``, ``memory``, ``system``, ``cpu``,
                 ``filesystems``, and ``temps`` sections populated from the
-                corresponding diagnostics endpoints.
+                corresponding diagnostics endpoints. A missing inventory
+                endpoint (404) supplies an empty list for ``filesystems`` or
+                an empty mapping for ``temps``. With ``throw_errors=False``,
+                a denied, failed, or undecodable inventory read sets only
+                its section to ``None``. In strict mode those errors propagate.
         """
         telemetry: dict[str, Any] = {}
         telemetry["mbuf"] = await self._get_telemetry_mbuf()
@@ -340,17 +344,17 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         return cpu
 
     @_log_errors
-    async def _get_telemetry_filesystems(self) -> list:
+    async def _get_telemetry_filesystems(self) -> list | None:
         """Collect filesystem telemetry entries from diagnostics.
 
         Returns:
-            list: Filesystem device rows from OPNsense disk diagnostics, or an
-                empty list when the endpoint is unavailable.
+            list | None: Filesystem device rows from OPNsense disk diagnostics,
+                an empty list on HTTP 404, or ``None`` on a suppressed error.
         """
         filesystems_outcome = await self._fetch_endpoint_outcome(SYSTEM_DISK_ENDPOINT)
         if not filesystems_outcome.is_data:
             _LOGGER.debug("Telemetry filesystem endpoint unavailable")
-            return []
+            return [] if filesystems_outcome.http_status == 404 else None
         filesystems_info = filesystems_outcome.mapping()
         filesystems: list = filesystems_info.get("devices", [])
         return filesystems
@@ -378,18 +382,19 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         return gateways
 
     @_log_errors
-    async def _get_telemetry_temps(self) -> MutableMapping[str, Any]:
+    async def _get_telemetry_temps(self) -> MutableMapping[str, Any] | None:
         """Collect temperature sensor telemetry.
 
         Returns:
-            MutableMapping[str, Any]: Mapping keyed by temperature device id,
-                with each value containing the numeric temperature, display
-                name, and original device id.
+            MutableMapping[str, Any] | None: Mapping keyed by temperature device
+                id, with each value containing the numeric temperature, display
+                name, and original device id. HTTP 404 yields an empty mapping,
+                and a suppressed error yields ``None``.
         """
         temps_outcome = await self._fetch_endpoint_outcome(SYSTEM_TEMPERATURE_ENDPOINT)
         if not temps_outcome.is_data:
             _LOGGER.debug("Telemetry temperature endpoint unavailable")
-            return {}
+            return {} if temps_outcome.http_status == 404 else None
         temps_info = temps_outcome.sequence()
         if not len(temps_info) > 0:
             return {}

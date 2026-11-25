@@ -9,7 +9,14 @@ from typing import Any
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import FakeResponse, FakeRouter, MakeClientFactory, make_router_client
+from aiopnsense.exceptions import OPNsenseError, OPNsensePrivilegeMissing, OPNsenseTimeoutError
+from tests.conftest import (
+    FakeResponse,
+    FakeRouter,
+    MakeClientFactory,
+    MalformedJSONResponse,
+    make_router_client,
+)
 
 SNAKE_CASE_FIRMWARE = "26.1.1"
 CAMELCASE_FIRMWARE = "25.1"
@@ -366,6 +373,106 @@ async def test_telemetry_temps_empty_returns_empty_mapping(make_client: MakeClie
     client, _ = _router(make_client, {TEMPERATURE_PATH: []})
 
     assert (await client.get_telemetry())["temps"] == {}
+
+
+@pytest.mark.parametrize(
+    ("section", "path", "other_section", "other_path", "other_reply", "other_result"),
+    [
+        (
+            "filesystems",
+            "/api/diagnostics/system/system_disk",
+            "temps",
+            "/api/diagnostics/system/system_temperature",
+            [{"device": "cpu.0", "temperature": "45"}],
+            {"cpu_0": {"device_id": "cpu.0", "name": "Num 0", "temperature": 45.0}},
+        ),
+        (
+            "temps",
+            "/api/diagnostics/system/system_temperature",
+            "filesystems",
+            "/api/diagnostics/system/system_disk",
+            {"devices": [{"mountpoint": "/"}]},
+            [{"mountpoint": "/"}],
+        ),
+    ],
+    ids=["filesystems", "temps"],
+)
+@pytest.mark.parametrize(
+    ("reply", "requests"),
+    [(403, 1), (TimeoutError(), 2), (MalformedJSONResponse(), 2)],
+    ids=["forbidden", "timeout", "undecodable"],
+)
+async def test_telemetry_inventory_failure_preserves_the_other_inventory(
+    make_client: MakeClientFactory,
+    section: str,
+    path: str,
+    other_section: str,
+    other_path: str,
+    other_reply: list | dict,
+    other_result: list | dict,
+    reply: int | TimeoutError | MalformedJSONResponse,
+    requests: int,
+) -> None:
+    """An unreadable inventory is absent from reconciliation on successive reads.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        section (str): Unreadable telemetry section.
+        path (str): Endpoint for the unreadable inventory.
+        other_section (str): Readable telemetry section.
+        other_path (str): Endpoint for the readable inventory.
+        other_reply (list | dict): Router response for the readable inventory.
+        other_result (list | dict): Expected normalized value of the readable inventory.
+        reply (int | TimeoutError | MalformedJSONResponse): Failure from the Router.
+        requests (int): Number of HTTP reads of the unreadable inventory across both calls.
+    """
+    client, router = _router(make_client, {path: reply, other_path: other_reply})
+
+    for _ in range(2):
+        telemetry = await client.get_telemetry()
+        assert telemetry[section] is None
+        assert telemetry[other_section] == other_result
+
+    assert router.count("GET", path) == requests
+    assert router.count("GET", other_path) == 2
+
+
+@pytest.mark.parametrize(
+    ("disk_reply", "temp_reply", "error", "temp_requests"),
+    [
+        (403, TimeoutError(), OPNsensePrivilegeMissing, 0),
+        (404, TimeoutError(), OPNsenseTimeoutError, 1),
+        (MalformedJSONResponse(), 403, OPNsenseError, 0),
+    ],
+    ids=["forbidden-before-timeout", "missing-before-timeout", "undecodable-before-forbidden"],
+)
+async def test_telemetry_strict_mode_raises_first_inventory_error(
+    make_client: MakeClientFactory,
+    disk_reply: int | MalformedJSONResponse,
+    temp_reply: int | TimeoutError,
+    error: type[OPNsenseError],
+    temp_requests: int,
+) -> None:
+    """Strict reads stop at the first error and continue past a 404.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        disk_reply (int | MalformedJSONResponse): Router reply to the filesystem read.
+        temp_reply (int | TimeoutError): Router reply to the temperature read.
+        error (type[OPNsenseError]): Public error expected from the strict call.
+        temp_requests (int): Number of temperature reads before the error.
+    """
+    client, router = _router(
+        make_client,
+        {"/api/diagnostics/system/system_disk": disk_reply, TEMPERATURE_PATH: temp_reply},
+        throw_errors=True,
+    )
+
+    with pytest.raises(error) as exc_info:
+        await client.get_telemetry()
+
+    assert type(exc_info.value) is error
+    assert router.count("GET", TEMPERATURE_PATH) == temp_requests
 
 
 async def test_get_interfaces_status_variants(make_client: MakeClientFactory) -> None:
