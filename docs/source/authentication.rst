@@ -9,6 +9,11 @@ initialized with the base URL, an ``aiohttp.ClientSession``, and API credentials
 appropriate for your deployment. In OPNsense, the generated API key is used
 as the ``username`` and the generated secret as the ``password``.
 
+The privileges granted to that API user decide which data each getter can
+return. A getter can return ``None`` when a read is denied, and some getters
+report Status Access when only live status is visible. See
+:doc:`access` before relying on an inventory being complete.
+
 TLS verification
 ----------------
 
