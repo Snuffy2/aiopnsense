@@ -513,12 +513,12 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 endpoint contributes nothing, so leases and interfaces it would
                 have supplied may be missing. Otherwise the result reports
                 Configuration Access. A missing (404) endpoint means its backend
-                is not installed and contributes nothing, and a Kea reservation
-                endpoint that cannot be read only drops reservation detail. With
-                the default ``throw_errors=False``, returns ``None`` (unknown)
-                when any lease endpoint fails with another error or returns a
-                malformed payload, and when a configuration endpoint does so
-                without a denial elsewhere establishing Status Access. When
+                is not installed and contributes nothing. With the default
+                ``throw_errors=False``, a Kea reservation endpoint that cannot be
+                read only drops reservation detail, and the method returns ``None``
+                (unknown) when any lease endpoint fails with another error or
+                returns a malformed payload, and when a configuration endpoint
+                does so without a denial elsewhere establishing Status Access. When
                 ``self._throw_errors`` is ``True``, a failed request raises
                 ``OPNsenseError`` instead, specifically ``OPNsensePrivilegeMissing``
                 for a forbidden (403) endpoint; a 404 never raises, and a
@@ -651,13 +651,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
 
         response = outcome.mapping()
         lease_interfaces: dict[str, Any] = {}
-        general = dict_get(response, "dhcpv4.general", {})
+        general = dict_get(response, "dhcpv4.general")
         if not isinstance(general, MutableMapping):
             _LOGGER.debug("Kea DHCP interface lookup returned invalid settings payload")
             return None
         if not api_value_matches(general.get("enabled", "0"), "1"):
             return AccessDict({}, access=Access.CONFIGURATION)
-        interfaces = general.get("interfaces", {})
+        interfaces = general.get("interfaces")
         if not isinstance(interfaces, MutableMapping):
             _LOGGER.debug("Kea DHCP interface lookup returned invalid interfaces payload")
             return None
