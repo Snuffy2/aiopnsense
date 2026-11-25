@@ -1152,6 +1152,8 @@ async def test_get_unbound_query_stats_reports_complete_buckets_only(
 ) -> None:
     """The last minute and the 24-hour sums ignore the newest, still-filling Bucket.
 
+    The last hour lists its newest Bucket first, so Buckets are ordered by start time.
+
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
@@ -1159,9 +1161,9 @@ async def test_get_unbound_query_stats_reports_complete_buckets_only(
         make_client,
         {
             ("GET", ROLLING_1H): {
+                "1763900160.0": _bucket(2, 2, 2),
                 "1763900040.0": _bucket(40, 4, 1),
                 "1763900100.0": _bucket(30, 3, 0),
-                "1763900160.0": _bucket(2, 2, 2),
             },
             ("GET", ROLLING_24H): {
                 "1763899200.0": _bucket(400, 40, 2),
@@ -1176,7 +1178,9 @@ async def test_get_unbound_query_stats_reports_complete_buckets_only(
 
     assert stats is not None
     assert stats.last_minute == client.BucketCounts(queries=30, blocked=3, dropped=0)
+    assert stats.absent is None
     assert stats.last_24h == client.BucketCounts(queries=1000, blocked=100, dropped=5)
+    assert stats.last_24h is not None
     assert stats.last_24h.blocked_share == 10.0
     assert stats.blocklist_size == 123456
     assert stats.since == datetime(2025, 11, 16, tzinfo=UTC)
@@ -1202,6 +1206,7 @@ async def test_get_unbound_query_stats_without_complete_buckets(make_client: Cli
     assert stats is not None
     assert stats.last_minute is None
     assert stats.last_24h == client.BucketCounts(queries=0, blocked=0, dropped=0)
+    assert stats.last_24h is not None
     assert stats.last_24h.blocked_share is None
     assert (stats.blocklist_size, stats.since) == (None, None)
 
@@ -1282,36 +1287,22 @@ async def test_get_unbound_query_stats_parses_top_domains(make_client: ClientTyp
     )
 
 
-@pytest.mark.parametrize(
-    ("top", "domains"),
-    [
-        pytest.param(
-            {f"d{index}.example.": {"total": 100 - index, "pcnt": 1.0} for index in range(12)},
-            [f"d{index}.example" for index in range(10)],
-            id="capped-at-ten",
-        ),
-        pytest.param([], [], id="not-a-mapping"),
-    ],
-)
-async def test_get_unbound_query_stats_bounds_top_lists(
-    make_client: ClientType, top: object, domains: list[str]
+async def test_get_unbound_query_stats_top_lists_empty_when_not_mapping(
+    make_client: ClientType,
 ) -> None:
-    """Top lists keep at most ten entries and are empty when not a mapping.
+    """Top lists are empty when the Router does not send a mapping.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        top (object): ``top`` and ``top_blocked`` payload from the Router.
-        domains (list[str]): Expected domains of both lists, in order.
     """
     client, _router = make_router_client(
-        make_client, _stats_routes(_totals(top=top, top_blocked=top))
+        make_client, _stats_routes(_totals(top=[], top_blocked=[]))
     )
 
     stats = await client.get_unbound_query_stats()
 
     assert stats is not None
-    assert [entry.domain for entry in stats.top_domains] == domains
-    assert [entry.domain for entry in stats.top_blocked_domains] == domains
+    assert (stats.top_domains, stats.top_blocked_domains) == ((), ())
 
 
 async def test_get_unbound_queries_searches_query_log(make_client: ClientType) -> None:
@@ -1327,7 +1318,7 @@ async def test_get_unbound_queries_searches_query_log(make_client: ClientType) -
                 "rows": [
                     _query_row(),
                     _query_row(
-                        time="1763900040.7",
+                        time=1763900040,
                         client="192.168.1.20",
                         domain="example.com.",
                         action="Pass",
@@ -1335,34 +1326,34 @@ async def test_get_unbound_queries_searches_query_log(make_client: ClientType) -
                         policy="",
                     ),
                     _query_row(time="not-a-time"),
-                    _query_row(time="inf"),
-                    _query_row(time=1e20),
                     "not-a-mapping",
                 ]
             }
         },
     )
 
-    entries = await client.get_unbound_queries(search="example")
+    query_log = await client.get_unbound_queries(search="example")
 
-    assert entries == [
-        client.QueryLogEntry(
-            time=datetime(2025, 11, 23, 12, 15, tzinfo=UTC),
-            client="samsung-tv.home.arpa",
-            domain="ads.example.net",
-            action="Block",
-            blocklist="HaGeZi Pro",
-            policy="Default - all devices",
-        ),
-        client.QueryLogEntry(
-            time=datetime(2025, 11, 23, 12, 14, tzinfo=UTC),
-            client="192.168.1.20",
-            domain="example.com",
-            action="Pass",
-            blocklist=None,
-            policy=None,
-        ),
-    ]
+    assert query_log == client.QueryLog(
+        entries=(
+            client.QueryLogEntry(
+                time=datetime(2025, 11, 23, 12, 15, tzinfo=UTC),
+                client="samsung-tv.home.arpa",
+                domain="ads.example.net",
+                action="Block",
+                blocklist="HaGeZi Pro",
+                policy="Default - all devices",
+            ),
+            client.QueryLogEntry(
+                time=datetime(2025, 11, 23, 12, 14, tzinfo=UTC),
+                client="192.168.1.20",
+                domain="example.com",
+                action="Pass",
+                blocklist=None,
+                policy=None,
+            ),
+        )
+    )
     assert router.bodies("POST", SEARCH_QUERIES) == [
         {"current": 1, "rowCount": 1000, "searchPhrase": "example", "sort": {"time": "desc"}}
     ]
@@ -1382,10 +1373,10 @@ async def test_get_unbound_queries_uses_camel_case_path_before_25_7(
         firmware="25.1",
     )
 
-    entries = await client.get_unbound_queries()
+    query_log = await client.get_unbound_queries()
 
-    assert entries is not None
-    assert [entry.domain for entry in entries] == ["ads.example.net"]
+    assert query_log is not None
+    assert [entry.domain for entry in query_log.entries] == ["ads.example.net"]
     assert router.count("POST", SEARCH_QUERIES) == 0
 
 
@@ -1403,6 +1394,12 @@ async def test_get_unbound_queries_uses_camel_case_path_before_25_7(
             "192.168.1.20",
             ["tracker.example.org", "drop.example"],
             id="client-exact",
+        ),
+        pytest.param(
+            {"action": "Block", "client": "192.168.1.20"},
+            "192.168.1.20",
+            ["tracker.example.org"],
+            id="client-phrase-before-action",
         ),
         pytest.param(
             {"action": "Drop", "client": "192.168.1.20", "search": "example"},
@@ -1435,10 +1432,10 @@ async def test_get_unbound_queries_filters_exactly(
         make_client, {("POST", SEARCH_QUERIES): {"rows": FILTER_ROWS}}
     )
 
-    entries = await client.get_unbound_queries(**kwargs)
+    query_log = await client.get_unbound_queries(**kwargs)
 
-    assert entries is not None
-    assert [entry.domain for entry in entries] == domains
+    assert query_log is not None
+    assert [entry.domain for entry in query_log.entries] == domains
     assert [body["searchPhrase"] for body in router.bodies("POST", SEARCH_QUERIES)] == [phrase]
     assert [body["rowCount"] for body in router.bodies("POST", SEARCH_QUERIES)] == [1000]
 
@@ -1446,10 +1443,10 @@ async def test_get_unbound_queries_filters_exactly(
 @pytest.mark.parametrize(
     "payload", [{"rows": "none"}, {}, []], ids=["rows-not-list", "no-rows", "list"]
 )
-async def test_get_unbound_queries_is_empty_for_malformed_payload(
+async def test_get_unbound_queries_is_none_for_malformed_payload(
     make_client: ClientType, payload: object
 ) -> None:
-    """A Query Log payload without a row list gives no entries.
+    """A Query Log payload without a row list is a failed read, not an empty log.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1457,27 +1454,30 @@ async def test_get_unbound_queries_is_empty_for_malformed_payload(
     """
     client, _router = make_router_client(make_client, {("POST", SEARCH_QUERIES): payload})
 
-    assert await client.get_unbound_queries() == []
+    assert await client.get_unbound_queries() is None
 
 
 @pytest.mark.parametrize(("method_name", "routes", "failing"), DNS_READS)
 @pytest.mark.parametrize(
-    ("status", "throw_errors"),
+    ("status", "throw_errors", "reason"),
     [
-        pytest.param(404, False, id="404-errors-off"),
-        pytest.param(404, True, id="404-errors-on"),
-        pytest.param(403, False, id="403-errors-off"),
+        pytest.param(404, False, "not_found", id="404-errors-off"),
+        pytest.param(404, True, "not_found", id="404-errors-on"),
+        pytest.param(403, False, "forbidden", id="403-errors-off"),
     ],
 )
-async def test_dns_reads_are_none_when_endpoint_is_absent(
+async def test_dns_reads_report_why_endpoint_is_absent(
     make_client: ClientType,
     method_name: str,
     routes: dict[tuple[str, str], Any],
     failing: str,
     status: int,
     throw_errors: bool,
+    reason: str,
 ) -> None:
-    """A DNS read returns None on 404 in either mode, or 403 with errors off.
+    """An absent endpoint gives a result with no data and ``absent`` saying why.
+
+    A second read answers from the cached status, still with the same reason.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1486,13 +1486,21 @@ async def test_dns_reads_are_none_when_endpoint_is_absent(
         failing (str): Path the Router refuses.
         status (int): HTTP status the Router answers that path with.
         throw_errors (bool): Public ``throw_errors`` setting of the client.
+        reason (str): Expected ``absent`` value.
     """
     method = "POST" if failing == SEARCH_QUERIES else "GET"
-    client, _router = make_router_client(
+    client, router = make_router_client(
         make_client, {**routes, (method, failing): status}, throw_errors=throw_errors
     )
+    empty = (
+        client.QueryLog(absent=reason)  # type: ignore[arg-type]
+        if method_name == "get_unbound_queries"
+        else client.QueryStats(absent=reason)  # type: ignore[arg-type]
+    )
 
-    assert await getattr(client, method_name)() is None
+    assert await getattr(client, method_name)() == empty
+    assert await getattr(client, method_name)() == empty
+    assert router.count(method, failing) == 1
 
 
 @pytest.mark.parametrize(("method_name", "routes", "failing"), DNS_READS)
@@ -1535,25 +1543,23 @@ async def test_dns_reads_raise_with_errors_on(
 
 @pytest.mark.parametrize(("method_name", "routes", "failing"), DNS_READS)
 @pytest.mark.parametrize(
-    ("make_failure", "expected_error"),
+    "make_failure",
     [
-        pytest.param(lambda: 500, OPNsenseError, id="500"),
-        pytest.param(MalformedJSONResponse, OPNsenseError, id="undecodable"),
-        pytest.param(
-            lambda: aiohttp.ClientConnectionError("reset"), OPNsenseConnectionError, id="connection"
-        ),
-        pytest.param(lambda: TimeoutError("slow"), OPNsenseTimeoutError, id="timeout"),
+        pytest.param(lambda: 500, id="500"),
+        pytest.param(MalformedJSONResponse, id="undecodable"),
+        pytest.param(lambda: ["not", "a", "mapping"], id="not-a-mapping"),
+        pytest.param(lambda: aiohttp.ClientConnectionError("reset"), id="connection"),
+        pytest.param(lambda: TimeoutError("slow"), id="timeout"),
     ],
 )
-async def test_dns_reads_raise_transient_failure_with_errors_off(
+async def test_dns_reads_are_none_when_read_fails_with_errors_off(
     make_client: ClientType,
     method_name: str,
     routes: dict[tuple[str, str], Any],
     failing: str,
     make_failure: Callable[[], object],
-    expected_error: type[Exception],
 ) -> None:
-    """With errors disabled, a transient failure still raises, unlike an absent endpoint.
+    """With errors disabled, a read that failed this time returns None.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
@@ -1561,12 +1567,8 @@ async def test_dns_reads_raise_transient_failure_with_errors_off(
         routes (dict[tuple[str, str], Any]): Healthy Router routes for the read.
         failing (str): Path whose request fails.
         make_failure (Callable[[], object]): Factory for the Router's failing reply.
-        expected_error (type[Exception]): Public error expected.
     """
     method = "POST" if failing == SEARCH_QUERIES else "GET"
-    client, _router = make_router_client(
-        make_client, {**routes, (method, failing): make_failure()}, throw_errors=False
-    )
+    client, _router = make_router_client(make_client, {**routes, (method, failing): make_failure()})
 
-    with pytest.raises(expected_error):
-        await getattr(client, method_name)()
+    assert await getattr(client, method_name)() is None

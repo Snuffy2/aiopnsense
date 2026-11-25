@@ -1,13 +1,12 @@
 """Unbound DNS blocklist, Query Stats and Query Log methods for OPNsenseClient."""
 
 from collections.abc import Mapping, MutableMapping
-import contextlib
 from dataclasses import dataclass
 from datetime import datetime
 import logging
-import math
-from typing import Any
+from typing import Any, Literal
 
+from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _log_boolean_errors, _log_errors, _throws_errors
 from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
@@ -24,6 +23,9 @@ from .helpers import (
 
 QUERY_LOG_SIZE = 1000
 TOP_DOMAINS_SIZE = 10
+
+type AbsentReason = Literal["not_found", "forbidden"]
+"""Why a DNS read has no data: the endpoint is missing (404) or not permitted (403)."""
 
 UNBOUND_SETTINGS_GET_ENDPOINT = "/api/unbound/settings/get"
 UNBOUND_SETTINGS_SET_ENDPOINT = "/api/unbound/settings/set"
@@ -114,23 +116,27 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         Attributes:
             last_minute (UnboundMixin.BucketCounts | None): Counters of the last Complete
-                Bucket of the last hour, or None when the hour has no Complete Bucket.
-            last_24h (UnboundMixin.BucketCounts): Counters summed over the Complete Buckets
-                of the last 24 hours.
+                Bucket of the last hour, or None when the hour has no Complete Bucket or
+                the stats are absent.
+            last_24h (UnboundMixin.BucketCounts | None): Counters summed over the Complete
+                Buckets of the last 24 hours, or None when the stats are absent.
             blocklist_size (int | None): Number of domains on the active blocklists.
             since (datetime | None): Start of the Retention Window.
             top_domains (tuple[UnboundMixin.TopDomain, ...]): Most queried domains in the
-                Retention Window, at most 10.
+                Retention Window, as many as ``overview/totals/10`` returns.
             top_blocked_domains (tuple[UnboundMixin.TopDomain, ...]): Most Blocked domains
-                in the Retention Window, at most 10.
+                in the Retention Window, as many as ``overview/totals/10`` returns.
+            absent (AbsentReason | None): Why there is no data, ``"not_found"`` (404) or
+                ``"forbidden"`` (403). None when the stats were read.
         """
 
-        last_minute: UnboundMixin.BucketCounts | None
-        last_24h: UnboundMixin.BucketCounts
-        blocklist_size: int | None
-        since: datetime | None
-        top_domains: tuple[UnboundMixin.TopDomain, ...]
-        top_blocked_domains: tuple[UnboundMixin.TopDomain, ...]
+        last_minute: UnboundMixin.BucketCounts | None = None
+        last_24h: UnboundMixin.BucketCounts | None = None
+        blocklist_size: int | None = None
+        since: datetime | None = None
+        top_domains: tuple[UnboundMixin.TopDomain, ...] = ()
+        top_blocked_domains: tuple[UnboundMixin.TopDomain, ...] = ()
+        absent: AbsentReason | None = None
 
     @dataclass(frozen=True, slots=True)
     class QueryLogEntry:
@@ -138,7 +144,8 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         Attributes:
             time (datetime): When the query was received.
-            client (str): Client hostname from DHCP, or its IP address.
+            client (str): Client as the Router reports it: usually its DHCP hostname,
+                otherwise its IP address.
             domain (str): Queried domain without the trailing dot.
             action (str): Action the Router reports, such as ``Pass``, ``Block`` or ``Drop``.
             blocklist (str | None): Blocklist that matched, if any.
@@ -152,6 +159,32 @@ class UnboundMixin(AiopnsenseClientProtocol):
         action: str
         blocklist: str | None
         policy: str | None
+
+    @dataclass(frozen=True, slots=True)
+    class QueryLog:
+        """Entries read from the Unbound Query Log.
+
+        Attributes:
+            entries (tuple[UnboundMixin.QueryLogEntry, ...]): Matching entries, newest
+                first. Empty when nothing matched or the Query Log is absent.
+            absent (AbsentReason | None): Why there is no data, ``"not_found"`` (404) or
+                ``"forbidden"`` (403). None when the Query Log was read.
+        """
+
+        entries: tuple[UnboundMixin.QueryLogEntry, ...] = ()
+        absent: AbsentReason | None = None
+
+    @staticmethod
+    def _absent_reason(outcome: _EndpointOutcome) -> AbsentReason:
+        """Return why an absent endpoint has no data.
+
+        Args:
+            outcome (_EndpointOutcome): Absent outcome; a cached 403 keeps its status.
+
+        Returns:
+            AbsentReason: ``"forbidden"`` for a 403, otherwise ``"not_found"``.
+        """
+        return "forbidden" if outcome.http_status == 403 else "not_found"
 
     @staticmethod
     def _complete_buckets(rolling: Mapping[str, Any]) -> list[UnboundMixin.BucketCounts]:
@@ -192,8 +225,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
     def _top_domains(entries: object) -> tuple[UnboundMixin.TopDomain, ...]:
         """Parse a top-domain mapping from ``overview/totals``, keeping Router order.
 
-        Entries that are not mappings or lack a numeric count are skipped, and at most
-        10 entries are kept.
+        Entries that are not mappings or lack a numeric count are skipped.
 
         Args:
             entries (object): Domain-keyed mapping of ``{total, pcnt[, blocklist]}``.
@@ -205,8 +237,6 @@ class UnboundMixin(AiopnsenseClientProtocol):
             return ()
         parsed: list[UnboundMixin.TopDomain] = []
         for domain, entry in entries.items():
-            if len(parsed) >= TOP_DOMAINS_SIZE:
-                break
             if not isinstance(entry, Mapping):
                 continue
             count = try_to_int(entry.get("total"))
@@ -231,15 +261,11 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         Returns:
             UnboundMixin.QueryLogEntry | None: The parsed entry, or None when the row is not
-            a mapping or has no finite numeric time.
+            a mapping or has no integer time.
         """
         if not isinstance(row, Mapping):
             return None
-        seconds = try_to_float(row.get("time"))
-        time: datetime | None = None
-        if seconds is not None and math.isfinite(seconds):
-            with contextlib.suppress(OverflowError, OSError, ValueError):
-                time = timestamp_to_datetime(int(seconds))
+        time = timestamp_to_datetime(try_to_int(row.get("time")))
         if time is None:
             return None
         return UnboundMixin.QueryLogEntry(
@@ -251,22 +277,20 @@ class UnboundMixin(AiopnsenseClientProtocol):
             policy=_optional_text(row.get("policy")),
         )
 
+    @_log_errors
     async def get_unbound_query_stats(self) -> QueryStats | None:
         """Return Unbound Query Stats for the last minute, 24 hours and Retention Window.
 
         Reads ``overview/rolling/1``, ``overview/rolling/24`` and ``overview/totals/10``.
         Only Complete Buckets are counted; the newest, still-filling Bucket is dropped.
 
-        Unlike most reads, a transient failure raises whatever ``throw_errors`` is, so
-        callers can tell a failed read from an absent endpoint.
-
         Returns:
-            QueryStats | None: The Query Stats, or None when any of the three endpoints is
-            absent (404, or 403 with errors disabled).
-
-        Raises:
-            outcome.error: The mapped ``OPNsenseError`` for a transient or decoding
-                failure. With errors enabled, a 403 also raises its mapped error.
+            QueryStats | None: The Query Stats. When any of the three endpoints is absent
+            (404, or 403 with errors disabled), a ``QueryStats`` with ``absent`` set and no
+            data. With errors disabled, None when a read failed this time: a transient
+            failure, or a body that cannot be decoded or is not a mapping. With errors
+            enabled, a 403, transient or decoding failure raises the mapped
+            ``OPNsenseError``.
         """
         payloads: list[Mapping[str, Any]] = []
         for endpoint in (
@@ -275,12 +299,14 @@ class UnboundMixin(AiopnsenseClientProtocol):
             UNBOUND_OVERVIEW_TOTALS_ENDPOINT,
         ):
             outcome = await self._fetch_endpoint_outcome(endpoint)
-            if outcome.is_transient and outcome.error is not None:
-                raise outcome.error
-            if not outcome.is_data:
-                _LOGGER.debug("[get_unbound_query_stats] %s absent", endpoint)
+            if outcome.is_absent:
+                reason = self._absent_reason(outcome)
+                _LOGGER.debug("[get_unbound_query_stats] %s absent (%s)", endpoint, reason)
+                return self.QueryStats(absent=reason)
+            if outcome.is_transient or not isinstance(outcome.payload, Mapping):
+                _LOGGER.debug("[get_unbound_query_stats] %s read failed", endpoint)
                 return None
-            payloads.append(outcome.mapping())
+            payloads.append(outcome.payload)
         hour, day, totals = payloads
 
         hour_buckets = self._complete_buckets(hour)
@@ -298,40 +324,40 @@ class UnboundMixin(AiopnsenseClientProtocol):
             top_blocked_domains=self._top_domains(totals.get("top_blocked")),
         )
 
+    @_log_errors
     async def get_unbound_queries(
         self,
         action: str | None = None,
         client: str | None = None,
         search: str | None = None,
         limit: int = 30,
-    ) -> list[QueryLogEntry] | None:
+    ) -> QueryLog | None:
         """Return the newest queries from the Unbound Query Log.
 
         The Router keeps only its last 1,000 queries. Its search phrase matches any column,
         so ``action`` and ``client`` are applied here as exact, case-insensitive filters.
 
-        Unlike most reads, a transient failure raises whatever ``throw_errors`` is, so
-        callers can tell a failed read from an absent endpoint.
-
         Args:
             action (str | None): Only return queries with this action (``Pass``, ``Block``
                 or ``Drop``).
-            client (str | None): Only return queries from this client hostname or IP address.
+            client (str | None): Only return queries from this client, matched against the
+                client field as the Router reports it. That field is usually the DHCP
+                hostname, and rows carry no separate IP address, so a named host's IP
+                address matches none of its queries.
             search (str | None): Free-text phrase the Router matches against every column.
             limit (int): Maximum number of entries to return, at most 1,000.
 
         Returns:
-            list[QueryLogEntry] | None: Matching entries, newest first, empty when nothing
-            matches or the payload has no rows. None when the endpoint is absent (404, or
-            403 with errors disabled).
-
-        Raises:
-            outcome.error: The mapped ``OPNsenseError`` for a transient or decoding
-                failure. With errors enabled, a 403 also raises its mapped error.
+            QueryLog | None: Matching entries, newest first; empty ``entries`` means nothing
+            matched. When the endpoint is absent (404, or 403 with errors disabled), a
+            ``QueryLog`` with ``absent`` set and no entries. With errors disabled, None when
+            the read failed this time: a transient failure, or a body that cannot be decoded
+            or has no row list. With errors enabled, a 403, transient or decoding failure
+            raises the mapped ``OPNsenseError``.
         """
-        # The Router takes one free-text phrase. Send the most selective one available to
-        # shrink the reply; action and client are then matched exactly below.
-        phrase = search or action or client or ""
+        # The Router takes one free-text phrase. Send search, else client, which matches
+        # fewer rows than an action such as Pass; both filters are then matched exactly.
+        phrase = search or client or action or ""
         payload = {
             "current": 1,
             "rowCount": QUERY_LOG_SIZE,
@@ -341,14 +367,14 @@ class UnboundMixin(AiopnsenseClientProtocol):
         outcome = await self._fetch_post_endpoint_outcome(
             UNBOUND_OVERVIEW_SEARCH_QUERIES_ENDPOINT, payload
         )
-        if outcome.is_transient and outcome.error is not None:
-            raise outcome.error
-        if not outcome.is_data:
-            _LOGGER.debug("[get_unbound_queries] Query Log absent")
-            return None
+        if outcome.is_absent:
+            reason = self._absent_reason(outcome)
+            _LOGGER.debug("[get_unbound_queries] Query Log absent (%s)", reason)
+            return self.QueryLog(absent=reason)
         rows = outcome.mapping().get("rows")
-        if not isinstance(rows, list):
-            return []
+        if outcome.is_transient or not isinstance(rows, list):
+            _LOGGER.debug("[get_unbound_queries] Query Log read failed")
+            return None
         entries: list[UnboundMixin.QueryLogEntry] = []
         for row in rows:
             if len(entries) >= min(limit, QUERY_LOG_SIZE):
@@ -362,7 +388,7 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 continue
             entries.append(entry)
         _LOGGER.debug("[get_unbound_queries] %s matching entries", len(entries))
-        return entries
+        return self.QueryLog(entries=tuple(entries))
 
     @staticmethod
     def _normalize_unbound_blocklist_legacy(
