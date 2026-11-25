@@ -10,7 +10,7 @@ import warnings
 
 import pytest
 
-from aiopnsense import OPNsenseClient
+from aiopnsense import Access, OPNsenseClient, result_access
 from aiopnsense.exceptions import (
     OPNsenseConnectionError,
     OPNsensePrivilegeMissing,
@@ -70,14 +70,14 @@ def _dhcp_router(
     )
 
 
-async def _get_leases(client: OPNsenseClient) -> dict[str, Any]:
+async def _get_leases(client: OPNsenseClient) -> dict[str, Any] | None:
     """Return ``get_dhcp_leases`` with a fixed Router timezone.
 
     Args:
         client (OPNsenseClient): Client backed by a fake Router.
 
     Returns:
-        dict[str, Any]: The ``get_dhcp_leases`` result.
+        dict[str, Any] | None: The ``get_dhcp_leases`` result.
     """
     return await client.get_dhcp_leases(opnsense_tz=_LEASE_ROUTER_TZ)
 
@@ -547,7 +547,6 @@ async def test_get_dhcp_leases_includes_empty_dnsmasq_range_interface(
 @pytest.mark.parametrize(
     ("response", "expected"),
     [
-        ({"rows": "invalid"}, {}),
         (
             {
                 "rows": [
@@ -1069,24 +1068,47 @@ async def test_get_dnsmasq_leases_invalid_rows_and_expiry_paths(make_client: Cli
     [
         (_KEA_LEASES4, {"rows": "bad"}),
         (_DNSMASQ_LEASES, {"rows": "bad-shape"}),
+        (_DNSMASQ_LEASES, {}),
         (_ISC_LEASES4, {"rows": "bad"}),
-        (_ISC_LEASES6, {"rows": "bad"}),
+        (_ISC_LEASES6, {"total": 0}),
+        (_KEA_INTERFACES, {"dhcpv4": {"general": "bad"}}),
+        (_KEA_INTERFACES, []),
+        (_KEA_INTERFACES, {}),
+        (_KEA_INTERFACES, {"dhcpv4": {}}),
+        (_KEA_INTERFACES, {"dhcpv4": {"general": {"enabled": "1", "interfaces": []}}}),
+        (_KEA_INTERFACES, {"dhcpv4": {"general": {"enabled": "1"}}}),
+        (_DNSMASQ_RANGES, {"rows": "invalid"}),
+        (_DNSMASQ_RANGES, []),
     ],
-    ids=["kea-dhcpv4", "dnsmasq", "isc-dhcpv4", "isc-dhcpv6"],
+    ids=[
+        "kea-dhcpv4",
+        "dnsmasq",
+        "dnsmasq-no-rows",
+        "isc-dhcpv4",
+        "isc-dhcpv6-no-rows",
+        "kea-settings",
+        "kea-settings-list",
+        "kea-settings-empty",
+        "kea-settings-no-general",
+        "kea-interfaces",
+        "kea-interfaces-missing",
+        "dnsmasq-ranges",
+        "dnsmasq-ranges-list",
+    ],
 )
-async def test_get_dhcp_leases_ignores_non_list_lease_rows(
-    make_client: ClientType, endpoint: str, payload: dict[str, str]
+async def test_get_dhcp_leases_malformed_payload_is_unknown(
+    make_client: ClientType, endpoint: str, payload: object
 ) -> None:
-    """A lease response whose rows are not a list contributes no leases.
+    """A malformed lease or interface payload makes the whole result unknown.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        endpoint (str): Lease endpoint that answers with a malformed body.
-        payload (dict[str, str]): Malformed lease response.
+        endpoint (str): Lease or configuration endpoint that answers with a malformed body.
+        payload (object): Malformed response.
     """
     client, router = _dhcp_router(make_client, {endpoint: payload})
 
-    assert await _get_leases(client) == {"lease_interfaces": {}, "leases": {}}
+    assert await _get_leases(client) is None
 
     assert router.count("GET", endpoint) == 1
 
@@ -2496,3 +2518,291 @@ async def test_get_dhcp_leases_isc_row_rules(
     # A lease without an interface cannot be grouped, so it is left out.
     assert set(result["leases"]) == {"lan"}
     assert result["lease_interfaces"] == {"lan": "LAN"}
+
+
+def _access_routes(**overrides: object) -> dict[str, object]:
+    """Return a Router with Kea and Dnsmasq leases and readable configuration.
+
+    Kea DHCPv4 serves ``lan`` (one lease) and ``opt1`` (no lease); Dnsmasq serves
+    ``opt2`` (one lease) and ``opt3`` (no lease).
+
+    Args:
+        overrides (object): Responses that replace a default, keyed by ``kea`` (Kea
+            DHCPv4 settings), ``ranges`` (Dnsmasq ranges), ``reservations`` (Kea
+            reservations), ``kea_leases`` (Kea DHCPv4 leases) or ``dnsmasq_leases``
+            (Dnsmasq leases).
+
+    Returns:
+        dict[str, object]: Response served for each GET path.
+    """
+    routes: dict[str, object] = {
+        _KEA_LEASES4: {
+            "rows": [
+                {
+                    "state": "0",
+                    "hwaddr": "aa:bb:cc:dd:ee:01",
+                    "address": "192.0.2.10",
+                    "hostname": "kea-host",
+                    "if_name": "lan",
+                    "if_descr": "LAN",
+                }
+            ]
+        },
+        _KEA_RESERVATIONS: {"rows": []},
+        _KEA_INTERFACES: {
+            "dhcpv4": {
+                "general": {
+                    "enabled": "1",
+                    "interfaces": {
+                        "lan": {"selected": 1, "value": "LAN"},
+                        "opt1": {"selected": 1, "value": "IoT"},
+                    },
+                }
+            }
+        },
+        _DNSMASQ_LEASES: {
+            "rows": [
+                {
+                    "address": "198.51.100.10",
+                    "hwaddr": "aa:bb:cc:dd:ee:02",
+                    "hostname": "dnsmasq-host",
+                    "if": "opt2",
+                    "if_descr": "Guest",
+                    "expire": 4102444800,
+                }
+            ]
+        },
+        _DNSMASQ_RANGES: {
+            "rows": [
+                {"interface": "opt2", "%interface": "Guest"},
+                {"interface": "opt3", "%interface": "Lab"},
+            ]
+        },
+    }
+    names = {
+        "dnsmasq_leases": _DNSMASQ_LEASES,
+        "kea": _KEA_INTERFACES,
+        "ranges": _DNSMASQ_RANGES,
+        "reservations": _KEA_RESERVATIONS,
+        "kea_leases": _KEA_LEASES4,
+    }
+    routes.update({names[name]: value for name, value in overrides.items()})
+    return routes
+
+
+@pytest.mark.asyncio
+async def test_get_dhcp_leases_reports_configuration_access(make_client: ClientType) -> None:
+    """Readable configuration lists zero-lease interfaces with Configuration Access.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _router = _dhcp_router(make_client, _access_routes())
+
+    result = await _get_leases(client)
+
+    assert result_access(result) is Access.CONFIGURATION
+    assert result["lease_interfaces"] == {
+        "lan": "LAN",
+        "opt1": "IoT",
+        "opt2": "Guest",
+        "opt3": "Lab",
+    }
+    assert set(result["leases"]) == {"lan", "opt2"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("denied", "denied_path", "expected_interfaces"),
+    [
+        pytest.param(
+            "kea",
+            "/api/kea/dhcpv4/get",
+            {"lan": "LAN", "opt2": "Guest", "opt3": "Lab"},
+            id="kea-settings",
+        ),
+        pytest.param(
+            "ranges",
+            "/api/dnsmasq/settings/search_range",
+            {"lan": "LAN", "opt1": "IoT", "opt2": "Guest"},
+            id="dnsmasq-ranges",
+        ),
+    ],
+)
+async def test_get_dhcp_leases_forbidden_interface_inventory_reports_status_access(
+    make_client: ClientType,
+    denied: str,
+    denied_path: str,
+    expected_interfaces: dict[str, str],
+) -> None:
+    """A forbidden interface inventory reports Status Access and keeps the leases.
+
+    The denied backend's zero-lease interface is missing, interfaces with leases stay,
+    and a second call reuses the cached denial without asking the Router again.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        denied (str): Configuration endpoint that answers 403.
+        denied_path (str): Path of that endpoint.
+        expected_interfaces (dict[str, str]): Interfaces the result still lists.
+    """
+    client, router = _dhcp_router(make_client, _access_routes(**{denied: 403}))
+
+    result = await _get_leases(client)
+
+    assert result_access(result) is Access.STATUS
+    assert result["lease_interfaces"] == expected_interfaces
+    assert _leases_by_address(result)["192.0.2.10"]["mac"] == "aa:bb:cc:dd:ee:01"
+    assert _leases_by_address(result, "opt2")["198.51.100.10"]["mac"] == "aa:bb:cc:dd:ee:02"
+
+    cached = await _get_leases(client)
+
+    assert cached == result
+    assert result_access(cached) is Access.STATUS
+    assert router.count("GET", denied_path) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_dhcp_leases_forbidden_reservations_keep_configuration_access(
+    make_client: ClientType,
+) -> None:
+    """A forbidden Kea reservation endpoint only drops reservation detail.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, router = _dhcp_router(make_client, _access_routes(reservations=403))
+
+    result = await _get_leases(client)
+
+    assert result_access(result) is Access.CONFIGURATION
+    assert set(result["lease_interfaces"]) == {"lan", "opt1", "opt2", "opt3"}
+    assert _leases_by_address(result)["192.0.2.10"]["type"] == "unknown"
+    assert router.count("GET", "/api/kea/dhcpv4/search_reservation") == 1
+
+
+@pytest.mark.asyncio
+async def test_get_dhcp_leases_missing_configuration_keeps_configuration_access(
+    make_client: ClientType,
+) -> None:
+    """Missing (404) configuration endpoints add no interfaces and keep Configuration Access.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _router = _dhcp_router(make_client, _access_routes(kea=404, ranges=404))
+
+    result = await _get_leases(client)
+
+    assert result_access(result) is Access.CONFIGURATION
+    assert result["lease_interfaces"] == {"lan": "LAN", "opt2": "Guest"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"kea_leases": 500}, id="kea-leases-server-error"),
+        pytest.param({"dnsmasq_leases": TimeoutError("timed out")}, id="dnsmasq-leases-timeout"),
+        pytest.param({"kea_leases": 500, "ranges": 403}, id="lease-failure-despite-denial"),
+        pytest.param({"kea": 500}, id="kea-settings-server-error"),
+        pytest.param({"ranges": TimeoutError("timed out")}, id="dnsmasq-ranges-timeout"),
+    ],
+)
+async def test_get_dhcp_leases_failed_read_is_unknown(
+    make_client: ClientType, overrides: dict[str, object]
+) -> None:
+    """A failed lease read, or a failed configuration read without a denial, is unknown.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        overrides (dict[str, object]): Endpoints that fail, by ``_access_routes`` name.
+    """
+    client, _router = _dhcp_router(make_client, _access_routes(**overrides))
+
+    assert await _get_leases(client) is None
+
+
+@pytest.mark.asyncio
+async def test_get_dhcp_leases_forbidden_lease_endpoint_reports_status_access(
+    make_client: ClientType,
+) -> None:
+    """A forbidden lease endpoint drops that backend's leases and reports Status Access.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, router = _dhcp_router(make_client, _access_routes(dnsmasq_leases=403))
+
+    result = await _get_leases(client)
+
+    assert result is not None
+    assert result_access(result) is Access.STATUS
+    assert set(result["leases"]) == {"lan"}
+    assert set(result["lease_interfaces"]) == {"lan", "opt1", "opt2", "opt3"}
+
+    cached = await _get_leases(client)
+
+    assert cached == result
+    assert result_access(cached) is Access.STATUS
+    assert router.count("GET", "/api/dnsmasq/leases/search") == 1
+
+
+@pytest.mark.asyncio
+async def test_get_dhcp_leases_denial_covers_failed_configuration_read(
+    make_client: ClientType,
+) -> None:
+    """A configuration denial lets the result stand when the other configuration read fails.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _router = _dhcp_router(make_client, _access_routes(kea=403, ranges=500))
+
+    result = await _get_leases(client)
+
+    assert result is not None
+    assert result_access(result) is Access.STATUS
+    assert result["lease_interfaces"] == {"lan": "LAN", "opt2": "Guest"}
+    assert set(result["leases"]) == {"lan", "opt2"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("overrides", "expected_error", "unrequested"),
+    [
+        pytest.param(
+            {"kea_leases": 500, "kea": 403},
+            OPNsenseConnectionError,
+            "/api/kea/dhcpv4/get",
+            id="lease-failure-first",
+        ),
+        pytest.param(
+            {"kea": 403, "ranges": 403},
+            OPNsensePrivilegeMissing,
+            "/api/dnsmasq/settings/search_range",
+            id="kea-denial-before-ranges",
+        ),
+    ],
+)
+async def test_get_dhcp_leases_strict_mode_raises_first_failure(
+    make_client: ClientType,
+    overrides: dict[str, int],
+    expected_error: type[OPNsenseConnectionError],
+    unrequested: str,
+) -> None:
+    """Throwing clients raise the first failed request and send nothing after it.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        overrides (dict[str, int]): Endpoints that fail, by ``_access_routes`` name.
+        expected_error (type[OPNsenseConnectionError]): Expected public exception type.
+        unrequested (str): Later endpoint the client must not reach.
+    """
+    client, router = _dhcp_router(make_client, _access_routes(**overrides), throw_errors=True)
+
+    with pytest.raises(expected_error) as raised:
+        await _get_leases(client)
+
+    assert type(raised.value) is expected_error
+    assert router.count("GET", unrequested) == 0

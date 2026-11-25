@@ -14,6 +14,19 @@ The original VPN Status Access spec preserved the old behavior for all transient
 
 A configuration 404 still supplies an empty inventory. Strict mode still propagates request errors in the original order.
 
+## DHCP leases
+
+`get_dhcp_leases` also reports its access level and follows the unknown-inventory rule below. It combines several DHCP backends, so one level covers the whole result. Its `lease_interfaces` inventory comes from the lease endpoints (Kea `leases4/search` and `leases6/search`, Dnsmasq `leases/search`, ISC `dhcpv4/leases/search_lease` and `dhcpv6/leases/search_lease`) and from two configuration endpoints that list interfaces a backend serves even without a lease: Kea `dhcpv4/get` and Dnsmasq `settings/search_range`. A 403 on any of these, including a cached 403, means Status Access: that endpoint contributes nothing, so the leases and interfaces it would have supplied may be missing, while every other source is still returned. Otherwise the result has Configuration Access.
+
+- A 403 alone decides, without first proving the backend is in use, because a denied configuration read cannot show whether it is. A user denied a backend it does not use therefore always gets Status Access, which only makes a caller keep entities it could have removed.
+- A 403 on Kea `dhcpv4/search_reservation` only drops reservation detail and leaves Configuration Access.
+- A 404 on any of these endpoints still means the backend is missing and adds nothing.
+- With `throw_errors=False`, a transient failure or malformed payload on a lease endpoint makes the result unknown (`None`), since its leases and lease counts cannot be trusted at either level. On a configuration endpoint it does the same, unless a 403 elsewhere already established Status Access, which tells the caller the interface inventory may be incomplete anyway. Neither can establish Status Access.
+- ISC DHCP has no configuration endpoint that lists its interfaces, so it never affects the level.
+- The lease endpoints are status endpoints, but none is primary: a Router normally lacks some backends, and an API user may be granted some backends and not others. A lease 403 therefore leaves the other backends' data and reports Status Access instead of returning `None`.
+
+In the stock OPNsense ACL definitions, one privilege grants both the settings and the lease endpoints of each backend: "Services: DHCP: Kea(v4)" covers `api/kea/dhcpv4/*` and `api/kea/leases4/*` (25.1 through 26.7), and "Services: Dnsmasq DNS/DHCP: Settings" covers all of `api/dnsmasq/*` (25.7, which added that API, through 26.7). A user who can read Kea DHCPv4 or Dnsmasq leases can therefore read that backend's configuration too, so Status Access does not occur for a backend whose leases are visible. It occurs when the API user lacks a backend's privilege entirely, such as a user with only the Kea(v6) privilege, whose DHCPv4 interfaces are then unknown.
+
 ## CARP
 
 `get_carp` reports its access level too. OPNsense grants the two CARP reads through separate privileges: `diagnostics/interface/get_vip_status` under "Interfaces: Virtual IPs: Status" and `interfaces/vip_settings/*` under "Interfaces: Virtual IPs: Settings".
@@ -36,7 +49,7 @@ With `throw_errors=False`:
 
 Strict mode keeps each getter's existing exceptions and their order.
 
-Getters that follow this rule: `get_services`, `get_unbound_blocklist`, `get_interfaces`, `get_gateways`, the `filesystems` and `temps` values of `get_telemetry`, `get_smart`, `get_smart_info`, `get_nut_ups_status`, `get_speedtest`, `get_vnstat`, `get_carp` and the rule groups of `get_firewall`. Other inventory getters adopt it when they are next changed.
+Getters that follow this rule: `get_services`, `get_unbound_blocklist`, `get_interfaces`, `get_gateways`, the `filesystems` and `temps` values of `get_telemetry`, `get_smart`, `get_smart_info`, `get_nut_ups_status`, `get_speedtest`, `get_vnstat`, `get_carp`, the rule groups of `get_firewall` and `get_dhcp_leases` (see DHCP leases). Other inventory getters adopt it when they are next changed.
 
 ## Considered Options
 
