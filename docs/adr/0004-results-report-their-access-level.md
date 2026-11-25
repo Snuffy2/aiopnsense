@@ -14,6 +14,14 @@ The original VPN Status Access spec preserved the old behavior for all transient
 
 A configuration 404 still supplies an empty inventory. Strict mode still propagates request errors in the original order.
 
+## CARP
+
+`get_carp` reports its access level too. OPNsense grants the two CARP reads through separate privileges: `diagnostics/interface/get_vip_status` under "Interfaces: Virtual IPs: Status" and `interfaces/vip_settings/*` under "Interfaces: Virtual IPs: Settings".
+
+- The VIP inventory comes from `get_vip_status` at both levels. That endpoint lists every configured CARP VIP, including disabled ones, so a Status Access result is not missing VIPs.
+- `interfaces/vip_settings/get` determines access. A 403, including a cached 403, means Status Access, and the result omits the settings enrichment of each VIP: fields the status rows lack, such as `descr` and `subnet_bits`. Data or a 404 means Configuration Access. A transient settings failure leaves Configuration Access with status-only VIP data, because a failure alone cannot establish Status Access.
+- A failed `get_vip_status` read, or a reply without a `rows` list, returns `None` with no level, instead of an empty snapshot that a caller could take for "no VIPs". Strict mode raises the status error first, then the settings error.
+
 ## Unknown inventories
 
 The 404-versus-failure rule applies to every getter whose result is an inventory a caller reconciles, whether or not the category supports Status Access. hass-opnsense removes entities missing from an inventory it believes complete, so an empty result must mean the Router has nothing to report, never that the read failed.
@@ -28,7 +36,7 @@ With `throw_errors=False`:
 
 Strict mode keeps each getter's existing exceptions and their order.
 
-Getters that follow this rule: `get_services`, `get_unbound_blocklist`, `get_interfaces`, `get_gateways`, the `filesystems` and `temps` values of `get_telemetry`, `get_smart`, `get_smart_info`, `get_nut_ups_status`, `get_speedtest`, `get_vnstat` and the rule groups of `get_firewall`. Other inventory getters adopt it when they are next changed.
+Getters that follow this rule: `get_services`, `get_unbound_blocklist`, `get_interfaces`, `get_gateways`, the `filesystems` and `temps` values of `get_telemetry`, `get_smart`, `get_smart_info`, `get_nut_ups_status`, `get_speedtest`, `get_vnstat`, `get_carp` and the rule groups of `get_firewall`. Other inventory getters adopt it when they are next changed.
 
 ## Considered Options
 
