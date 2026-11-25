@@ -11,10 +11,18 @@ import pytest
 from aiopnsense import (
     OPNsenseClient,
     OPNsenseConnectionError,
+    OPNsenseError,
     OPNsenseInvalidURL,
+    OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
-from tests.conftest import FIRMWARE_STATUS_PATH, FakeRouter, HeldResponse, make_router_client
+from tests.conftest import (
+    FIRMWARE_STATUS_PATH,
+    FakeRouter,
+    HeldResponse,
+    MalformedJSONResponse,
+    make_router_client,
+)
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -194,7 +202,6 @@ async def test_get_unbound_blocklist_handles_empty_or_invalid_responses(
     [
         pytest.param(404, False, id="404-errors-off"),
         pytest.param(404, True, id="404-errors-on"),
-        pytest.param(403, False, id="403-errors-off"),
     ],
 )
 async def test_get_unbound_blocklist_returns_empty_when_endpoint_unavailable(
@@ -216,6 +223,79 @@ async def test_get_unbound_blocklist_returns_empty_when_endpoint_unavailable(
 
     assert await client.get_unbound_blocklist() == {}
     assert router.count("GET", SEARCH_DNSBL) == 1
+
+
+@pytest.mark.parametrize(
+    ("firmware", "endpoint"),
+    [(EXTENDED_FIRMWARE, SEARCH_DNSBL), (LEGACY_FIRMWARE, SETTINGS_GET)],
+    ids=["extended", "legacy"],
+)
+@pytest.mark.parametrize(
+    ("reply", "strict_error", "request_count"),
+    [
+        pytest.param(403, OPNsensePrivilegeMissing, 1, id="forbidden"),
+        pytest.param(TimeoutError("timed out"), OPNsenseTimeoutError, 2, id="timeout"),
+        pytest.param(MalformedJSONResponse(), OPNsenseError, 2, id="undecodable"),
+    ],
+)
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["default", "strict"])
+async def test_get_unbound_blocklist_failed_read(
+    make_client: ClientType,
+    firmware: str,
+    endpoint: str,
+    reply: object,
+    strict_error: type[OPNsenseError],
+    request_count: int,
+    throw_errors: bool,
+) -> None:
+    """Verify unreadable inventories follow error policy, including cached denial.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+        firmware (str): Firmware version selecting the read endpoint.
+        endpoint (str): Settings endpoint expected for the firmware.
+        reply (object): Failure returned by the fake Router.
+        strict_error (type[OPNsenseError]): Error the strict client propagates.
+        request_count (int): Requests expected across two suppressed reads.
+        throw_errors (bool): Client error propagation setting.
+    """
+    client, router = make_router_client(
+        make_client, {("GET", endpoint): reply}, firmware=firmware, throw_errors=throw_errors
+    )
+
+    if throw_errors:
+        with pytest.raises(strict_error):
+            await client.get_unbound_blocklist()
+        assert router.count("GET", endpoint) == 1
+    else:
+        results = [await client.get_unbound_blocklist(), await client.get_unbound_blocklist()]
+        assert results == [None, None]
+        assert router.count("GET", endpoint) == request_count
+
+
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["default", "strict"])
+async def test_get_unbound_blocklist_legacy_endpoint_missing(
+    make_client: ClientType, throw_errors: bool
+) -> None:
+    """Verify a missing legacy endpoint supplies empty inventory or raises in strict mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+        throw_errors (bool): Client error propagation setting.
+    """
+    client, router = make_router_client(
+        make_client,
+        {("GET", SETTINGS_GET): 404},
+        firmware=LEGACY_FIRMWARE,
+        throw_errors=throw_errors,
+    )
+
+    if throw_errors:
+        with pytest.raises(OPNsenseConnectionError):
+            await client.get_unbound_blocklist()
+    else:
+        assert await client.get_unbound_blocklist() == {}
+    assert router.count("GET", SETTINGS_GET) == 1
 
 
 @pytest.mark.parametrize("firmware_version", ["25.7.7", "25.7.7_1"])

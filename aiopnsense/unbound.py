@@ -4,7 +4,7 @@ from collections.abc import MutableMapping
 import logging
 from typing import Any
 
-from ._error_policy import _log_boolean_errors, _log_errors
+from ._error_policy import _log_boolean_errors, _log_errors, _throws_errors
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import ToggleSpec, ToggleStep, ToggleTarget
 from .const import EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY
@@ -21,20 +21,20 @@ UNBOUND_SETTINGS_TOGGLE_DNSBL_ENDPOINT_PREFIX = "/api/unbound/settings/toggle_dn
 class UnboundMixin(AiopnsenseClientProtocol):
     """Unbound DNS blocklist methods for OPNsenseClient."""
 
-    @_log_errors
-    async def _get_unbound_blocklist_legacy(
-        self, *, require_complete: bool = False
+    @staticmethod
+    def _normalize_unbound_blocklist_legacy(
+        response: dict[str, Any], *, require_complete: bool = False
     ) -> dict[str, Any]:
-        """Return legacy Unbound DNSBL settings.
+        """Normalize legacy Unbound DNSBL settings.
 
         Args:
+            response (dict[str, Any]): Decoded Unbound settings response.
             require_complete (bool): Require every field sent by the legacy settings write.
 
         Returns:
             dict[str, Any]: Normalized legacy DNSBL settings returned by older
             OPNsense firmware, or an empty mapping if the required settings are missing.
         """
-        response = await self._safe_dict_get(UNBOUND_SETTINGS_GET_ENDPOINT)
         unbound_settings = response.get("unbound", {})
         if not isinstance(unbound_settings, MutableMapping):
             return {}
@@ -78,7 +78,8 @@ class UnboundMixin(AiopnsenseClientProtocol):
             read, save, apply or restart request raises an
             ``OPNsenseError`` subclass instead of returning ``False``.
         """
-        dnsbl = await self._get_unbound_blocklist_legacy(require_complete=True)
+        response = await self._safe_dict_get(UNBOUND_SETTINGS_GET_ENDPOINT)
+        dnsbl = self._normalize_unbound_blocklist_legacy(response, require_complete=True)
         if not dnsbl:
             _LOGGER.error("Unable to get Unbound Blocklist Status")
             return False
@@ -109,17 +110,16 @@ class UnboundMixin(AiopnsenseClientProtocol):
         )
 
     @_log_errors
-    async def get_unbound_blocklist(self) -> dict[str, Any]:
+    async def get_unbound_blocklist(self) -> dict[str, Any] | None:
         """Return Unbound DNS blocklist configuration.
 
         Returns:
-            dict[str, Any]:  A UUID-keyed mapping of DNSBL rows from
-                ``search_dnsbl``. For legacy firmware, a mapping with ``legacy``
-                set to the regular DNSBL settings. Returns an empty mapping when
-                the endpoint is unavailable or its decoded payload has no usable rows.
-                With errors disabled, malformed JSON follows the shared error policy
-                and returns ``None``; with errors enabled, the mapped
-                ``OPNsenseError`` propagates.
+            dict[str, Any] | None: A UUID-keyed mapping of extended DNSBL rows,
+                or the regular DNSBL settings under ``legacy`` on older firmware.
+                A missing endpoint (404) returns an empty mapping. With errors
+                disabled, a denied or failed read, including undecodable JSON,
+                returns ``None``. With errors enabled, the mapped ``OPNsenseError``
+                propagates for those failures and for a legacy endpoint's 404.
         """
         extended_supported = await self._firmware_capability_enabled(
             EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY
@@ -129,14 +129,24 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 "Getting Unbound regular blocklists for OPNsense < %s or unknown firmware",
                 EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY.minimum,
             )
-            return {"legacy": await self._get_unbound_blocklist_legacy()}
+            if _throws_errors(self):
+                # Keep the legacy plain request's strict-mode handling of a 404.
+                response = await self._safe_dict_get(UNBOUND_SETTINGS_GET_ENDPOINT)
+                return {"legacy": self._normalize_unbound_blocklist_legacy(response)}
 
-        dnsbl_outcome = await self._fetch_endpoint_outcome(UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT)
+        endpoint = (
+            UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT
+            if extended_supported
+            else UNBOUND_SETTINGS_GET_ENDPOINT
+        )
+        dnsbl_outcome = await self._fetch_endpoint_outcome(endpoint)
         if not dnsbl_outcome.is_data:
-            _LOGGER.debug("Unbound DNSBL endpoint unavailable")
-            return {}
+            return {} if dnsbl_outcome.http_status == 404 else None
 
         dnsbl_raw = dnsbl_outcome.mapping()
+        if not extended_supported:
+            return {"legacy": self._normalize_unbound_blocklist_legacy(dnsbl_raw)}
+
         dnsbl_rows = dnsbl_raw.get("rows", [])
         if not isinstance(dnsbl_rows, list) or not len(dnsbl_rows) > 0:
             return {}
