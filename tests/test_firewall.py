@@ -2,10 +2,11 @@
 
 from collections.abc import Callable
 import logging
+from typing import Any
 
 import pytest
 
-from aiopnsense import OPNsenseClient
+from aiopnsense import OPNsenseClient, OPNsensePrivilegeMissing
 from tests.conftest import make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -273,6 +274,77 @@ async def test_get_firewall_returns_empty_collections_when_endpoints_are_unavail
     }
     for path in (FILTER_RULES_PATH, DNAT_PATH, ONE_TO_ONE_PATH, SOURCE_NAT_PATH, NPT_PATH):
         assert router.count("GET", path) == 1
+
+
+@pytest.mark.parametrize(
+    ("denied_path", "denied_group"),
+    [
+        pytest.param("/api/firewall/filter/download_rules", ("rules",), id="filter-rules"),
+        pytest.param("/api/firewall/d_nat/search_rule", ("nat", "d_nat"), id="d_nat"),
+        pytest.param(
+            "/api/firewall/one_to_one/search_rule", ("nat", "one_to_one"), id="one_to_one"
+        ),
+        pytest.param(
+            "/api/firewall/source_nat/search_rule", ("nat", "source_nat"), id="source_nat"
+        ),
+        pytest.param("/api/firewall/npt/search_rule", ("nat", "npt"), id="npt"),
+    ],
+)
+async def test_get_firewall_reports_forbidden_group_as_unknown(
+    make_client: ClientType, denied_path: str, denied_group: tuple[str, ...]
+) -> None:
+    """A group whose endpoint is forbidden is ``None``, also from the cached 403.
+
+    Other groups keep their rules. A missing (404) group stays empty; see
+    ``test_get_firewall_returns_empty_collections_when_endpoints_are_unavailable``.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        denied_path (str): Endpoint that answers 403.
+        denied_group (tuple[str, ...]): Keys of the denied group in the result.
+    """
+    routes: dict[tuple[str, str], object] = {
+        ("GET", "/api/firewall/filter/download_rules"): "@uuid;enabled\nrule1;1\n",
+        ("GET", "/api/firewall/d_nat/search_rule"): {"rows": [{"uuid": "dst1", "enabled": "1"}]},
+        ("GET", "/api/firewall/one_to_one/search_rule"): {"rows": [{"uuid": "oto1"}]},
+        ("GET", "/api/firewall/source_nat/search_rule"): {"rows": [{"uuid": "src1"}]},
+        ("GET", "/api/firewall/npt/search_rule"): {"rows": [{"uuid": "npt1"}]},
+    }
+    expected: dict[str, Any] = {
+        "rules": {"rule1": {"uuid": "rule1", "enabled": "1"}},
+        "nat": {
+            "d_nat": {"dst1": {"uuid": "dst1", "description": "", "enabled": "1"}},
+            "one_to_one": {"oto1": {"uuid": "oto1"}},
+            "source_nat": {"src1": {"uuid": "src1"}},
+            "npt": {"npt1": {"uuid": "npt1"}},
+        },
+    }
+    routes[("GET", denied_path)] = 403
+    client, router = make_router_client(make_client, routes)
+    parent = expected
+    for key in denied_group[:-1]:
+        parent = parent[key]
+    parent[denied_group[-1]] = None
+
+    assert await client.get_firewall() == expected
+    assert await client.get_firewall() == expected
+    assert router.count("GET", denied_path) == 1
+
+
+async def test_get_firewall_raises_forbidden_group_in_strict_mode(
+    make_client: ClientType,
+) -> None:
+    """With ``throw_errors`` on, a forbidden group raises instead of returning ``None``.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, _router = make_router_client(
+        make_client, {("GET", "/api/firewall/npt/search_rule"): 403}, throw_errors=True
+    )
+
+    with pytest.raises(OPNsensePrivilegeMissing):
+        await client.get_firewall()
 
 
 @pytest.mark.parametrize(

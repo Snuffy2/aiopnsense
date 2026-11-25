@@ -14,6 +14,14 @@ The original VPN Status Access spec preserved the old behavior for all transient
 
 A configuration 404 still supplies an empty inventory. Strict mode still propagates request errors in the original order.
 
+## Configuration-only categories
+
+Some categories have no status endpoint: aiopnsense reads each part of their inventory from a configuration endpoint alone, so there is no Status Access to report and no status data to fall back on. In such a category, a 403 on the endpoint that supplies one group's inventory means that group is unknown, and the getter reports it as `None`. A 404 still means the feature is missing, and the group is empty (`{}`). Other groups in the same result are unaffected. Strict mode still raises the 403.
+
+This is the option rejected below for VPN getters, applied where its objection does not hold: there, `None` would discard status data the user may see; here, there is none. A caller must still treat a `None` group as unknown and keep what it already has, rather than as an empty inventory.
+
+`get_firewall` adopts this first. OPNsense grants Firewall Rules, Destination NAT, One-to-One NAT, Source NAT and NPTv6 as separate privileges, so each of `rules`, `nat.d_nat`, `nat.one_to_one`, `nat.source_nat` and `nat.npt` is decided by its own endpoint. Unbound blocklists, interface assignment and certificates may follow.
+
 ## Considered Options
 
 - **A top-level `access` key in the result mapping.** Rejected: additive for mapping results, but a category whose getter returns a list could only adopt it by wrapping its result, a breaking change for each such category.

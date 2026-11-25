@@ -5,6 +5,7 @@ import csv
 from io import StringIO
 from typing import Any
 
+from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _log_boolean_errors, _log_errors
 from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
@@ -119,7 +120,7 @@ class FirewallMixin(AiopnsenseClientProtocol):
         debug_label: str,
         normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         include_rule: Callable[[dict[str, Any]], bool] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Fetch rule rows from one endpoint and return them keyed by UUID.
 
         Args:
@@ -131,17 +132,41 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 Optional row predicate applied after normalization.
 
         Returns:
-            dict[str, Any]: Rule mapping keyed by UUID.
+            dict[str, Any] | None: Rule mapping keyed by UUID, empty when the endpoint
+                is missing (404) or failed transiently, or ``None`` when it is
+                forbidden (403).
         """
         outcome = await self._fetch_endpoint_outcome(endpoint)
         if not outcome.is_data:
-            _LOGGER.debug("%s endpoint not available", debug_label)
-            return {}
+            return self._unavailable_rule_group(outcome, debug_label)
 
         rules: list = outcome.mapping().get("rows", [])
         rules_dict = self._index_rule_rows(rules, normalizer=normalizer, include_rule=include_rule)
         _LOGGER.debug("[%s] rules_dict length: %s", debug_label, len(rules_dict))
         return rules_dict
+
+    @staticmethod
+    def _unavailable_rule_group(
+        outcome: _EndpointOutcome, debug_label: str
+    ) -> dict[str, Any] | None:
+        """Return the rule group for an endpoint that returned no data.
+
+        Each rule group is read from a configuration endpoint only, with no status
+        endpoint behind it, so a forbidden read leaves the group unknown (ADR 0004).
+
+        Args:
+            outcome (_EndpointOutcome): Outcome of the group's endpoint, not ``DATA``.
+            debug_label (str): Label used in the debug log.
+
+        Returns:
+            dict[str, Any] | None: ``None`` when the endpoint is forbidden (403),
+                including a cached 403, otherwise an empty mapping.
+        """
+        if outcome.http_status == 403:
+            _LOGGER.debug("%s endpoint forbidden; rule group unknown", debug_label)
+            return None
+        _LOGGER.debug("%s endpoint not available", debug_label)
+        return {}
 
     @_log_errors
     async def get_firewall(self) -> dict[str, Any]:
@@ -152,7 +177,12 @@ class FirewallMixin(AiopnsenseClientProtocol):
                 filter rules, excluding lockout and automatically generated
                 firewall rules, and ``nat`` groups for destination NAT,
                 one-to-one NAT, source NAT, and NPT rules. Rule groups are
-                keyed by rule UUID.
+                keyed by rule UUID. A group whose endpoint the API user may not
+                read (403) is ``None``, meaning unknown; a group whose endpoint is
+                missing (404) is empty. With ``throw_errors`` off, a transient
+                request failure leaves its group empty, and an unexpected error
+                while building a group leaves it ``None``. With ``throw_errors``
+                on, a 403 raises ``OPNsensePrivilegeMissing``.
         """
         firewall: dict[str, Any] = {"nat": {}}
         firewall["rules"] = await self._get_firewall_rules()
@@ -163,21 +193,21 @@ class FirewallMixin(AiopnsenseClientProtocol):
         return firewall
 
     @_log_errors
-    async def _get_firewall_rules(self) -> dict[str, Any]:
+    async def _get_firewall_rules(self) -> dict[str, Any] | None:
         """Retrieve firewall rules from OPNsense.
 
         Returns:
-            dict[str, Any]: Firewall filter rules keyed by UUID, excluding
+            dict[str, Any] | None: Firewall filter rules keyed by UUID, excluding
                 malformed rows, lockout rules, and automatically generated
                 rules (the download endpoint exports only MVC model rules
-                and structurally excludes plugin-generated entries).
+                and structurally excludes plugin-generated entries). ``None``
+                when the endpoint is forbidden (403).
         """
         outcome = await self._fetch_endpoint_outcome(
             FIREWALL_FILTER_RULES_DOWNLOAD_ENDPOINT, response_format="text"
         )
         if not outcome.is_data:
-            _LOGGER.debug("get_firewall_rules endpoint not available")
-            return {}
+            return self._unavailable_rule_group(outcome, "get_firewall_rules")
 
         response = outcome.text()
         if not response:
@@ -207,14 +237,15 @@ class FirewallMixin(AiopnsenseClientProtocol):
         return rules
 
     @_log_errors
-    async def _get_nat_destination_rules(self) -> dict[str, Any]:
+    async def _get_nat_destination_rules(self) -> dict[str, Any] | None:
         """Retrieve NAT destination rules from OPNsense.
 
         Returns:
-            dict[str, Any]: Destination NAT rules keyed by UUID, with
+            dict[str, Any] | None: Destination NAT rules keyed by UUID, with
                 ``descr`` normalized to ``description``, ``disabled`` normalized
                 to ``enabled``, and on unified-NAT firmware category keys mirrored
                 from ``category``/``%category`` into ``categories``/``%categories``.
+                ``None`` when the endpoint is forbidden (403).
         """
         normalize_categories = await self._firmware_capability_enabled(
             UNIFIED_NAT_TEMPLATE_CAPABILITY
@@ -228,14 +259,15 @@ class FirewallMixin(AiopnsenseClientProtocol):
         )
 
     @_log_errors
-    async def _get_nat_one_to_one_rules(self) -> dict[str, Any]:
+    async def _get_nat_one_to_one_rules(self) -> dict[str, Any] | None:
         """Retrieve NAT one-to-one rules from OPNsense.
 
         Returns:
-            dict[str, Any]: Mapping of NAT one-to-one rules keyed by rule
+            dict[str, Any] | None: Mapping of NAT one-to-one rules keyed by rule
                 identifiers, with each value containing the corresponding
                 rule details (for example, source, destination, external IP,
-                and description fields when present).
+                and description fields when present). ``None`` when the
+                endpoint is forbidden (403).
         """
         return await self._get_uuid_indexed_rules(
             endpoint=FIREWALL_ONE_TO_ONE_RULES_SEARCH_ENDPOINT,
@@ -243,18 +275,18 @@ class FirewallMixin(AiopnsenseClientProtocol):
         )
 
     @_log_errors
-    async def _get_nat_source_rules(self) -> dict[str, Any]:
+    async def _get_nat_source_rules(self) -> dict[str, Any] | None:
         """Retrieve NAT source rules from OPNsense.
 
         Returns:
-            dict[str, Any]: Source NAT rules keyed by UUID, excluding
+            dict[str, Any] | None: Source NAT rules keyed by UUID, excluding
                 malformed rows and lockout rules. For OPNsense 26.1.11 and
                 newer, generated automatic source NAT rows are also excluded.
+                ``None`` when the endpoint is forbidden (403).
         """
         outcome = await self._fetch_endpoint_outcome(FIREWALL_SOURCE_NAT_RULES_SEARCH_ENDPOINT)
         if not outcome.is_data:
-            _LOGGER.debug("%s endpoint not available", "get_nat_source_rules")
-            return {}
+            return self._unavailable_rule_group(outcome, "get_nat_source_rules")
 
         rules: list = outcome.mapping().get("rows", [])
         has_automatic_rows = any(
@@ -281,12 +313,12 @@ class FirewallMixin(AiopnsenseClientProtocol):
         return rules_dict
 
     @_log_errors
-    async def _get_nat_npt_rules(self) -> dict[str, Any]:
+    async def _get_nat_npt_rules(self) -> dict[str, Any] | None:
         """Retrieve NAT NPT rules from OPNsense.
 
         Returns:
-            dict[str, Any]: NPT NAT rules keyed by UUID, excluding malformed
-                rows and lockout rules.
+            dict[str, Any] | None: NPT NAT rules keyed by UUID, excluding malformed
+                rows and lockout rules. ``None`` when the endpoint is forbidden (403).
         """
         return await self._get_uuid_indexed_rules(
             endpoint=FIREWALL_NPT_RULES_SEARCH_ENDPOINT,
