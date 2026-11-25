@@ -75,3 +75,16 @@ from a release without access reporting.
 The design and the per-category details are recorded in ADR 0004,
 `Results report their access level
 <https://github.com/Snuffy2/aiopnsense/blob/main/docs/adr/0004-results-report-their-access-level.md>`_.
+
+API reference
+-------------
+
+.. autoclass:: aiopnsense.Access
+   :members:
+   :undoc-members:
+
+.. autoclass:: aiopnsense.AccessDict
+
+.. autoclass:: aiopnsense.AccessList
+
+.. autofunction:: aiopnsense.result_access
