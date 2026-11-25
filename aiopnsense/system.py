@@ -704,9 +704,6 @@ class SystemMixin(AiopnsenseClientProtocol):
             "interfaces": [],
             "vips": [],
         }
-        if not response:
-            return summary
-
         carp_raw = response.get("carp")
         if isinstance(carp_raw, Mapping):
             has_carp_block = True
