@@ -59,8 +59,8 @@ def result_access(result: object) -> Access | None:
 
     Returns:
         Access | None: Reported level, or ``None`` if the result does not carry one.
-            Callers can handle an unreported level as Configuration Access.
-            Deep copying and pickling preserve the level. Plain copies made with
+            Callers handle an unreported level as they handled results before
+            access reporting existed. Deep copying and pickling preserve the level. Plain copies made with
             ``dict()``, ``list()`` or JSON serialization discard it.
     """
     if isinstance(result, (AccessDict, AccessList)):

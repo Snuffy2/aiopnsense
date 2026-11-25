@@ -53,7 +53,7 @@ _Avoid_: Apply, enable/disable (as separate operations)
 ### Access
 
 **Status Access**:
-The level at which the Router lets the API user read the live status of a category, or of one VPN type, but not its configured inventory. Under Status Access, items the status does not show, such as disabled VPN Instances, are not visible, and nothing can be Toggled. The Router's answers decide the level, not a user setting.
+The level at which the Router lets the API user read the live status of a category, or of one VPN type, but denies (403) a read that completes its result. Usually the denied read is the configured inventory; for DHCP leases it can also be one backend's lease endpoint. A Status Access result can therefore lack items or detail that the denied read would add, such as disabled VPN Instances or CARP VIP settings, and nothing can be Toggled. Callers treat it as possibly incomplete. The Router's answers decide the level, not a user setting.
 _Avoid_: Read-only, status-only user
 
 **Configuration Access**:
