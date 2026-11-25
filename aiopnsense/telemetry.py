@@ -7,7 +7,7 @@ from typing import Any
 
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
-from ._error_policy import _log_errors
+from ._error_policy import _log_errors, _throws_errors
 from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
@@ -85,23 +85,28 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         return telemetry
 
     @_log_errors
-    async def get_interfaces(self) -> MutableMapping[str, Any]:
+    async def get_interfaces(self) -> MutableMapping[str, Any] | None:
         """Return normalized interface status and counters.
 
         Returns:
-            MutableMapping[str, Any]: Mapping keyed by OPNsense interface
+            MutableMapping[str, Any] | None: Mapping keyed by OPNsense interface
                 identifier. Each interface includes packet and byte counters,
                 error counters, status, addresses, media, gateway and route
                 metadata, MAC address, enabled flag, and VLAN tag when
-                available.
+                available. HTTP 404 returns an empty mapping. Forbidden reads,
+                transient failures, and undecodable responses return ``None``
+                when ``throw_errors`` is disabled and raise when enabled.
+                A decoded body with the wrong shape returns ``None`` when
+                ``throw_errors`` is disabled and an empty mapping when enabled.
         """
         outcome = await self._fetch_endpoint_outcome(INTERFACE_OVERVIEW_EXPORT_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("Interface overview endpoint unavailable")
-            return {}
-        interface_info = outcome.sequence()
-        if not len(interface_info) > 0:
-            return {}
+            return {} if outcome.http_status == 404 else None
+        interface_info = outcome.payload
+        if not isinstance(interface_info, list):
+            _LOGGER.debug("[get_interfaces] Interface overview response is not a list")
+            return {} if _throws_errors(self) else None
         interfaces: dict[str, Any] = {}
         for ifinfo in interface_info:
             interface: dict[str, Any] = {}
