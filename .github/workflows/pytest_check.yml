@@ -77,6 +77,15 @@ jobs:
           ignore-nothing-to-cache: true
           cache-dependency-glob: uv.lock
 
+      - name: Record the checkout tested by pytest
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --verify HEAD)"
+          tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          printf '### Pytest checkout\n\n- Commit: %s\n- Tree: %s\n' "$commit" "$tree" >> "$GITHUB_STEP_SUMMARY"
+          # The Checks API exposes this notice on this exact job, including reruns.
+          printf '::notice file=.github/workflows/pytest_check.yml,line=1,title=Readiness checkout v1::commit=%s tree=%s\n' "$commit" "$tree"
+
       - name: Run pytest with coverage from the lock
         run: uv run --locked --group pytest pytest
 
