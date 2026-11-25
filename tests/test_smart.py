@@ -5,7 +5,13 @@ from collections.abc import Callable
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import make_router_client
+from aiopnsense.exceptions import (
+    OPNsenseConnectionError,
+    OPNsenseError,
+    OPNsensePrivilegeMissing,
+    OPNsenseTimeoutError,
+)
+from tests.conftest import MalformedJSONResponse, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -59,21 +65,21 @@ async def test_get_smart_returns_device_rows(
         pytest.param("info", SMART_INFO_PATH, {}, id="info"),
     ],
 )
-async def test_smart_fails_closed_when_endpoint_is_unavailable(
+async def test_smart_returns_empty_when_endpoint_is_missing(
     make_client: ClientType,
     throw_errors: bool,
     operation: str,
     path: str,
     expected: object,
 ) -> None:
-    """SMART POST reads fail closed when the Router answers 404, in either error mode.
+    """SMART POST reads report an empty result for 404 in either error mode.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         throw_errors (bool): Public ``throw_errors`` setting of the client.
         operation (str): SMART operation under test.
         path (str): Path of the POST request the operation sends.
-        expected (object): Expected fail-closed result.
+        expected (object): Empty result for the missing endpoint.
     """
     client, router = make_router_client(
         make_client, {("POST", path): 404}, throw_errors=throw_errors
@@ -85,6 +91,50 @@ async def test_smart_fails_closed_when_endpoint_is_unavailable(
         got = await client.get_smart_info("nvme0")
 
     assert got == expected
+    assert router.count("POST", path) == 1
+
+
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
+@pytest.mark.parametrize("path", [SMART_LIST_PATH, SMART_INFO_PATH], ids=["list", "info"])
+@pytest.mark.parametrize(
+    ("reply", "error"),
+    [
+        pytest.param(403, OPNsensePrivilegeMissing, id="forbidden"),
+        pytest.param(503, OPNsenseConnectionError, id="http-failure"),
+        pytest.param(TimeoutError(), OPNsenseTimeoutError, id="timeout"),
+        pytest.param(MalformedJSONResponse(), OPNsenseError, id="undecodable"),
+    ],
+)
+async def test_smart_reports_failed_reads(
+    make_client: ClientType,
+    throw_errors: bool,
+    path: str,
+    reply: int | TimeoutError | MalformedJSONResponse,
+    error: type[OPNsenseError],
+) -> None:
+    """SMART read failures suppress to None or raise the corresponding public exception.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+        path (str): SMART POST endpoint under test.
+        reply (int | TimeoutError | MalformedJSONResponse): Router reply or transport error.
+        error (type[OPNsenseError]): Expected exception with strict mode enabled.
+    """
+    client, router = make_router_client(
+        make_client, {("POST", path): reply}, throw_errors=throw_errors
+    )
+    read = client.get_smart if path == SMART_LIST_PATH else lambda: client.get_smart_info("nvme0")
+
+    if throw_errors:
+        with pytest.raises(error) as exc_info:
+            await read()
+        assert type(exc_info.value) is error
+    else:
+        assert await read() is None
+        if reply == 403:
+            assert await read() is None
+
     assert router.count("POST", path) == 1
 
 

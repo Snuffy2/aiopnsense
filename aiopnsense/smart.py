@@ -21,15 +21,15 @@ class SmartMixin(AiopnsenseClientProtocol):
 
         Returns:
             list[dict[str, Any]] | None: SMART device rows, or an empty list when the
-                endpoint returns 404. With ``throw_errors`` off, 403 and transient HTTP
-                or transport failures return an empty list, and an undecodable response
-                body returns ``None``. With ``throw_errors`` on, those failures raise
-                ``OPNsenseError``.
+                endpoint returns 404. With ``throw_errors`` off, 403 (including a cached
+                denial), transient HTTP or transport failures, and an undecodable
+                response body return ``None``. With ``throw_errors`` on, those failures
+                raise ``OPNsenseError``.
         """
         outcome = await self._fetch_post_endpoint_outcome(SMART_SERVICE_DETAIL_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("SMART plugin unavailable")
-            return []
+            return [] if outcome.http_status == 404 else None
         devices = outcome.mapping().get("devices", [])
         if not isinstance(devices, list):
             _LOGGER.debug(
@@ -70,8 +70,8 @@ class SmartMixin(AiopnsenseClientProtocol):
         Returns:
             dict[str, Any] | None: Decoded SMART details, with non-mapping outputs
                 wrapped under ``output``. A 404 returns an empty dictionary. With
-                ``throw_errors`` off, 403 and transient HTTP or transport failures return
-                an empty dictionary, and an undecodable response body returns ``None``.
+                ``throw_errors`` off, 403 (including a cached denial), transient HTTP or
+                transport failures, and an undecodable response body return ``None``.
                 With ``throw_errors`` on, those failures raise ``OPNsenseError``.
         """
         outcome = await self._fetch_post_endpoint_outcome(
@@ -80,6 +80,6 @@ class SmartMixin(AiopnsenseClientProtocol):
         )
         if not outcome.is_data:
             _LOGGER.debug("SMART plugin unavailable")
-            return {}
+            return {} if outcome.http_status == 404 else None
         output = outcome.mapping().get("output", {})
         return dict(output) if isinstance(output, MutableMapping) else {"output": output}
