@@ -34,40 +34,34 @@ class ServicesMixin(AiopnsenseClientProtocol):
             normalized_services.append(service)
         return normalized_services
 
-    async def _fetch_normalized_services(
-        self,
-        *,
-        return_none_when_unavailable: bool,
-    ) -> list[dict[str, Any]] | None:
-        """Fetch and normalize services with configurable unavailable-endpoint behavior.
-
-        Args:
-            return_none_when_unavailable (bool): Whether to return ``None`` instead of an empty
-                list when the endpoint is absent or the request fails.
+    async def _fetch_normalized_services(self) -> list[dict[str, Any]] | None:
+        """Fetch and normalize services from the Router.
 
         Returns:
-            list[dict[str, Any]] | None: Normalized service payload, or ``None`` when the
-                endpoint is absent or the request fails and ``return_none_when_unavailable`` is ``True``.
+            list[dict[str, Any]] | None: Normalized rows, an empty list on HTTP 404,
+                or ``None`` for a suppressed request failure. Strict mode propagates
+                request errors.
         """
         outcome = await self._fetch_endpoint_outcome(CORE_SERVICE_SEARCH_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("Service search endpoint unavailable")
-            if return_none_when_unavailable:
-                return None
-            return []
+            return [] if outcome.http_status == 404 else None
 
         return self._normalize_services_rows(outcome.mapping().get("rows") or [])
 
     @_log_errors
-    async def get_services(self) -> list[dict[str, Any]]:
+    async def get_services(self) -> list[dict[str, Any]] | None:
         """Return all manageable OPNsense services.
 
         Returns:
-            list[dict[str, Any]]: Service rows from the core service search
+            list[dict[str, Any]] | None: Service rows from the core service search
                 endpoint with a derived boolean ``status`` field indicating
-                whether each service is currently running.
+                whether each service is currently running. HTTP 404 yields an
+                empty list. With ``throw_errors=False``, HTTP 403, other read
+                failures, and undecodable responses yield ``None``. With
+                ``throw_errors=True``, those failures raise an ``OPNsenseError``.
         """
-        return await self._fetch_normalized_services(return_none_when_unavailable=False) or []
+        return await self._fetch_normalized_services()
 
     async def _get_service_running_state(self, service: str) -> bool | None:
         """Return service running state with support for unknown endpoint state.
@@ -79,10 +73,8 @@ class ServicesMixin(AiopnsenseClientProtocol):
             bool | None: ``True`` when running, ``False`` when known not running,
                 or ``None`` when status cannot be determined.
         """
-        services: list[dict[str, Any]] | None = await self._fetch_normalized_services(
-            return_none_when_unavailable=True
-        )
-        if services is None or not isinstance(services, list):
+        services = await self._fetch_normalized_services()
+        if services is None:
             return None
         for svc in services:
             if svc.get("name") == service or svc.get("id") == service:

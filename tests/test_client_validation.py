@@ -43,7 +43,7 @@ async def _assert_service_failure(client: OPNsenseClient, *, throw_errors: bool)
         with pytest.raises(OPNsenseConnectionError):
             await client.get_services()
     else:
-        assert await client.get_services() == []
+        assert await client.get_services() is None
 
 
 @pytest.mark.parametrize("start_workers_first", [True, False], ids=["existing", "first-use"])
@@ -97,7 +97,7 @@ async def test_session_callback_task_keeps_default_after_validation(
     async def poll_after_validation() -> None:
         """Run a service search independently after validation and close."""
         await release_poll.wait()
-        assert await client.get_services() == []
+        assert await client.get_services() is None
 
     async with asyncio.timeout(3), asyncio.TaskGroup() as tasks:
 
