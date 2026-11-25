@@ -444,6 +444,26 @@ async def test_get_interfaces_empty_and_invalid_rows(make_client: MakeClientFact
     assert interfaces["em0"]["status"] == ""
 
 
+@pytest.mark.parametrize(
+    ("throw_errors", "expected"), [(False, None), (True, {})], ids=["suppress", "strict"]
+)
+async def test_get_interfaces_wrong_body_shape(
+    make_client: MakeClientFactory, throw_errors: bool, expected: dict[str, Any] | None
+) -> None:
+    """An object body leaves the inventory unknown when errors are suppressed.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+        expected (dict[str, Any] | None): Inventory result expected for an object body.
+    """
+    client, _ = _router(
+        make_client, {INTERFACES_PATH: {"status": "error"}}, throw_errors=throw_errors
+    )
+
+    assert await client.get_interfaces() == expected
+
+
 async def test_get_interfaces_forbidden_stays_unknown_while_cached(
     make_client: MakeClientFactory,
 ) -> None:
