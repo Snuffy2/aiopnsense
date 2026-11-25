@@ -539,6 +539,35 @@ async def test_get_gateways_skips_rows_without_name(make_client: MakeClientFacto
     assert gateways == {"gw1": {"name": "gw1", "status": "online"}}
 
 
+@pytest.mark.parametrize(
+    ("reply", "inventory"),
+    [
+        pytest.param({}, None, id="missing-items"),
+        pytest.param({"items": {}}, None, id="wrong-items-shape"),
+        pytest.param({"items": [], "status": "failed"}, None, id="backend-failure"),
+        pytest.param({"items": [], "status": "ok"}, {}, id="valid-empty-inventory"),
+    ],
+)
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_gateways_decoded_inventory(
+    make_client: MakeClientFactory,
+    reply: dict[str, Any],
+    inventory: dict[str, Any] | None,
+    throw_errors: bool,
+) -> None:
+    """Only a valid empty inventory signals absence when errors are suppressed.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        reply (dict[str, Any]): Decoded gateway status response from the Router.
+        inventory (dict[str, Any] | None): Expected inventory in non-strict mode.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+    """
+    client, _ = _router(make_client, {GATEWAYS_PATH: reply}, throw_errors=throw_errors)
+
+    assert await client.get_gateways() == ({} if throw_errors else inventory)
+
+
 async def test_get_gateways_forbidden_remains_unavailable_when_cached(
     make_client: MakeClientFactory,
 ) -> None:
