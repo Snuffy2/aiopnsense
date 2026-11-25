@@ -33,7 +33,10 @@ These behaviors were checked against the router's installed controller and
 scripts, in addition to the live API capture:
 
 - `GET /api/core/firmware/running` returns `ready` or `busy` based on the
-  firmware lock. Both checks and installations use this lock.
+  firmware lock. Both checks and installations use this lock. It returns an
+  empty `status` when configd cannot answer, for example while an update
+  replaces the lock script. `install_firmware` keeps polling through an empty
+  status after dispatch and fails before dispatch, when nothing has started.
 - `POST /api/core/firmware/update` flushes cached availability data and
   dispatches the update launcher. Its `ok` and `msg_uuid` acknowledge dispatch,
   not successful lock acquisition or installation.

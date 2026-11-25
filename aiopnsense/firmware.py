@@ -661,7 +661,12 @@ class FirmwareMixin(AiopnsenseClientProtocol):
                 _LOGGER.debug("Firmware state temporarily unavailable: %s", err)
             else:
                 lock_state = running.get("status")
-                if lock_state not in ("ready", "busy"):
+                if lock_state == "":
+                    # The Router replies with an empty status when configd cannot
+                    # answer, such as while an update replaces its scripts. The lock
+                    # is unknown, not failed, and only "ready" can complete below.
+                    _LOGGER.debug("Firmware lock state temporarily unavailable")
+                elif lock_state not in ("ready", "busy"):
                     raise OPNsenseError(f"Unknown firmware lock state: {running}")
                 if started:
                     terminal = (
