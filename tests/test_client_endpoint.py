@@ -688,8 +688,8 @@ async def test_cached_permission_error_is_trusted_by_default_and_rechecked_in_th
     """
     client, router = make_router_client(make_client, routes={("GET", NUT_PATH): 403})
     try:
-        assert await client.get_nut_ups_status() == {}
-        assert await client.get_nut_ups_status() == {}
+        assert await client.get_nut_ups_status() is None
+        assert await client.get_nut_ups_status() is None
         assert router.count("GET", NUT_PATH) == 1
 
         client.toggle_throwing_errors(True)
@@ -715,8 +715,8 @@ async def test_transient_failure_is_not_cached_and_logs_once_per_outage(
     client, router = make_router_client(make_client, routes={("GET", NUT_PATH): failure})
     try:
         with caplog.at_level(logging.DEBUG, logger="aiopnsense"):
-            assert await client.get_nut_ups_status() == {}
-            assert await client.get_nut_ups_status() == {}
+            assert await client.get_nut_ups_status() is None
+            assert await client.get_nut_ups_status() is None
             failures = [r for r in caplog.records if r.levelno == logging.ERROR]
             assert len(failures) == 1
             assert router.count("GET", NUT_PATH) == 2
@@ -745,9 +745,9 @@ async def test_transient_failure_raises_in_throw_mode_and_is_not_cached(
     client.toggle_throwing_errors(True)
     try:
         with pytest.raises(OPNsenseError):
-            await client._fetch_endpoint_outcome(NUT_PATH)
+            await client.get_nut_ups_status()
         with pytest.raises(OPNsenseError):
-            await client._fetch_endpoint_outcome(NUT_PATH)
+            await client.get_nut_ups_status()
         assert router.count("GET", NUT_PATH) == 2
     finally:
         await client.async_close()

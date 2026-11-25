@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._error_policy import _log_errors
+from ._error_policy import _attempt, _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, dict_get, normalize_datetime, try_to_float, try_to_int
 
@@ -29,30 +29,38 @@ class SpeedtestMixin(AiopnsenseClientProtocol):
     """Speedtest methods for OPNsenseClient."""
 
     @_log_errors
-    async def get_speedtest(self) -> dict[str, Any]:
+    async def get_speedtest(self) -> dict[str, Any] | None:
         """Return the latest and average Speedtest result summaries.
 
         Returns:
-            dict[str, Any]: Mapping with ``available`` plus ``last`` and
+            dict[str, Any] | None: Mapping with ``available`` plus ``last`` and
                 ``average`` sections for download, upload, and latency. Latest
-                results include server, date, and URL metadata; averages
-                include min, max, sample count, and period bounds. Returns
-                ``{"available": False}`` when show-log is absent (404 in either mode),
-                or on 403/transient HTTP or transport failures with ``throw_errors`` off.
-                Those failures raise ``OPNsenseError`` when enabled. Undecodable JSON
-                returns ``None`` when errors are disabled and raises ``OPNsenseError``
-                otherwise.
+                results include server, date, and URL metadata. Averages
+                include min, max, sample count, and period bounds. A 404 from
+                ``showlog`` returns ``{"available": False}`` in either mode.
+                With ``throw_errors`` off, a 403, HTTP or transport failure, or
+                undecodable JSON from ``showlog`` returns ``None``. A failed or
+                missing ``showstat`` read leaves average fields unset while
+                preserving the latest result. With ``throw_errors`` on, either
+                read raises ``OPNsenseError`` on failures other than 404.
         """
         outcome = await self._fetch_endpoint_outcome(SPEEDTEST_SHOW_LOG_ENDPOINT)
         if not outcome.is_data:
-            _LOGGER.debug("Speedtest not installed")
-            return {"available": False}
+            if outcome.http_status == 404:
+                _LOGGER.debug("[get_speedtest] Speedtest not installed")
+                return {"available": False}
+            return None
 
         latest_result = self._parse_showlog_latest(outcome.sequence())
-        stat_outcome = await self._fetch_endpoint_outcome(SPEEDTEST_SHOW_STAT_ENDPOINT)
-        if not stat_outcome.is_data:
-            _LOGGER.debug("Speedtest statistics endpoint unavailable")
-        show_stat = stat_outcome.mapping()
+        stat_outcome = await _attempt(
+            self,
+            lambda: self._fetch_endpoint_outcome(SPEEDTEST_SHOW_STAT_ENDPOINT),
+            empty=None,
+            name="get_speedtest showstat",
+        )
+        if stat_outcome is None or not stat_outcome.is_data:
+            _LOGGER.debug("[get_speedtest] Speedtest statistics endpoint unavailable")
+        show_stat = stat_outcome.mapping() if stat_outcome is not None else {}
 
         server_id = latest_result.get("server_id")
         server_name = latest_result.get("server")
