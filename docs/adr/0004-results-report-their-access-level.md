@@ -14,6 +14,14 @@ The original VPN Status Access spec preserved the old behavior for all transient
 
 A configuration 404 still supplies an empty inventory. Strict mode still propagates request errors in the original order.
 
+## CARP
+
+`get_carp` reports its access level too. OPNsense grants the two CARP reads through separate privileges: `diagnostics/interface/get_vip_status` under "Interfaces: Virtual IPs: Status" and `interfaces/vip_settings/*` under "Interfaces: Virtual IPs: Settings".
+
+- The VIP inventory comes from `get_vip_status` at both levels. That endpoint lists every configured CARP VIP, including disabled ones, so a Status Access result is not missing VIPs.
+- `interfaces/vip_settings/get` determines access. A 403, including a cached 403, means Status Access, and the result omits the settings enrichment of each VIP: fields the status rows lack, such as `descr` and `subnet_bits`. Data or a 404 means Configuration Access. A transient settings failure leaves Configuration Access with status-only VIP data, because a failure alone cannot establish Status Access.
+- A failed `get_vip_status` read returns `None` with no level, instead of an empty snapshot that a caller could take for "no VIPs". Strict mode raises the status error first, then the settings error.
+
 ## Considered Options
 
 - **A top-level `access` key in the result mapping.** Rejected: additive for mapping results, but a category whose getter returns a list could only adopt it by wrapping its result, a breaking change for each such category.

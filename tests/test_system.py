@@ -7,8 +7,12 @@ from typing import Any
 import aiohttp
 import pytest
 
-from aiopnsense import OPNsenseClient
-from aiopnsense.exceptions import OPNsenseMissingDeviceUniqueID
+from aiopnsense import Access, OPNsenseClient, result_access
+from aiopnsense.exceptions import (
+    OPNsenseConnectionError,
+    OPNsenseMissingDeviceUniqueID,
+    OPNsensePrivilegeMissing,
+)
 from tests.conftest import (
     FakeRouter,
     SequencedResponse,
@@ -923,6 +927,137 @@ async def test_get_carp_uses_status_rows_when_settings_unusable(
     assert [(row["interface"], row["subnet"]) for row in interfaces] == [("wan", "1.2.3.4")]
 
 
+_CARP_STATUS_ROW = {
+    "mode": "carp",
+    "interface": "LAN",
+    "vhid": "1",
+    "advbase": "1",
+    "advskew": "0",
+    "subnet": "10.0.0.1",
+    "status": "MASTER",
+}
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected_access"),
+    [
+        pytest.param(403, Access.STATUS, id="settings-denied"),
+        pytest.param(404, Access.CONFIGURATION, id="settings-missing"),
+        pytest.param(500, Access.CONFIGURATION, id="settings-transient"),
+        pytest.param({"rows": []}, Access.CONFIGURATION, id="settings-data"),
+    ],
+)
+async def test_get_carp_reports_access_from_vip_settings(
+    make_client: ClientType, settings: Any, expected_access: Access
+) -> None:
+    """Report Status Access only when the VIP settings read is denied, keeping status VIPs.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        settings (Any): Router reply to the VIP settings read.
+        expected_access (Access): Access level the snapshot must report.
+    """
+    client, router = make_router_client(make_client)
+    _serve_carp(router, {"rows": [_CARP_STATUS_ROW], "carp": _carp_state()}, settings)
+
+    snapshot = await client.get_carp()
+
+    assert snapshot is not None
+    assert result_access(snapshot) is expected_access
+    assert snapshot["interfaces"] == [_CARP_STATUS_ROW]
+    assert snapshot["status_summary"]["state"] == "healthy"
+    assert snapshot["status_summary"]["master_count"] == 1
+
+
+async def test_get_carp_reuses_cached_settings_denial(make_client: ClientType) -> None:
+    """Keep reporting Status Access from a cached settings 403 without asking again.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, router = make_router_client(make_client)
+    _serve_carp(router, {"rows": [_CARP_STATUS_ROW], "carp": _carp_state()}, 403)
+
+    first = await client.get_carp()
+    cached = await client.get_carp()
+
+    assert first is not None
+    assert cached == first
+    assert result_access(cached) is Access.STATUS
+    assert router.count("GET", "/api/interfaces/vip_settings/get") == 1
+    assert router.count("GET", "/api/diagnostics/interface/get_vip_status") == 2
+
+
+@pytest.mark.parametrize("status", [403, 404, 500])
+async def test_get_carp_returns_none_when_vip_status_unavailable(
+    make_client: ClientType, status: int
+) -> None:
+    """Return ``None`` with no level, not an empty snapshot, when the status read fails.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        status (int): HTTP status of the failed VIP status read.
+    """
+    client, router = make_router_client(make_client)
+    _serve_carp(router, status, {"rows": []})
+
+    assert await client.get_carp() is None
+    assert router.count("GET", "/api/interfaces/vip_settings/get") == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "settings", "expected_error", "settings_requests"),
+    [
+        pytest.param(403, 403, OPNsensePrivilegeMissing, 0, id="status-denied-first"),
+        pytest.param(500, 403, OPNsenseConnectionError, 0, id="status-transient-first"),
+        pytest.param(None, 403, OPNsensePrivilegeMissing, 1, id="settings-denied"),
+        pytest.param(None, 500, OPNsenseConnectionError, 1, id="settings-transient"),
+    ],
+)
+async def test_get_carp_strict_mode_raises_in_request_order(
+    make_client: ClientType,
+    status: int | None,
+    settings: int,
+    expected_error: type[Exception],
+    settings_requests: int,
+) -> None:
+    """Raise the VIP status error before the settings error when errors are enabled.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        status (int | None): HTTP status of the VIP status read, or ``None`` for data.
+        settings (int): HTTP status of the VIP settings read.
+        expected_error (type[Exception]): Exception the call must raise.
+        settings_requests (int): Expected number of VIP settings reads.
+    """
+    client, router = make_router_client(make_client, throw_errors=True)
+    status_reply = {"rows": [_CARP_STATUS_ROW], "carp": _carp_state()} if status is None else status
+    _serve_carp(router, status_reply, settings)
+
+    with pytest.raises(expected_error):
+        await client.get_carp()
+
+    assert router.count("GET", "/api/interfaces/vip_settings/get") == settings_requests
+
+
+async def test_get_carp_strict_mode_reports_missing_settings_as_configuration_access(
+    make_client: ClientType,
+) -> None:
+    """Keep a known missing settings endpoint as Configuration Access when errors are enabled.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, router = make_router_client(make_client, throw_errors=True)
+    _serve_carp(router, {"rows": [_CARP_STATUS_ROW], "carp": _carp_state()}, 404)
+
+    snapshot = await client.get_carp()
+
+    assert snapshot is not None
+    assert result_access(snapshot) is Access.CONFIGURATION
+    assert snapshot["interfaces"] == [_CARP_STATUS_ROW]
+
+
 async def test_carp_row_helpers_normalize_and_match_rows(make_client: ClientType) -> None:
     """Verify the pure CARP row helpers, which make no request.
 
@@ -962,22 +1097,7 @@ async def test_version_switched_system_endpoints_fail_closed(make_client: Client
 
     assert await client.get_system_info() == {}
     assert await client.get_device_unique_id() is None
-    assert await client.get_carp() == {
-        "interfaces": [],
-        "status_summary": {
-            "state": "unknown",
-            "enabled": False,
-            "maintenance_mode": False,
-            "demotion": 0,
-            "status_message": "",
-            "vip_count": 0,
-            "master_count": 0,
-            "backup_count": 0,
-            "other_count": 0,
-            "interfaces": [],
-            "vips": [],
-        },
-    }
+    assert await client.get_carp() is None
     assert await client.get_notices() == {
         "pending_notices_present": False,
         "pending_notices": [],
