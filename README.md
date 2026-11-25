@@ -32,13 +32,13 @@
 | aiopnsense/smart.py                      |       38 |        0 |       12 |        0 |    100% |           |
 | aiopnsense/speedtest.py                  |       56 |        0 |       16 |        0 |    100% |           |
 | aiopnsense/system.py                     |      397 |        3 |      160 |        7 |     98% |303-\>305, 305-\>307, 308, 313-\>298, 339, 342, 708-\>699 |
-| aiopnsense/telemetry.py                  |      251 |        3 |       70 |        3 |     98% |65, 117, 222 |
+| aiopnsense/telemetry.py                  |      255 |        3 |       72 |        3 |     98% |65, 117, 222 |
 | aiopnsense/traffic.py                    |      112 |        0 |       52 |        1 |     99% | 151-\>154 |
 | aiopnsense/unbound.py                    |      105 |        1 |       42 |        1 |     99% |        40 |
 | aiopnsense/vnstat.py                     |      223 |        7 |      100 |        7 |     96% |230, 283, 426, 469, 503, 523, 545 |
 | aiopnsense/vouchers.py                   |       53 |        1 |       18 |        1 |     97% |        87 |
 | aiopnsense/vpn.py                        |      563 |       11 |      266 |       14 |     97% |298, 322, 323-\>exit, 344, 393, 523-524, 593, 598, 635-\>591, 644, 823, 828-\>821, 1148, 1439-\>1435 |
-| **TOTAL**                                | **4151** |   **58** | **1530** |   **65** | **98%** |           |
+| **TOTAL**                                | **4155** |   **58** | **1532** |   **65** | **98%** |           |
 
 
 ## Setup coverage badge
