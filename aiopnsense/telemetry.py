@@ -7,7 +7,7 @@ from typing import Any
 
 from dateutil.parser import ParserError, UnknownTimezoneWarning, parse
 
-from ._error_policy import _log_errors
+from ._error_policy import _log_errors, _throws_errors
 from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .const import AMBIGUOUS_TZINFOS
@@ -72,7 +72,13 @@ class TelemetryMixin(AiopnsenseClientProtocol):
             MutableMapping[str, Any]: Mapping containing ``mbuf``,
                 ``pfstate``, ``memory``, ``system``, ``cpu``,
                 ``filesystems``, and ``temps`` sections populated from the
-                corresponding diagnostics endpoints.
+                corresponding diagnostics endpoints. A missing inventory
+                endpoint (404) supplies an empty list for ``filesystems`` or
+                an empty mapping for ``temps``. With ``throw_errors=False``,
+                a denied or failed inventory read, undecodable body, or
+                incorrect inventory container sets only its section to
+                ``None``. Strict mode propagates request and decoding errors
+                and preserves the existing handling of decoded bodies.
         """
         telemetry: dict[str, Any] = {}
         telemetry["mbuf"] = await self._get_telemetry_mbuf()
@@ -85,23 +91,28 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         return telemetry
 
     @_log_errors
-    async def get_interfaces(self) -> MutableMapping[str, Any]:
+    async def get_interfaces(self) -> MutableMapping[str, Any] | None:
         """Return normalized interface status and counters.
 
         Returns:
-            MutableMapping[str, Any]: Mapping keyed by OPNsense interface
+            MutableMapping[str, Any] | None: Mapping keyed by OPNsense interface
                 identifier. Each interface includes packet and byte counters,
                 error counters, status, addresses, media, gateway and route
                 metadata, MAC address, enabled flag, and VLAN tag when
-                available.
+                available. HTTP 404 returns an empty mapping. Forbidden reads,
+                transient failures, and undecodable responses return ``None``
+                when ``throw_errors`` is disabled and raise when enabled.
+                A decoded body with the wrong shape returns ``None`` when
+                ``throw_errors`` is disabled and an empty mapping when enabled.
         """
         outcome = await self._fetch_endpoint_outcome(INTERFACE_OVERVIEW_EXPORT_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("Interface overview endpoint unavailable")
-            return {}
-        interface_info = outcome.sequence()
-        if not len(interface_info) > 0:
-            return {}
+            return {} if outcome.http_status == 404 else None
+        interface_info = outcome.payload
+        if not isinstance(interface_info, list):
+            _LOGGER.debug("[get_interfaces] Interface overview response is not a list")
+            return {} if _throws_errors(self) else None
         interfaces: dict[str, Any] = {}
         for ifinfo in interface_info:
             interface: dict[str, Any] = {}
@@ -340,37 +351,51 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         return cpu
 
     @_log_errors
-    async def _get_telemetry_filesystems(self) -> list:
+    async def _get_telemetry_filesystems(self) -> list | None:
         """Collect filesystem telemetry entries from diagnostics.
 
         Returns:
-            list: Filesystem device rows from OPNsense disk diagnostics, or an
-                empty list when the endpoint is unavailable.
+            list | None: Filesystem device rows from OPNsense disk diagnostics,
+                an empty list on HTTP 404, or ``None`` when errors are
+                suppressed and the read fails or lacks a device list.
         """
         filesystems_outcome = await self._fetch_endpoint_outcome(SYSTEM_DISK_ENDPOINT)
         if not filesystems_outcome.is_data:
             _LOGGER.debug("Telemetry filesystem endpoint unavailable")
-            return []
+            return [] if filesystems_outcome.http_status == 404 else None
         filesystems_info = filesystems_outcome.mapping()
+        if not isinstance(filesystems_info.get("devices"), list) and not _throws_errors(self):
+            _LOGGER.debug("[get_telemetry] Filesystem response lacks a device list")
+            return None
         filesystems: list = filesystems_info.get("devices", [])
         return filesystems
 
     @_log_errors
-    async def get_gateways(self) -> MutableMapping[str, Any]:
+    async def get_gateways(self) -> MutableMapping[str, Any] | None:
         """Return OPNsense gateway status details.
 
         Returns:
-            MutableMapping[str, Any]: Mapping keyed by gateway name, with each
+            MutableMapping[str, Any] | None: Mapping keyed by gateway name, with each
                 gateway row preserved from OPNsense and ``status`` normalized
-                from the translated status when available.
+                from the translated status when available. HTTP 404 returns an
+                empty mapping. Other request or decoding failures return ``None``
+                when ``throw_errors`` is off and raise an ``OPNsenseError`` when it is on.
+                With ``throw_errors`` off, a decoded response with a missing or
+                invalid ``items`` list or a failed backend status also returns ``None``.
         """
         gateways_outcome = await self._fetch_endpoint_outcome(GATEWAY_STATUS_ENDPOINT)
         if not gateways_outcome.is_data:
             _LOGGER.debug("Gateway status endpoint unavailable")
-            return {}
+            return {} if gateways_outcome.http_status == 404 else None
         gateways_info = gateways_outcome.mapping()
+        items = gateways_info.get("items", ())
+        if not _throws_errors(self) and (
+            not isinstance(items, list) or gateways_info.get("status") == "failed"
+        ):
+            _LOGGER.debug("[get_gateways] Gateway response did not report an inventory")
+            return None
         gateways: dict[str, Any] = {}
-        for gw_info in gateways_info.get("items", []):
+        for gw_info in items:
             if isinstance(gw_info, MutableMapping) and "name" in gw_info:
                 gateways[gw_info["name"]] = gw_info
         for gateway in gateways.values():
@@ -378,21 +403,24 @@ class TelemetryMixin(AiopnsenseClientProtocol):
         return gateways
 
     @_log_errors
-    async def _get_telemetry_temps(self) -> MutableMapping[str, Any]:
+    async def _get_telemetry_temps(self) -> MutableMapping[str, Any] | None:
         """Collect temperature sensor telemetry.
 
         Returns:
-            MutableMapping[str, Any]: Mapping keyed by temperature device id,
-                with each value containing the numeric temperature, display
-                name, and original device id.
+            MutableMapping[str, Any] | None: Mapping keyed by temperature device
+                id, with each value containing the numeric temperature, display
+                name, and original device id. HTTP 404 yields an empty mapping,
+                and a failed read or non-list body yields ``None`` when
+                errors are suppressed.
         """
         temps_outcome = await self._fetch_endpoint_outcome(SYSTEM_TEMPERATURE_ENDPOINT)
         if not temps_outcome.is_data:
             _LOGGER.debug("Telemetry temperature endpoint unavailable")
-            return {}
-        temps_info = temps_outcome.sequence()
-        if not len(temps_info) > 0:
-            return {}
+            return {} if temps_outcome.http_status == 404 else None
+        temps_info = temps_outcome.payload
+        if not isinstance(temps_info, list):
+            _LOGGER.debug("[get_telemetry] Temperature response is not a list")
+            return {} if _throws_errors(self) else None
         temps: dict[str, Any] = {}
         for i, temp_info in enumerate(temps_info):
             temp: dict[str, Any] = {}

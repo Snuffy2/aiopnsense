@@ -4,7 +4,7 @@ from collections.abc import Mapping
 import re
 from typing import Any
 
-from ._error_policy import _log_errors
+from ._error_policy import _log_errors, _throws_errors
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER
 
@@ -16,38 +16,41 @@ class NutMixin(AiopnsenseClientProtocol):
     """NUT plugin methods for OPNsenseClient."""
 
     @_log_errors
-    async def get_nut_ups_status(self) -> dict[str, Any]:
+    async def get_nut_ups_status(self) -> dict[str, Any] | None:
         """Return UPS status data from the OPNsense NUT plugin.
 
         Returns:
-            dict[str, Any]: Decoded NUT UPS status payload, or an empty
-                dictionary when the NUT diagnostics endpoint is unavailable.
+            dict[str, Any] | None: Decoded NUT UPS status payload, an empty
+                dictionary when the endpoint is missing (HTTP 404), or ``None``
+                when the request fails or the response body is unusable. With
+                ``throw_errors`` enabled, request and decoding errors propagate,
+                and a decoded non-mapping body returns an empty dictionary.
         """
         outcome = await self._fetch_endpoint_outcome(NUT_DIAGNOSTICS_UPS_STATUS_ENDPOINT)
         if not outcome.is_data:
-            _LOGGER.debug("NUT UPS status endpoint unavailable")
-            return {}
-        return self._normalize_nut_ups_status_payload(outcome.mapping())
+            _LOGGER.debug("[get_nut_ups_status] NUT UPS status endpoint unavailable")
+            return {} if outcome.http_status == 404 else None
+        payload = outcome.payload
+        if not isinstance(payload, Mapping):
+            _LOGGER.debug(
+                "[get_nut_ups_status] NUT UPS status payload is not a mapping (type=%s)",
+                type(payload).__name__,
+            )
+            return {} if _throws_errors(self) else None
+        return self._normalize_nut_ups_status_payload(payload)
 
     @staticmethod
-    def _normalize_nut_ups_status_payload(payload: Any) -> dict[str, Any]:
+    def _normalize_nut_ups_status_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         """Normalize raw NUT UPS status payloads to the expected status mapping.
 
         Args:
-            payload (Any): Raw response payload from the NUT diagnostics endpoint.
+            payload (Mapping[str, Any]): Response payload from the NUT diagnostics endpoint.
 
         Returns:
             dict[str, Any]: Normalized NUT status payload in the shape
                 ``{..., "status": mapping}`` when parsable status data exists,
                 otherwise a shallow copy of the original mapping payload.
         """
-        if not isinstance(payload, Mapping):
-            _LOGGER.debug(
-                "NUT UPS status payload is not a mapping (type=%s), returning {}",
-                type(payload).__name__,
-            )
-            return {}
-
         normalized_payload = dict(payload)
         status_value = payload.get("status")
         if isinstance(status_value, Mapping):

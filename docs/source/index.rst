@@ -11,6 +11,7 @@ aiopnsense
    requirements
    quickstart
    authentication
+   access
    api/index
    examples
    scripts
