@@ -20,7 +20,7 @@ A configuration 404 still supplies an empty inventory. Strict mode still propaga
 
 - The VIP inventory comes from `get_vip_status` at both levels. That endpoint lists every configured CARP VIP, including disabled ones, so a Status Access result is not missing VIPs.
 - `interfaces/vip_settings/get` determines access. A 403, including a cached 403, means Status Access, and the result omits the settings enrichment of each VIP: fields the status rows lack, such as `descr` and `subnet_bits`. Data or a 404 means Configuration Access. A transient settings failure leaves Configuration Access with status-only VIP data, because a failure alone cannot establish Status Access.
-- A failed `get_vip_status` read returns `None` with no level, instead of an empty snapshot that a caller could take for "no VIPs". Strict mode raises the status error first, then the settings error.
+- A failed `get_vip_status` read, or a reply without a `rows` list, returns `None` with no level, instead of an empty snapshot that a caller could take for "no VIPs". Strict mode raises the status error first, then the settings error.
 
 ## Unknown inventories
 
@@ -36,7 +36,7 @@ With `throw_errors=False`:
 
 Strict mode keeps each getter's existing exceptions and their order.
 
-Getters that follow this rule: `get_services`, `get_unbound_blocklist`, `get_interfaces`, `get_gateways`, the `filesystems` and `temps` values of `get_telemetry`, `get_smart`, `get_smart_info`, `get_nut_ups_status`, `get_speedtest`, `get_vnstat` and the rule groups of `get_firewall`. Other inventory getters adopt it when they are next changed.
+Getters that follow this rule: `get_services`, `get_unbound_blocklist`, `get_interfaces`, `get_gateways`, the `filesystems` and `temps` values of `get_telemetry`, `get_smart`, `get_smart_info`, `get_nut_ups_status`, `get_speedtest`, `get_vnstat`, `get_carp` and the rule groups of `get_firewall`. Other inventory getters adopt it when they are next changed.
 
 ## Considered Options
 

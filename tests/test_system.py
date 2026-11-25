@@ -583,9 +583,6 @@ async def test_get_carp_handles_invalid_payloads_and_default_status(
     """
     client, router = make_router_client(make_client)
 
-    _serve_carp(router, {"rows": "bad"}, {"rows": "bad"})
-    assert (await client.get_carp()).get("interfaces", []) == []
-
     _serve_carp(
         router,
         {
@@ -775,7 +772,6 @@ async def test_get_carp_returns_no_match_for_ambiguous_partial_key_collisions(
             },
             "healthy",
         ),
-        ({"rows": "bad", "carp": "bad"}, "unknown"),
         ({"rows": [{"mode": "carp", "status": "MASTER", "interface": "wan"}]}, "unknown"),
         (
             {
@@ -1000,6 +996,30 @@ async def test_get_carp_returns_none_when_vip_status_unavailable(
     """
     client, router = make_router_client(make_client)
     _serve_carp(router, status, {"rows": []})
+
+    assert await client.get_carp() is None
+    assert router.count("GET", "/api/interfaces/vip_settings/get") == 0
+
+
+@pytest.mark.parametrize(
+    "status_body",
+    [
+        pytest.param({"rows": "bad", "carp": "bad"}, id="rows-not-a-list"),
+        pytest.param({"carp": {"allow": "1"}}, id="rows-missing"),
+        pytest.param(["not-a-mapping"], id="body-not-a-mapping"),
+    ],
+)
+async def test_get_carp_returns_none_for_malformed_vip_status(
+    make_client: ClientType, status_body: Any
+) -> None:
+    """Report an unknown VIP inventory, not an empty one, for a wrongly shaped status reply.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        status_body (Any): Malformed body of the VIP status read.
+    """
+    client, router = make_router_client(make_client)
+    _serve_carp(router, status_body, {"rows": []})
 
     assert await client.get_carp() is None
     assert router.count("GET", "/api/interfaces/vip_settings/get") == 0

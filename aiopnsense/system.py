@@ -617,8 +617,10 @@ class SystemMixin(AiopnsenseClientProtocol):
                 ``descr`` and ``subnet_bits`` that the status rows lack). Settings
                 data, a known missing (404) settings endpoint or a transient
                 settings failure reports Configuration Access, the last two with
-                status-only VIP data. With the default ``throw_errors=False``,
-                returns ``None`` when the VIP status endpoint is unavailable. When
+                status-only VIP data. Returns ``None`` in either error mode when
+                the VIP status ``rows`` are missing or malformed, because the VIP
+                inventory is then unknown. With the default ``throw_errors=False``,
+                also returns ``None`` when the VIP status endpoint is unavailable. When
                 ``self._throw_errors`` is ``True``, a failed status or settings
                 request raises ``OPNsenseError`` instead, status first,
                 specifically ``OPNsensePrivilegeMissing`` for a forbidden (403)
@@ -646,13 +648,18 @@ class SystemMixin(AiopnsenseClientProtocol):
             tuple[dict[str, Any], list[dict[str, Any]], Access] | None: Raw VIP
                 status response, merged/normalized CARP VIP rows derived from status
                 + settings endpoints, and the detected access level. ``None`` when
-                the VIP status endpoint is unavailable.
+                the VIP status endpoint is unavailable or its ``rows`` are missing
+                or malformed.
         """
         vip_status_outcome = await self._fetch_endpoint_outcome(CARP_VIP_STATUS_ENDPOINT)
         if not vip_status_outcome.is_data:
             _LOGGER.debug("CARP VIP status endpoint unavailable")
             return None
         vip_status = vip_status_outcome.mapping()
+        vip_status_rows = vip_status.get("rows")
+        if not isinstance(vip_status_rows, list):
+            _LOGGER.debug("CARP VIP status unavailable (missing or malformed rows)")
+            return None
         vip_settings_outcome = await self._fetch_endpoint_outcome(VIP_SETTINGS_ENDPOINT)
         # Only a definitive denial establishes Status Access; a 404 or transient failure does not.
         access = Access.STATUS if vip_settings_outcome.http_status == 403 else Access.CONFIGURATION
@@ -663,10 +670,9 @@ class SystemMixin(AiopnsenseClientProtocol):
             )
         vip_settings = vip_settings_outcome.mapping()
 
-        vip_status_rows = vip_status.get("rows")
         vip_settings_rows = vip_settings.get("rows")
         merged_vips = self._merge_carp_vip_rows(
-            vip_status_rows if isinstance(vip_status_rows, list) else [],
+            vip_status_rows,
             vip_settings_rows if isinstance(vip_settings_rows, list) else [],
         )
         return vip_status, merged_vips, access
