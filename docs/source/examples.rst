@@ -120,7 +120,10 @@ Check firmware or control a service
                services = await client.get_services()
 
                print(f"Current firmware: {firmware.get('product', {}).get('product_version')}")
-               print(f"Available services: {[service.get('name') for service in services[:5]]}")
+               if services is None:
+                   print("Service inventory unavailable")
+               else:
+                   print(f"Available services: {[service.get('name') for service in services[:5]]}")
 
                restarted = await client.restart_service_if_running("unbound")
                print(f"Restarted unbound: {restarted}")
