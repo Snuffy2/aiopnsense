@@ -363,15 +363,53 @@ async def test_telemetry_memory_returns_base_payload_when_swap_endpoint_missing(
     assert router.count("GET", SWAP_PATH) == 1
 
 
-async def test_telemetry_temps_empty_returns_empty_mapping(make_client: MakeClientFactory) -> None:
-    """Temperature telemetry is an empty mapping when the Router reports no sensors.
+async def test_telemetry_accepts_empty_inventory_payloads(make_client: MakeClientFactory) -> None:
+    """The Router can positively report that both inventories are empty.
 
     Args:
         make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
     """
-    client, _ = _router(make_client, {TEMPERATURE_PATH: []})
+    client, _ = _router(
+        make_client, {"/api/diagnostics/system/system_disk": {"devices": []}, TEMPERATURE_PATH: []}
+    )
 
-    assert (await client.get_telemetry())["temps"] == {}
+    telemetry = await client.get_telemetry()
+    assert telemetry["filesystems"] == []
+    assert telemetry["temps"] == {}
+
+
+@pytest.mark.parametrize(
+    ("path", "section", "reply", "strict_result"),
+    [
+        ("/api/diagnostics/system/system_disk", "filesystems", [], []),
+        ("/api/diagnostics/system/system_disk", "filesystems", {}, []),
+        ("/api/diagnostics/system/system_disk", "filesystems", {"devices": {}}, {}),
+        ("/api/diagnostics/system/system_temperature", "temps", {"status": "error"}, {}),
+    ],
+    ids=["disk-backend-failure", "missing-devices", "non-list-devices", "temperature-object"],
+)
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["suppress", "strict"])
+async def test_telemetry_inventory_with_wrong_body_shape(
+    make_client: MakeClientFactory,
+    path: str,
+    section: str,
+    reply: list | dict,
+    strict_result: list | dict,
+    throw_errors: bool,
+) -> None:
+    """Unreadable inventory bodies yield None in suppressing mode.
+
+    Args:
+        make_client (MakeClientFactory): Factory for a client using a mocked HTTP session.
+        path (str): Endpoint returning a wrongly shaped body.
+        section (str): Telemetry key for that inventory.
+        reply (list | dict): Decoded body returned by the Router.
+        strict_result (list | dict): Existing inventory value in strict mode.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+    """
+    client, _ = _router(make_client, {path: reply}, throw_errors=throw_errors)
+
+    assert (await client.get_telemetry())[section] == (strict_result if throw_errors else None)
 
 
 @pytest.mark.parametrize(
