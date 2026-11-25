@@ -29,7 +29,6 @@ The client currently includes helpers for:
 - IPsec phase 1 (IKE) connection status plus connection toggling, and phase 2 (child SA) status
 - vnStat metrics, captive portal vouchers, and speed test data
 
-Inventory getters return `None` when the inventory is unknown, for example after a denied or failed read, and an empty value only when the Router has nothing to report. VPN, DHCP lease and CARP results also report whether the API user has Status Access or Configuration Access. See [Access Levels and Unknown Inventories](https://aiopnsense.readthedocs.io/en/stable/access.html).
 
 ## Requirements
 
