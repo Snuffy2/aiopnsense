@@ -3,11 +3,11 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
-import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import make_mock_session_client, make_router_client
+from aiopnsense.exceptions import OPNsenseError, OPNsensePrivilegeMissing, OPNsenseTimeoutError
+from tests.conftest import MalformedJSONResponse, make_mock_session_client, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -124,15 +124,11 @@ async def test_get_vnstat_metrics_unsupported_period_or_endpoint_missing(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("hourly_unavailable", [False, True])
-async def test_get_vnstat_summary_from_hourly_daily_monthly(
-    make_client: ClientType, hourly_unavailable: bool
-) -> None:
-    """Daily and monthly summaries survive a transient hourly read failure.
+async def test_get_vnstat_summary_from_hourly_daily_monthly(make_client: ClientType) -> None:
+    """Combine all three periods and preserve traffic totals for each interface.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
-        hourly_unavailable (bool): Whether the hourly request fails transiently.
     """
     try:
         # Keep payload dates aligned with mocked OPNsense system time to avoid
@@ -193,11 +189,7 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(
         client, router = make_router_client(
             make_client,
             routes={
-                ("GET", VNSTAT_HOURLY_PATH): (
-                    aiohttp.ClientConnectionError("Hourly read failed")
-                    if hourly_unavailable
-                    else hourly_payload
-                ),
+                ("GET", VNSTAT_HOURLY_PATH): hourly_payload,
                 ("GET", VNSTAT_DAILY_PATH): daily_payload,
                 ("GET", VNSTAT_MONTHLY_PATH): monthly_payload,
                 ("GET", SYSTEM_TIME_PATH): {"datetime": "2000-01-15 12:00:00 EST"},
@@ -214,9 +206,7 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(
         assert igc0_metrics["vnstat_this_month"]["total_bytes"] == 8 * gib
         assert igc0_metrics["vnstat_yesterday"]["total_bytes"] == 2 * gib
         assert igc0_metrics["vnstat_last_month"]["total_bytes"] == 6 * gib
-        assert igc0_metrics["vnstat_last_hour"]["total_bytes"] == (
-            None if hourly_unavailable else 3 * gib
-        )
+        assert igc0_metrics["vnstat_last_hour"]["total_bytes"] == 3 * gib
 
         igc1_metrics = vnstat["interfaces"]["igc1"]["metrics"]
         assert igc1_metrics["vnstat_today"]["total_bytes"] == int(1.5 * gib)
@@ -225,9 +215,7 @@ async def test_get_vnstat_summary_from_hourly_daily_monthly(
         assert igc1_metrics["vnstat_this_month"]["total_bytes"] == 3 * gib
         assert igc1_metrics["vnstat_yesterday"]["total_bytes"] == 1 * gib
         assert igc1_metrics["vnstat_last_month"]["total_bytes"] == 2 * gib
-        assert igc1_metrics["vnstat_last_hour"]["total_bytes"] == (
-            None if hourly_unavailable else int(1.5 * gib)
-        )
+        assert igc1_metrics["vnstat_last_hour"]["total_bytes"] == int(1.5 * gib)
         assert router.count("GET", VNSTAT_DAILY_PATH) == 1
         assert router.count("GET", VNSTAT_MONTHLY_PATH) == 1
     finally:
@@ -254,20 +242,108 @@ async def test_get_vnstat_uses_systemtime_endpoint_path(make_client: ClientType)
     assert router.count("GET", SYSTEM_TIME_PATH) == 1
 
 
-@pytest.mark.asyncio
-async def test_get_vnstat_skips_calls_when_endpoint_missing(make_client: ClientType) -> None:
-    """get_vnstat should return empty payload and skip API calls when endpoint is absent.
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_vnstat_skips_calls_when_endpoint_missing(
+    make_client: ClientType, throw_errors: bool
+) -> None:
+    """An hourly 404 supplies an empty inventory in either error mode.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Whether the client propagates errors.
     """
-    client, router = make_router_client(make_client)
+    client, router = make_router_client(
+        make_client, routes={("GET", VNSTAT_HOURLY_PATH): 404}, throw_errors=throw_errors
+    )
 
     vnstat = await client.get_vnstat()
 
     assert vnstat == {"interfaces": {}, "interface_count": 0}
     assert router.count("GET", VNSTAT_HOURLY_PATH) == 1
     assert router.count() == 1
+
+
+async def test_get_vnstat_denied_hourly_inventory_stays_unknown(make_client: ClientType) -> None:
+    """An hourly denial leaves the inventory unknown on the first and cached reads.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, router = make_router_client(make_client, routes={("GET", VNSTAT_HOURLY_PATH): 403})
+
+    first = await client.get_vnstat()
+    second = await client.get_vnstat()
+
+    assert first is None
+    assert second is None
+    assert router.paths("GET") == [VNSTAT_HOURLY_PATH]
+
+
+@pytest.mark.parametrize(
+    "reply, error",
+    [
+        (403, OPNsensePrivilegeMissing),
+        (TimeoutError("Hourly read timed out"), OPNsenseTimeoutError),
+        (MalformedJSONResponse(), OPNsenseError),
+    ],
+)
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_vnstat_hourly_failure_stops_further_reads(
+    make_client: ClientType,
+    reply: int | TimeoutError | MalformedJSONResponse,
+    error: type[OPNsenseError],
+    throw_errors: bool,
+) -> None:
+    """Surface the hourly failure before reading time or another period.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        reply (int | TimeoutError | MalformedJSONResponse): Failed hourly read.
+        error (type[OPNsenseError]): Public exception expected in strict mode.
+        throw_errors (bool): Whether the client propagates errors.
+    """
+    client, router = make_router_client(
+        make_client, routes={("GET", VNSTAT_HOURLY_PATH): reply}, throw_errors=throw_errors
+    )
+
+    if throw_errors:
+        with pytest.raises(error) as exc_info:
+            await client.get_vnstat()
+        assert type(exc_info.value) is error
+    else:
+        assert await client.get_vnstat() is None
+
+    assert router.paths("GET") == [VNSTAT_HOURLY_PATH]
+
+
+@pytest.mark.parametrize("status", [403, 404, 503])
+async def test_get_vnstat_secondary_periods_contribute_to_inventory(
+    make_client: ClientType, status: int
+) -> None:
+    """Keep secondary-only interfaces and suppress a summary with an unknown period.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        status (int): HTTP status of the monthly endpoint.
+    """
+    client, _router = make_router_client(
+        make_client,
+        routes={
+            ("GET", VNSTAT_HOURLY_PATH): {"response": "igc0 / hourly"},
+            ("GET", SYSTEM_TIME_PATH): {"datetime": "2000-01-15 12:00:00 EST"},
+            ("GET", VNSTAT_DAILY_PATH): {"response": "igc1 / daily"},
+            ("GET", VNSTAT_MONTHLY_PATH): status,
+        },
+    )
+
+    result = await client.get_vnstat()
+
+    if status == 404:
+        assert result is not None
+        assert result["interface_count"] == 2
+        assert set(result["interfaces"]) == {"igc0", "igc1"}
+    else:
+        assert result is None
 
 
 @pytest.mark.asyncio

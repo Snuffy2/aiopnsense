@@ -7,7 +7,8 @@ import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import make_mock_session_client, make_router_client
+from aiopnsense.exceptions import OPNsenseError, OPNsensePrivilegeMissing, OPNsenseTimeoutError
+from tests.conftest import MalformedJSONResponse, make_mock_session_client, make_router_client
 
 SYSTEM_TIME_PATH = "/api/diagnostics/system/system_time"
 
@@ -48,17 +49,90 @@ def _showlog_row(
     ]
 
 
-async def test_get_speedtest_skips_calls_when_endpoint_missing(make_client: ClientType) -> None:
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_speedtest_skips_calls_when_endpoint_missing(
+    make_client: ClientType, throw_errors: bool
+) -> None:
     """A 404 show-log reports Speedtest unavailable and reads nothing more.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Whether the client raises request errors.
     """
-    client, router = make_router_client(make_client, {("GET", SHOWLOG_PATH): 404})
+    client, router = make_router_client(
+        make_client, {("GET", SHOWLOG_PATH): 404}, throw_errors=throw_errors
+    )
 
     assert await client.get_speedtest() == {"available": False}
 
     assert router.calls() == [("GET", SHOWLOG_PATH)]
+
+
+@pytest.mark.parametrize("throw_errors", [False, True])
+@pytest.mark.parametrize(
+    ("response", "error"),
+    [
+        pytest.param(403, OPNsensePrivilegeMissing, id="forbidden"),
+        pytest.param(TimeoutError(), OPNsenseTimeoutError, id="timeout"),
+        pytest.param(MalformedJSONResponse(), OPNsenseError, id="invalid-json"),
+    ],
+)
+async def test_get_speedtest_handles_failed_showlog(
+    make_client: ClientType, throw_errors: bool, response: object, error: type[OPNsenseError]
+) -> None:
+    """A failed primary read stops polling and follows the client's error mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Whether the client raises request errors.
+        response (object): Simulated primary response or transport failure.
+        error (type[OPNsenseError]): Expected exception in strict mode.
+    """
+    client, router = make_router_client(
+        make_client, {("GET", SHOWLOG_PATH): response}, throw_errors=throw_errors
+    )
+
+    if throw_errors:
+        with pytest.raises(error):
+            await client.get_speedtest()
+    else:
+        assert await client.get_speedtest() is None
+        if response == 403:
+            assert await client.get_speedtest() is None
+
+    assert router.calls() == [("GET", SHOWLOG_PATH)]
+
+
+@pytest.mark.parametrize("throw_errors", [False, True])
+async def test_get_speedtest_handles_undecodable_showstat(
+    make_client: ClientType, throw_errors: bool
+) -> None:
+    """An undecodable statistics response preserves the latest results in non-strict mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Whether the client raises request errors.
+    """
+    client, router = make_router_client(
+        make_client,
+        {
+            ("GET", SHOWLOG_PATH): _showlog_row(),
+            ("GET", SHOWSTAT_PATH): MalformedJSONResponse(),
+            ("GET", SYSTEM_TIME_PATH): MINUS_FOUR_TIME,
+        },
+        throw_errors=throw_errors,
+    )
+
+    if throw_errors:
+        with pytest.raises(OPNsenseError):
+            await client.get_speedtest()
+        assert router.calls() == [("GET", SHOWLOG_PATH), ("GET", SHOWSTAT_PATH)]
+    else:
+        result = await client.get_speedtest()
+        assert result is not None
+        assert result["available"] is True
+        assert result["last"]["download"]["value"] == 1.0
+        assert result["average"]["download"]["value"] is None
 
 
 async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client: ClientType) -> None:
@@ -86,6 +160,7 @@ async def test_get_speedtest_normalizes_latest_and_stat_payloads(make_client: Cl
 
     result = await client.get_speedtest()
 
+    assert result is not None
     assert result["available"] is True
     assert result["last"]["download"]["value"] == 836.05
     assert result["last"]["download"]["server_id"] == "72800"
@@ -127,6 +202,7 @@ async def test_get_speedtest_reads_optional_showstat_payload(
 
     result = await client.get_speedtest()
 
+    assert result is not None
     assert result["available"] is True
     assert router.count("GET", SHOWLOG_PATH) == 1
     assert router.count("GET", SHOWSTAT_PATH) == 1
@@ -154,6 +230,7 @@ async def test_get_speedtest_preserves_timezone_aware_date(make_client: ClientTy
 
     result = await client.get_speedtest()
 
+    assert result is not None
     assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
     assert router.count("GET", SYSTEM_TIME_PATH) == 1
 
@@ -175,6 +252,7 @@ async def test_get_speedtest_drops_malformed_date(make_client: ClientType) -> No
 
     result = await client.get_speedtest()
 
+    assert result is not None
     assert result["last"]["download"]["date"] is None
     assert router.count("GET", SYSTEM_TIME_PATH) == 1
 
@@ -201,6 +279,7 @@ async def test_get_speedtest_preserves_aware_date_and_drops_naive_periods_when_t
 
     result = await client.get_speedtest()
 
+    assert result is not None
     assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
     assert result["average"]["download"]["oldest"] is None
     assert result["average"]["download"]["youngest"] is None
@@ -242,6 +321,7 @@ async def test_get_speedtest_normalizes_malformed_payloads(make_client: ClientTy
 
     result = await client.get_speedtest()
 
+    assert result is not None
     assert result["available"] is True
     assert result["last"]["download"]["server_id"] is None
     assert result["last"]["download"]["server"] == "Regional POP - NYC"
@@ -447,6 +527,7 @@ async def test_get_speedtest_survives_failed_system_time_lookup(
 
     result = await client.get_speedtest()
 
+    assert result is not None
     assert result["last"]["download"]["date"] == "2026-03-14T03:09:45+01:30"
     assert result["average"]["download"]["oldest"] is None
     assert result["average"]["download"]["youngest"] is None
