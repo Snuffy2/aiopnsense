@@ -14,16 +14,35 @@ The original VPN Status Access spec preserved the old behavior for all transient
 
 A configuration 404 still supplies an empty inventory. Strict mode still propagates request errors in the original order.
 
+## Unknown inventories
+
+The 404-versus-failure rule applies to every getter whose result is an inventory a caller reconciles, whether or not the category supports Status Access. hass-opnsense removes entities missing from an inventory it believes complete, so an empty result must mean the Router has nothing to report, never that the read failed.
+
+With `throw_errors=False`:
+
+- A 404 on the endpoint that supplies an inventory means the feature is missing. The getter returns an empty inventory, or the feature's existing missing marker, such as `{"available": False}` from `get_speedtest`.
+- A 403 on that endpoint, including a cached 403, a transient failure, and an undecodable or wrongly shaped body all make the inventory unknown. The getter returns `None`. Callers treat `None` as unknown and defer reconciliation.
+- When several endpoints each contribute items to one inventory, as the vnStat periods do, each must return data or a 404. Otherwise the inventory is `None`.
+- When a getter returns independent inventories in one result, the rule applies to each one. `get_telemetry` sets only the affected `filesystems` or `temps` to `None` and leaves the other values unchanged. `get_firewall` does the same for each rule group: `rules` and each NAT type under `nat` (`d_nat`, `one_to_one`, `source_nat`, `npt`) come from their own configuration endpoint, so one group can be `None` while the others keep their rules. OPNsense grants these as separate privileges (Firewall: Rules, and Firewall: NAT: Destination NAT, 1:1, Source NAT and NPTv6 in its ACL definitions), so an API user can be denied one group and not the others.
+- A read that only adds detail to items already listed does not make the inventory unknown. Its fields stay unset, as with Speedtest averages from `showstat`, or the failed item's detail is `None`, as with one device's `get_smart_info` result under its key in `smart_info`.
+
+Strict mode keeps each getter's existing exceptions and their order.
+
+Getters that follow this rule: `get_services`, `get_unbound_blocklist`, `get_interfaces`, `get_gateways`, the `filesystems` and `temps` values of `get_telemetry`, `get_smart`, `get_smart_info`, `get_nut_ups_status`, `get_speedtest`, `get_vnstat` and the rule groups of `get_firewall`. Other inventory getters adopt it when they are next changed.
+
 ## Considered Options
 
 - **A top-level `access` key in the result mapping.** Rejected: additive for mapping results, but a category whose getter returns a list could only adopt it by wrapping its result, a breaking change for each such category.
 - **A separate client call reporting the last access level.** Rejected: the level is not tied to the data it describes, so an interleaved call to the same getter can make them disagree, and every caller must remember to ask immediately after each read.
-- **Returning `None` for a forbidden configuration read.** Rejected: safe against deletion, but it discards the status data a Status Access user is entitled to and leaves a downstream inventory permanently incomplete.
+- **Returning `None` for a forbidden configuration read.** Rejected where a status endpoint can still supply data: safe against deletion, but it discards the status data a Status Access user is entitled to and leaves a downstream inventory permanently incomplete. When no status endpoint exists, nothing is discarded, and `None` is the answer (see Unknown inventories).
 - **A user-chosen access level in the downstream sync options.** Rejected: it can disagree with the Router's actual permissions, and choosing a level the Router does not grant has no sensible meaning.
 
 ## Consequences
 
 - Results still compare equal to, and pass `isinstance` checks as, plain `dict` and `list` values, so existing callers and tests are unaffected. Declared return types stay unchanged.
 - The level survives `copy.deepcopy` and pickling, but a plain copy (`dict(x)`, `{**x}`, `list(x)`, JSON) silently drops it. `result_access()` then returns `None`, meaning "not reported", which callers must treat as the behavior from before access reporting existed.
+- Getters that follow the unknown-inventory rule can now return `None` where they returned an empty value, so every caller must handle `None`. hass-opnsense already does. Home Assistant Core's OPNsense integration calls `get_interfaces()` during entry setup and config flow and iterates the result, so it must handle `None` before it raises its aiopnsense version requirement.
+- While a read keeps failing, for example because the API user is permanently denied a category that is still enabled in hass-opnsense, setup never sees a complete inventory, so hass-opnsense's Device ID repair stays pending. Completing it would need hass-opnsense to reconcile the inventories it can read and keep the rest.
+- A Router that answers a failed read with an empty HTTP 200 body is still indistinguishable from an empty inventory.
 - Under Status Access, items the status does not show, such as disabled VPN Instances, are absent, and nothing can be Toggled.
 - The WireGuard status endpoint exposes no UUIDs, so every WireGuard Server and WireGuard Client entry carries a `key_hash` derived from its public key, at both access levels. Under Status Access, entries are keyed by `key_hash` with no UUID; under Configuration Access, they stay keyed by UUID. Callers that need one identity across both levels use `key_hash`, so its derivation is part of the public contract: changing it changes every identity built from it.

@@ -5,7 +5,8 @@ from collections.abc import Callable
 import pytest
 
 from aiopnsense import OPNsenseClient
-from tests.conftest import make_router_client
+from aiopnsense.exceptions import OPNsenseError, OPNsensePrivilegeMissing, OPNsenseTimeoutError
+from tests.conftest import MalformedJSONResponse, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -41,6 +42,7 @@ async def test_service_management_and_get_services(make_client: ClientType) -> N
     )
 
     services = await client.get_services()
+    assert services is not None
     assert len(services) == 1
     assert services[0]["status"] is True
     assert await client.get_service_is_running("svc1") is True
@@ -129,6 +131,75 @@ async def test_restart_service_if_running_matches_composite_service_identifier(
     assert router.count("POST") == 1
 
 
+async def test_get_services_forbidden_result_stays_unknown_when_cached(
+    make_client: ClientType,
+) -> None:
+    """A cached 403 still reports an unknown service inventory.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+    """
+    client, router = make_router_client(make_client, {("GET", SERVICE_SEARCH_PATH): 403})
+
+    assert await client.get_services() is None
+    assert await client.get_services() is None
+    assert router.count("GET", SERVICE_SEARCH_PATH) == 1
+
+
+@pytest.mark.parametrize(
+    ("reply", "error"),
+    [
+        (403, OPNsensePrivilegeMissing),
+        (TimeoutError("timed out"), OPNsenseTimeoutError),
+        (MalformedJSONResponse(), OPNsenseError),
+    ],
+    ids=["forbidden", "timeout", "invalid-json"],
+)
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["default", "strict"])
+async def test_get_services_failed_read(
+    make_client: ClientType,
+    reply: int | TimeoutError | MalformedJSONResponse,
+    error: type[OPNsenseError],
+    *,
+    throw_errors: bool,
+) -> None:
+    """Service read failures follow the configured error policy.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+        reply (int | TimeoutError | MalformedJSONResponse): Service search failure.
+        error (type[OPNsenseError]): Public error expected in strict mode.
+        throw_errors (bool): Whether read failures raise.
+    """
+    client, _ = make_router_client(
+        make_client, {("GET", SERVICE_SEARCH_PATH): reply}, throw_errors=throw_errors
+    )
+
+    if throw_errors:
+        with pytest.raises(error) as exc:
+            await client.get_services()
+        assert type(exc.value) is error
+    else:
+        assert await client.get_services() is None
+
+
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["default", "strict"])
+async def test_get_services_missing_endpoint_is_empty(
+    make_client: ClientType, *, throw_errors: bool
+) -> None:
+    """A missing service endpoint reports an empty inventory in either mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+        throw_errors (bool): Whether read failures raise.
+    """
+    client, _ = make_router_client(
+        make_client, {("GET", SERVICE_SEARCH_PATH): 404}, throw_errors=throw_errors
+    )
+
+    assert await client.get_services() == []
+
+
 @pytest.mark.asyncio
 async def test_service_unknown_state_fails_closed(make_client: ClientType) -> None:
     """Unavailable service-search endpoint should produce fail-closed restart behavior.
@@ -175,6 +246,7 @@ async def test_get_services_handles_non_list_rows_and_running_coercion(
         ]
     }
     services = await client.get_services()
+    assert services is not None
     assert len(services) == 2
     assert services[0]["status"] is False
     assert services[1]["status"] is True
