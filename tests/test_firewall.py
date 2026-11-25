@@ -4,10 +4,11 @@ from collections.abc import Callable
 import logging
 from typing import Any
 
+import aiohttp
 import pytest
 
 from aiopnsense import OPNsenseClient, OPNsensePrivilegeMissing
-from tests.conftest import make_router_client
+from tests.conftest import MalformedJSONResponse, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -329,6 +330,71 @@ async def test_get_firewall_reports_forbidden_group_as_unknown(
     assert await client.get_firewall() == expected
     assert await client.get_firewall() == expected
     assert router.count("GET", denied_path) == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "group", "reply"),
+    [
+        pytest.param("/api/firewall/filter/download_rules", ("rules",), 500, id="rules-500"),
+        pytest.param(
+            "/api/firewall/filter/download_rules",
+            ("rules",),
+            aiohttp.ClientConnectionError("down"),
+            id="rules-connection",
+        ),
+        pytest.param(
+            "/api/firewall/filter/download_rules",
+            ("rules",),
+            "enabled;description\n1;no uuid column\n",
+            id="rules-no-uuid-column",
+        ),
+        pytest.param("/api/firewall/npt/search_rule", ("nat", "npt"), 500, id="npt-500"),
+        pytest.param(
+            "/api/firewall/npt/search_rule",
+            ("nat", "npt"),
+            MalformedJSONResponse(),
+            id="npt-undecodable",
+        ),
+        pytest.param(
+            "/api/firewall/d_nat/search_rule", ("nat", "d_nat"), {"rows": None}, id="d_nat-rows"
+        ),
+        pytest.param(
+            "/api/firewall/source_nat/search_rule",
+            ("nat", "source_nat"),
+            ["not", "a", "mapping"],
+            id="source_nat-list-body",
+        ),
+    ],
+)
+async def test_get_firewall_reports_failed_or_malformed_group_as_unknown(
+    make_client: ClientType, path: str, group: tuple[str, ...], reply: object
+) -> None:
+    """A group whose read fails or returns a malformed body is ``None``; others are kept.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        path (str): Endpoint whose reply fails or is malformed.
+        group (tuple[str, ...]): Keys of that group in the result.
+        reply (object): The Router's reply for ``path``.
+    """
+    client, _router = make_router_client(
+        make_client,
+        {
+            ("GET", "/api/firewall/filter/download_rules"): "@uuid;enabled\nrule1;1\n",
+            ("GET", "/api/firewall/one_to_one/search_rule"): {"rows": [{"uuid": "oto1"}]},
+            ("GET", path): reply,
+        },
+    )
+
+    firewall = await client.get_firewall()
+
+    value: Any = firewall
+    for key in group:
+        value = value[key]
+    assert value is None
+    if group != ("rules",):
+        assert firewall["rules"] == {"rule1": {"uuid": "rule1", "enabled": "1"}}
+    assert firewall["nat"]["one_to_one"] == {"oto1": {"uuid": "oto1"}}
 
 
 async def test_get_firewall_raises_forbidden_group_in_strict_mode(
