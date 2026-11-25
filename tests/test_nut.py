@@ -188,18 +188,25 @@ ups.load: 12"""
 
 
 @pytest.mark.parametrize(
-    "response_payload, expected, expect_falsey, expect_no_status",
+    "response_payload, expected, throw_errors",
     [
-        (None, {}, True, False),
-        ({}, {}, True, False),
-        ({"response": None}, {"response": None}, False, False),
-        ({"response": 123}, {"response": 123}, False, False),
-        ({"status": "not-a-mapping"}, {"status": "not-a-mapping"}, False, False),
+        (None, None, False),
+        ([], None, False),
+        ([], {}, True),
+        ({}, {}, False),
+        ({"response": None}, {"response": None}, False),
+        ({"response": 123}, {"response": 123}, False),
+        ({"status": "not-a-mapping"}, {"status": "not-a-mapping"}, False),
+        ({"response": 123, "status": {}}, {"response": 123, "status": {}}, False),
+        (
+            {"response": "invalid-status-line-without-colon"},
+            {"response": "invalid-status-line-without-colon"},
+            False,
+        ),
         (
             {"response": "Error: UPS unavailable", "request_id": "abc"},
             {"response": "Error: UPS unavailable", "request_id": "abc"},
             False,
-            True,
         ),
     ],
 )
@@ -207,31 +214,27 @@ ups.load: 12"""
 async def test_get_nut_ups_status_handles_invalid_payloads(
     make_client: ClientType,
     response_payload: Any,
-    expected: dict[str, Any],
-    expect_falsey: bool,
-    expect_no_status: bool,
+    expected: dict[str, Any] | None,
+    throw_errors: bool,
 ) -> None:
     """NUT UPS status should fail gracefully for malformed payload shapes.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         response_payload (Any): Invalid payloads to exercise normalization safety.
-        expected (dict[str, Any]): Parsed result expected for the invalid payload.
-        expect_falsey (bool): Whether the parsed result should be falsey.
-        expect_no_status (bool): Whether the parsed result must omit UPS status.
+        expected (dict[str, Any] | None): Expected result for the payload.
+        throw_errors (bool): Whether to use strict mode.
 
     Returns:
         None: This test validates defensive handling of malformed responses.
     """
-    client, router = make_router_client(make_client, routes={("GET", NUT_PATH): response_payload})
+    client, router = make_router_client(
+        make_client, routes={("GET", NUT_PATH): response_payload}, throw_errors=throw_errors
+    )
 
     nut_status = await client.get_nut_ups_status()
 
-    if expect_falsey:
-        assert not nut_status
     assert nut_status == expected
-    if expect_no_status:
-        assert "status" not in nut_status
     assert router.count("GET", NUT_PATH) == 1
 
 
@@ -251,36 +254,3 @@ async def test_get_nut_ups_status_returns_empty_dict_when_endpoint_unavailable(
 
     assert await client.get_nut_ups_status() == {}
     assert router.count("GET", NUT_PATH) == 1
-
-
-@pytest.mark.parametrize(
-    "payload, expected",
-    [
-        (
-            "not-a-mapping",
-            {},
-        ),
-        (
-            {"response": 123, "status": {}},
-            {"response": 123, "status": {}},
-        ),
-        (
-            {"response": "invalid-status-line-without-colon"},
-            {"response": "invalid-status-line-without-colon"},
-        ),
-    ],
-)
-def test_normalize_nut_ups_status_payload_fallback_branches(
-    payload: Any,
-    expected: dict[str, Any],
-) -> None:
-    """Cover fallback return values for NUT payload normalization.
-
-    Args:
-        payload (Any): Input payload passed to the normalization helper.
-        expected (dict[str, Any]): Expected normalized payload for the branch.
-
-    Returns:
-        None: This test validates all fallback branches via parametrized cases.
-    """
-    assert OPNsenseClient._normalize_nut_ups_status_payload(payload) == expected
