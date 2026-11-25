@@ -8,7 +8,7 @@ from ._error_policy import _log_boolean_errors, _log_errors, _throws_errors
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import ToggleSpec, ToggleStep, ToggleTarget
 from .const import EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY
-from .helpers import _LOGGER, api_value_matches
+from .helpers import _LOGGER, api_value_matches, dict_get
 
 UNBOUND_SETTINGS_GET_ENDPOINT = "/api/unbound/settings/get"
 UNBOUND_SETTINGS_SET_ENDPOINT = "/api/unbound/settings/set"
@@ -117,9 +117,11 @@ class UnboundMixin(AiopnsenseClientProtocol):
             dict[str, Any] | None: A UUID-keyed mapping of extended DNSBL rows,
                 or the regular DNSBL settings under ``legacy`` on older firmware.
                 A missing endpoint (404) returns an empty mapping. With errors
-                disabled, a denied or failed read, including undecodable JSON,
-                returns ``None``. With errors enabled, the mapped ``OPNsenseError``
-                propagates for those failures and for a legacy endpoint's 404.
+                disabled, a denied or failed read, undecodable JSON, or a wrongly
+                shaped inventory returns ``None``. With errors enabled, decoded
+                payloads use the existing normalization rules, and the mapped
+                ``OPNsenseError`` propagates for request or decoding failures,
+                including a legacy endpoint's 404.
         """
         extended_supported = await self._firmware_capability_enabled(
             EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY
@@ -145,17 +147,25 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         dnsbl_raw = dnsbl_outcome.mapping()
         if not extended_supported:
+            enabled = dict_get(dnsbl_raw, "unbound.dnsbl.enabled")
+            if not (api_value_matches(enabled, "0") or api_value_matches(enabled, "1")):
+                _LOGGER.debug("[get_unbound_blocklist] Invalid legacy DNSBL settings")
+                return None
             return {"legacy": self._normalize_unbound_blocklist_legacy(dnsbl_raw)}
 
-        dnsbl_rows = dnsbl_raw.get("rows", [])
-        if not isinstance(dnsbl_rows, list) or not len(dnsbl_rows) > 0:
-            return {}
+        throw_errors = _throws_errors(self)
+        dnsbl_rows = dnsbl_raw.get("rows")
+        if not isinstance(dnsbl_rows, list):
+            _LOGGER.debug("[get_unbound_blocklist] Invalid DNSBL row list")
+            return {} if throw_errors else None
         dnsbl_full: dict[str, Any] = {}
         for dnsbl in dnsbl_rows:
-            if not isinstance(dnsbl, MutableMapping):
-                continue
-            if dnsbl.get("uuid"):
-                dnsbl_full.update({dnsbl["uuid"]: dnsbl})
+            uuid = dnsbl.get("uuid") if isinstance(dnsbl, MutableMapping) else None
+            if not throw_errors and (not isinstance(uuid, str) or not uuid):
+                _LOGGER.debug("[get_unbound_blocklist] DNSBL row has no valid UUID")
+                return None
+            if uuid:
+                dnsbl_full[uuid] = dnsbl
         _LOGGER.debug("[get_unbound_blocklist] dnsbl_full length: %s", len(dnsbl_full))
         return dnsbl_full
 
