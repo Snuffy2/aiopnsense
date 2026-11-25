@@ -244,18 +244,22 @@ class UnboundMixin(AiopnsenseClientProtocol):
             policy=_optional_text(row.get("policy")),
         )
 
-    @_log_errors
     async def get_unbound_query_stats(self) -> QueryStats | None:
         """Return Unbound Query Stats for the last minute, 24 hours and Retention Window.
 
         Reads ``overview/rolling/1``, ``overview/rolling/24`` and ``overview/totals/10``.
         Only Complete Buckets are counted; the newest, still-filling Bucket is dropped.
 
+        Unlike most reads, a transient failure raises whatever ``throw_errors`` is, so
+        callers can tell a failed read from an absent endpoint.
+
         Returns:
             QueryStats | None: The Query Stats, or None when any of the three endpoints is
-            unavailable (404, or 403 with errors disabled) or, with errors disabled, a
-            response cannot be decoded. With errors enabled, a 403, transient or decoding
-            failure raises the mapped ``OPNsenseError``.
+            absent (404, or 403 with errors disabled).
+
+        Raises:
+            outcome.error: The mapped ``OPNsenseError`` for a transient or decoding
+                failure. With errors enabled, a 403 also raises its mapped error.
         """
         payloads: list[Mapping[str, Any]] = []
         for endpoint in (
@@ -264,8 +268,10 @@ class UnboundMixin(AiopnsenseClientProtocol):
             UNBOUND_OVERVIEW_TOTALS_ENDPOINT,
         ):
             outcome = await self._fetch_endpoint_outcome(endpoint)
+            if outcome.is_transient and outcome.error is not None:
+                raise outcome.error
             if not outcome.is_data:
-                _LOGGER.debug("[get_unbound_query_stats] %s unavailable", endpoint)
+                _LOGGER.debug("[get_unbound_query_stats] %s absent", endpoint)
                 return None
             payloads.append(outcome.mapping())
         hour, day, totals = payloads
@@ -285,7 +291,6 @@ class UnboundMixin(AiopnsenseClientProtocol):
             top_blocked_domains=self._top_domains(totals.get("top_blocked")),
         )
 
-    @_log_errors
     async def get_unbound_queries(
         self,
         action: str | None = None,
@@ -298,6 +303,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
         The Router keeps only its last 1,000 queries. Its search phrase matches any column,
         so ``action`` and ``client`` are applied here as exact, case-insensitive filters.
 
+        Unlike most reads, a transient failure raises whatever ``throw_errors`` is, so
+        callers can tell a failed read from an absent endpoint.
+
         Args:
             action (str | None): Only return queries with this action (``Pass``, ``Block``
                 or ``Drop``).
@@ -306,11 +314,13 @@ class UnboundMixin(AiopnsenseClientProtocol):
             limit (int): Maximum number of entries to return, at most 1,000.
 
         Returns:
-            list[QueryLogEntry] | None: Matching entries, newest first. An empty list when
-            the endpoint is unavailable (404, or 403 with errors disabled) or its payload
-            has no rows. None when, with errors disabled, the response cannot be decoded.
-            With errors enabled, a 403, transient or decoding failure raises the mapped
-            ``OPNsenseError``.
+            list[QueryLogEntry] | None: Matching entries, newest first, empty when nothing
+            matches or the payload has no rows. None when the endpoint is absent (404, or
+            403 with errors disabled).
+
+        Raises:
+            outcome.error: The mapped ``OPNsenseError`` for a transient or decoding
+                failure. With errors enabled, a 403 also raises its mapped error.
         """
         # The Router takes one free-text phrase. Send the most selective one available to
         # shrink the reply; action and client are then matched exactly below.
@@ -324,9 +334,11 @@ class UnboundMixin(AiopnsenseClientProtocol):
         outcome = await self._fetch_post_endpoint_outcome(
             UNBOUND_OVERVIEW_SEARCH_QUERIES_ENDPOINT, payload
         )
+        if outcome.is_transient and outcome.error is not None:
+            raise outcome.error
         if not outcome.is_data:
-            _LOGGER.debug("[get_unbound_queries] Query Log unavailable")
-            return []
+            _LOGGER.debug("[get_unbound_queries] Query Log absent")
+            return None
         rows = outcome.mapping().get("rows")
         if not isinstance(rows, list):
             return []

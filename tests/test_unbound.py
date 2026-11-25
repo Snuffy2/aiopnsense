@@ -12,11 +12,18 @@ import pytest
 from aiopnsense import (
     OPNsenseClient,
     OPNsenseConnectionError,
+    OPNsenseError,
     OPNsenseInvalidURL,
     OPNsensePrivilegeMissing,
     OPNsenseTimeoutError,
 )
-from tests.conftest import FIRMWARE_STATUS_PATH, FakeRouter, HeldResponse, make_router_client
+from tests.conftest import (
+    FIRMWARE_STATUS_PATH,
+    FakeRouter,
+    HeldResponse,
+    MalformedJSONResponse,
+    make_router_client,
+)
 
 ClientType = Callable[..., OPNsenseClient]
 
@@ -1006,18 +1013,17 @@ FILTER_ROWS = [
 ]
 
 DNS_READS = [
-    pytest.param("get_unbound_query_stats", _stats_routes(), ROLLING_1H, None, id="stats-1h"),
-    pytest.param("get_unbound_query_stats", _stats_routes(), ROLLING_24H, None, id="stats-24h"),
-    pytest.param("get_unbound_query_stats", _stats_routes(), TOTALS, None, id="stats-totals"),
+    pytest.param("get_unbound_query_stats", _stats_routes(), ROLLING_1H, id="stats-1h"),
+    pytest.param("get_unbound_query_stats", _stats_routes(), ROLLING_24H, id="stats-24h"),
+    pytest.param("get_unbound_query_stats", _stats_routes(), TOTALS, id="stats-totals"),
     pytest.param(
         "get_unbound_queries",
         {("POST", SEARCH_QUERIES): {"rows": [_query_row()]}},
         SEARCH_QUERIES,
-        [],
         id="queries",
     ),
 ]
-"""Each DNS read: method, healthy routes, the path to fail, and its empty result."""
+"""Each DNS read: method, healthy routes, and the path to fail."""
 
 
 async def test_get_unbound_query_stats_reports_complete_buckets_only(
@@ -1333,7 +1339,7 @@ async def test_get_unbound_queries_is_empty_for_malformed_payload(
     assert await client.get_unbound_queries() == []
 
 
-@pytest.mark.parametrize(("method_name", "routes", "failing", "empty"), DNS_READS)
+@pytest.mark.parametrize(("method_name", "routes", "failing"), DNS_READS)
 @pytest.mark.parametrize(
     ("status", "throw_errors"),
     [
@@ -1342,23 +1348,21 @@ async def test_get_unbound_queries_is_empty_for_malformed_payload(
         pytest.param(403, False, id="403-errors-off"),
     ],
 )
-async def test_dns_reads_are_empty_when_endpoint_is_absent(
+async def test_dns_reads_are_none_when_endpoint_is_absent(
     make_client: ClientType,
     method_name: str,
     routes: dict[tuple[str, str], Any],
     failing: str,
-    empty: object,
     status: int,
     throw_errors: bool,
 ) -> None:
-    """A DNS read gives its empty result on 404 in either mode, or 403 with errors off.
+    """A DNS read returns None on 404 in either mode, or 403 with errors off.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         method_name (str): Public client method under test.
         routes (dict[tuple[str, str], Any]): Healthy Router routes for the read.
         failing (str): Path the Router refuses.
-        empty (object): Empty result the method documents.
         status (int): HTTP status the Router answers that path with.
         throw_errors (bool): Public ``throw_errors`` setting of the client.
     """
@@ -1367,10 +1371,10 @@ async def test_dns_reads_are_empty_when_endpoint_is_absent(
         make_client, {**routes, (method, failing): status}, throw_errors=throw_errors
     )
 
-    assert await getattr(client, method_name)() == empty
+    assert await getattr(client, method_name)() is None
 
 
-@pytest.mark.parametrize(("method_name", "routes", "failing", "empty"), DNS_READS)
+@pytest.mark.parametrize(("method_name", "routes", "failing"), DNS_READS)
 @pytest.mark.parametrize(
     ("make_failure", "expected_error"),
     [
@@ -1386,7 +1390,6 @@ async def test_dns_reads_raise_with_errors_on(
     method_name: str,
     routes: dict[tuple[str, str], Any],
     failing: str,
-    empty: object,
     make_failure: Callable[[], object],
     expected_error: type[Exception],
 ) -> None:
@@ -1397,11 +1400,9 @@ async def test_dns_reads_raise_with_errors_on(
         method_name (str): Public client method under test.
         routes (dict[tuple[str, str], Any]): Healthy Router routes for the read.
         failing (str): Path whose request fails.
-        empty (object): Empty result with errors disabled, unused here.
         make_failure (Callable[[], object]): Factory for the Router's failing reply.
         expected_error (type[Exception]): Public error expected.
     """
-    del empty
     method = "POST" if failing == SEARCH_QUERIES else "GET"
     client, _router = make_router_client(
         make_client, {**routes, (method, failing): make_failure()}, throw_errors=True
@@ -1411,26 +1412,40 @@ async def test_dns_reads_raise_with_errors_on(
         await getattr(client, method_name)()
 
 
-@pytest.mark.parametrize(("method_name", "routes", "failing", "empty"), DNS_READS)
-async def test_dns_reads_are_empty_on_transient_failure_with_errors_off(
+@pytest.mark.parametrize(("method_name", "routes", "failing"), DNS_READS)
+@pytest.mark.parametrize(
+    ("make_failure", "expected_error"),
+    [
+        pytest.param(lambda: 500, OPNsenseError, id="500"),
+        pytest.param(MalformedJSONResponse, OPNsenseError, id="undecodable"),
+        pytest.param(
+            lambda: aiohttp.ClientConnectionError("reset"), OPNsenseConnectionError, id="connection"
+        ),
+        pytest.param(lambda: TimeoutError("slow"), OPNsenseTimeoutError, id="timeout"),
+    ],
+)
+async def test_dns_reads_raise_transient_failure_with_errors_off(
     make_client: ClientType,
     method_name: str,
     routes: dict[tuple[str, str], Any],
     failing: str,
-    empty: object,
+    make_failure: Callable[[], object],
+    expected_error: type[Exception],
 ) -> None:
-    """With errors disabled, a transient failure gives the read's empty result.
+    """With errors disabled, a transient failure still raises, unlike an absent endpoint.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         method_name (str): Public client method under test.
         routes (dict[tuple[str, str], Any]): Healthy Router routes for the read.
         failing (str): Path whose request fails.
-        empty (object): Empty result the method documents.
+        make_failure (Callable[[], object]): Factory for the Router's failing reply.
+        expected_error (type[Exception]): Public error expected.
     """
     method = "POST" if failing == SEARCH_QUERIES else "GET"
     client, _router = make_router_client(
-        make_client, {**routes, (method, failing): aiohttp.ClientConnectionError("reset")}
+        make_client, {**routes, (method, failing): make_failure()}, throw_errors=False
     )
 
-    assert await getattr(client, method_name)() == empty
+    with pytest.raises(expected_error):
+        await getattr(client, method_name)()

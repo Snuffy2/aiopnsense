@@ -11,4 +11,5 @@ OPNsense's `unbound/overview/rolling/<hours>` returns Buckets keyed by start tim
 
 - The 24-hour sums leave out the newest, still-filling 10-minute Bucket, so they lag by up to 10 minutes.
 - Blocked counts DNSBL hits only. Dropped is reported separately from Buckets; Retention Window totals have no Dropped figure.
-- An absent endpoint (404, or 403 with errors disabled) gives an empty result through the endpoint outcome reads. No Firmware Capability gates these reads, because every supported release has the endpoints.
+- An absent endpoint (404, or 403 with errors disabled) returns None. A transient failure raises whatever `throw_errors` is, unlike most reads, so a caller running with errors disabled, such as hass-opnsense, can tell absent from failed: it creates entities when the read is not absent and marks an update failed instead of reporting zero queries.
+- No Firmware Capability gates these reads, because every supported release has the endpoints.
