@@ -3,7 +3,7 @@
 from collections.abc import MutableMapping
 from typing import Any
 
-from ._error_policy import _log_errors
+from ._error_policy import _log_errors, _throws_errors
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER
 
@@ -24,18 +24,17 @@ class SmartMixin(AiopnsenseClientProtocol):
                 endpoint returns 404. With ``throw_errors`` off, 403 (including a cached
                 denial), transient HTTP or transport failures, and an undecodable
                 response body return ``None``. With ``throw_errors`` on, those failures
-                raise ``OPNsenseError``.
+                raise ``OPNsenseError``. A decoded response without a device list
+                returns ``None`` with ``throw_errors`` off and an empty list with it on.
         """
         outcome = await self._fetch_post_endpoint_outcome(SMART_SERVICE_DETAIL_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("SMART plugin unavailable")
             return [] if outcome.http_status == 404 else None
-        devices = outcome.mapping().get("devices", [])
+        devices = outcome.mapping().get("devices")
         if not isinstance(devices, list):
-            _LOGGER.debug(
-                "Discarding SMART devices payload because devices is not a list: %r", devices
-            )
-            return []
+            _LOGGER.debug("[get_smart] Discarding response without a SMART device list")
+            return [] if _throws_errors(self) else None
         smart_devices: list[dict[str, Any]] = []
         for device in devices:
             if not isinstance(device, MutableMapping):

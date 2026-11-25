@@ -34,7 +34,7 @@ NVME_ROW = {"ident": "nvme0", "device": "nvme0", "status": "PASSED"}
             id="blank-ident-skipped",
         ),
         pytest.param(["unexpected-string-row", NVME_ROW], [NVME_ROW], id="non-mapping-skipped"),
-        pytest.param("ignored", [], id="non-list-payload"),
+        pytest.param([], [], id="no-devices"),
     ],
 )
 async def test_get_smart_returns_device_rows(
@@ -55,6 +55,38 @@ async def test_get_smart_returns_device_rows(
 
     # One POST with no body and no other request, so the list is read by POST only.
     assert router.requests == [("POST", SMART_LIST_PATH, None)]
+
+
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"devices": None}, id="null-devices"),
+        pytest.param({"devices": "unexpected"}, id="non-list-devices"),
+        pytest.param({"message": "Unable to run list action"}, id="missing-devices"),
+        pytest.param([], id="non-mapping-body"),
+    ],
+)
+async def test_get_smart_reports_malformed_inventory(
+    make_client: ClientType, throw_errors: bool, payload: dict[str, object] | list[object]
+) -> None:
+    """Malformed SMART inventories are unknown in non-strict mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        throw_errors (bool): Public ``throw_errors`` setting of the client.
+        payload (dict[str, object] | list[object]): Decoded response body from the Router.
+    """
+    client, _ = make_router_client(
+        make_client, {("POST", SMART_LIST_PATH): payload}, throw_errors=throw_errors
+    )
+
+    result = await client.get_smart()
+
+    if throw_errors:
+        assert result == []
+    else:
+        assert result is None
 
 
 @pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
