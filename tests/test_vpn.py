@@ -10,11 +10,11 @@ from typing import Any
 import aiohttp
 import pytest
 
-import aiopnsense as aiopnsense_module
 from aiopnsense import (
     Access,
     OPNsenseClient,
     OPNsensePrivilegeMissing,
+    _wireguard,
     result_access,
     vpn as aiopnsense_vpn,
 )
@@ -205,42 +205,6 @@ def ipsec_routes(
         ("GET", children_path): {"rows": []} if children is None else children,
         ("POST", phase2_path): {"rows": []} if phase2 is None else phase2,
     }
-
-
-@pytest.mark.parametrize(
-    "delta_minutes,expected",
-    [
-        (2, True),  # within 3 minutes => connected
-        (3, True),  # exactly at threshold => connected
-        (5, False),  # beyond threshold => not connected
-    ],
-)
-def test__wireguard_is_connected_variants(
-    monkeypatch: pytest.MonkeyPatch, delta_minutes: int, expected: bool
-) -> None:
-    """WireGuard connection considered active when last handshake within threshold.
-
-    Monkeypatch `datetime.now` in the module under test to a fixed value with no
-    microseconds so comparisons at the 3-minute boundary are deterministic.
-
-    Args:
-        monkeypatch (pytest.MonkeyPatch): Fixture for replacing the module datetime provider.
-        delta_minutes (int): Age of the latest WireGuard handshake.
-        expected (bool): Connection state expected for that handshake age.
-    """
-    fixed_now = datetime.now().astimezone().replace(microsecond=0)
-    # create a minimal fake datetime provider with a static now() returning fixed_now
-    FakeDT = type("FakeDT", (), {"now": staticmethod(lambda: fixed_now)})
-    monkeypatch.setattr(aiopnsense_vpn, "datetime", FakeDT)
-    assert (
-        aiopnsense_vpn.VPNMixin._wireguard_is_connected(
-            fixed_now - timedelta(minutes=delta_minutes)
-        )
-        is expected
-    )
-    # None always False
-    if delta_minutes == 5:  # only need to assert once in param set
-        assert aiopnsense_vpn.VPNMixin._wireguard_is_connected(None) is False
 
 
 async def test_get_openvpn_and_fetch_details(make_client: ClientType) -> None:
@@ -478,7 +442,7 @@ def wireguard_now(monkeypatch: pytest.MonkeyPatch) -> datetime:
     """
     now = datetime(2026, 1, 1, 12, tzinfo=UTC)
     clock = type("Clock", (), {"now": staticmethod(lambda: now)})
-    monkeypatch.setattr(aiopnsense_vpn, "datetime", clock)
+    monkeypatch.setattr(_wireguard, "datetime", clock)
     return now
 
 
@@ -592,6 +556,67 @@ async def test_get_wireguard_reports_live_details_for_each_configured_view(
 
     router.routes[("GET", WIREGUARD_SUMMARY_PATH)] = {"rows": {}}
     assert await client.get_wireguard() is None
+
+
+async def test_get_wireguard_aggregates_repeated_link_observations(
+    make_client: ClientType, wireguard_now: datetime
+) -> None:
+    """Keep the endpoint and newest connected handshake across repeated observations.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+        wireguard_now (datetime): Fixed reference time for handshake status.
+    """
+    threshold = wireguard_now - timedelta(minutes=3)
+    newest = wireguard_now - timedelta(seconds=30)
+    endpoint = "192.0.2.1:51820"
+    row = {"type": "peer", "public-key": "client-key", "if": "wg1"}
+    client_config = {
+        "pubkey": "client-key",
+        "servers": {"server-id": {"selected": "1", "value": "Server"}},
+    }
+    server_config = {
+        "instance": "1",
+        "peers": {"client-id": {"selected": "1", "value": "Client"}},
+    }
+    client, _router = make_vpn_router(
+        make_client,
+        wireguard_routes(
+            summary={
+                "rows": [
+                    {**row, "endpoint": endpoint, "latest-handshake": int(threshold.timestamp())},
+                    {
+                        **row,
+                        "endpoint": "(none)",
+                        "latest-handshake": int(newest.timestamp()),
+                        "transfer-rx": "15",
+                        "transfer-tx": "20",
+                    },
+                    {**row, "latest-handshake": int(threshold.timestamp())},
+                    {**row, "endpoint": "(none)", "transfer-rx": "2", "transfer-tx": "invalid"},
+                ]
+            },
+            clients={"client": {"clients": {"client": {"client-id": client_config}}}},
+            servers={"server": {"servers": {"server": {"server-id": server_config}}}},
+        ),
+    )
+
+    result = await client.get_wireguard()
+
+    assert result is not None
+    server = result["servers"]["server-id"]
+    configured_client = result["clients"]["client-id"]
+    assert server["connected_clients"] == configured_client["connected_servers"] == 3
+    for parent, link in (
+        (server, server["clients"][0]),
+        (configured_client, configured_client["servers"][0]),
+    ):
+        assert parent["latest_handshake"] == newest
+        assert (parent["total_bytes_recv"], parent["total_bytes_sent"]) == (17, 20)
+        assert link["endpoint"] == endpoint
+        assert link["connected"] is False
+        assert link["latest_handshake"] == datetime(1970, 1, 1, tzinfo=UTC)
+        assert (link["bytes_recv"], link["bytes_sent"]) == (2, 0)
 
 
 @pytest.mark.parametrize("selecting_view", ["servers", "clients"])
@@ -755,6 +780,58 @@ async def test_get_wireguard_status_access_links_live_rows(
             "Server 2": False,
         }
     assert router.count("GET", denied_path) == 2
+
+
+async def test_get_wireguard_status_access_keeps_a_link_for_each_visible_row(
+    make_client: ClientType, wireguard_now: datetime
+) -> None:
+    """Report each observation on its own link while preserving visible unlinked Clients.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        wireguard_now (datetime): Fixed reference time for handshake status.
+    """
+    handshake = wireguard_now - timedelta(seconds=30)
+    endpoint = "192.0.2.1:51820"
+    peer_row = {"type": "peer", "public-key": "client-key", "if": "wg1"}
+    rows = [
+        {
+            **peer_row,
+            "endpoint": endpoint,
+            "latest-handshake": int(handshake.timestamp()),
+            "transfer-rx": "15",
+            "transfer-tx": "20",
+        },
+        {**peer_row, "endpoint": "(none)", "transfer-rx": "2", "transfer-tx": "3"},
+        {"type": "interface", "public-key": "server-key", "if": "wg1"},
+        {"type": "peer", "public-key": "unlinked-key", "if": "wg2", "transfer-rx": "100"},
+    ]
+    client, _router = make_vpn_router(
+        make_client, wireguard_routes(summary={"rows": rows}, clients=403)
+    )
+
+    result = await client.get_wireguard()
+
+    assert result is not None
+    assert result_access(result) is Access.STATUS
+    (server,) = result["servers"].values()
+    clients = result["clients"]
+    assert len(clients) == 2
+    clients_by_public_key = {entry["pubkey"]: entry for entry in clients.values()}
+    linked = clients_by_public_key["client-key"]
+    unlinked = clients_by_public_key["unlinked-key"]
+    assert unlinked["servers"] == []
+    assert unlinked["total_bytes_recv"] == 0
+    assert server["connected_clients"] == linked["connected_servers"] == 1
+    for parent, links in ((server, server["clients"]), (linked, linked["servers"])):
+        assert (parent["total_bytes_recv"], parent["total_bytes_sent"]) == (17, 23)
+        assert parent["latest_handshake"] == handshake
+        first, second = links
+        assert (first["bytes_recv"], first["bytes_sent"], first["connected"]) == (15, 20, True)
+        assert first["latest_handshake"] == handshake
+        assert first["endpoint"] == endpoint
+        assert (second["bytes_recv"], second["bytes_sent"], second["connected"]) == (2, 3, False)
+        assert "endpoint" not in second
 
 
 @pytest.mark.parametrize("reverse_rows", [False, True])
@@ -933,6 +1010,7 @@ async def test_get_wireguard_retains_duplicate_and_incomplete_links(
     assert result is not None
     for server_uuid in ("server-1", "server-2"):
         server = result["servers"][server_uuid]
+        assert server["key_hash"] is None
         assert (server["total_bytes_recv"], server["total_bytes_sent"]) == (15, 20)
         assert [link["uuid"] for link in server["clients"]] == ["client-uuid", "missing-client"]
         active, missing = server["clients"]
@@ -945,6 +1023,7 @@ async def test_get_wireguard_retains_duplicate_and_incomplete_links(
         }
 
     configured_client = result["clients"]["client-uuid"]
+    assert configured_client["key_hash"] is None
     assert (configured_client["total_bytes_recv"], configured_client["total_bytes_sent"]) == (
         30,
         40,
@@ -1165,6 +1244,71 @@ async def test_get_wireguard_malformed_summary_stops_configuration_reads(
 
     assert await client.get_wireguard() is None
     assert sent(router) == [("GET", WIREGUARD_SUMMARY_PATH)]
+
+
+@pytest.mark.parametrize(
+    ("summary", "clients", "servers", "expected_error", "expected_status", "expected_paths"),
+    [
+        pytest.param(
+            UNAVAILABLE,
+            403,
+            403,
+            OPNsenseConnectionError,
+            UNAVAILABLE,
+            [WIREGUARD_SUMMARY_PATH],
+            id="summary-failure",
+        ),
+        pytest.param(
+            {"rows": None},
+            UNAVAILABLE,
+            403,
+            OPNsenseConnectionError,
+            UNAVAILABLE,
+            [WIREGUARD_SUMMARY_PATH, "/api/wireguard/client/get"],
+            id="client-failure",
+        ),
+        pytest.param(
+            {"rows": None},
+            NOT_FOUND,
+            403,
+            OPNsensePrivilegeMissing,
+            403,
+            [WIREGUARD_SUMMARY_PATH, "/api/wireguard/client/get", "/api/wireguard/server/get"],
+            id="server-denial",
+        ),
+    ],
+)
+async def test_get_wireguard_strict_raises_first_request_failure(
+    make_client: ClientType,
+    summary: Any,
+    clients: int,
+    servers: int,
+    expected_error: type[OPNsenseConnectionError],
+    expected_status: int,
+    expected_paths: list[str],
+) -> None:
+    """Raise the first request failure even when the summary has malformed rows.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        summary (Any): Status summary reply.
+        clients (int): Client configuration HTTP status.
+        servers (int): Server configuration HTTP status.
+        expected_error (type[OPNsenseConnectionError]): Public exception type.
+        expected_status (int): HTTP status reported by the exception.
+        expected_paths (list[str]): Requests made before the failure.
+    """
+    client, router = make_vpn_router(
+        make_client,
+        wireguard_routes(summary=summary, clients=clients, servers=servers),
+        throw_errors=True,
+    )
+
+    with pytest.raises(expected_error) as error:
+        await client.get_wireguard()
+
+    assert error.value.status == expected_status
+    assert router.paths("GET") == expected_paths
 
 
 async def test_openvpn_sessions_failure_stops_the_read(make_client: ClientType) -> None:
@@ -1543,52 +1687,6 @@ async def test_vpn_switched_endpoints_follow_selected_case(
     assert router.count("GET", expected_sessions) == 1
     assert router.count("GET", expected_routes) == 1
     assert router.count("POST", expected_client_toggle) == 1
-
-
-@pytest.mark.asyncio
-async def test_update_wireguard_peer_details_endpoint_none_does_not_override() -> None:
-    """When endpoint is '(none)' existing endpoint value should remain unchanged."""
-    server = {
-        "total_bytes_recv": 0,
-        "total_bytes_sent": 0,
-        "connected_servers": 0,
-        "latest_handshake": None,
-    }
-    peer = {"endpoint": "keep"}
-    aiopnsense_module.OPNsenseClient._update_wireguard_peer_details(  # type: ignore[arg-type]
-        peer=peer,
-        server_or_client=server,
-        endpoint="(none)",
-        transfer_rx=0,
-        transfer_tx=0,
-        handshake_time=None,
-        is_connected=False,
-        connection_counter_key="connected_servers",
-    )
-    assert peer.get("endpoint") == "keep"
-
-
-@pytest.mark.asyncio
-async def test_update_wireguard_peer_details_latest_handshake() -> None:
-    """_update_wireguard_peer_details should update latest_handshake when newer."""
-    server: dict = {"total_bytes_recv": 0, "total_bytes_sent": 0, "connected_clients": 0}
-    peer: dict = {}
-    old_time = datetime.now().astimezone() - timedelta(minutes=10)
-    server["latest_handshake"] = old_time
-    new_time = datetime.now().astimezone()
-    aiopnsense_module.OPNsenseClient._update_wireguard_peer_details(  # type: ignore[arg-type]
-        peer=peer,
-        server_or_client=server,
-        endpoint="1.2.3.4:51820",
-        transfer_rx=10,
-        transfer_tx=20,
-        handshake_time=new_time,
-        is_connected=True,
-        connection_counter_key="connected_clients",
-    )
-    assert server.get("latest_handshake") == new_time
-    assert server.get("connected_clients") == 1
-    assert peer.get("connected") is True
 
 
 async def test_get_ipsec_success_normalizes_rows(make_client: ClientType) -> None:
