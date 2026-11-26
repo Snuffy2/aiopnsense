@@ -72,6 +72,12 @@ fails or its body is undecodable or malformed. Without a denial, an unreadable
 interface configuration read makes the inventory unknown. An unreadable lease
 read makes the inventory unknown even when another endpoint returns 403.
 
+With ``throw_errors=False``, a missing, denied, failed, or unreadable Kea DHCPv4
+reservation response leaves the readable leases and interfaces available at
+the access level determined by the lease and interface configuration reads.
+Kea leases retain their type when the lease data explicitly classifies them.
+Leases that need unavailable reservation data have type ``unknown``.
+
 The result is an ``AccessDict`` or ``AccessList``, which compares equal to and
 passes ``isinstance`` checks as a plain ``dict`` or ``list``. The level survives
 ``copy.deepcopy`` and pickling, but plain copies made with ``dict()``,

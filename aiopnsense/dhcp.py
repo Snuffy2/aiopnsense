@@ -542,8 +542,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 have supplied may be missing. Otherwise the result reports
                 Configuration Access. A missing (404) endpoint means its backend
                 is not installed and contributes nothing. With the default
-                ``throw_errors=False``, a Kea reservation endpoint that cannot be
-                read only drops reservation detail, and the method returns ``None``
+                ``throw_errors=False``, an unavailable or unreadable Kea DHCPv4
+                reservation response, including an undecodable body, leaves the
+                leases, interfaces, and access level intact. Kea lease metadata
+                still determines the type when authoritative. Leases that need
+                reservation data have type ``unknown``. The method returns ``None``
                 (unknown) when any lease endpoint fails with another error,
                 returns an undecodable body, or returns decoded data the parser
                 rejects. An unreadable interface configuration endpoint makes
@@ -796,7 +799,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         if reservation_endpoint is None or not needs_reservation_lookup:
             res_info = None
         else:
-            res_outcome = await self._fetch_endpoint_outcome(reservation_endpoint)
+            res_outcome = await self._fetch_dhcp_outcome(reservation_endpoint)
             if not res_outcome.is_data:
                 _LOGGER.debug("%s reservation endpoint unavailable", service_name)
                 res_info = None
