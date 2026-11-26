@@ -5,7 +5,12 @@ from collections.abc import Callable
 import pytest
 
 from aiopnsense import OPNsenseClient
-from aiopnsense.exceptions import OPNsenseError, OPNsensePrivilegeMissing, OPNsenseTimeoutError
+from aiopnsense.exceptions import (
+    OPNsenseConnectionError,
+    OPNsenseError,
+    OPNsensePrivilegeMissing,
+    OPNsenseTimeoutError,
+)
 from tests.conftest import MalformedJSONResponse, make_router_client
 
 ClientType = Callable[..., OPNsenseClient]
@@ -131,10 +136,10 @@ async def test_restart_service_if_running_matches_composite_service_identifier(
     assert router.count("POST") == 1
 
 
-async def test_get_services_forbidden_result_stays_unknown_when_cached(
+async def test_get_services_reuses_denial_only_in_suppressed_mode(
     make_client: ClientType,
 ) -> None:
-    """A cached 403 still reports an unknown service inventory.
+    """A cached 403 remains unknown in suppressed mode and is retried in strict mode.
 
     Args:
         make_client (ClientType): Fixture factory returning client instances.
@@ -144,16 +149,21 @@ async def test_get_services_forbidden_result_stays_unknown_when_cached(
     assert await client.get_services() is None
     assert await client.get_services() is None
     assert router.count("GET", SERVICE_SEARCH_PATH) == 1
+    client.toggle_throwing_errors(True)
+    with pytest.raises(OPNsensePrivilegeMissing):
+        await client.get_services()
+    assert router.count("GET", SERVICE_SEARCH_PATH) == 2
 
 
 @pytest.mark.parametrize(
     ("reply", "error"),
     [
         (403, OPNsensePrivilegeMissing),
+        (503, OPNsenseConnectionError),
         (TimeoutError("timed out"), OPNsenseTimeoutError),
         (MalformedJSONResponse(), OPNsenseError),
     ],
-    ids=["forbidden", "timeout", "invalid-json"],
+    ids=["forbidden", "unavailable", "timeout", "invalid-json"],
 )
 @pytest.mark.parametrize("throw_errors", [False, True], ids=["default", "strict"])
 async def test_get_services_failed_read(
@@ -193,8 +203,27 @@ async def test_get_services_missing_endpoint_is_empty(
         make_client (ClientType): Fixture factory returning client instances.
         throw_errors (bool): Whether read failures raise.
     """
-    client, _ = make_router_client(
+    client, router = make_router_client(
         make_client, {("GET", SERVICE_SEARCH_PATH): 404}, throw_errors=throw_errors
+    )
+
+    assert await client.get_services() == []
+    assert await client.get_services() == []
+    assert router.count("GET", SERVICE_SEARCH_PATH) == 1
+
+
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["default", "strict"])
+async def test_get_services_valid_empty_rows(
+    make_client: ClientType, *, throw_errors: bool
+) -> None:
+    """A valid empty rows list reports a complete empty inventory in either mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+        throw_errors (bool): Whether read failures raise.
+    """
+    client, _ = make_router_client(
+        make_client, {("GET", SERVICE_SEARCH_PATH): {"rows": []}}, throw_errors=throw_errors
     )
 
     assert await client.get_services() == []
@@ -222,36 +251,85 @@ async def test_service_unknown_state_fails_closed(make_client: ClientType) -> No
     assert router.count("POST") == 0
 
 
-@pytest.mark.asyncio
-async def test_get_services_handles_non_list_rows_and_running_coercion(
-    make_client: ClientType,
+@pytest.mark.parametrize(
+    "reply",
+    [{}, {"rows": None}, {"rows": "bad-shape"}, []],
+    ids=["missing-rows", "null-rows", "non-list-rows", "non-mapping-body"],
+)
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["default", "strict"])
+async def test_get_services_reports_malformed_inventory(
+    make_client: ClientType, reply: object, *, throw_errors: bool
 ) -> None:
-    """Service parsing should handle malformed rows and non-int running values.
+    """A decoded body without a rows list follows the inventory policy for the mode.
 
     Args:
-        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        make_client (ClientType): Fixture factory returning client instances.
+        reply (object): Decoded service search body.
+        throw_errors (bool): Whether read failures raise.
+    """
+    client, _ = make_router_client(
+        make_client, {("GET", SERVICE_SEARCH_PATH): reply}, throw_errors=throw_errors
+    )
 
-    Returns:
-        None: This test validates service-row normalization and status coercion.
+    if throw_errors:
+        assert await client.get_services() == []
+    else:
+        assert await client.get_services() is None
+
+
+@pytest.mark.parametrize("throw_errors", [False, True], ids=["default", "strict"])
+async def test_get_services_recovers_after_malformed_inventory(
+    make_client: ClientType, *, throw_errors: bool
+) -> None:
+    """A usable reply after a malformed inventory returns normalized rows.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+        throw_errors (bool): Whether read failures raise.
     """
     client, router = make_router_client(
-        make_client, routes={("GET", SERVICE_SEARCH_PATH): {"rows": "bad-shape"}}
+        make_client,
+        {("GET", SERVICE_SEARCH_PATH): {"rows": "bad-shape"}},
+        throw_errors=throw_errors,
     )
-    assert await client.get_services() == []
+    await client.get_services()
 
     router.routes[("GET", SERVICE_SEARCH_PATH)] = {
         "rows": [
-            {"name": "svc1", "running": object(), "id": "svc1"},
+            {"name": "svc1", "running": "unknown", "id": "svc1", "description": "First service"},
+            "malformed",
             {"name": "svc2", "running": "1", "id": "svc2"},
         ]
     }
     services = await client.get_services()
     assert services is not None
-    assert len(services) == 2
+    assert services == [
+        {
+            "name": "svc1",
+            "running": "unknown",
+            "id": "svc1",
+            "description": "First service",
+            "status": False,
+        },
+        {"name": "svc2", "running": "1", "id": "svc2", "status": True},
+    ]
     assert services[0]["status"] is False
     assert services[1]["status"] is True
 
     assert await client.get_service_is_running("does-not-exist") is False
     # An unknown service is not a stopped one, so no restart request is sent.
     assert await client.restart_service_if_running("does-not-exist") is False
+    assert router.count("POST") == 0
+
+
+async def test_service_state_fails_closed_for_malformed_inventory(make_client: ClientType) -> None:
+    """A malformed inventory cannot establish running state or authorize a restart.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+    """
+    client, router = make_router_client(make_client, {("GET", SERVICE_SEARCH_PATH): {}})
+
+    assert await client.get_service_is_running("svc1") is False
+    assert await client.restart_service_if_running("svc1") is False
     assert router.count("POST") == 0

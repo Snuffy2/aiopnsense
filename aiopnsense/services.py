@@ -1,10 +1,10 @@
 """Service management methods for OPNsenseClient."""
 
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from typing import Any
 from urllib.parse import quote
 
-from ._error_policy import _log_errors
+from ._error_policy import _log_errors, _throws_errors
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, api_value_matches
 
@@ -15,18 +15,17 @@ CORE_SERVICE_ENDPOINT_PREFIX = "/api/core/service/"
 class ServicesMixin(AiopnsenseClientProtocol):
     """Service management methods for OPNsenseClient."""
 
-    def _normalize_services_rows(self, rows: object) -> list[dict[str, Any]]:
+    def _normalize_services_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Normalize service rows and derive boolean status values.
 
         Args:
-            rows (object): Raw ``rows`` payload from the service-search endpoint.
+            rows (list[dict[str, Any]]): Raw ``rows`` list from the service-search endpoint.
 
         Returns:
             list[dict[str, Any]]: List of normalized service mappings.
         """
-        services: list[dict[str, Any]] = rows if isinstance(rows, list) else []
         normalized_services: list[dict[str, Any]] = []
-        for service in services:
+        for service in rows:
             if not isinstance(service, MutableMapping):
                 continue
             running = service.get("running", 0)
@@ -38,28 +37,37 @@ class ServicesMixin(AiopnsenseClientProtocol):
         """Fetch and normalize services from the Router.
 
         Returns:
-            list[dict[str, Any]] | None: Normalized rows, an empty list on HTTP 404,
-                or ``None`` for a suppressed request failure. Strict mode propagates
-                request errors.
+            list[dict[str, Any]] | None: Normalized rows from a mapping with a
+                list-valued ``rows`` field, or an empty list on HTTP 404. A decoded
+                response without that shape yields ``None`` in suppressed mode and
+                an empty list in strict mode. Suppressed request failures yield
+                ``None``. Strict mode propagates request errors.
         """
         outcome = await self._fetch_endpoint_outcome(CORE_SERVICE_SEARCH_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("Service search endpoint unavailable")
             return [] if outcome.http_status == 404 else None
 
-        return self._normalize_services_rows(outcome.mapping().get("rows") or [])
+        payload = outcome.payload
+        rows = payload.get("rows") if isinstance(payload, Mapping) else None
+        if not isinstance(rows, list):
+            _LOGGER.debug("[get_services] Discarding response without a service rows list")
+            return [] if _throws_errors(self) else None
+        return self._normalize_services_rows(rows)
 
     @_log_errors
     async def get_services(self) -> list[dict[str, Any]] | None:
         """Return all manageable OPNsense services.
 
         Returns:
-            list[dict[str, Any]] | None: Service rows from the core service search
-                endpoint with a derived boolean ``status`` field indicating
-                whether each service is currently running. HTTP 404 yields an
-                empty list. With ``throw_errors=False``, HTTP 403, other read
-                failures, and undecodable responses yield ``None``. With
-                ``throw_errors=True``, those failures raise an ``OPNsenseError``.
+            list[dict[str, Any]] | None: Service rows from a mapping with a
+                list-valued ``rows`` field, with a derived boolean ``status`` field
+                indicating whether each service is running. Valid empty rows and
+                HTTP 404 yield an empty list. With ``throw_errors=False``, a decoded
+                response without the required shape, HTTP 403, other read failures,
+                and undecodable responses yield ``None``. With ``throw_errors=True``,
+                a decoded response without the required shape yields an empty list
+                and request or decoding failures raise an ``OPNsenseError``.
         """
         return await self._fetch_normalized_services()
 
