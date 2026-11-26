@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.6.0](https://github.com/Snuffy2/aiopnsense/compare/v1.5.0...v1.6.0) (2026-11-26)
+
+
+### Features
+
+* add Unbound Query Stats and Query Log reads ([#243](https://github.com/Snuffy2/aiopnsense/issues/243)) ([22762f4](https://github.com/Snuffy2/aiopnsense/commit/22762f40af0750d3f6a01de9dcfea73768bf624f))
+* report CARP access level ([#253](https://github.com/Snuffy2/aiopnsense/issues/253)) ([17af0fc](https://github.com/Snuffy2/aiopnsense/commit/17af0fcb048063c8c08d0415117a16a143a4e603))
+* report DHCP lease access level ([#252](https://github.com/Snuffy2/aiopnsense/issues/252)) ([4b97653](https://github.com/Snuffy2/aiopnsense/commit/4b976530f487d337d241bab684d1b8a2278d2ac3))
+* report VPN status and configuration access ([#245](https://github.com/Snuffy2/aiopnsense/issues/245)) ([6ac2aa9](https://github.com/Snuffy2/aiopnsense/commit/6ac2aa99b516847fe08fc4b5dc0e952ccf33d642))
+
+
+### Bug Fixes
+
+* distinguish failed Speedtest reads from a missing plugin ([#261](https://github.com/Snuffy2/aiopnsense/issues/261)) ([52e65cb](https://github.com/Snuffy2/aiopnsense/commit/52e65cbb86aa3efe5eab6191d94a4511beb2f55b))
+* distinguish unavailable speedtest reads from missing plugin ([52e65cb](https://github.com/Snuffy2/aiopnsense/commit/52e65cbb86aa3efe5eab6191d94a4511beb2f55b))
+* keep observing firmware install through an empty lock state ([#267](https://github.com/Snuffy2/aiopnsense/issues/267)) ([bf7cf6f](https://github.com/Snuffy2/aiopnsense/commit/bf7cf6fb6f72c2754fe83b44ea8058ff72176ba4))
+* make shared-key WireGuard status order-independent ([#247](https://github.com/Snuffy2/aiopnsense/issues/247)) ([5e6597c](https://github.com/Snuffy2/aiopnsense/commit/5e6597c814dd5a5c4d30e0fc716805e230b5ca63))
+* preserve NUT inventory when status reads fail ([#260](https://github.com/Snuffy2/aiopnsense/issues/260)) ([299709d](https://github.com/Snuffy2/aiopnsense/commit/299709d13df4a3340e360e5e8b41ea94392f86b8))
+* preserve readable DHCP lease inventory ([#270](https://github.com/Snuffy2/aiopnsense/issues/270)) ([bfa524e](https://github.com/Snuffy2/aiopnsense/commit/bfa524ef44451c7a1f1ace7f928d75aabf73d38f))
+* preserve Unbound switches when inventory reads fail ([#255](https://github.com/Snuffy2/aiopnsense/issues/255)) ([d1a59a1](https://github.com/Snuffy2/aiopnsense/commit/d1a59a15d7c5c26773bfd6387a93c687905244f5))
+* preserve unknown gateway inventory on read failure ([#257](https://github.com/Snuffy2/aiopnsense/issues/257)) ([3764a05](https://github.com/Snuffy2/aiopnsense/commit/3764a05090fba1e36d80ae931aca8bf44218840f))
+* preserve unknown interface inventories on read failure ([#254](https://github.com/Snuffy2/aiopnsense/issues/254)) ([8d2a152](https://github.com/Snuffy2/aiopnsense/commit/8d2a152c599c949e432e1a3973cc2c2a307ac370))
+* preserve unknown service inventories ([#256](https://github.com/Snuffy2/aiopnsense/issues/256)) ([4dab499](https://github.com/Snuffy2/aiopnsense/commit/4dab49955bfb93d26a7b227b69e43fe7de153ba7))
+* preserve unknown SMART results on read failure ([#259](https://github.com/Snuffy2/aiopnsense/issues/259)) ([cea1406](https://github.com/Snuffy2/aiopnsense/commit/cea1406126db8dad9a44a9cbd6e79f49b456b341))
+* preserve unknown vnStat inventories on read failure ([#263](https://github.com/Snuffy2/aiopnsense/issues/263)) ([d38a6ce](https://github.com/Snuffy2/aiopnsense/commit/d38a6cee02adf2190abe4edc73028ec7a8c39546))
+* preserve unreadable telemetry inventories ([#258](https://github.com/Snuffy2/aiopnsense/issues/258)) ([af11106](https://github.com/Snuffy2/aiopnsense/commit/af1110608489b48b7bb8e98e656e5814ee4f72db))
+* preserve VPN status after configuration denial ([#246](https://github.com/Snuffy2/aiopnsense/issues/246)) ([b3d1565](https://github.com/Snuffy2/aiopnsense/commit/b3d1565e3b4b01955319991b28ffe4d1e54a2fa2))
+* report an unreadable firewall rule group as unknown ([#251](https://github.com/Snuffy2/aiopnsense/issues/251)) ([d67dc1a](https://github.com/Snuffy2/aiopnsense/commit/d67dc1ae14eb59cff9f2205ddc351b8e939d8b21))
+* report malformed service inventories as unknown ([#268](https://github.com/Snuffy2/aiopnsense/issues/268)) ([9c4be29](https://github.com/Snuffy2/aiopnsense/commit/9c4be293553a2a23a27add39123c22450be92c16))
+
+
+### Documentation
+
+* **agents:** allow read-only network lookups without asking ([#266](https://github.com/Snuffy2/aiopnsense/issues/266)) ([ec33a4c](https://github.com/Snuffy2/aiopnsense/commit/ec33a4cd8c7dc6d3acdf1eb64ce1c72069921f1c))
+* align documentation with ADR 0004 ([#265](https://github.com/Snuffy2/aiopnsense/issues/265)) ([5f2d1b3](https://github.com/Snuffy2/aiopnsense/commit/5f2d1b3456e2348d208a86d4aafa3a4897dbbd8b))
+* align glossary terms with hass-opnsense ([#250](https://github.com/Snuffy2/aiopnsense/issues/250)) ([d991331](https://github.com/Snuffy2/aiopnsense/commit/d991331bcf187c7336543050d8cd5ecd8ed90499))
+* define Status Access and Configuration Access ([#244](https://github.com/Snuffy2/aiopnsense/issues/244)) ([2ec54ed](https://github.com/Snuffy2/aiopnsense/commit/2ec54edad36111a4c6c4e782b6c1f6b9e2b643e8))
+* extend ADR 0004 to unknown inventories ([#262](https://github.com/Snuffy2/aiopnsense/issues/262)) ([97f8b72](https://github.com/Snuffy2/aiopnsense/commit/97f8b7227b47341f1ca77377654d560e635cddce))
+
+
+### Code Refactoring
+
+* centralize WireGuard link assembly ([#269](https://github.com/Snuffy2/aiopnsense/issues/269)) ([75e0a22](https://github.com/Snuffy2/aiopnsense/commit/75e0a22ee8d8f3bcc869b3ffd78ab08e76912f3e))
+* share inventory read policy for Services and SMART ([#271](https://github.com/Snuffy2/aiopnsense/issues/271)) ([5cdf37b](https://github.com/Snuffy2/aiopnsense/commit/5cdf37b7a2a19ab8a64b418474c2d1475c693bce))
+
+
+### Continuous Integration
+
+* expose the checkout tested by pytest ([#264](https://github.com/Snuffy2/aiopnsense/issues/264)) ([496c603](https://github.com/Snuffy2/aiopnsense/commit/496c6035fa0553faa32bf81a3edbcb7a457f9440))
+
 ## [1.5.0](https://github.com/Snuffy2/aiopnsense/compare/v1.4.1...v1.5.0) (2026-11-24)
 
 
