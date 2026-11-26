@@ -1,14 +1,33 @@
-"""Unbound DNS blocklist methods for OPNsenseClient."""
+"""Unbound DNS blocklist, Query Stats and Query Log methods for OPNsenseClient."""
 
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
+from dataclasses import dataclass
+from datetime import datetime
 import logging
-from typing import Any
+from typing import Any, Literal
 
+from ._endpoint_outcome import _EndpointOutcome
 from ._error_policy import _log_boolean_errors, _log_errors, _throws_errors
+from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
 from .client_toggle import ToggleSpec, ToggleStep, ToggleTarget
 from .const import EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY
-from .helpers import _LOGGER, api_value_matches, dict_get
+from .helpers import (
+    _LOGGER,
+    api_value_matches,
+    coerce_bool,
+    dict_get,
+    timestamp_to_datetime,
+    try_to_float,
+    try_to_int,
+)
+
+QUERY_LOG_SIZE = 1000
+TOP_DOMAINS_SIZE = 10
+
+type AbsentReason = Literal["not_found", "forbidden", "disabled"]
+"""Why a DNS read has no data: the endpoint is missing (404), not permitted (403), or
+Unbound statistics are turned off on the Router."""
 
 UNBOUND_SETTINGS_GET_ENDPOINT = "/api/unbound/settings/get"
 UNBOUND_SETTINGS_SET_ENDPOINT = "/api/unbound/settings/set"
@@ -16,10 +35,409 @@ UNBOUND_SERVICE_DNSBL_ENDPOINT = "/api/unbound/service/dnsbl"
 UNBOUND_SERVICE_RESTART_ENDPOINT = "/api/unbound/service/restart"
 UNBOUND_SETTINGS_SEARCH_DNSBL_ENDPOINT = "/api/unbound/settings/search_dnsbl"
 UNBOUND_SETTINGS_TOGGLE_DNSBL_ENDPOINT_PREFIX = "/api/unbound/settings/toggle_dnsbl/"
+UNBOUND_OVERVIEW_ROLLING_HOUR_ENDPOINT = "/api/unbound/overview/rolling/1"
+UNBOUND_OVERVIEW_ROLLING_DAY_ENDPOINT = "/api/unbound/overview/rolling/24"
+UNBOUND_OVERVIEW_TOTALS_ENDPOINT = f"/api/unbound/overview/totals/{TOP_DOMAINS_SIZE}"
+UNBOUND_OVERVIEW_IS_ENABLED_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/unbound/overview/is_enabled",
+    camel_case="/api/unbound/overview/isEnabled",
+)
+UNBOUND_OVERVIEW_SEARCH_QUERIES_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/unbound/overview/search_queries",
+    camel_case="/api/unbound/overview/searchQueries",
+)
+
+
+def _optional_text(value: object) -> str | None:
+    """Return a Router field as text, or None when it is absent or empty.
+
+    Args:
+        value (object): Field value from the Router.
+
+    Returns:
+        str | None: The value as text, or None when it is falsy.
+    """
+    return str(value) if value else None
+
+
+def _domain_name(value: object) -> str:
+    """Return a domain from the Router without its trailing dot.
+
+    Args:
+        value (object): Fully qualified domain as the Router reports it.
+
+    Returns:
+        str: The domain without the trailing dot, or an empty string when absent.
+    """
+    return str(value or "").rstrip(".")
 
 
 class UnboundMixin(AiopnsenseClientProtocol):
-    """Unbound DNS blocklist methods for OPNsenseClient."""
+    """Unbound DNS blocklist, Query Stats and Query Log methods for OPNsenseClient."""
+
+    @dataclass(frozen=True, slots=True)
+    class BucketCounts:
+        """Query counters for one Complete Bucket or a sum of Complete Buckets.
+
+        Attributes:
+            queries (int): All queries.
+            blocked (int): Blocked queries. Never includes Dropped.
+            dropped (int): Dropped queries.
+        """
+
+        queries: int
+        blocked: int
+        dropped: int
+
+        @property
+        def blocked_share(self) -> float | None:
+            """Return the percentage of queries that were Blocked.
+
+            Returns:
+                float | None: Blocked share in percent, or None when there were no queries.
+            """
+            if not self.queries:
+                return None
+            return self.blocked / self.queries * 100
+
+    @dataclass(frozen=True, slots=True)
+    class TopDomain:
+        """One entry of a top-domain list over the Retention Window.
+
+        Attributes:
+            domain (str): Queried domain without the trailing dot.
+            count (int): Queries for the domain in the Retention Window.
+            percent (float): Share of the list's queries, in percent, as the Router reports it.
+            blocklist (str | None): Blocklist that matched, for top Blocked domains only.
+        """
+
+        domain: str
+        count: int
+        percent: float
+        blocklist: str | None
+
+    @dataclass(frozen=True, slots=True)
+    class QueryStats:
+        """Unbound Query Stats built from Complete Buckets and Retention Window totals.
+
+        Attributes:
+            last_minute (UnboundMixin.BucketCounts | None): Counters of the last Complete
+                Bucket of the last hour, or None when the hour has no Complete Bucket or
+                the stats are absent.
+            last_24h (UnboundMixin.BucketCounts | None): Counters summed over the Complete
+                Buckets of the last 24 hours, or None when the stats are absent.
+            blocklist_size (int | None): Number of domains on the active blocklists.
+            since (datetime | None): Start of the Retention Window.
+            top_domains (tuple[UnboundMixin.TopDomain, ...]): Most queried domains in the
+                Retention Window, as many as ``overview/totals/10`` returns.
+            top_blocked_domains (tuple[UnboundMixin.TopDomain, ...]): Most Blocked domains
+                in the Retention Window, as many as ``overview/totals/10`` returns.
+            absent (AbsentReason | None): Why there is no data: ``"not_found"`` (404),
+                ``"forbidden"`` (403) or ``"disabled"`` (Unbound statistics are off).
+                None when the stats were read.
+        """
+
+        last_minute: UnboundMixin.BucketCounts | None = None
+        last_24h: UnboundMixin.BucketCounts | None = None
+        blocklist_size: int | None = None
+        since: datetime | None = None
+        top_domains: tuple[UnboundMixin.TopDomain, ...] = ()
+        top_blocked_domains: tuple[UnboundMixin.TopDomain, ...] = ()
+        absent: AbsentReason | None = None
+
+    @dataclass(frozen=True, slots=True)
+    class QueryLogEntry:
+        """One query from the Unbound Query Log.
+
+        Attributes:
+            time (datetime): When the query was received.
+            client (str): Client as the Router reports it: usually its DHCP hostname,
+                otherwise its IP address.
+            domain (str): Queried domain without the trailing dot.
+            action (str): Action the Router reports, such as ``Pass``, ``Block`` or ``Drop``.
+            blocklist (str | None): Blocklist that matched, if any.
+            policy (str | None): Blocklist policy that matched, if any. OPNsense reports
+                policies from 26.1.
+        """
+
+        time: datetime
+        client: str
+        domain: str
+        action: str
+        blocklist: str | None
+        policy: str | None
+
+    @dataclass(frozen=True, slots=True)
+    class QueryLog:
+        """Entries read from the Unbound Query Log.
+
+        Attributes:
+            entries (tuple[UnboundMixin.QueryLogEntry, ...]): Matching entries, newest
+                first. Empty when nothing matched or the Query Log is absent.
+            absent (AbsentReason | None): Why there is no data: ``"not_found"`` (404),
+                ``"forbidden"`` (403) or ``"disabled"`` (Unbound statistics are off).
+                None when the Query Log was read.
+        """
+
+        entries: tuple[UnboundMixin.QueryLogEntry, ...] = ()
+        absent: AbsentReason | None = None
+
+    @staticmethod
+    def _absent_reason(outcome: _EndpointOutcome) -> AbsentReason:
+        """Return why an absent endpoint has no data.
+
+        Args:
+            outcome (_EndpointOutcome): Absent outcome; a cached 403 keeps its status.
+
+        Returns:
+            AbsentReason: ``"forbidden"`` for a 403, otherwise ``"not_found"``.
+        """
+        return "forbidden" if outcome.http_status == 403 else "not_found"
+
+    async def _unbound_stats_state(self, caller: str) -> AbsentReason | Literal["enabled"] | None:
+        """Ask the Router whether Unbound statistics can be read.
+
+        Reads ``overview/is_enabled``. A Router with statistics turned off answers the
+        stats and Query Log endpoints with empty bodies, so this tells "off" apart from a
+        failed read.
+
+        Args:
+            caller (str): Public method name used in debug logs.
+
+        Returns:
+            AbsentReason | Literal["enabled"] | None: ``"enabled"`` when statistics can be
+            read, otherwise why not. With errors disabled, None when the read failed this
+            time or its body has no ``enabled`` value.
+        """
+        outcome = await self._fetch_endpoint_outcome(UNBOUND_OVERVIEW_IS_ENABLED_ENDPOINT)
+        if outcome.is_absent:
+            reason = self._absent_reason(outcome)
+            _LOGGER.debug("[%s] Unbound statistics endpoint absent (%s)", caller, reason)
+            return reason
+        enabled = outcome.mapping().get("enabled")
+        if outcome.is_transient or enabled is None:
+            _LOGGER.debug("[%s] Unbound statistics setting read failed", caller)
+            return None
+        if not coerce_bool(enabled):
+            _LOGGER.debug("[%s] Unbound statistics are disabled", caller)
+            return "disabled"
+        return "enabled"
+
+    @staticmethod
+    def _complete_buckets(rolling: Mapping[str, Any]) -> list[UnboundMixin.BucketCounts]:
+        """Return the counters of each Complete Bucket, oldest first.
+
+        The newest Bucket is still filling and is dropped. Buckets whose key is not an
+        epoch, or whose counters are not integers, are skipped.
+
+        Args:
+            rolling (Mapping[str, Any]): Epoch-keyed Buckets from ``overview/rolling``.
+
+        Returns:
+            list[UnboundMixin.BucketCounts]: Counters per Complete Bucket.
+        """
+        keyed = sorted(
+            (
+                (start, bucket)
+                for key, bucket in rolling.items()
+                if (start := try_to_float(key)) is not None
+            ),
+            key=lambda item: item[0],
+        )
+        complete: list[UnboundMixin.BucketCounts] = []
+        for _start, bucket in keyed[:-1]:
+            if not isinstance(bucket, Mapping):
+                continue
+            queries = try_to_int(bucket.get("total"))
+            blocked = try_to_int(bucket.get("blocked"))
+            dropped = try_to_int(bucket.get("dropped"))
+            if queries is None or blocked is None or dropped is None:
+                continue
+            complete.append(
+                UnboundMixin.BucketCounts(queries=queries, blocked=blocked, dropped=dropped)
+            )
+        return complete
+
+    @staticmethod
+    def _top_domains(entries: object) -> tuple[UnboundMixin.TopDomain, ...]:
+        """Parse a top-domain mapping from ``overview/totals``, keeping Router order.
+
+        Entries that are not mappings or lack a numeric count are skipped.
+
+        Args:
+            entries (object): Domain-keyed mapping of ``{total, pcnt[, blocklist]}``.
+
+        Returns:
+            tuple[UnboundMixin.TopDomain, ...]: Parsed entries.
+        """
+        if not isinstance(entries, Mapping):
+            return ()
+        parsed: list[UnboundMixin.TopDomain] = []
+        for domain, entry in entries.items():
+            if not isinstance(entry, Mapping):
+                continue
+            count = try_to_int(entry.get("total"))
+            if count is None:
+                continue
+            parsed.append(
+                UnboundMixin.TopDomain(
+                    domain=_domain_name(domain),
+                    count=count,
+                    percent=try_to_float(entry.get("pcnt")) or 0.0,
+                    blocklist=_optional_text(entry.get("blocklist")),
+                )
+            )
+        return tuple(parsed)
+
+    @staticmethod
+    def _query_log_entry(row: object) -> UnboundMixin.QueryLogEntry | None:
+        """Parse one ``overview/search_queries`` row.
+
+        Args:
+            row (object): Query Log row from the Router.
+
+        Returns:
+            UnboundMixin.QueryLogEntry | None: The parsed entry, or None when the row is not
+            a mapping or has no integer time.
+        """
+        if not isinstance(row, Mapping):
+            return None
+        time = timestamp_to_datetime(try_to_int(row.get("time")))
+        if time is None:
+            return None
+        return UnboundMixin.QueryLogEntry(
+            time=time,
+            client=str(row.get("client") or ""),
+            domain=_domain_name(row.get("domain")),
+            action=str(row.get("action") or ""),
+            blocklist=_optional_text(row.get("blocklist")),
+            policy=_optional_text(row.get("policy")),
+        )
+
+    @_log_errors
+    async def get_unbound_query_stats(self) -> QueryStats | None:
+        """Return Unbound Query Stats for the last minute, 24 hours and Retention Window.
+
+        Reads ``overview/is_enabled`` first, then ``overview/rolling/1``,
+        ``overview/rolling/24`` and ``overview/totals/10``. Only Complete Buckets are
+        counted; the newest, still-filling Bucket is dropped.
+
+        Returns:
+            QueryStats | None: The Query Stats. A ``QueryStats`` with ``absent`` set and no
+            data when an endpoint is absent (404, or 403 with errors disabled) or Unbound
+            statistics are turned off. With errors disabled, None when a read failed this
+            time: a transient failure, or a body that cannot be decoded or has the wrong
+            shape. With errors enabled, a 403, transient or decoding failure raises the
+            mapped ``OPNsenseError``.
+        """
+        state = await self._unbound_stats_state("get_unbound_query_stats")
+        if state is None:
+            return None
+        if state != "enabled":
+            return self.QueryStats(absent=state)
+        payloads: list[Mapping[str, Any]] = []
+        for endpoint in (
+            UNBOUND_OVERVIEW_ROLLING_HOUR_ENDPOINT,
+            UNBOUND_OVERVIEW_ROLLING_DAY_ENDPOINT,
+            UNBOUND_OVERVIEW_TOTALS_ENDPOINT,
+        ):
+            outcome = await self._fetch_endpoint_outcome(endpoint)
+            if outcome.is_absent:
+                reason = self._absent_reason(outcome)
+                _LOGGER.debug("[get_unbound_query_stats] %s absent (%s)", endpoint, reason)
+                return self.QueryStats(absent=reason)
+            if outcome.is_transient or not isinstance(outcome.payload, Mapping):
+                _LOGGER.debug("[get_unbound_query_stats] %s read failed", endpoint)
+                return None
+            payloads.append(outcome.payload)
+        hour, day, totals = payloads
+
+        hour_buckets = self._complete_buckets(hour)
+        day_buckets = self._complete_buckets(day)
+        return self.QueryStats(
+            last_minute=hour_buckets[-1] if hour_buckets else None,
+            last_24h=self.BucketCounts(
+                queries=sum(bucket.queries for bucket in day_buckets),
+                blocked=sum(bucket.blocked for bucket in day_buckets),
+                dropped=sum(bucket.dropped for bucket in day_buckets),
+            ),
+            blocklist_size=try_to_int(totals.get("blocklist_size")),
+            since=timestamp_to_datetime(try_to_int(totals.get("start_time"))),
+            top_domains=self._top_domains(totals.get("top")),
+            top_blocked_domains=self._top_domains(totals.get("top_blocked")),
+        )
+
+    @_log_errors
+    async def get_unbound_queries(
+        self,
+        action: str | None = None,
+        client: str | None = None,
+        search: str | None = None,
+        limit: int = 30,
+    ) -> QueryLog | None:
+        """Return the newest queries from the Unbound Query Log.
+
+        Reads ``overview/is_enabled`` first. The Router keeps only its last 1,000 queries.
+        Its search phrase matches any column, so ``action`` and ``client`` are applied
+        here as exact, case-insensitive filters.
+
+        Args:
+            action (str | None): Only return queries with this action (``Pass``, ``Block``
+                or ``Drop``).
+            client (str | None): Only return queries from this client, matched against the
+                client field as the Router reports it. That field is usually the DHCP
+                hostname, and rows carry no separate IP address, so a named host's IP
+                address matches none of its queries.
+            search (str | None): Free-text phrase the Router matches against every column.
+            limit (int): Maximum number of entries to return, at most 1,000.
+
+        Returns:
+            QueryLog | None: Matching entries, newest first; empty ``entries`` means nothing
+            matched. A ``QueryLog`` with ``absent`` set and no entries when an endpoint is
+            absent (404, or 403 with errors disabled) or Unbound statistics are turned off.
+            With errors disabled, None when a read failed this time: a transient failure,
+            or a body that cannot be decoded or has the wrong shape. With errors enabled,
+            a 403, transient or decoding failure raises the mapped ``OPNsenseError``.
+        """
+        state = await self._unbound_stats_state("get_unbound_queries")
+        if state is None:
+            return None
+        if state != "enabled":
+            return self.QueryLog(absent=state)
+        # The Router takes one free-text phrase. Send search, else client, which matches
+        # fewer rows than an action such as Pass; both filters are then matched exactly.
+        phrase = search or client or action or ""
+        payload = {
+            "current": 1,
+            "rowCount": QUERY_LOG_SIZE,
+            "searchPhrase": phrase,
+            "sort": {"time": "desc"},
+        }
+        outcome = await self._fetch_post_endpoint_outcome(
+            UNBOUND_OVERVIEW_SEARCH_QUERIES_ENDPOINT, payload
+        )
+        if outcome.is_absent:
+            reason = self._absent_reason(outcome)
+            _LOGGER.debug("[get_unbound_queries] Query Log absent (%s)", reason)
+            return self.QueryLog(absent=reason)
+        rows = outcome.mapping().get("rows")
+        if outcome.is_transient or not isinstance(rows, list):
+            _LOGGER.debug("[get_unbound_queries] Query Log read failed")
+            return None
+        entries: list[UnboundMixin.QueryLogEntry] = []
+        for row in rows:
+            if len(entries) >= min(limit, QUERY_LOG_SIZE):
+                break
+            entry = self._query_log_entry(row)
+            if entry is None:
+                continue
+            if action is not None and entry.action.casefold() != action.casefold():
+                continue
+            if client is not None and entry.client.casefold() != client.casefold():
+                continue
+            entries.append(entry)
+        _LOGGER.debug("[get_unbound_queries] %s matching entries", len(entries))
+        return self.QueryLog(entries=tuple(entries))
 
     @staticmethod
     def _normalize_unbound_blocklist_legacy(
