@@ -815,8 +815,11 @@ async def test_get_wireguard_status_access_keeps_a_link_for_each_visible_row(
     assert result is not None
     assert result_access(result) is Access.STATUS
     (server,) = result["servers"].values()
-    linked, unlinked = result["clients"].values()
-    assert unlinked["pubkey"] == "unlinked-key"
+    clients = result["clients"]
+    assert len(clients) == 2
+    clients_by_public_key = {entry["pubkey"]: entry for entry in clients.values()}
+    linked = clients_by_public_key["client-key"]
+    unlinked = clients_by_public_key["unlinked-key"]
     assert unlinked["servers"] == []
     assert unlinked["total_bytes_recv"] == 0
     assert server["connected_clients"] == linked["connected_servers"] == 1
