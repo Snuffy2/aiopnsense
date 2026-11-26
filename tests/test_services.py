@@ -1,6 +1,7 @@
 """Tests for `aiopnsense.services`."""
 
 from collections.abc import Callable
+import logging
 
 import pytest
 
@@ -227,6 +228,33 @@ async def test_get_services_valid_empty_rows(
     )
 
     assert await client.get_services() == []
+
+
+@pytest.mark.parametrize(
+    ("reply", "diagnostic"),
+    [
+        (404, "Service search endpoint unavailable"),
+        ({}, "[get_services] Discarding response without a service rows list"),
+    ],
+    ids=["missing-endpoint", "malformed-inventory"],
+)
+async def test_get_services_reports_inventory_diagnostic(
+    make_client: ClientType, caplog: pytest.LogCaptureFixture, reply: object, diagnostic: str
+) -> None:
+    """Distinguish an unavailable endpoint from a malformed inventory in debug logs.
+
+    Args:
+        make_client (ClientType): Fixture factory returning client instances.
+        caplog (pytest.LogCaptureFixture): Captured Router read diagnostics.
+        reply (object): Service search response.
+        diagnostic (str): Expected message identifying the failure.
+    """
+    client, _ = make_router_client(make_client, {("GET", SERVICE_SEARCH_PATH): reply})
+
+    with caplog.at_level(logging.DEBUG):
+        await client.get_services()
+
+    assert caplog.messages.count(diagnostic) == 1
 
 
 @pytest.mark.asyncio

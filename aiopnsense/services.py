@@ -1,10 +1,10 @@
 """Service management methods for OPNsenseClient."""
 
-from collections.abc import Mapping, MutableMapping
+from collections.abc import MutableMapping
 from typing import Any
 from urllib.parse import quote
 
-from ._error_policy import _log_errors, _throws_errors
+from ._error_policy import _log_errors
 from ._typing import AiopnsenseClientProtocol
 from .helpers import _LOGGER, api_value_matches
 
@@ -44,16 +44,13 @@ class ServicesMixin(AiopnsenseClientProtocol):
                 ``None``. Strict mode propagates request errors.
         """
         outcome = await self._fetch_endpoint_outcome(CORE_SERVICE_SEARCH_ENDPOINT)
-        if not outcome.is_data:
-            _LOGGER.debug("Service search endpoint unavailable")
-            return [] if outcome.http_status == 404 else None
-
-        payload = outcome.payload
-        rows = payload.get("rows") if isinstance(payload, Mapping) else None
-        if not isinstance(rows, list):
-            _LOGGER.debug("[get_services] Discarding response without a service rows list")
-            return [] if _throws_errors(self) else None
-        return self._normalize_services_rows(rows)
+        rows = self._inventory_rows(
+            outcome,
+            field="rows",
+            unavailable_message="Service search endpoint unavailable",
+            malformed_message="[get_services] Discarding response without a service rows list",
+        )
+        return None if rows is None else self._normalize_services_rows(rows)
 
     @_log_errors
     async def get_services(self) -> list[dict[str, Any]] | None:
