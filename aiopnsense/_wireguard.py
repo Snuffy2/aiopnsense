@@ -1,7 +1,7 @@
-"""Assemble configured WireGuard inventories and apply live link observations."""
+"""Assemble WireGuard inventories and apply live link observations."""
 
 from collections import defaultdict
-from collections.abc import Hashable, Iterator, MutableMapping
+from collections.abc import Hashable, Iterable, Iterator, MutableMapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
@@ -162,23 +162,121 @@ def _assemble_configured_wireguard(
                 if server["pubkey"] == row.get("public-key"):
                     server["status"] = row.get("status")
         elif row.get("type") == "peer":
-            _apply_wireguard_observation(row, links)
+            interface = row.get("if", "-")
+            targets: Iterable[_WireGuardLinkTarget] = ()
+            # Configured interfaces are strings, or absent for an incomplete reference.
+            if interface is None or isinstance(interface, str):
+                key = _WireGuardLinkKey(interface, row.get("public-key", "-"))
+                targets = links.get(key, ())
+            _apply_wireguard_observation(row, targets)
+    return servers, clients
+
+
+def _assemble_status_wireguard(
+    summary: list[Any],
+) -> tuple[dict[str, MutableMapping[str, Any]], dict[str, MutableMapping[str, Any]]]:
+    """Build WireGuard inventories and links visible in the status summary.
+
+    Args:
+        summary (list[Any]): WireGuard summary rows from the Router.
+
+    Returns:
+        tuple[dict[str, MutableMapping[str, Any]], dict[str, MutableMapping[str, Any]]]:
+            Servers and Clients keyed by public-key hash.
+    """
+    servers: dict[str, MutableMapping[str, Any]] = {}
+    clients: dict[str, MutableMapping[str, Any]] = {}
+    servers_by_interface: dict[str, MutableMapping[str, Any]] = {}
+    server_names_by_interface: dict[str, Any] = {}
+    client_rows: list[tuple[str, MutableMapping[str, Any], MutableMapping[str, Any]]] = []
+    for row in summary:
+        if not isinstance(row, MutableMapping):
+            continue
+        public_key = row.get("public-key")
+        key_hash = _wireguard_key_hash(public_key)
+        interface = row.get("if")
+        if key_hash is None or not isinstance(interface, str) or not interface:
+            continue
+        identity = {
+            "uuid": None,
+            "key_hash": key_hash,
+            "name": row.get("name") or row.get("ifname"),
+            "pubkey": public_key,
+            "total_bytes_recv": 0,
+            "total_bytes_sent": 0,
+        }
+        if row.get("type") == "interface":
+            server_entry = servers.get(key_hash)
+            status = row.get("status")
+            if server_entry is None:
+                server_entry = {
+                    **identity,
+                    "interface": interface,
+                    "status": status,
+                    "clients": [],
+                    "connected_clients": 0,
+                }
+                servers[key_hash] = server_entry
+            else:
+                current_status = server_entry["status"]
+                # Prefer up, then missing status, then down. Break ties by interface name.
+                if (status != "up", status == "down", interface) < (
+                    current_status != "up",
+                    current_status == "down",
+                    server_entry["interface"],
+                ):
+                    server_entry.update(
+                        name=identity["name"],
+                        pubkey=public_key,
+                        interface=interface,
+                        status=status,
+                    )
+            servers_by_interface[interface] = server_entry
+            server_names_by_interface[interface] = identity["name"]
+        elif row.get("type") == "peer":
+            client = clients.setdefault(
+                key_hash, {**identity, "servers": [], "connected_servers": 0}
+            )
+            client_rows.append((interface, client, row))
+
+    for interface, client, row in client_rows:
+        server = servers_by_interface.get(interface)
+        if server is None:
+            continue
+        server_link: MutableMapping[str, Any] = {
+            "uuid": None,
+            "name": client["name"],
+            "pubkey": client["pubkey"],
+            "connected": False,
+        }
+        server["clients"].append(server_link)
+        client_link: MutableMapping[str, Any] = {
+            "uuid": None,
+            "name": server_names_by_interface[interface],
+            "pubkey": server["pubkey"],
+            "interface": interface,
+            "connected": False,
+        }
+        client["servers"].append(client_link)
+        # Match the public key itself and apply this row only to its own pair of links.
+        targets = (
+            (server_link, server, "connected_clients"),
+            (client_link, client, "connected_servers"),
+        )
+        _apply_wireguard_observation(row, targets if row["public-key"] == client["pubkey"] else ())
     return servers, clients
 
 
 def _apply_wireguard_observation(
     row: MutableMapping[str, Any],
-    links: MutableMapping[_WireGuardLinkKey, list[_WireGuardLinkTarget]],
+    targets: Iterable[_WireGuardLinkTarget],
 ) -> None:
     """Apply a live observation to every matching link and its parent totals.
 
     Args:
         row (MutableMapping[str, Any]): WireGuard summary peer row.
-        links (MutableMapping[_WireGuardLinkKey, list[_WireGuardLinkTarget]]):
-            Link records, their parents and their counters grouped by relationship key.
+        targets (Iterable[_WireGuardLinkTarget]): Matching links, their parents and counters.
     """
-    public_key = row.get("public-key", "-")
-    interface = row.get("if", "-")
     endpoint = row.get("endpoint")
     received = try_to_int(row.get("transfer-rx", 0), 0) or 0
     sent = try_to_int(row.get("transfer-tx", 0), 0) or 0
@@ -187,10 +285,7 @@ def _apply_wireguard_observation(
         minutes=3
     )
 
-    # Configured interfaces are strings, or absent for an incomplete reference.
-    if interface is not None and not isinstance(interface, str):
-        return
-    for link, parent, counter in links.get(_WireGuardLinkKey(interface, public_key), []):
+    for link, parent, counter in targets:
         if endpoint and endpoint != "(none)":
             link["endpoint"] = endpoint
         link.update(

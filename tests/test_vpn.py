@@ -782,6 +782,55 @@ async def test_get_wireguard_status_access_links_live_rows(
     assert router.count("GET", denied_path) == 2
 
 
+async def test_get_wireguard_status_access_keeps_a_link_for_each_visible_row(
+    make_client: ClientType, wireguard_now: datetime
+) -> None:
+    """Report each observation on its own link while preserving visible unlinked Clients.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        wireguard_now (datetime): Fixed reference time for handshake status.
+    """
+    handshake = wireguard_now - timedelta(seconds=30)
+    endpoint = "192.0.2.1:51820"
+    peer_row = {"type": "peer", "public-key": "client-key", "if": "wg1"}
+    rows = [
+        {
+            **peer_row,
+            "endpoint": endpoint,
+            "latest-handshake": int(handshake.timestamp()),
+            "transfer-rx": "15",
+            "transfer-tx": "20",
+        },
+        {**peer_row, "endpoint": "(none)", "transfer-rx": "2", "transfer-tx": "3"},
+        {"type": "interface", "public-key": "server-key", "if": "wg1"},
+        {"type": "peer", "public-key": "unlinked-key", "if": "wg2", "transfer-rx": "100"},
+    ]
+    client, _router = make_vpn_router(
+        make_client, wireguard_routes(summary={"rows": rows}, clients=403)
+    )
+
+    result = await client.get_wireguard()
+
+    assert result is not None
+    assert result_access(result) is Access.STATUS
+    (server,) = result["servers"].values()
+    linked, unlinked = result["clients"].values()
+    assert unlinked["pubkey"] == "unlinked-key"
+    assert unlinked["servers"] == []
+    assert unlinked["total_bytes_recv"] == 0
+    assert server["connected_clients"] == linked["connected_servers"] == 1
+    for parent, links in ((server, server["clients"]), (linked, linked["servers"])):
+        assert (parent["total_bytes_recv"], parent["total_bytes_sent"]) == (17, 23)
+        assert parent["latest_handshake"] == handshake
+        first, second = links
+        assert (first["bytes_recv"], first["bytes_sent"], first["connected"]) == (15, 20, True)
+        assert first["latest_handshake"] == handshake
+        assert first["endpoint"] == endpoint
+        assert (second["bytes_recv"], second["bytes_sent"], second["connected"]) == (2, 3, False)
+        assert "endpoint" not in second
+
+
 @pytest.mark.parametrize("reverse_rows", [False, True])
 async def test_get_wireguard_status_access_aggregates_shared_server_key(
     make_client: ClientType, wireguard_now: datetime, reverse_rows: bool
@@ -1192,6 +1241,71 @@ async def test_get_wireguard_malformed_summary_stops_configuration_reads(
 
     assert await client.get_wireguard() is None
     assert sent(router) == [("GET", WIREGUARD_SUMMARY_PATH)]
+
+
+@pytest.mark.parametrize(
+    ("summary", "clients", "servers", "expected_error", "expected_status", "expected_paths"),
+    [
+        pytest.param(
+            UNAVAILABLE,
+            403,
+            403,
+            OPNsenseConnectionError,
+            UNAVAILABLE,
+            [WIREGUARD_SUMMARY_PATH],
+            id="summary-failure",
+        ),
+        pytest.param(
+            {"rows": None},
+            UNAVAILABLE,
+            403,
+            OPNsenseConnectionError,
+            UNAVAILABLE,
+            [WIREGUARD_SUMMARY_PATH, "/api/wireguard/client/get"],
+            id="client-failure",
+        ),
+        pytest.param(
+            {"rows": None},
+            NOT_FOUND,
+            403,
+            OPNsensePrivilegeMissing,
+            403,
+            [WIREGUARD_SUMMARY_PATH, "/api/wireguard/client/get", "/api/wireguard/server/get"],
+            id="server-denial",
+        ),
+    ],
+)
+async def test_get_wireguard_strict_raises_first_request_failure(
+    make_client: ClientType,
+    summary: Any,
+    clients: int,
+    servers: int,
+    expected_error: type[OPNsenseConnectionError],
+    expected_status: int,
+    expected_paths: list[str],
+) -> None:
+    """Raise the first request failure even when the summary has malformed rows.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        summary (Any): Status summary reply.
+        clients (int): Client configuration HTTP status.
+        servers (int): Server configuration HTTP status.
+        expected_error (type[OPNsenseConnectionError]): Public exception type.
+        expected_status (int): HTTP status reported by the exception.
+        expected_paths (list[str]): Requests made before the failure.
+    """
+    client, router = make_vpn_router(
+        make_client,
+        wireguard_routes(summary=summary, clients=clients, servers=servers),
+        throw_errors=True,
+    )
+
+    with pytest.raises(expected_error) as error:
+        await client.get_wireguard()
+
+    assert error.value.status == expected_status
+    assert router.paths("GET") == expected_paths
 
 
 async def test_openvpn_sessions_failure_stops_the_read(make_client: ClientType) -> None:

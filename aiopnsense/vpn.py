@@ -8,12 +8,7 @@ from typing import Any
 from ._error_policy import _attempt, _log_boolean_errors, _log_errors, _throws_errors
 from ._styled_endpoint import _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
-from ._wireguard import (
-    _apply_wireguard_observation,
-    _assemble_configured_wireguard,
-    _wireguard_key_hash,
-    _WireGuardLinkKey,
-)
+from ._wireguard import _assemble_configured_wireguard, _assemble_status_wireguard
 from .access import Access, AccessDict
 from .client_toggle import TOGGLE_ITEM_RESULTS, ToggleSpec, ToggleStep, ToggleTarget, VpnInstance
 from .exceptions import OPNsenseError
@@ -490,7 +485,7 @@ class VPNMixin(AiopnsenseClientProtocol):
             _LOGGER.debug("[get_wireguard] status unavailable (malformed rows)")
             return None
         if access is Access.STATUS:
-            servers, clients = self._wireguard_status_inventory(summary)
+            servers, clients = _assemble_status_wireguard(summary)
         else:
             client_summ = inventories.get(WIREGUARD_CLIENTS_ENDPOINT)
             server_summ = inventories.get(WIREGUARD_SERVERS_ENDPOINT)
@@ -512,102 +507,6 @@ class VPNMixin(AiopnsenseClientProtocol):
             len(clients),
         )
         return AccessDict({"servers": servers, "clients": clients}, access=access)
-
-    @staticmethod
-    def _wireguard_status_inventory(
-        summary: list[MutableMapping[str, Any]],
-    ) -> tuple[dict[str, MutableMapping[str, Any]], dict[str, MutableMapping[str, Any]]]:
-        """Build WireGuard inventories and links visible in the status summary.
-
-        Args:
-            summary (list[MutableMapping[str, Any]]): WireGuard status rows.
-
-        Returns:
-            tuple[dict[str, MutableMapping[str, Any]], dict[str, MutableMapping[str, Any]]]:
-                Servers and clients keyed by public-key hash.
-        """
-        servers: dict[str, MutableMapping[str, Any]] = {}
-        clients: dict[str, MutableMapping[str, Any]] = {}
-        servers_by_interface: dict[str, MutableMapping[str, Any]] = {}
-        server_names_by_interface: dict[str, Any] = {}
-        peers: list[tuple[str, MutableMapping[str, Any], MutableMapping[str, Any]]] = []
-        for row in summary:
-            if not isinstance(row, MutableMapping):
-                continue
-            public_key = row.get("public-key")
-            key_hash = _wireguard_key_hash(public_key)
-            interface = row.get("if")
-            if key_hash is None or not isinstance(interface, str) or not interface:
-                continue
-            identity = {
-                "uuid": None,
-                "key_hash": key_hash,
-                "name": row.get("name") or row.get("ifname"),
-                "pubkey": public_key,
-                "total_bytes_recv": 0,
-                "total_bytes_sent": 0,
-            }
-            if row.get("type") == "interface":
-                server_entry = servers.get(key_hash)
-                status = row.get("status")
-                if server_entry is None:
-                    server_entry = {
-                        **identity,
-                        "interface": interface,
-                        "status": status,
-                        "clients": [],
-                        "connected_clients": 0,
-                    }
-                    servers[key_hash] = server_entry
-                else:
-                    current_status = server_entry["status"]
-                    # Prefer up, then missing status, then down. Break ties by interface name.
-                    if (status != "up", status == "down", interface) < (
-                        current_status != "up",
-                        current_status == "down",
-                        server_entry["interface"],
-                    ):
-                        server_entry.update(
-                            name=identity["name"],
-                            pubkey=public_key,
-                            interface=interface,
-                            status=status,
-                        )
-                servers_by_interface[interface] = server_entry
-                server_names_by_interface[interface] = identity["name"]
-            elif row.get("type") == "peer":
-                client = clients.setdefault(
-                    key_hash, {**identity, "servers": [], "connected_servers": 0}
-                )
-                peers.append((interface, client, row))
-
-        for interface, client, row in peers:
-            server = servers_by_interface.get(interface)
-            if server is None:
-                continue
-            server_link: MutableMapping[str, Any] = {
-                "uuid": None,
-                "name": client["name"],
-                "pubkey": client["pubkey"],
-                "connected": False,
-            }
-            server["clients"].append(server_link)
-            client_link: MutableMapping[str, Any] = {
-                "uuid": None,
-                "name": server_names_by_interface[interface],
-                "pubkey": server["pubkey"],
-                "interface": interface,
-                "connected": False,
-            }
-            client["servers"].append(client_link)
-            links = {
-                _WireGuardLinkKey(interface, client["pubkey"]): [
-                    (server_link, server, "connected_clients"),
-                    (client_link, client, "connected_servers"),
-                ]
-            }
-            _apply_wireguard_observation(row, links)
-        return servers, clients
 
     @_log_boolean_errors
     async def toggle_vpn_instance(
