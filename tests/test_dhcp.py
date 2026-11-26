@@ -2872,6 +2872,7 @@ async def test_get_dhcp_leases_denial_covers_failed_configuration_read(
     assert result is not None
     assert result_access(result) is Access.STATUS
     assert result["lease_interfaces"] == {"lan": "LAN", "opt2": "Guest"}
+    assert set(result["leases"]) == {"lan", "opt2"}
     assert _leases_by_address(result)["192.0.2.10"]["mac"] == "aa:bb:cc:dd:ee:01"
     assert _leases_by_address(result, "opt2")["198.51.100.10"]["mac"] == "aa:bb:cc:dd:ee:02"
 
