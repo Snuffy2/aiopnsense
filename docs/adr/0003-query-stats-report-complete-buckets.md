@@ -14,5 +14,6 @@ OPNsense's `unbound/overview/rolling/<hours>` returns Buckets keyed by start tim
 - With errors disabled, both reads keep three cases apart, so a caller such as hass-opnsense can create entities once a read is not absent and mark them unavailable instead of reporting zero queries:
   - **Read failed this time** (a transient failure, or a body that cannot be decoded or has the wrong shape): `None`, as from `@_log_errors` and under [ADR 0004](0004-results-report-their-access-level.md).
   - **Endpoint absent** (404, or 403 including a cached 403): a `QueryStats` or `QueryLog` with no data and `absent` set to `"not_found"` or `"forbidden"`.
+  - **Statistics disabled:** the same empty result with `absent="disabled"`. Both reads ask `overview/is_enabled` first, because a Router with Unbound statistics off answers `rolling` with `[]` and would otherwise look like a failed read on every poll. A disabled Router gets no further requests.
   - **Data:** `absent` is `None`. Empty `QueryLog.entries` means nothing matched.
 - No Firmware Capability gates these reads, because every supported release has the endpoints.

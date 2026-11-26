@@ -15,6 +15,7 @@ from .const import EXTENDED_UNBOUND_BLOCKLIST_CAPABILITY
 from .helpers import (
     _LOGGER,
     api_value_matches,
+    coerce_bool,
     dict_get,
     timestamp_to_datetime,
     try_to_float,
@@ -24,8 +25,9 @@ from .helpers import (
 QUERY_LOG_SIZE = 1000
 TOP_DOMAINS_SIZE = 10
 
-type AbsentReason = Literal["not_found", "forbidden"]
-"""Why a DNS read has no data: the endpoint is missing (404) or not permitted (403)."""
+type AbsentReason = Literal["not_found", "forbidden", "disabled"]
+"""Why a DNS read has no data: the endpoint is missing (404), not permitted (403), or
+Unbound statistics are turned off on the Router."""
 
 UNBOUND_SETTINGS_GET_ENDPOINT = "/api/unbound/settings/get"
 UNBOUND_SETTINGS_SET_ENDPOINT = "/api/unbound/settings/set"
@@ -36,6 +38,10 @@ UNBOUND_SETTINGS_TOGGLE_DNSBL_ENDPOINT_PREFIX = "/api/unbound/settings/toggle_dn
 UNBOUND_OVERVIEW_ROLLING_HOUR_ENDPOINT = "/api/unbound/overview/rolling/1"
 UNBOUND_OVERVIEW_ROLLING_DAY_ENDPOINT = "/api/unbound/overview/rolling/24"
 UNBOUND_OVERVIEW_TOTALS_ENDPOINT = f"/api/unbound/overview/totals/{TOP_DOMAINS_SIZE}"
+UNBOUND_OVERVIEW_IS_ENABLED_ENDPOINT = _StyledEndpoint(
+    snake_case="/api/unbound/overview/is_enabled",
+    camel_case="/api/unbound/overview/isEnabled",
+)
 UNBOUND_OVERVIEW_SEARCH_QUERIES_ENDPOINT = _StyledEndpoint(
     snake_case="/api/unbound/overview/search_queries",
     camel_case="/api/unbound/overview/searchQueries",
@@ -126,8 +132,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
                 Retention Window, as many as ``overview/totals/10`` returns.
             top_blocked_domains (tuple[UnboundMixin.TopDomain, ...]): Most Blocked domains
                 in the Retention Window, as many as ``overview/totals/10`` returns.
-            absent (AbsentReason | None): Why there is no data, ``"not_found"`` (404) or
-                ``"forbidden"`` (403). None when the stats were read.
+            absent (AbsentReason | None): Why there is no data: ``"not_found"`` (404),
+                ``"forbidden"`` (403) or ``"disabled"`` (Unbound statistics are off).
+                None when the stats were read.
         """
 
         last_minute: UnboundMixin.BucketCounts | None = None
@@ -167,8 +174,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
         Attributes:
             entries (tuple[UnboundMixin.QueryLogEntry, ...]): Matching entries, newest
                 first. Empty when nothing matched or the Query Log is absent.
-            absent (AbsentReason | None): Why there is no data, ``"not_found"`` (404) or
-                ``"forbidden"`` (403). None when the Query Log was read.
+            absent (AbsentReason | None): Why there is no data: ``"not_found"`` (404),
+                ``"forbidden"`` (403) or ``"disabled"`` (Unbound statistics are off).
+                None when the Query Log was read.
         """
 
         entries: tuple[UnboundMixin.QueryLogEntry, ...] = ()
@@ -185,6 +193,35 @@ class UnboundMixin(AiopnsenseClientProtocol):
             AbsentReason: ``"forbidden"`` for a 403, otherwise ``"not_found"``.
         """
         return "forbidden" if outcome.http_status == 403 else "not_found"
+
+    async def _unbound_stats_state(self, caller: str) -> AbsentReason | Literal["enabled"] | None:
+        """Ask the Router whether Unbound statistics can be read.
+
+        Reads ``overview/is_enabled``. A Router with statistics turned off answers the
+        stats and Query Log endpoints with empty bodies, so this tells "off" apart from a
+        failed read.
+
+        Args:
+            caller (str): Public method name used in debug logs.
+
+        Returns:
+            AbsentReason | Literal["enabled"] | None: ``"enabled"`` when statistics can be
+            read, otherwise why not. With errors disabled, None when the read failed this
+            time or its body has no ``enabled`` value.
+        """
+        outcome = await self._fetch_endpoint_outcome(UNBOUND_OVERVIEW_IS_ENABLED_ENDPOINT)
+        if outcome.is_absent:
+            reason = self._absent_reason(outcome)
+            _LOGGER.debug("[%s] Unbound statistics endpoint absent (%s)", caller, reason)
+            return reason
+        enabled = outcome.mapping().get("enabled")
+        if outcome.is_transient or enabled is None:
+            _LOGGER.debug("[%s] Unbound statistics setting read failed", caller)
+            return None
+        if not coerce_bool(enabled):
+            _LOGGER.debug("[%s] Unbound statistics are disabled", caller)
+            return "disabled"
+        return "enabled"
 
     @staticmethod
     def _complete_buckets(rolling: Mapping[str, Any]) -> list[UnboundMixin.BucketCounts]:
@@ -281,17 +318,23 @@ class UnboundMixin(AiopnsenseClientProtocol):
     async def get_unbound_query_stats(self) -> QueryStats | None:
         """Return Unbound Query Stats for the last minute, 24 hours and Retention Window.
 
-        Reads ``overview/rolling/1``, ``overview/rolling/24`` and ``overview/totals/10``.
-        Only Complete Buckets are counted; the newest, still-filling Bucket is dropped.
+        Reads ``overview/is_enabled`` first, then ``overview/rolling/1``,
+        ``overview/rolling/24`` and ``overview/totals/10``. Only Complete Buckets are
+        counted; the newest, still-filling Bucket is dropped.
 
         Returns:
-            QueryStats | None: The Query Stats. When any of the three endpoints is absent
-            (404, or 403 with errors disabled), a ``QueryStats`` with ``absent`` set and no
-            data. With errors disabled, None when a read failed this time: a transient
-            failure, or a body that cannot be decoded or is not a mapping. With errors
-            enabled, a 403, transient or decoding failure raises the mapped
-            ``OPNsenseError``.
+            QueryStats | None: The Query Stats. A ``QueryStats`` with ``absent`` set and no
+            data when an endpoint is absent (404, or 403 with errors disabled) or Unbound
+            statistics are turned off. With errors disabled, None when a read failed this
+            time: a transient failure, or a body that cannot be decoded or has the wrong
+            shape. With errors enabled, a 403, transient or decoding failure raises the
+            mapped ``OPNsenseError``.
         """
+        state = await self._unbound_stats_state("get_unbound_query_stats")
+        if state is None:
+            return None
+        if state != "enabled":
+            return self.QueryStats(absent=state)
         payloads: list[Mapping[str, Any]] = []
         for endpoint in (
             UNBOUND_OVERVIEW_ROLLING_HOUR_ENDPOINT,
@@ -334,8 +377,9 @@ class UnboundMixin(AiopnsenseClientProtocol):
     ) -> QueryLog | None:
         """Return the newest queries from the Unbound Query Log.
 
-        The Router keeps only its last 1,000 queries. Its search phrase matches any column,
-        so ``action`` and ``client`` are applied here as exact, case-insensitive filters.
+        Reads ``overview/is_enabled`` first. The Router keeps only its last 1,000 queries.
+        Its search phrase matches any column, so ``action`` and ``client`` are applied
+        here as exact, case-insensitive filters.
 
         Args:
             action (str | None): Only return queries with this action (``Pass``, ``Block``
@@ -349,12 +393,17 @@ class UnboundMixin(AiopnsenseClientProtocol):
 
         Returns:
             QueryLog | None: Matching entries, newest first; empty ``entries`` means nothing
-            matched. When the endpoint is absent (404, or 403 with errors disabled), a
-            ``QueryLog`` with ``absent`` set and no entries. With errors disabled, None when
-            the read failed this time: a transient failure, or a body that cannot be decoded
-            or has no row list. With errors enabled, a 403, transient or decoding failure
-            raises the mapped ``OPNsenseError``.
+            matched. A ``QueryLog`` with ``absent`` set and no entries when an endpoint is
+            absent (404, or 403 with errors disabled) or Unbound statistics are turned off.
+            With errors disabled, None when a read failed this time: a transient failure,
+            or a body that cannot be decoded or has the wrong shape. With errors enabled,
+            a 403, transient or decoding failure raises the mapped ``OPNsenseError``.
         """
+        state = await self._unbound_stats_state("get_unbound_queries")
+        if state is None:
+            return None
+        if state != "enabled":
+            return self.QueryLog(absent=state)
         # The Router takes one free-text phrase. Send search, else client, which matches
         # fewer rows than an action such as Pass; both filters are then matched exactly.
         phrase = search or client or action or ""

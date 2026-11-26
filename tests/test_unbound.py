@@ -1034,6 +1034,9 @@ ROLLING_24H = "/api/unbound/overview/rolling/24"
 TOTALS = "/api/unbound/overview/totals/10"
 SEARCH_QUERIES = "/api/unbound/overview/search_queries"
 SEARCH_QUERIES_CAMEL = "/api/unbound/overview/searchQueries"
+IS_ENABLED = "/api/unbound/overview/is_enabled"
+IS_ENABLED_CAMEL = "/api/unbound/overview/isEnabled"
+STATS_ENABLED = {"enabled": "1"}
 
 
 def _bucket(total: int, blocked: int, dropped: int) -> dict[str, int]:
@@ -1091,6 +1094,7 @@ def _stats_routes(totals: dict[str, Any] | None = None) -> dict[tuple[str, str],
         dict[tuple[str, str], Any]: Routes for the three Query Stats reads.
     """
     return {
+        ("GET", IS_ENABLED): STATS_ENABLED,
         ("GET", ROLLING_1H): {"1763900100.0": _bucket(1, 0, 0)},
         ("GET", ROLLING_24H): {"1763899800.0": _bucket(1, 0, 0)},
         ("GET", TOTALS): totals if totals is not None else _totals(),
@@ -1134,14 +1138,21 @@ FILTER_ROWS = [
 ]
 
 DNS_READS = [
+    pytest.param("get_unbound_query_stats", _stats_routes(), IS_ENABLED, id="stats-is-enabled"),
     pytest.param("get_unbound_query_stats", _stats_routes(), ROLLING_1H, id="stats-1h"),
     pytest.param("get_unbound_query_stats", _stats_routes(), ROLLING_24H, id="stats-24h"),
     pytest.param("get_unbound_query_stats", _stats_routes(), TOTALS, id="stats-totals"),
     pytest.param(
         "get_unbound_queries",
-        {("POST", SEARCH_QUERIES): {"rows": [_query_row()]}},
+        {("GET", IS_ENABLED): STATS_ENABLED, ("POST", SEARCH_QUERIES): {"rows": [_query_row()]}},
         SEARCH_QUERIES,
         id="queries",
+    ),
+    pytest.param(
+        "get_unbound_queries",
+        {("GET", IS_ENABLED): STATS_ENABLED, ("POST", SEARCH_QUERIES): {"rows": [_query_row()]}},
+        IS_ENABLED,
+        id="queries-is-enabled",
     ),
 ]
 """Each DNS read: method, healthy routes, and the path to fail."""
@@ -1160,6 +1171,7 @@ async def test_get_unbound_query_stats_reports_complete_buckets_only(
     client, _router = make_router_client(
         make_client,
         {
+            ("GET", IS_ENABLED): STATS_ENABLED,
             ("GET", ROLLING_1H): {
                 "1763900160.0": _bucket(2, 2, 2),
                 "1763900040.0": _bucket(40, 4, 1),
@@ -1195,6 +1207,7 @@ async def test_get_unbound_query_stats_without_complete_buckets(make_client: Cli
     client, _router = make_router_client(
         make_client,
         {
+            ("GET", IS_ENABLED): STATS_ENABLED,
             ("GET", ROLLING_1H): {"1763900160.0": _bucket(5, 1, 0)},
             ("GET", ROLLING_24H): {},
             ("GET", TOTALS): _totals(start_time=None, blocklist_size=None),
@@ -1220,6 +1233,7 @@ async def test_get_unbound_query_stats_skips_malformed_buckets(make_client: Clie
     client, _router = make_router_client(
         make_client,
         {
+            ("GET", IS_ENABLED): STATS_ENABLED,
             ("GET", ROLLING_1H): {
                 "1763900040.0": _bucket(40, 4, 1),
                 "1763900100.0": {"total": "many", "blocked": 3, "dropped": 0},
@@ -1314,6 +1328,7 @@ async def test_get_unbound_queries_searches_query_log(make_client: ClientType) -
     client, router = make_router_client(
         make_client,
         {
+            ("GET", IS_ENABLED): STATS_ENABLED,
             ("POST", SEARCH_QUERIES): {
                 "rows": [
                     _query_row(),
@@ -1328,7 +1343,7 @@ async def test_get_unbound_queries_searches_query_log(make_client: ClientType) -
                     _query_row(time="not-a-time"),
                     "not-a-mapping",
                 ]
-            }
+            },
         },
     )
 
@@ -1362,14 +1377,17 @@ async def test_get_unbound_queries_searches_query_log(make_client: ClientType) -
 async def test_get_unbound_queries_uses_camel_case_path_before_25_7(
     make_client: ClientType,
 ) -> None:
-    """Firmware before 25.7 is searched at the camelCase ``searchQueries`` path.
+    """Firmware before 25.7 uses the camelCase ``isEnabled`` and ``searchQueries`` paths.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
     """
     client, router = make_router_client(
         make_client,
-        {("POST", SEARCH_QUERIES_CAMEL): {"rows": [_query_row()]}},
+        {
+            ("GET", IS_ENABLED_CAMEL): STATS_ENABLED,
+            ("POST", SEARCH_QUERIES_CAMEL): {"rows": [_query_row()]},
+        },
         firmware="25.1",
     )
 
@@ -1378,6 +1396,7 @@ async def test_get_unbound_queries_uses_camel_case_path_before_25_7(
     assert query_log is not None
     assert [entry.domain for entry in query_log.entries] == ["ads.example.net"]
     assert router.count("POST", SEARCH_QUERIES) == 0
+    assert router.count("GET", IS_ENABLED) == 0
 
 
 @pytest.mark.parametrize(
@@ -1429,7 +1448,8 @@ async def test_get_unbound_queries_filters_exactly(
         domains (list[str]): Domains of the expected entries, in order.
     """
     client, router = make_router_client(
-        make_client, {("POST", SEARCH_QUERIES): {"rows": FILTER_ROWS}}
+        make_client,
+        {("GET", IS_ENABLED): STATS_ENABLED, ("POST", SEARCH_QUERIES): {"rows": FILTER_ROWS}},
     )
 
     query_log = await client.get_unbound_queries(**kwargs)
@@ -1452,7 +1472,9 @@ async def test_get_unbound_queries_is_none_for_malformed_payload(
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         payload (object): Payload the Router answers with.
     """
-    client, _router = make_router_client(make_client, {("POST", SEARCH_QUERIES): payload})
+    client, _router = make_router_client(
+        make_client, {("GET", IS_ENABLED): STATS_ENABLED, ("POST", SEARCH_QUERIES): payload}
+    )
 
     assert await client.get_unbound_queries() is None
 
@@ -1570,5 +1592,59 @@ async def test_dns_reads_are_none_when_read_fails_with_errors_off(
     """
     method = "POST" if failing == SEARCH_QUERIES else "GET"
     client, _router = make_router_client(make_client, {**routes, (method, failing): make_failure()})
+
+    assert await getattr(client, method_name)() is None
+
+
+@pytest.mark.parametrize(("method_name", "routes", "failing"), DNS_READS[:1] + DNS_READS[-1:])
+@pytest.mark.parametrize("enabled", ["0", 0, False], ids=["string", "int", "bool"])
+async def test_dns_reads_report_disabled_statistics(
+    make_client: ClientType,
+    method_name: str,
+    routes: dict[tuple[str, str], Any],
+    failing: str,
+    enabled: object,
+) -> None:
+    """With Unbound statistics off, a read reports ``disabled`` and reads nothing else.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        method_name (str): Public client method under test.
+        routes (dict[tuple[str, str], Any]): Healthy Router routes for the read.
+        failing (str): ``overview/is_enabled``, the path that reports the setting.
+        enabled (object): Statistics setting the Router reports.
+    """
+    client, router = make_router_client(
+        make_client, {**routes, ("GET", failing): {"enabled": enabled}}
+    )
+    empty = (
+        client.QueryLog(absent="disabled")
+        if method_name == "get_unbound_queries"
+        else client.QueryStats(absent="disabled")
+    )
+
+    assert await getattr(client, method_name)() == empty
+    assert [path for method, path in routes if path != failing and router.count(method, path)] == []
+
+
+@pytest.mark.parametrize(("method_name", "routes", "failing"), DNS_READS[:1] + DNS_READS[-1:])
+@pytest.mark.parametrize("payload", [{}, {"enabled": None}], ids=["no-key", "null"])
+async def test_dns_reads_are_none_without_statistics_setting(
+    make_client: ClientType,
+    method_name: str,
+    routes: dict[tuple[str, str], Any],
+    failing: str,
+    payload: dict[str, Any],
+) -> None:
+    """An ``is_enabled`` reply without a setting is a failed read.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+        method_name (str): Public client method under test.
+        routes (dict[tuple[str, str], Any]): Healthy Router routes for the read.
+        failing (str): ``overview/is_enabled``, the path that reports the setting.
+        payload (dict[str, Any]): Reply without a usable ``enabled`` value.
+    """
+    client, _router = make_router_client(make_client, {**routes, ("GET", failing): payload})
 
     assert await getattr(client, method_name)() is None
