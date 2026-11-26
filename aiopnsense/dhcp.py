@@ -4,7 +4,9 @@ from collections.abc import Mapping, MutableMapping
 import copy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
+from enum import Enum, auto
 import ipaddress
+from json import JSONDecodeError
 import re
 from typing import Any, Literal
 from warnings import deprecated
@@ -18,10 +20,11 @@ from ._dhcp_leases import (
     _normalize_leases,
 )
 from ._endpoint_outcome import _EndpointOutcome
-from ._error_policy import _log_errors
-from ._styled_endpoint import _StyledEndpoint
+from ._error_policy import _log_errors, _throws_errors
+from ._styled_endpoint import _EndpointPath, _StyledEndpoint
 from ._typing import AiopnsenseClientProtocol
-from .access import Access, AccessDict, AccessList
+from .access import Access, AccessDict
+from .exceptions import OPNsenseError
 from .helpers import _LOGGER, api_value_matches, coerce_bool, dict_get, get_ip_key, try_to_int
 
 ARP_TABLE_ENDPOINT = "/api/diagnostics/interface/search_arp"
@@ -47,6 +50,31 @@ ISC_DHCPV6_LEASES_SEARCH_ENDPOINT = _StyledEndpoint(
 
 
 _MAC_PATTERN = re.compile(r"^([0-9a-f]{2}:){5}([0-9a-f]{2})$")
+
+
+class _DHCPSourceUnavailable(Enum):
+    """Reasons a DHCP inventory source contributed no data."""
+
+    MISSING = auto()
+    DENIED = auto()
+    UNREADABLE = auto()
+
+    @classmethod
+    def from_outcome(cls, outcome: _EndpointOutcome) -> _DHCPSourceUnavailable:
+        """Classify a request outcome without data.
+
+        Args:
+            outcome (_EndpointOutcome): Outcome of a request that returned no data.
+
+        Returns:
+            _DHCPSourceUnavailable: Cached or fresh denial, missing endpoint, or read failure.
+        """
+        if outcome.is_absent:
+            return cls.DENIED if outcome.http_status == 403 else cls.MISSING
+        return cls.UNREADABLE
+
+
+type _LeaseSource = list[dict[str, Any]] | _DHCPSourceUnavailable
 
 
 class DHCPMixin(AiopnsenseClientProtocol):
@@ -516,13 +544,15 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 is not installed and contributes nothing. With the default
                 ``throw_errors=False``, a Kea reservation endpoint that cannot be
                 read only drops reservation detail, and the method returns ``None``
-                (unknown) when any lease endpoint fails with another error or
-                returns a malformed payload, and when a configuration endpoint
-                does so without a denial elsewhere establishing Status Access. When
-                ``self._throw_errors`` is ``True``, a failed request raises
-                ``OPNsenseError`` instead, specifically ``OPNsensePrivilegeMissing``
-                for a forbidden (403) endpoint; a 404 never raises, and a
-                malformed payload still returns ``None``.
+                (unknown) when any lease endpoint fails with another error,
+                returns an undecodable body, or returns decoded data the parser
+                rejects. An unreadable interface configuration endpoint makes
+                the inventory unknown only when no lease or configuration read
+                reports a denial. With ``throw_errors=True``, request and decoding
+                errors raise ``OPNsenseError`` in read order, with
+                ``OPNsensePrivilegeMissing`` for a 403. A 404 contributes no data
+                in either mode. Rejected decoded data follows the same inventory
+                rules in both modes.
         """
         if opnsense_tz is None:
             opnsense_tz = await self._get_opnsense_timezone()
@@ -541,24 +571,26 @@ class DHCPMixin(AiopnsenseClientProtocol):
         # every assigned interface as DHCP-capable.
         interface_reads = [await self._get_kea_interfaces(), await self._get_dnsmasq_interfaces()]
 
-        lease_sources = [source for source in lease_reads if source is not None]
-        if len(lease_sources) != len(lease_reads):
+        if _DHCPSourceUnavailable.UNREADABLE in lease_reads:
             _LOGGER.debug("[get_dhcp_leases] leases unknown (failed or malformed lease read)")
             return None
-        interface_sources = [source for source in interface_reads if source is not None]
-        denied = any(source.access is Access.STATUS for source in lease_sources) or any(
-            source.access is Access.STATUS for source in interface_sources
+        denied = (
+            _DHCPSourceUnavailable.DENIED in lease_reads
+            or _DHCPSourceUnavailable.DENIED in interface_reads
         )
-        if not denied and len(interface_sources) != len(interface_reads):
+        if not denied and _DHCPSourceUnavailable.UNREADABLE in interface_reads:
             _LOGGER.debug(
                 "[get_dhcp_leases] interfaces unknown (failed or malformed configuration read)"
             )
             return None
         access = Access.STATUS if denied else Access.CONFIGURATION
         lease_interfaces: dict[str, Any] = {}
-        for interface_source in interface_sources:
-            lease_interfaces.update(interface_source)
-        leases_raw = [lease for source in lease_sources for lease in source]
+        for interface_source in interface_reads:
+            if isinstance(interface_source, dict):
+                lease_interfaces.update(interface_source)
+        leases_raw = [
+            lease for source in lease_reads if isinstance(source, list) for lease in source
+        ]
         for lease in leases_raw:
             if (
                 not isinstance(lease, MutableMapping)
@@ -590,104 +622,80 @@ class DHCPMixin(AiopnsenseClientProtocol):
         )
         return dhcp_leases
 
-    @staticmethod
-    def _unread_dhcp_source_access(outcome: _EndpointOutcome) -> Access | None:
-        """Return the access level a DHCP endpoint without data implies.
+    async def _fetch_dhcp_outcome(self, endpoint: _EndpointPath) -> _EndpointOutcome:
+        """Read one DHCP endpoint and retain a suppressed decoding failure.
 
         Args:
-            outcome (_EndpointOutcome): Outcome of a request that returned no data.
+            endpoint (_EndpointPath): DHCP endpoint to request.
 
         Returns:
-            Access | None: Status Access after a forbidden (403) read, including a
-                cached denial, Configuration Access for a missing (404) endpoint, and
-                ``None`` when a transient failure leaves the source unknown.
+            _EndpointOutcome: Request outcome, with an undecodable body treated as unreadable
+                when errors are suppressed.
+
+        Raises:
+            OPNsenseError: The original request error in strict mode, or an unexpected error.
         """
-        if outcome.is_transient:
-            return None
-        return Access.STATUS if outcome.http_status == 403 else Access.CONFIGURATION
+        path = await self._resolve_endpoint(endpoint)
+        try:
+            return await self._fetch_endpoint_outcome(path)
+        except OPNsenseError as err:
+            # The queue already logged the decoding error and preserved it as the cause.
+            if _throws_errors(self) or not isinstance(
+                err.__cause__, (JSONDecodeError, UnicodeDecodeError)
+            ):
+                raise
+            return _EndpointOutcome.transient(err)
 
-    @classmethod
-    def _unread_interfaces(cls, outcome: _EndpointOutcome) -> AccessDict[str, Any] | None:
-        """Return the interface inventory of a configuration endpoint without data.
-
-        Args:
-            outcome (_EndpointOutcome): Outcome of a request that returned no data.
-
-        Returns:
-            AccessDict[str, Any] | None: Empty inventory carrying the access level from
-                ``_unread_dhcp_source_access``, or ``None`` when the inventory is unknown.
-        """
-        access = cls._unread_dhcp_source_access(outcome)
-        return None if access is None else AccessDict({}, access=access)
-
-    @classmethod
-    def _unread_leases(cls, outcome: _EndpointOutcome) -> AccessList[Any] | None:
-        """Return the leases of a lease endpoint without data.
-
-        Args:
-            outcome (_EndpointOutcome): Outcome of a request that returned no data.
-
-        Returns:
-            AccessList[Any] | None: No leases, carrying the access level from
-                ``_unread_dhcp_source_access``, or ``None`` when the leases are unknown.
-        """
-        access = cls._unread_dhcp_source_access(outcome)
-        return None if access is None else AccessList([], access=access)
-
-    async def _get_kea_interfaces(self) -> AccessDict[str, Any] | None:
+    async def _get_kea_interfaces(self) -> dict[str, Any] | _DHCPSourceUnavailable:
         """Return interfaces selected for Kea DHCPv4.
 
         Returns:
-            AccessDict[str, Any] | None: Mapping of Kea interface identifiers to
-                display names when Kea DHCPv4 is enabled; otherwise an empty mapping.
-                A forbidden (403) settings endpoint gives an empty mapping with Status
-                Access; every other mapping has Configuration Access. ``None`` when the
-                settings read fails or its payload is malformed.
+            dict[str, Any] | _DHCPSourceUnavailable: Mapping of Kea interface identifiers to
+                display names when Kea DHCPv4 is enabled, or an empty mapping when disabled.
+                If the source is unavailable, the reason it contributed no interfaces.
         """
-        outcome = await self._fetch_endpoint_outcome(KEA_DHCPV4_GET_ENDPOINT)
+        outcome = await self._fetch_dhcp_outcome(KEA_DHCPV4_GET_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("Kea DHCP interface endpoint unavailable")
-            return self._unread_interfaces(outcome)
+            return _DHCPSourceUnavailable.from_outcome(outcome)
 
         response = outcome.mapping()
         lease_interfaces: dict[str, Any] = {}
         general = dict_get(response, "dhcpv4.general")
         if not isinstance(general, MutableMapping):
             _LOGGER.debug("Kea DHCP interface lookup returned invalid settings payload")
-            return None
+            return _DHCPSourceUnavailable.UNREADABLE
         if not api_value_matches(general.get("enabled", "0"), "1"):
-            return AccessDict({}, access=Access.CONFIGURATION)
+            return {}
         interfaces = general.get("interfaces")
         if not isinstance(interfaces, MutableMapping):
             _LOGGER.debug("Kea DHCP interface lookup returned invalid interfaces payload")
-            return None
+            return _DHCPSourceUnavailable.UNREADABLE
         for if_name, iface in interfaces.items():
             if not isinstance(iface, MutableMapping):
                 continue
             if api_value_matches(iface.get("selected", 0), "1") and iface.get("value", None):
                 lease_interfaces[if_name] = iface.get("value")
-        return AccessDict(lease_interfaces, access=Access.CONFIGURATION)
+        return lease_interfaces
 
-    async def _get_dnsmasq_interfaces(self) -> AccessDict[str, Any] | None:
+    async def _get_dnsmasq_interfaces(self) -> dict[str, Any] | _DHCPSourceUnavailable:
         """Return interfaces with configured Dnsmasq DHCP ranges.
 
         Returns:
-            AccessDict[str, Any] | None: Mapping of Dnsmasq range interface identifiers
-                to display names, including interfaces without active leases. A
-                forbidden (403) range endpoint gives an empty mapping with Status
-                Access; every other mapping has Configuration Access. ``None`` when
-                the range read fails or its rows are missing or malformed.
+            dict[str, Any] | _DHCPSourceUnavailable: Mapping of Dnsmasq range interface
+                identifiers to display names, including interfaces without active leases.
+                If the source is unavailable, the reason it contributed no interfaces.
         """
-        outcome = await self._fetch_endpoint_outcome(DNSMASQ_RANGES_SEARCH_ENDPOINT)
+        outcome = await self._fetch_dhcp_outcome(DNSMASQ_RANGES_SEARCH_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("Dnsmasq DHCP range endpoint unavailable")
-            return self._unread_interfaces(outcome)
+            return _DHCPSourceUnavailable.from_outcome(outcome)
 
         response = outcome.mapping()
         ranges = response.get("rows")
         if not isinstance(ranges, list):
             _LOGGER.debug("Dnsmasq DHCP range lookup returned invalid rows payload")
-            return None
+            return _DHCPSourceUnavailable.UNREADABLE
 
         lease_interfaces: dict[str, Any] = {}
         for range_info in ranges:
@@ -704,11 +712,9 @@ class DHCPMixin(AiopnsenseClientProtocol):
                     lease_interfaces[if_name] = (
                         if_descr if isinstance(if_descr, str) and if_descr else if_name
                     )
-        return AccessDict(lease_interfaces, access=Access.CONFIGURATION)
+        return lease_interfaces
 
-    async def _get_kea_dhcpv4_leases(
-        self, opnsense_tz: tzinfo | None = None
-    ) -> AccessList[Any] | None:
+    async def _get_kea_dhcpv4_leases(self, opnsense_tz: tzinfo | None = None) -> _LeaseSource:
         """Return active IPv4 DHCP leases reported by Kea.
 
         Args:
@@ -716,12 +722,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 accepted for parity with other lease providers.
 
         Returns:
-            AccessList[Any] | None: Normalized Kea IPv4 lease entries. Expired leases,
+            _LeaseSource: Normalized Kea IPv4 lease entries. Expired leases,
                 non-active rows, malformed rows, and rows without hardware
                 addresses are omitted; lease ``type`` is ``static``,
                 ``dynamic``, or ``unknown`` depending on reservation data.
-                See ``_unread_leases`` for an endpoint without data; ``None``
-                when the leases are unknown.
+                If the source is unavailable, the reason it contributed no leases.
         """
         return await self._get_kea_dhcp_leases(
             lease_endpoint=KEA_LEASES4_SEARCH_ENDPOINT,
@@ -730,9 +735,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
             service_name="Kea DHCPv4",
         )
 
-    async def _get_kea_dhcpv6_leases(
-        self, opnsense_tz: tzinfo | None = None
-    ) -> AccessList[Any] | None:
+    async def _get_kea_dhcpv6_leases(self, opnsense_tz: tzinfo | None = None) -> _LeaseSource:
         """Return active IPv6 DHCP leases reported by Kea.
 
         Args:
@@ -740,12 +743,11 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 accepted for parity with other lease providers.
 
         Returns:
-            AccessList[Any] | None: Normalized Kea IPv6 lease entries. Expired leases,
+            _LeaseSource: Normalized Kea IPv6 lease entries. Expired leases,
                 non-active rows, and malformed rows are omitted; lease
                 ``type`` is ``static``, ``dynamic``, or ``unknown`` depending
                 on reservation data.
-                See ``_unread_leases`` for an endpoint without data; ``None``
-                when the leases are unknown.
+                If the source is unavailable, the reason it contributed no leases.
         """
         return await self._get_kea_dhcp_leases(
             lease_endpoint=KEA_LEASES6_SEARCH_ENDPOINT,
@@ -759,7 +761,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         service_name: str,
         reservation_endpoint: _StyledEndpoint | None = None,
         require_hardware_address: bool = True,
-    ) -> AccessList[Any] | None:
+    ) -> _LeaseSource:
         """Return active DHCP leases reported by a Kea lease endpoint.
 
         Args:
@@ -769,18 +771,17 @@ class DHCPMixin(AiopnsenseClientProtocol):
             require_hardware_address (bool, optional): Whether to skip rows without ``hwaddr``.
 
         Returns:
-            AccessList[Any] | None: Normalized Kea lease entries for the supplied
-                endpoint with Configuration Access. See ``_unread_leases`` for an
-                endpoint without data; ``None`` when the rows are missing or malformed.
+            _LeaseSource: Normalized Kea lease entries for the supplied endpoint, or the
+                reason the source contributed no leases.
         """
-        outcome = await self._fetch_endpoint_outcome(lease_endpoint)
+        outcome = await self._fetch_dhcp_outcome(lease_endpoint)
         if not outcome.is_data:
             _LOGGER.debug("%s lease endpoint unavailable", service_name)
-            return self._unread_leases(outcome)
+            return _DHCPSourceUnavailable.from_outcome(outcome)
         response = outcome.mapping()
         if not isinstance(response.get("rows", None), list):
             _LOGGER.debug("%s lease lookup returned invalid rows payload", service_name)
-            return None
+            return _DHCPSourceUnavailable.UNREADABLE
         leases_info: list = response.get("rows", [])
         current_time = datetime.now().astimezone()
         res_info: list[Any] | None
@@ -815,16 +816,13 @@ class DHCPMixin(AiopnsenseClientProtocol):
                     continue
                 if hw_address := res.get("hw_address", None):
                     reservations[hw_address] = res.get("ip_address", "")
-        return AccessList(
-            _normalize_leases(
-                leases_info,
-                _kea_lease_backend(
-                    require_hardware_address=require_hardware_address,
-                    reservations=None if res_info is None else reservations,
-                ),
-                now=current_time,
+        return _normalize_leases(
+            leases_info,
+            _kea_lease_backend(
+                require_hardware_address=require_hardware_address,
+                reservations=None if res_info is None else reservations,
             ),
-            access=Access.CONFIGURATION,
+            now=current_time,
         )
 
     def _keep_latest_leases(self, reservations: list[dict]) -> list[dict]:
@@ -862,9 +860,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
 
         return [entry for _, entry in seen.values()]
 
-    async def _get_dnsmasq_leases(
-        self, opnsense_tz: tzinfo | None = None
-    ) -> AccessList[Any] | None:
+    async def _get_dnsmasq_leases(self, opnsense_tz: tzinfo | None = None) -> _LeaseSource:
         """Return active IPv4 and IPv6 DHCP leases reported by dnsmasq.
 
         Args:
@@ -872,40 +868,35 @@ class DHCPMixin(AiopnsenseClientProtocol):
                 accepted for parity with other lease providers.
 
         Returns:
-            AccessList[Any] | None: Normalized dnsmasq lease entries. Duplicate rows are reduced
+            _LeaseSource: Normalized dnsmasq lease entries. Duplicate rows are reduced
                 to the latest expiration, expired rows are omitted, and lease
                 ``type`` is derived from dnsmasq reservation metadata.
-                See ``_unread_leases`` for an endpoint without data; ``None``
-                when the leases are unknown.
+                If the source is unavailable, the reason it contributed no leases.
         """
-        outcome = await self._fetch_endpoint_outcome(DNSMASQ_LEASES_SEARCH_ENDPOINT)
+        outcome = await self._fetch_dhcp_outcome(DNSMASQ_LEASES_SEARCH_ENDPOINT)
         if not outcome.is_data:
             _LOGGER.debug("Dnsmasq DHCP lease endpoint unavailable")
-            return self._unread_leases(outcome)
+            return _DHCPSourceUnavailable.from_outcome(outcome)
         leases_info = outcome.mapping().get("rows")
         if not isinstance(leases_info, list):
             _LOGGER.debug("Dnsmasq DHCP lease lookup returned invalid rows payload")
-            return None
-        return AccessList(
-            _normalize_leases(
-                self._keep_latest_leases(leases_info),
-                _DNSMASQ_LEASE_BACKEND,
-                now=datetime.now().astimezone(),
-            ),
-            access=Access.CONFIGURATION,
+            return _DHCPSourceUnavailable.UNREADABLE
+        return _normalize_leases(
+            self._keep_latest_leases(leases_info),
+            _DNSMASQ_LEASE_BACKEND,
+            now=datetime.now().astimezone(),
         )
 
-    async def _get_isc_dhcpv4_leases(self, opnsense_tz: tzinfo) -> AccessList[Any] | None:
+    async def _get_isc_dhcpv4_leases(self, opnsense_tz: tzinfo) -> _LeaseSource:
         """Return active IPv4 DHCP leases reported by ISC DHCP.
 
         Args:
             opnsense_tz (tzinfo): Timezone used to localize ISC ``ends`` timestamps.
 
         Returns:
-            AccessList[Any] | None: Normalized ISC DHCPv4 lease entries. Non-active, expired,
+            _LeaseSource: Normalized ISC DHCPv4 lease entries. Non-active, expired,
                 malformed, and MAC-less rows are omitted.
-                See ``_unread_leases`` for an endpoint without data; ``None``
-                when the leases are unknown.
+                If the source is unavailable, the reason it contributed no leases.
         """
         return await self._get_isc_dhcp_leases(
             lease_endpoint=ISC_DHCPV4_LEASES_SEARCH_ENDPOINT,
@@ -913,17 +904,16 @@ class DHCPMixin(AiopnsenseClientProtocol):
             opnsense_tz=opnsense_tz,
         )
 
-    async def _get_isc_dhcpv6_leases(self, opnsense_tz: tzinfo) -> AccessList[Any] | None:
+    async def _get_isc_dhcpv6_leases(self, opnsense_tz: tzinfo) -> _LeaseSource:
         """Return active IPv6 DHCP leases reported by ISC DHCP.
 
         Args:
             opnsense_tz (tzinfo): Timezone used to localize ISC ``ends`` timestamps.
 
         Returns:
-            AccessList[Any] | None: Normalized ISC DHCPv6 lease entries. Non-active, expired,
+            _LeaseSource: Normalized ISC DHCPv6 lease entries. Non-active, expired,
                 malformed, and MAC-less rows are omitted.
-                See ``_unread_leases`` for an endpoint without data; ``None``
-                when the leases are unknown.
+                If the source is unavailable, the reason it contributed no leases.
         """
         return await self._get_isc_dhcp_leases(
             lease_endpoint=ISC_DHCPV6_LEASES_SEARCH_ENDPOINT,
@@ -936,7 +926,7 @@ class DHCPMixin(AiopnsenseClientProtocol):
         lease_endpoint: _StyledEndpoint,
         service_name: str,
         opnsense_tz: tzinfo,
-    ) -> AccessList[Any] | None:
+    ) -> _LeaseSource:
         """Return active DHCP leases reported by an ISC DHCP lease endpoint.
 
         Args:
@@ -945,24 +935,20 @@ class DHCPMixin(AiopnsenseClientProtocol):
             opnsense_tz (tzinfo): Timezone used to localize ISC ``ends`` timestamps.
 
         Returns:
-            AccessList[Any] | None: Normalized ISC lease entries for the supplied
-                endpoint with Configuration Access. See ``_unread_leases`` for an
-                endpoint without data; ``None`` when the rows are missing or malformed.
+            _LeaseSource: Normalized ISC lease entries for the supplied endpoint, or the
+                reason the source contributed no leases.
         """
-        outcome = await self._fetch_endpoint_outcome(lease_endpoint)
+        outcome = await self._fetch_dhcp_outcome(lease_endpoint)
         if not outcome.is_data:
             _LOGGER.debug("%s lease endpoint unavailable", service_name)
-            return self._unread_leases(outcome)
+            return _DHCPSourceUnavailable.from_outcome(outcome)
         leases_info = outcome.mapping().get("rows")
         if not isinstance(leases_info, list):
             _LOGGER.debug("%s lease lookup returned invalid rows payload", service_name)
-            return None
-        return AccessList(
-            _normalize_leases(
-                leases_info,
-                _ISC_LEASE_BACKEND,
-                now=datetime.now().astimezone(),
-                router_tz=opnsense_tz,
-            ),
-            access=Access.CONFIGURATION,
+            return _DHCPSourceUnavailable.UNREADABLE
+        return _normalize_leases(
+            leases_info,
+            _ISC_LEASE_BACKEND,
+            now=datetime.now().astimezone(),
+            router_tz=opnsense_tz,
         )
