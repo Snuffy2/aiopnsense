@@ -70,14 +70,14 @@ async def test_get_smart_returns_device_rows(
 async def test_get_smart_reports_malformed_inventory(
     make_client: ClientType, throw_errors: bool, payload: dict[str, object] | list[object]
 ) -> None:
-    """Malformed SMART inventories are unknown in non-strict mode.
+    """A malformed SMART inventory does not prevent the next read from recovering.
 
     Args:
         make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
         throw_errors (bool): Public ``throw_errors`` setting of the client.
         payload (dict[str, object] | list[object]): Decoded response body from the Router.
     """
-    client, _ = make_router_client(
+    client, router = make_router_client(
         make_client, {("POST", SMART_LIST_PATH): payload}, throw_errors=throw_errors
     )
 
@@ -87,6 +87,10 @@ async def test_get_smart_reports_malformed_inventory(
         assert result == []
     else:
         assert result is None
+
+    router.routes[("POST", SMART_LIST_PATH)] = {"devices": [NVME_ROW]}
+    assert await client.get_smart() == [NVME_ROW]
+    assert router.requests == [("POST", SMART_LIST_PATH, None)] * 2
 
 
 @pytest.mark.parametrize("throw_errors", [False, True], ids=["errors-off", "errors-on"])
@@ -168,6 +172,22 @@ async def test_smart_reports_failed_reads(
             assert await read() is None
 
     assert router.count("POST", path) == 1
+
+
+async def test_get_smart_retries_cached_denial_in_strict_mode(make_client: ClientType) -> None:
+    """Strict SMART inventory reads retry a denial previously cached in default mode.
+
+    Args:
+        make_client (ClientType): Fixture factory returning ``OPNsenseClient`` instances.
+    """
+    client, router = make_router_client(make_client, {("POST", SMART_LIST_PATH): 403})
+
+    assert await client.get_smart() is None
+    client.toggle_throwing_errors(True)
+    with pytest.raises(OPNsensePrivilegeMissing):
+        await client.get_smart()
+
+    assert router.requests == [("POST", SMART_LIST_PATH, None)] * 2
 
 
 async def test_get_smart_info_returns_json_output(make_client: ClientType) -> None:
