@@ -1,6 +1,6 @@
 """Endpoint selection and availability helpers for OPNsenseClient."""
 
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 from warnings import deprecated
@@ -319,6 +319,38 @@ class ClientEndpointMixin:
         self._endpoint_cache.clear(cache_key, ticket)
         _raise_if_throwing(self, outcome.error)
         return outcome
+
+    def _inventory_rows(
+        self,
+        outcome: _EndpointOutcome,
+        *,
+        field: str,
+        unavailable_message: str,
+        malformed_message: str,
+    ) -> list[Any] | None:
+        """Interpret the outcome of a read from a single inventory endpoint.
+
+        Args:
+            outcome (_EndpointOutcome): Result of the gated inventory request.
+            field (str): Required list field in the decoded response.
+            unavailable_message (str): Debug message for an unsuccessful request.
+            malformed_message (str): Debug message for a response without the required list.
+
+        Returns:
+            list[Any] | None: Raw rows on success, an empty list for a missing
+                endpoint (404) or a malformed reply in strict mode, and ``None``
+                for suppressed failures or a malformed reply in default mode.
+        """
+        if not outcome.is_data:
+            _LOGGER.debug(unavailable_message)
+            return [] if outcome.http_status == 404 else None
+
+        payload = outcome.payload
+        rows = payload.get(field) if isinstance(payload, Mapping) else None
+        if not isinstance(rows, list):
+            _LOGGER.debug(malformed_message)
+            return [] if _throws_errors(self) else None
+        return rows
 
     @deprecated("Endpoint availability probing is internal. Direct calls are no longer needed.")
     async def is_endpoint_available(self, path: str, force_refresh: bool = False) -> bool:

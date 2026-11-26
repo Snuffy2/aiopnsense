@@ -99,6 +99,15 @@ class AiopnsenseClientProtocol(Protocol):
         self, path: _EndpointPath, payload: MutableMapping[str, Any] | None = None
     ) -> _EndpointOutcome: ...
 
+    def _inventory_rows(
+        self,
+        outcome: _EndpointOutcome,
+        *,
+        field: str,
+        unavailable_message: str,
+        malformed_message: str,
+    ) -> list[Any] | None: ...
+
     async def _check_endpoint_status(
         self, path: str, *, force_refresh: bool = False
     ) -> _EndpointOutcome: ...
