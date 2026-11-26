@@ -2842,7 +2842,7 @@ async def test_get_dhcp_leases_unreadable_lease_overrides_denial(make_client: Cl
 
     assert await _get_leases(client) is None
     assert router.count("GET", _KEA_LEASES4) == 1
-    assert router.count("GET", _DNSMASQ_RANGES) == 1
+    assert router.count("GET", _DNSMASQ_LEASES) == 1
 
 
 @pytest.mark.asyncio
