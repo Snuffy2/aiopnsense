@@ -14,7 +14,7 @@
 | aiopnsense/\_sse\_decoder.py             |       66 |        0 |       12 |        0 |    100% |           |
 | aiopnsense/\_styled\_endpoint.py         |        7 |        0 |        0 |        0 |    100% |           |
 | aiopnsense/\_typing.py                   |        9 |        0 |        0 |        0 |    100% |           |
-| aiopnsense/\_wireguard.py                |      120 |        3 |       60 |        5 |     96% |159, 164-\>157, 194, 199, 236-\>192 |
+| aiopnsense/\_wireguard.py                |      119 |        3 |       60 |        5 |     96% |159, 167-\>157, 198, 203, 225-\>196 |
 | aiopnsense/access.py                     |       17 |        0 |        2 |        0 |    100% |           |
 | aiopnsense/client.py                     |       64 |        0 |       16 |        0 |    100% |           |
 | aiopnsense/client\_base.py               |       67 |        0 |       14 |        0 |    100% |           |
@@ -38,8 +38,8 @@
 | aiopnsense/unbound.py                    |      252 |        1 |       96 |        1 |     99% |       458 |
 | aiopnsense/vnstat.py                     |      223 |        7 |      100 |        7 |     96% |230, 283, 426, 469, 503, 523, 545 |
 | aiopnsense/vouchers.py                   |       53 |        1 |       18 |        1 |     97% |        87 |
-| aiopnsense/vpn.py                        |      436 |        7 |      210 |        8 |     98% |260, 284, 285-\>exit, 306, 355, 485-486, 741, 1032-\>1028 |
-| **TOTAL**                                | **4345** |   **53** | **1608** |   **60** | **98%** |           |
+| aiopnsense/vpn.py                        |      436 |        7 |      210 |        8 |     98% |260, 284, 285-\>exit, 306, 355, 508-509, 764, 1055-\>1051 |
+| **TOTAL**                                | **4344** |   **53** | **1608** |   **60** | **98%** |           |
 
 
 ## Setup coverage badge
