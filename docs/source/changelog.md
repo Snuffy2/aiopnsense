@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.1](https://github.com/Snuffy2/aiopnsense/compare/v1.6.0...v1.6.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* keep WireGuard Server instances separate under Status Access ([#272](https://github.com/Snuffy2/aiopnsense/issues/272)) ([edb55ea](https://github.com/Snuffy2/aiopnsense/commit/edb55eac6dcdb63cfa0fb63861a64899d6a1b5f7))
+
 ## [1.6.0](https://github.com/Snuffy2/aiopnsense/compare/v1.5.0...v1.6.0) (2026-11-26)
 
 
