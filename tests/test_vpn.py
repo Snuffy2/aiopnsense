@@ -825,6 +825,7 @@ async def test_get_wireguard_status_access_keeps_a_link_for_each_visible_row(
     unlinked = clients_by_public_key["unlinked-key"]
     assert unlinked["servers"] == []
     assert unlinked["total_bytes_recv"] == 0
+    assert linked["names"] == unlinked["names"] == []
     assert server["connected_clients"] == linked["connected_servers"] == 1
     for parent, links in ((server, server["clients"]), (linked, linked["servers"])):
         assert (parent["total_bytes_recv"], parent["total_bytes_sent"]) == (17, 23)
@@ -931,6 +932,7 @@ async def test_get_wireguard_status_access_separates_instances_sharing_a_key(
         ("roaming-key", {"wg0": "Server 0", "wg1": "Server 1"}, 4, 6),
     ):
         peer = peers[public_key]
+        assert peer["names"] == [peer["name"]]
         assert (peer["total_bytes_recv"], peer["total_bytes_sent"]) == (received, sent)
         assert {link["interface"]: link["name"] for link in peer["servers"]} == links
     roaming_links = {link["interface"]: link for link in peers["roaming-key"]["servers"]}
@@ -970,6 +972,7 @@ async def test_get_wireguard_status_access_client_name_ignores_row_order(
     assert result is not None
     (peer,) = result["clients"].values()
     assert peer["name"] == "Site A"
+    assert peer["names"] == ["Site A", "Site B"]
     assert {link["interface"] for link in peer["servers"]} == {"wg0", "wg1", "wg2"}
     for server in result["servers"].values():
         assert [link["name"] for link in server["clients"]] == ["Site A"]

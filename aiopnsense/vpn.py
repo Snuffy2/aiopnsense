@@ -437,7 +437,13 @@ class VPNMixin(AiopnsenseClientProtocol):
                 and each client link to a server carries that server's
                 ``interface``. When a client's rows carry different names, the
                 client takes the name of a row with its own name, choosing the
-                first interface in lexical order among ties. Under Configuration
+                first interface in lexical order among ties. Each Status Access
+                client also has ``names``, the sorted distinct non-empty names
+                of its rows. More than one name means several configured clients
+                share the key. One name does not prove the key is unshared,
+                because clients with the same name, or linked to the same
+                server, report one name. An empty list means no row was named,
+                as for a peer the Router has not configured. Under Configuration
                 Access, several clients can share a ``key_hash``, because the
                 Router allows clients with the same public key and different
                 endpoints. At either level, ``key_hash`` is the first 16

@@ -199,7 +199,7 @@ def _assemble_status_wireguard(
     Returns:
         tuple[dict[str, MutableMapping[str, Any]], dict[str, MutableMapping[str, Any]]]:
             Servers keyed by ``<interface>:<key_hash>``, one per instance, and Clients
-            keyed by public-key hash.
+            keyed by public-key hash with the sorted distinct names of their rows.
     """
     servers: dict[str, MutableMapping[str, Any]] = {}
     clients: dict[str, MutableMapping[str, Any]] = {}
@@ -237,8 +237,12 @@ def _assemble_status_wireguard(
             servers_by_interface[interface] = server_entry
         elif row.get("type") == "peer":
             client = clients.setdefault(
-                key_hash, {**identity, "servers": [], "connected_servers": 0}
+                key_hash, {**identity, "names": [], "servers": [], "connected_servers": 0}
             )
+            # Distinct configured names show that several Clients share this key.
+            if (row_name := row.get("name")) and row_name not in client["names"]:
+                client["names"].append(row_name)
+                client["names"].sort()
             # Rows sharing a key may carry different configured names. Prefer a row with
             # its own name, then the first interface in lexical order, whatever the row order.
             name_rank = (not row.get("name"), interface)
