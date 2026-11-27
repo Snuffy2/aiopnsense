@@ -940,6 +940,42 @@ async def test_get_wireguard_status_access_separates_instances_sharing_a_key(
 
 
 @pytest.mark.parametrize("reverse_rows", [False, True])
+async def test_get_wireguard_status_access_client_name_ignores_row_order(
+    make_client: ClientType, reverse_rows: bool
+) -> None:
+    """Name a Client from a named row on the first interface when its rows disagree.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        reverse_rows (bool): Whether the Router reports the rows in reverse order.
+    """
+    rows: list[dict[str, Any]] = [
+        {"type": "interface", "public-key": f"server-key-{index}", "if": f"wg{index}"}
+        for index in range(3)
+    ]
+    rows += [
+        {"type": "peer", "public-key": "shared-key", "if": "wg0", "name": "", "ifname": "S0"},
+        {"type": "peer", "public-key": "shared-key", "if": "wg1", "name": "Site A"},
+        {"type": "peer", "public-key": "shared-key", "if": "wg2", "name": "Site B"},
+    ]
+    if reverse_rows:
+        rows.reverse()
+    client, _router = make_vpn_router(
+        make_client,
+        wireguard_routes(summary={"rows": rows}, clients=403, servers=403),
+    )
+
+    result = await client.get_wireguard()
+
+    assert result is not None
+    (peer,) = result["clients"].values()
+    assert peer["name"] == "Site A"
+    assert {link["interface"] for link in peer["servers"]} == {"wg0", "wg1", "wg2"}
+    for server in result["servers"].values():
+        assert [link["name"] for link in server["clients"]] == ["Site A"]
+
+
+@pytest.mark.parametrize("reverse_rows", [False, True])
 async def test_get_wireguard_configured_status_follows_each_instance(
     make_client: ClientType, reverse_rows: bool
 ) -> None:

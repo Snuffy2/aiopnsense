@@ -435,7 +435,12 @@ class VPNMixin(AiopnsenseClientProtocol):
                 server's identity from its ``interface`` and ``key_hash`` fields
                 rather than parsing the key. Clients are keyed by ``key_hash``,
                 and each client link to a server carries that server's
-                ``interface``. At either level, ``key_hash`` is the first 16
+                ``interface``. When a client's rows carry different names, the
+                client takes the name of a row with its own name, choosing the
+                first interface in lexical order among ties. Under Configuration
+                Access, several clients can share a ``key_hash``, because the
+                Router allows clients with the same public key and different
+                endpoints. At either level, ``key_hash`` is the first 16
                 lowercase hex characters of the SHA-256 of the public key
                 string as reported by the Router, and a server's ``interface``
                 is ``wg`` followed by its instance number.

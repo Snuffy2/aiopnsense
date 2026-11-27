@@ -204,6 +204,7 @@ def _assemble_status_wireguard(
     servers: dict[str, MutableMapping[str, Any]] = {}
     clients: dict[str, MutableMapping[str, Any]] = {}
     servers_by_interface: dict[str, MutableMapping[str, Any]] = {}
+    client_name_ranks: dict[str, tuple[bool, str]] = {}
     client_rows: list[tuple[str, MutableMapping[str, Any], MutableMapping[str, Any]]] = []
     for row in summary:
         if not isinstance(row, MutableMapping):
@@ -238,6 +239,12 @@ def _assemble_status_wireguard(
             client = clients.setdefault(
                 key_hash, {**identity, "servers": [], "connected_servers": 0}
             )
+            # Rows sharing a key may carry different configured names. Prefer a row with
+            # its own name, then the first interface in lexical order, whatever the row order.
+            name_rank = (not row.get("name"), interface)
+            if key_hash not in client_name_ranks or name_rank < client_name_ranks[key_hash]:
+                client_name_ranks[key_hash] = name_rank
+                client["name"] = identity["name"]
             client_rows.append((interface, client, row))
 
     for interface, client, row in client_rows:
