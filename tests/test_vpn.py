@@ -875,7 +875,13 @@ async def test_get_wireguard_status_access_separates_instances_sharing_a_key(
             "transfer-rx": "1",
             "transfer-tx": "2",
         },
-        {"type": "interface", "public-key": "shared-server-key", "if": "wg1", "ifname": "Server 1"},
+        {
+            "type": "interface",
+            "public-key": "shared-server-key",
+            "if": "wg1",
+            "ifname": "Server 1",
+            "status": "down",
+        },
         {
             "type": "peer",
             "public-key": "client-key-1",
@@ -910,7 +916,7 @@ async def test_get_wireguard_status_access_separates_instances_sharing_a_key(
     assert set(servers) == {"wg0:cc021956c09576eb", "wg1:cc021956c09576eb"}
     for key, name, status, received, sent, connected, clients in (
         ("wg0:cc021956c09576eb", "Server 0", "up", 11, 13, 1, {"client-key-0", "roaming-key"}),
-        ("wg1:cc021956c09576eb", "Server 1", None, 23, 25, 2, {"client-key-1", "roaming-key"}),
+        ("wg1:cc021956c09576eb", "Server 1", "down", 23, 25, 2, {"client-key-1", "roaming-key"}),
     ):
         server = servers[key]
         assert server["uuid"] is None
@@ -945,7 +951,7 @@ async def test_get_wireguard_status_access_separates_instances_sharing_a_key(
 async def test_get_wireguard_status_access_client_name_ignores_row_order(
     make_client: ClientType, reverse_rows: bool
 ) -> None:
-    """Name a Client from a named row on the first interface when its rows disagree.
+    """Name a Client from a named row when its rows disagree, and each Server link by interface.
 
     Args:
         make_client (ClientType): Client factory fixture.
@@ -974,8 +980,10 @@ async def test_get_wireguard_status_access_client_name_ignores_row_order(
     assert peer["name"] == "Site A"
     assert peer["names"] == ["Site A", "Site B"]
     assert {link["interface"] for link in peer["servers"]} == {"wg0", "wg1", "wg2"}
+    expected_link_names = {"wg0": "Site A", "wg1": "Site A", "wg2": "Site B"}
     for server in result["servers"].values():
-        assert [link["name"] for link in server["clients"]] == ["Site A"]
+        expected = [expected_link_names[server["interface"]]]
+        assert [link["name"] for link in server["clients"]] == expected
 
 
 @pytest.mark.parametrize("reverse_rows", [False, True])

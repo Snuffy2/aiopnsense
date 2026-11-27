@@ -244,7 +244,8 @@ def _assemble_status_wireguard(
             continue
         server_link: MutableMapping[str, Any] = {
             "uuid": None,
-            "name": client["name"],
+            # The row names the peer configured on this interface; the aggregate name is a fallback.
+            "name": row.get("name") or client["name"],
             "pubkey": client["pubkey"],
             "connected": False,
         }
