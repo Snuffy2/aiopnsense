@@ -232,10 +232,11 @@ def _assemble_status_wireguard(
                 client["names"].sort()
             # Rows sharing a key may carry different configured names. Prefer a row with
             # its own name, then the first interface in lexical order, whatever the row order.
+            # A peer row's ifname names its Server, never the peer, so it is not a fallback.
             name_rank = (not row_name, interface)
             if key_hash not in client_name_ranks or name_rank < client_name_ranks[key_hash]:
                 client_name_ranks[key_hash] = name_rank
-                client["name"] = identity["name"]
+                client["name"] = row_name or None
             client_rows.append((interface, client, row))
 
     for interface, client, row in client_rows:

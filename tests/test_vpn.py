@@ -965,6 +965,7 @@ async def test_get_wireguard_status_access_client_name_ignores_row_order(
         {"type": "peer", "public-key": "shared-key", "if": "wg0", "name": "", "ifname": "S0"},
         {"type": "peer", "public-key": "shared-key", "if": "wg1", "name": "Site A"},
         {"type": "peer", "public-key": "shared-key", "if": "wg2", "name": "Site B"},
+        {"type": "peer", "public-key": "unknown-key", "if": "wg1", "name": "", "ifname": "S1"},
     ]
     if reverse_rows:
         rows.reverse()
@@ -976,14 +977,21 @@ async def test_get_wireguard_status_access_client_name_ignores_row_order(
     result = await client.get_wireguard()
 
     assert result is not None
-    (peer,) = result["clients"].values()
+    peers = {entry["pubkey"]: entry for entry in result["clients"].values()}
+    peer = peers["shared-key"]
     assert peer["name"] == "Site A"
     assert peer["names"] == ["Site A", "Site B"]
+    unknown = peers["unknown-key"]
+    assert (unknown["name"], unknown["names"]) == (None, [])
     assert {link["interface"] for link in peer["servers"]} == {"wg0", "wg1", "wg2"}
-    expected_link_names = {"wg0": "Site A", "wg1": "Site A", "wg2": "Site B"}
+    expected_link_names = {
+        "wg0": {"shared-key": "Site A"},
+        "wg1": {"shared-key": "Site A", "unknown-key": None},
+        "wg2": {"shared-key": "Site B"},
+    }
     for server in result["servers"].values():
-        expected = [expected_link_names[server["interface"]]]
-        assert [link["name"] for link in server["clients"]] == expected
+        links = {link["pubkey"]: link["name"] for link in server["clients"]}
+        assert links == expected_link_names[server["interface"]]
 
 
 @pytest.mark.parametrize("reverse_rows", [False, True])

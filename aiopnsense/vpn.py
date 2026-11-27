@@ -437,7 +437,11 @@ class VPNMixin(AiopnsenseClientProtocol):
                 and each client link to a server carries that server's
                 ``interface``. When a client's rows carry different names, the
                 client takes the name of a row with its own name, choosing the
-                first interface in lexical order among ties. Each Status Access
+                first interface in lexical order among ties, and a client whose
+                rows have no name, such as a peer the Router has not configured,
+                has ``name=None``. Each server's link to a client takes the name
+                of that interface's row, or the client's name when the row has
+                none. Each Status Access
                 client also has ``names``, the sorted distinct non-empty names
                 of its rows. More than one name means several configured clients
                 share the key. One name does not prove the key is unshared,
@@ -455,6 +459,9 @@ class VPNMixin(AiopnsenseClientProtocol):
                 both its interface and its public key.
                 A valid empty summary under Configuration Access
                 still reports configured peers as disconnected with zero counters.
+                The Router also answers a failed WireGuard status read with an
+                empty summary, so that failure cannot be told apart from having
+                no running WireGuard interfaces.
                 When ``self._throw_errors`` is ``True``, request failures can raise
                 ``OPNsenseError``, specifically ``OPNsensePrivilegeMissing`` for a
                 forbidden (403) endpoint.
