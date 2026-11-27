@@ -426,19 +426,42 @@ class VPNMixin(AiopnsenseClientProtocol):
                 when the other configuration inventory fails or is malformed.
                 Without a denial, both inventories must be readable or missing
                 (404) for this method to return a result.
-                Under Status Access, entries come from the status summary, are keyed
-                by ``key_hash`` with ``uuid=None``, and omit ``enabled``,
-                ``tunnel_addresses`` and ``dns_servers``. When interfaces share
-                a server key, the server status is ``up`` if any interface is
-                up, ``down`` if every interface is down, or ``None`` otherwise.
-                The server takes its name and interface from a row that supports
-                that status, choosing the first interface name in lexical order
-                among ties. At either level, ``key_hash`` is the first 16
+                Under Status Access, entries come from the status summary, have
+                ``uuid=None``, and omit ``enabled``, ``tunnel_addresses`` and
+                ``dns_servers``. Servers are keyed by ``<interface>:<key_hash>``,
+                for example ``wg0:cc021956c09576eb``, so each instance is its own
+                entry with its own ``interface``, ``status``, name, client links
+                and counters, even when instances share a public key. Read a
+                server's identity from its ``interface`` and ``key_hash`` fields
+                rather than parsing the key. Clients are keyed by ``key_hash``,
+                and each client link to a server carries that server's
+                ``interface``. When a client's rows carry different names, the
+                client takes the name of a row with its own name, choosing the
+                first interface in lexical order among ties, and a client whose
+                rows have no name, such as a peer the Router has not configured,
+                has ``name=None``. Each server's link to a client takes the name
+                of that interface's row, or the client's name when the row has
+                none. Each Status Access
+                client also has ``names``, the sorted distinct non-empty names
+                of its rows. More than one name means several configured clients
+                share the key. One name does not prove the key is unshared,
+                because clients with the same name, or linked to the same
+                server, report one name. An empty list means no row was named,
+                as for a peer the Router has not configured. Under Configuration
+                Access, several clients can share a ``key_hash``, because the
+                Router allows clients with the same public key and different
+                endpoints. At either level, ``key_hash`` is the first 16
                 lowercase hex characters of the SHA-256 of the public key
-                string as reported by the Router.
+                string as reported by the Router, and a server's ``interface``
+                is ``wg`` followed by its instance number.
                 A configured entry without a public key has ``key_hash=None``.
+                A configured server takes its ``status`` from the summary row with
+                both its interface and its public key.
                 A valid empty summary under Configuration Access
                 still reports configured peers as disconnected with zero counters.
+                The Router also answers a failed WireGuard status read with an
+                empty summary, so that failure cannot be told apart from having
+                no running WireGuard interfaces.
                 When ``self._throw_errors`` is ``True``, request failures can raise
                 ``OPNsenseError``, specifically ``OPNsensePrivilegeMissing`` for a
                 forbidden (403) endpoint.

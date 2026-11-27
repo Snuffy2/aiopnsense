@@ -158,8 +158,11 @@ def _assemble_configured_wireguard(
         if not isinstance(row, MutableMapping):
             continue
         if row.get("type") == "interface":
+            # Instances may share a public key, so the interface identifies the instance.
             for server in servers.values():
-                if server["pubkey"] == row.get("public-key"):
+                if server["interface"] == row.get("if") and server["pubkey"] == row.get(
+                    "public-key"
+                ):
                     server["status"] = row.get("status")
         elif row.get("type") == "peer":
             interface = row.get("if", "-")
@@ -182,12 +185,13 @@ def _assemble_status_wireguard(
 
     Returns:
         tuple[dict[str, MutableMapping[str, Any]], dict[str, MutableMapping[str, Any]]]:
-            Servers and Clients keyed by public-key hash.
+            Servers keyed by ``<interface>:<key_hash>``, one per instance, and Clients
+            keyed by public-key hash with the sorted distinct names of their rows.
     """
     servers: dict[str, MutableMapping[str, Any]] = {}
     clients: dict[str, MutableMapping[str, Any]] = {}
     servers_by_interface: dict[str, MutableMapping[str, Any]] = {}
-    server_names_by_interface: dict[str, Any] = {}
+    client_name_ranks: dict[str, tuple[bool, str]] = {}
     client_rows: list[tuple[str, MutableMapping[str, Any], MutableMapping[str, Any]]] = []
     for row in summary:
         if not isinstance(row, MutableMapping):
@@ -206,37 +210,33 @@ def _assemble_status_wireguard(
             "total_bytes_sent": 0,
         }
         if row.get("type") == "interface":
-            server_entry = servers.get(key_hash)
-            status = row.get("status")
-            if server_entry is None:
-                server_entry = {
+            # Instances may share a public key, so each interface is its own Server.
+            server_entry = servers.setdefault(
+                f"{interface}:{key_hash}",
+                {
                     **identity,
                     "interface": interface,
-                    "status": status,
+                    "status": row.get("status"),
                     "clients": [],
                     "connected_clients": 0,
-                }
-                servers[key_hash] = server_entry
-            else:
-                current_status = server_entry["status"]
-                # Prefer up, then missing status, then down. Break ties by interface name.
-                if (status != "up", status == "down", interface) < (
-                    current_status != "up",
-                    current_status == "down",
-                    server_entry["interface"],
-                ):
-                    server_entry.update(
-                        name=identity["name"],
-                        pubkey=public_key,
-                        interface=interface,
-                        status=status,
-                    )
+                },
+            )
             servers_by_interface[interface] = server_entry
-            server_names_by_interface[interface] = identity["name"]
         elif row.get("type") == "peer":
             client = clients.setdefault(
-                key_hash, {**identity, "servers": [], "connected_servers": 0}
+                key_hash, {**identity, "names": [], "servers": [], "connected_servers": 0}
             )
+            # Distinct configured names show that several Clients share this key.
+            if (row_name := row.get("name")) and row_name not in client["names"]:
+                client["names"].append(row_name)
+                client["names"].sort()
+            # Rows sharing a key may carry different configured names. Prefer a row with
+            # its own name, then the first interface in lexical order, whatever the row order.
+            # A peer row's ifname names its Server, never the peer, so it is not a fallback.
+            name_rank = (not row_name, interface)
+            if key_hash not in client_name_ranks or name_rank < client_name_ranks[key_hash]:
+                client_name_ranks[key_hash] = name_rank
+                client["name"] = row_name or None
             client_rows.append((interface, client, row))
 
     for interface, client, row in client_rows:
@@ -245,14 +245,15 @@ def _assemble_status_wireguard(
             continue
         server_link: MutableMapping[str, Any] = {
             "uuid": None,
-            "name": client["name"],
+            # The row names the peer configured on this interface; the aggregate name is a fallback.
+            "name": row.get("name") or client["name"],
             "pubkey": client["pubkey"],
             "connected": False,
         }
         server["clients"].append(server_link)
         client_link: MutableMapping[str, Any] = {
             "uuid": None,
-            "name": server_names_by_interface[interface],
+            "name": server["name"],
             "pubkey": server["pubkey"],
             "interface": interface,
             "connected": False,

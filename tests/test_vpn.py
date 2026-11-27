@@ -469,7 +469,7 @@ async def test_get_wireguard_reports_live_details_for_each_configured_view(
     rows: list[dict[str, Any]] = []
     if handshake is not None:
         rows = [
-            {"type": "interface", "public-key": "server-key-1", "status": "up"},
+            {"type": "interface", "public-key": "server-key-1", "if": "wg1", "status": "up"},
             {
                 "type": "peer",
                 "public-key": "client-key",
@@ -757,17 +757,20 @@ async def test_get_wireguard_status_access_links_live_rows(
         result = await client.get_wireguard()
         assert result is not None
         assert result_access(result) is Access.STATUS
-        assert set(result["servers"]) == {"006f9c9fb3b751aa", "d3ef32285d74752e"}
+        assert set(result["servers"]) == {"wg1:006f9c9fb3b751aa", "wg2:d3ef32285d74752e"}
         assert set(result["clients"]) == {"53f6b5178afbdb4e"}
+        for key, entry in result["servers"].items():
+            assert key == f"{entry['interface']}:{entry['key_hash']}"
+        for key, entry in result["clients"].items():
+            assert key == entry["key_hash"]
         for inventory in result.values():
-            for key_hash, entry in inventory.items():
+            for entry in inventory.values():
                 assert entry["uuid"] is None
-                assert entry["key_hash"] == key_hash
                 assert {"enabled", "tunnel_addresses", "dns_servers"}.isdisjoint(entry)
-        server = result["servers"]["006f9c9fb3b751aa"]
+        server = result["servers"]["wg1:006f9c9fb3b751aa"]
         assert server["name"] == "Server 1"
         assert server["status"] == "up"
-        assert result["servers"]["d3ef32285d74752e"]["status"] is None
+        assert result["servers"]["wg2:d3ef32285d74752e"]["status"] is None
         assert server["connected_clients"] == 1
         assert server["clients"][0]["latest_handshake"] == handshake
         peer = result["clients"]["53f6b5178afbdb4e"]
@@ -822,6 +825,7 @@ async def test_get_wireguard_status_access_keeps_a_link_for_each_visible_row(
     unlinked = clients_by_public_key["unlinked-key"]
     assert unlinked["servers"] == []
     assert unlinked["total_bytes_recv"] == 0
+    assert linked["names"] == unlinked["names"] == []
     assert server["connected_clients"] == linked["connected_servers"] == 1
     for parent, links in ((server, server["clients"]), (linked, linked["servers"])):
         assert (parent["total_bytes_recv"], parent["total_bytes_sent"]) == (17, 23)
@@ -835,10 +839,10 @@ async def test_get_wireguard_status_access_keeps_a_link_for_each_visible_row(
 
 
 @pytest.mark.parametrize("reverse_rows", [False, True])
-async def test_get_wireguard_status_access_aggregates_shared_server_key(
+async def test_get_wireguard_status_access_separates_instances_sharing_a_key(
     make_client: ClientType, wireguard_now: datetime, reverse_rows: bool
 ) -> None:
-    """Aggregate links and counters when status interfaces share a public key.
+    """Report each Server instance separately when instances share a public key.
 
     Args:
         make_client (ClientType): Client factory fixture.
@@ -864,6 +868,14 @@ async def test_get_wireguard_status_access_aggregates_shared_server_key(
             "latest-handshake": handshake,
         },
         {
+            "type": "peer",
+            "public-key": "roaming-key",
+            "name": "Roaming",
+            "if": "wg0",
+            "transfer-rx": "1",
+            "transfer-tx": "2",
+        },
+        {
             "type": "interface",
             "public-key": "shared-server-key",
             "if": "wg1",
@@ -879,6 +891,15 @@ async def test_get_wireguard_status_access_aggregates_shared_server_key(
             "transfer-tx": "21",
             "latest-handshake": handshake,
         },
+        {
+            "type": "peer",
+            "public-key": "roaming-key",
+            "name": "Roaming",
+            "if": "wg1",
+            "transfer-rx": "3",
+            "transfer-tx": "4",
+            "latest-handshake": handshake,
+        },
     ]
     if reverse_rows:
         rows.reverse()
@@ -891,70 +912,128 @@ async def test_get_wireguard_status_access_aggregates_shared_server_key(
 
     assert result is not None
     assert result_access(result) is Access.STATUS
-    assert set(result["servers"]) == {"cc021956c09576eb"}
-    server = result["servers"]["cc021956c09576eb"]
-    assert server["key_hash"] == "cc021956c09576eb"
-    assert server["uuid"] is None
-    assert (server["name"], server["interface"], server["status"]) == ("Server 0", "wg0", "up")
-    assert (server["total_bytes_recv"], server["total_bytes_sent"]) == (30, 32)
-    assert server["connected_clients"] == 2
-    assert {link["pubkey"] for link in server["clients"]} == {"client-key-0", "client-key-1"}
-    clients = {entry["pubkey"]: entry for entry in result["clients"].values()}
-    assert set(clients) == {"client-key-0", "client-key-1"}
-    for public_key, interface, name, received, sent in (
-        ("client-key-0", "wg0", "Server 0", 10, 11),
-        ("client-key-1", "wg1", "Server 1", 20, 21),
+    servers = result["servers"]
+    assert set(servers) == {"wg0:cc021956c09576eb", "wg1:cc021956c09576eb"}
+    for key, name, status, received, sent, connected, clients in (
+        ("wg0:cc021956c09576eb", "Server 0", "up", 11, 13, 1, {"client-key-0", "roaming-key"}),
+        ("wg1:cc021956c09576eb", "Server 1", "down", 23, 25, 2, {"client-key-1", "roaming-key"}),
     ):
-        peer = clients[public_key]
+        server = servers[key]
+        assert server["uuid"] is None
+        assert server["key_hash"] == "cc021956c09576eb"
+        assert (server["interface"], server["name"], server["status"]) == (
+            key.split(":")[0],
+            name,
+            status,
+        )
+        assert (server["total_bytes_recv"], server["total_bytes_sent"]) == (received, sent)
+        assert server["connected_clients"] == connected
+        assert {link["pubkey"] for link in server["clients"]} == clients
+
+    peers = {entry["pubkey"]: entry for entry in result["clients"].values()}
+    assert set(peers) == {"client-key-0", "client-key-1", "roaming-key"}
+    for public_key, links, received, sent in (
+        ("client-key-0", {"wg0": "Server 0"}, 10, 11),
+        ("client-key-1", {"wg1": "Server 1"}, 20, 21),
+        ("roaming-key", {"wg0": "Server 0", "wg1": "Server 1"}, 4, 6),
+    ):
+        peer = peers[public_key]
+        assert peer["names"] == [peer["name"]]
         assert (peer["total_bytes_recv"], peer["total_bytes_sent"]) == (received, sent)
-        (link,) = peer["servers"]
-        assert (link["interface"], link["name"]) == (interface, name)
+        assert {link["interface"]: link["name"] for link in peer["servers"]} == links
+    roaming_links = {link["interface"]: link for link in peers["roaming-key"]["servers"]}
+    assert (roaming_links["wg0"]["bytes_recv"], roaming_links["wg0"]["connected"]) == (1, False)
+    assert (roaming_links["wg1"]["bytes_recv"], roaming_links["wg1"]["connected"]) == (3, True)
+    assert peers["roaming-key"]["connected_servers"] == 1
 
 
-@pytest.mark.parametrize(
-    ("statuses", "expected_interface", "expected_status"),
-    [
-        (("up", "up"), "wg0", "up"),
-        (("down", "down"), "wg0", "down"),
-        ((None, None), "wg0", None),
-        ((None, "up"), "wg1", "up"),
-        (("down", None), "wg1", None),
-    ],
-)
-async def test_get_wireguard_status_access_shared_server_status(
-    make_client: ClientType,
-    statuses: tuple[str | None, str | None],
-    expected_interface: str,
-    expected_status: str | None,
+@pytest.mark.parametrize("reverse_rows", [False, True])
+async def test_get_wireguard_status_access_client_name_ignores_row_order(
+    make_client: ClientType, reverse_rows: bool
 ) -> None:
-    """Report the shared server status even when peer data or interface status is absent.
+    """Name a Client from a named row when its rows disagree, and each Server link by interface.
 
     Args:
         make_client (ClientType): Client factory fixture.
-        statuses (tuple[str | None, str | None]): Statuses of the two interface rows.
-        expected_interface (str): Interface representing the shared server.
-        expected_status (str | None): Status reported for the shared server.
+        reverse_rows (bool): Whether the Router reports the rows in reverse order.
     """
-    rows = [
-        {
-            "type": "interface",
-            "if": f"wg{index}",
-            "public-key": "shared-server-key",
-            **({"status": status} if status is not None else {}),
-        }
-        for index, status in enumerate(statuses)
+    rows: list[dict[str, Any]] = [
+        {"type": "interface", "public-key": f"server-key-{index}", "if": f"wg{index}"}
+        for index in range(3)
     ]
-    client, router = make_vpn_router(
+    rows += [
+        {"type": "peer", "public-key": "shared-key", "if": "wg0", "name": "", "ifname": "S0"},
+        {"type": "peer", "public-key": "shared-key", "if": "wg1", "name": "Site A"},
+        {"type": "peer", "public-key": "shared-key", "if": "wg2", "name": "Site B"},
+        {"type": "peer", "public-key": "unknown-key", "if": "wg1", "name": "", "ifname": "S1"},
+    ]
+    if reverse_rows:
+        rows.reverse()
+    client, _router = make_vpn_router(
         make_client,
         wireguard_routes(summary={"rows": rows}, clients=403, servers=403),
     )
 
-    for ordered_rows in (rows, rows[::-1]):
-        router.routes[("GET", WIREGUARD_SUMMARY_PATH)] = {"rows": ordered_rows}
-        result = await client.get_wireguard()
-        assert result is not None
-        server = result["servers"]["cc021956c09576eb"]
-        assert (server["interface"], server["status"]) == (expected_interface, expected_status)
+    result = await client.get_wireguard()
+
+    assert result is not None
+    peers = {entry["pubkey"]: entry for entry in result["clients"].values()}
+    peer = peers["shared-key"]
+    assert peer["name"] == "Site A"
+    assert peer["names"] == ["Site A", "Site B"]
+    unknown = peers["unknown-key"]
+    assert (unknown["name"], unknown["names"]) == (None, [])
+    assert {link["interface"] for link in peer["servers"]} == {"wg0", "wg1", "wg2"}
+    expected_link_names = {
+        "wg0": {"shared-key": "Site A"},
+        "wg1": {"shared-key": "Site A", "unknown-key": None},
+        "wg2": {"shared-key": "Site B"},
+    }
+    for server in result["servers"].values():
+        links = {link["pubkey"]: link["name"] for link in server["clients"]}
+        assert links == expected_link_names[server["interface"]]
+
+
+@pytest.mark.parametrize("reverse_rows", [False, True])
+async def test_get_wireguard_configured_status_follows_each_instance(
+    make_client: ClientType, reverse_rows: bool
+) -> None:
+    """Give each configured Server the status of its own interface when keys match.
+
+    Args:
+        make_client (ClientType): Client factory fixture.
+        reverse_rows (bool): Whether the Router reports the rows in reverse order.
+    """
+    rows = [
+        {"type": "interface", "public-key": "shared-server-key", "if": "wg0", "status": "up"},
+        {"type": "interface", "public-key": "shared-server-key", "if": "wg1", "status": "down"},
+        {"type": "interface", "public-key": "other-server-key", "if": "wg2", "status": "up"},
+    ]
+    if reverse_rows:
+        rows.reverse()
+    server_config = {
+        "server-0": {"pubkey": "shared-server-key", "instance": "0"},
+        "server-1": {"pubkey": "shared-server-key", "instance": "1"},
+        "server-2": {"pubkey": "shared-server-key", "instance": "2"},
+    }
+    client, _router = make_vpn_router(
+        make_client,
+        wireguard_routes(
+            summary={"rows": rows},
+            clients={"client": {"clients": {"client": {}}}},
+            servers={"server": {"servers": {"server": server_config}}},
+        ),
+    )
+
+    result = await client.get_wireguard()
+
+    assert result is not None
+    assert result_access(result) is Access.CONFIGURATION
+    assert {uuid: server.get("status") for uuid, server in result["servers"].items()} == {
+        "server-0": "up",
+        "server-1": "down",
+        "server-2": None,
+    }
 
 
 async def test_get_wireguard_retains_duplicate_and_incomplete_links(
@@ -1126,9 +1205,9 @@ async def test_get_wireguard_status_access_with_failed_other_inventory(
 
     assert result is not None
     assert result_access(result) is Access.STATUS
-    assert set(result["servers"]) == {"006f9c9fb3b751aa"}
-    assert result["servers"]["006f9c9fb3b751aa"]["status"] == "up"
-    assert result["servers"]["006f9c9fb3b751aa"]["uuid"] is None
+    assert set(result["servers"]) == {"wg1:006f9c9fb3b751aa"}
+    assert result["servers"]["wg1:006f9c9fb3b751aa"]["status"] == "up"
+    assert result["servers"]["wg1:006f9c9fb3b751aa"]["uuid"] is None
 
     cached = await client.get_wireguard()
     assert cached == result
