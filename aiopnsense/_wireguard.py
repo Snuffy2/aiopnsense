@@ -175,19 +175,6 @@ def _assemble_configured_wireguard(
     return servers, clients
 
 
-def _wireguard_status_server_key(interface: str, key_hash: str) -> str:
-    """Build the Status Access key of a WireGuard Server.
-
-    Args:
-        interface (str): Server interface, such as ``wg0``.
-        key_hash (str): Public-key hash of the Server.
-
-    Returns:
-        str: ``<interface>:<key_hash>``, unique per instance even when public keys match.
-    """
-    return f"{interface}:{key_hash}"
-
-
 def _assemble_status_wireguard(
     summary: list[Any],
 ) -> tuple[dict[str, MutableMapping[str, Any]], dict[str, MutableMapping[str, Any]]]:
@@ -225,7 +212,7 @@ def _assemble_status_wireguard(
         if row.get("type") == "interface":
             # Instances may share a public key, so each interface is its own Server.
             server_entry = servers.setdefault(
-                _wireguard_status_server_key(interface, key_hash),
+                f"{interface}:{key_hash}",
                 {
                     **identity,
                     "interface": interface,
@@ -245,7 +232,7 @@ def _assemble_status_wireguard(
                 client["names"].sort()
             # Rows sharing a key may carry different configured names. Prefer a row with
             # its own name, then the first interface in lexical order, whatever the row order.
-            name_rank = (not row.get("name"), interface)
+            name_rank = (not row_name, interface)
             if key_hash not in client_name_ranks or name_rank < client_name_ranks[key_hash]:
                 client_name_ranks[key_hash] = name_rank
                 client["name"] = identity["name"]
